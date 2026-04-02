@@ -1,0 +1,295 @@
+{
+  "title": "Formularz zgłoszeniowy",
+  "description": "Proszę uzupełnić wszystkie wymagane pola. Dokument PDF wygenerowany po wysłaniu formularza jest przeznaczony do podpisu kwalifikowanego jako zewnętrzny proces podpisu.",
+  "submit_label": "Generuj i wyślij",
+  "fields": [
+    {
+      "type": "section",
+      "label": "Dane kandydata / kandydatki"
+    },
+    {
+      "type": "text",
+      "name": "imiona",
+      "label": "Imię (imiona)",
+      "placeholder": "Wpisz imię lub imiona",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "nazwisko",
+      "label": "Nazwisko",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "obywatelstwo",
+      "label": "Obywatelstwo",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "date",
+      "name": "data_urodzenia",
+      "label": "Data urodzenia",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "miejsce_urodzenia",
+      "label": "Miejsce urodzenia",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "pesel",
+      "name": "pesel",
+      "label": "PESEL",
+      "placeholder": "11 cyfr",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "radio",
+      "name": "plec",
+      "label": "Płeć",
+      "required": true,
+      "options": ["Kobieta", "Mężczyzna", "Inna"],
+      "width": "half"
+    },
+    {
+      "type": "number",
+      "name": "wiek",
+      "label": "Wiek",
+      "placeholder": "Wiek w chwili przystąpienia do projektu",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "select",
+      "name": "wyksztalcenie",
+      "label": "Wykształcenie",
+      "required": true,
+      "options": [
+        "Brak",
+        "Podstawowe",
+        "Gimnazjalne",
+        "Ponadgimnazjalne",
+        "Policealne",
+        "Wyższe licencjackie",
+        "Wyższe magisterskie",
+        "Wyższe doktoranckie"
+      ],
+      "width": "half"
+    },
+
+    {
+      "type": "section",
+      "label": "Adres zamieszkania"
+    },
+    {
+      "type": "text",
+      "name": "wojewodztwo",
+      "label": "Województwo",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "powiat",
+      "label": "Powiat",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "gmina",
+      "label": "Gmina",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "miejscowosc",
+      "label": "Miejscowość",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "kod_pocztowy",
+      "label": "Kod pocztowy",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "ulica",
+      "label": "Ulica",
+      "required": false,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "nr_budynku",
+      "label": "Nr budynku",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "text",
+      "name": "nr_lokalu",
+      "label": "Nr lokalu",
+      "required": false,
+      "width": "half"
+    },
+
+    {
+      "type": "section",
+      "label": "Dane kontaktowe"
+    },
+    {
+      "type": "tel",
+      "name": "telefon",
+      "label": "Telefon kontaktowy",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "email",
+      "name": "email",
+      "label": "Adres e-mail",
+      "required": true,
+      "width": "half"
+    },
+
+    {
+      "type": "section",
+      "label": "Przynależność do grupy docelowej"
+    },
+    {
+      "type": "radio",
+      "name": "zamieszkuje_lubuskie",
+      "label": "Zamieszkuję na terenie województwa lubuskiego",
+      "required": true,
+      "options": ["Tak", "Nie"],
+      "width": "half"
+    },
+    {
+      "type": "radio",
+      "name": "pracuje_lubuskie",
+      "label": "Pracuję na terenie województwa lubuskiego",
+      "required": true,
+      "options": ["Tak", "Nie"],
+      "width": "half"
+    },
+
+    {
+      "type": "section",
+      "label": "Status kandydata / kandydatki i dane dodatkowe"
+    },
+    {
+      "type": "radio",
+      "name": "osoba_niepelnosprawna",
+      "label": "Osoba z niepełnosprawnościami",
+      "required": true,
+      "options": ["Tak", "Nie", "Odmowa podania informacji"],
+      "help_text": "Dane wrażliwe mogą być niezbędne do weryfikacji kwalifikowalności uczestnika.",
+      "width": "full"
+    },
+    {
+      "type": "radio",
+      "name": "specjalne_potrzeby",
+      "label": "Czy występują specjalne potrzeby związane z udziałem w projekcie?",
+      "required": true,
+      "options": ["Tak", "Nie", "Nie dotyczy"],
+      "width": "half"
+    },
+    {
+      "type": "textarea",
+      "name": "specjalne_potrzeby_opis",
+      "label": "Opis specjalnych potrzeb",
+      "required": true,
+      "width": "full",
+      "visible_if": {
+        "field": "specjalne_potrzeby",
+        "operator": "equals",
+        "value": "Tak"
+      }
+    },
+
+    {
+      "type": "section",
+      "label": "Oświadczenia"
+    },
+    {
+      "type": "static_text",
+      "label": "Poniższe oświadczenia są zatwierdzane w formularzu, natomiast formalny podpis dotyczy całego wygenerowanego dokumentu PDF i realizowany jest wyłącznie przez zewnętrzny proces kwalifikowanego podpisu elektronicznego."
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_regulamin",
+      "label": "Zapoznałem/am się z Regulaminem rekrutacji i uczestnictwa w Projekcie i akceptuję jego treść.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_kryteria",
+      "label": "Oświadczam, że spełniam kryteria uczestnictwa w Projekcie.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_finansowanie",
+      "label": "Zostałem/am poinformowany/a, że projekt jest współfinansowany ze środków Unii Europejskiej.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_brak_gwarancji",
+      "label": "Zostałem/am poinformowany/a, że złożenie formularza nie jest równoznaczne z zakwalifikowaniem do udziału w projekcie.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_rodo",
+      "label": "Wyrażam zgodę na gromadzenie i przetwarzanie danych osobowych dla potrzeb rekrutacji.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_ewaluacja",
+      "label": "Zostałem/am poinformowany/a o obowiązku udziału w badaniach ewaluacyjnych.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_zatrudnienie",
+      "label": "Zobowiązuję się do przekazania zaświadczenia od pracodawcy potwierdzającego zatrudnienie.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_monitoring",
+      "label": "Zobowiązuję się do przekazania danych niezbędnych do monitoringu efektów projektu.",
+      "required": true,
+      "width": "full"
+    },
+    {
+      "type": "checkbox",
+      "name": "osw_prawdziwosc",
+      "label": "Oświadczam, że dane zawarte w formularzu są zgodne ze stanem prawnym i faktycznym.",
+      "required": true,
+      "width": "full"
+    }
+  ]
+}

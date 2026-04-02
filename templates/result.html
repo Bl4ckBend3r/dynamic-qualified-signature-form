@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Wynik operacji{% endblock %}
+
+{% block content %}
+<div class="card result-card">
+    <div class="card-header">
+        <h2>Wynik operacji</h2>
+        <p>Formularz został przetworzony.</p>
+    </div>
+
+    <div class="result-grid">
+        <div class="result-item">
+            <span class="result-label">Nazwa formularza</span>
+            <span class="result-value">{{ result.form_title }}</span>
+        </div>
+        <div class="result-item">
+            <span class="result-label">Identyfikator zgłoszenia</span>
+            <span class="result-value">{{ result.submission_id }}</span>
+        </div>
+        <div class="result-item">
+            <span class="result-label">Identyfikator procesu podpisu</span>
+            <span class="result-value">{{ result.signature_request_id }}</span>
+        </div>
+        <div class="result-item">
+            <span class="result-label">Status PDF</span>
+            <span class="badge badge-success">Utworzono</span>
+        </div>
+        <div class="result-item">
+            <span class="result-label">Status podpisu kwalifikowanego</span>
+            <span class="badge badge-{{ result.signature_status }}">{{ result.signature_status }}</span>
+        </div>
+    </div>
+
+    <div class="download-links">
+        <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
+
+        {% if result.signed_pdf_url %}
+            <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>
+        {% endif %}
+    </div>
+
+    <div class="back-link">
+        <a href="{{ url_for('index') }}">Powrót do formularza</a>
+    </div>
+</div>
+{% endblock %}

@@ -1,113 +1,112 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pl">
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>{{ form_definition.title }}</title>
     <style>
-        @page {
-            size: A4;
-            margin: 20mm;
-        }
+      @page {
+        size: A4;
+        margin: 20mm;
+      }
 
-        body {
-            font-family: "DejaVu Sans", Arial, sans-serif;
-            color: #1f2937;
-            font-size: 12px;
-            line-height: 1.5;
-        }
+      body {
+        font-family: "DejaVuSans";
+        color: #1f2937;
+        font-size: 12px;
+        line-height: 1.5;
+      }
 
-        h1 {
-            font-size: 22px;
-            margin-bottom: 6px;
-            color: #0f172a;
-        }
+      h1 {
+        font-family: "DejaVuSans-Bold";
+        font-size: 22px;
+        margin-bottom: 6px;
+        color: #0f172a;
+      }
 
-        .description {
-            font-size: 12px;
-            color: #475569;
-            margin-bottom: 18px;
-        }
+      .description {
+        font-size: 12px;
+        color: #475569;
+        margin-bottom: 18px;
+      }
 
-        .meta {
-            margin-bottom: 20px;
-            font-size: 11px;
-            color: #475569;
-        }
+      .meta {
+        margin-bottom: 20px;
+        font-size: 11px;
+        color: #475569;
+      }
 
-        .section {
-            margin-bottom: 20px;
-            border: 1px solid #dbe3ef;
-            border-radius: 8px;
-            padding: 12px;
-        }
+      .section {
+        margin-bottom: 20px;
+        border: 1px solid #dbe3ef;
+        border-radius: 8px;
+        padding: 12px;
+      }
 
-        .section-title {
-            font-size: 15px;
-            font-weight: bold;
-            margin-bottom: 10px;
-            color: #0f172a;
-            border-bottom: 1px solid #e2e8f0;
-            padding-bottom: 6px;
-        }
+      .section-title {
+        font-family: "DejaVuSans-Bold";
+        font-size: 15px;
+        margin-bottom: 10px;
+        color: #0f172a;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 6px;
+      }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
 
-        td {
-            padding: 8px 6px;
-            border-bottom: 1px solid #edf2f7;
-            vertical-align: top;
-        }
+      td {
+        padding: 8px 6px;
+        border-bottom: 1px solid #edf2f7;
+        vertical-align: top;
+      }
 
-        td.label {
-            width: 38%;
-            font-weight: bold;
-            color: #334155;
-        }
+      td.label {
+        width: 38%;
+        font-family: "DejaVuSans-Bold";
+        color: #334155;
+      }
 
-        td.value {
-            width: 62%;
-        }
+      td.value {
+        width: 62%;
+      }
 
-        .footer-note {
-            margin-top: 20px;
-            font-size: 10px;
-            color: #64748b;
-        }
+      .footer-note {
+        margin-top: 20px;
+        font-size: 10px;
+        color: #64748b;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <h1>{{ form_definition.title }}</h1>
 
     {% if form_definition.description %}
-        <div class="description">{{ form_definition.description }}</div>
+    <div class="description">{{ form_definition.description }}</div>
     {% endif %}
 
     <div class="meta">
-        <div><strong>Id zgłoszenia:</strong> {{ submission_id }}</div>
-        <div><strong>Dokument przeznaczony do podpisu kwalifikowanego:</strong> tak</div>
+      <div><strong>Id zgłoszenia:</strong> {{ submission_id }}</div>
+     
     </div>
 
     {% for section in submission_view %}
-        <div class="section">
-            <div class="section-title">{{ section["title"] }}</div>
-            <table>
-                <tbody>
-                {% for item in section["items"] %}
-                    <tr>
-                        <td class="label">{{ item["label"] }}</td>
-                        <td class="value">{{ item["value"] }}</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
+    <div class="section">
+      <div class="section-title">{{ section["title"] }}</div>
+      <table>
+        <tbody>
+          {% for item in section["items"] %}
+          <tr>
+            <td class="label">{{ item["label"] }}</td>
+            <td class="value">{{ item["value"] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% endfor %}
 
-    <div class="footer-note">
-        Dokument został wygenerowany automatycznie z aplikacji webowej. Podpis kwalifikowany dotyczy całego dokumentu PDF.
-    </div>
-</body>
+
+  </body>
 </html>

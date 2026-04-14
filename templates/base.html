@@ -8,26 +8,25 @@
 </head>
 <body>
     <div class="page-shell">
-        <header class="site-header">
+        {% include "partials/header.html" %}
+
+        <main class="site-main">
             <div class="container">
-                <h1 class="site-title">{{ app_name }}</h1>
-                <p class="site-subtitle">Dynamiczne formularze JSON, PDF, CSV i proces kwalifikowanego podpisu elektronicznego</p>
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        <div class="flash-stack">
+                            {% for category, message in messages %}
+                                <div class="flash flash-{{ category }}">{{ message }}</div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
             </div>
-        </header>
-
-        <main class="container">
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    <div class="flash-stack">
-                        {% for category, message in messages %}
-                            <div class="flash flash-{{ category }}">{{ message }}</div>
-                        {% endfor %}
-                    </div>
-                {% endif %}
-            {% endwith %}
-
-            {% block content %}{% endblock %}
         </main>
+
+        {% include "partials/footer.html" %}
     </div>
 </body>
 </html>

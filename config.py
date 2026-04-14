@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 class Config:
-    APP_NAME = "Dynamiczny Formularz z PDF i Podpisem Kwalifikowanym"
+    APP_NAME = "Formularze Lubuskie"
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
 

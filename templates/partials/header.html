@@ -1,0 +1,21 @@
+<header class="site-header">
+    <div class="container site-header__inner">
+        <a href="{{ url_for('index') }}" class="site-brand" aria-label="Strona główna">
+            <img
+                src="{{ url_for('static', filename='images/logo.png') }}"
+                alt="Logo Województwa Lubuskiego"
+                class="site-brand__logo"
+            >
+            <div class="site-brand__text">
+                <span class="site-title">{{ app_name }}</span>
+                <span class="site-subtitle">Platforma składania formularzy online</span>
+            </div>
+        </a>
+
+        <nav class="site-nav" aria-label="Nawigacja główna">
+            <a href="{{ url_for('index') }}" class="is-active">Strona główna</a>
+            <a href="#">Formularze</a>
+            <a href="#">Kontakt</a>
+        </nav>
+    </div>
+</header>

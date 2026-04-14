@@ -1,169 +1,35 @@
 {% extends "base.html" %}
 
-{% block title %}{{ form_definition.title }}{% endblock %}
+{% block title %}Dostępne formularze{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        <h2>{{ form_definition.title }}</h2>
-        {% if form_definition.description %}
-            <p>{{ form_definition.description }}</p>
-        {% endif %}
+<section class="forms-showcase">
+    <div class="forms-showcase__header">
+        <div>
+            <h2>Dostępne formularze</h2>
+            <p>Wybierz formularz do wypełnienia.</p>
+        </div>
     </div>
 
-    <form method="post" action="{{ url_for('submit') }}" novalidate class="dynamic-form">
-        {% for field in form_definition.fields %}
-            {% if field.type == "section" %}
-                <section class="form-section">
-                    <h3>{{ field.label }}</h3>
-                </section>
+    <div class="forms-grid">
+        {% for item in forms %}
+            <a class="form-tile {% if loop.first %}form-tile--featured{% elif loop.index in [3] %}form-tile--accent{% elif loop.index in [5,7] %}form-tile--light{% endif %}"
+               href="{{ url_for('form_page', slug=item.slug) }}">
+                {% if not loop.first %}
+                    <div class="form-tile__plus">+</div>
+                {% endif %}
 
-            {% elif field.type == "static_text" %}
-                <div class="static-text">{{ field.label|safe }}</div>
-
-            {% else %}
-                {% set value = values.get(field.name, field.default) %}
-                {% set has_error = errors.get(field.name) %}
-                <div
-                    class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
-                    {% if field.visible_if %}
-                        data-visible-field="{{ field.visible_if.field }}"
-                        data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
-                        data-visible-value="{{ field.visible_if.value or '' }}"
+                <div class="form-tile__content">
+                    {% if loop.first %}
+                        <div class="form-tile__eyebrow">Projekt 6.08</div>
                     {% endif %}
-                >
-                    <label for="{{ field.name }}">
-                        {{ field.label }}
-                        {% if field.required %}
-                            <span class="required">*</span>
-                        {% endif %}
-                    </label>
-
-                    {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
-                        <input
-                            type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            value="{{ value }}"
-                            placeholder="{{ field.placeholder }}"
-                            {% if field.readonly %}readonly{% endif %}
-                            {% if field.required %}required{% endif %}
-                        >
-                    {% elif field.type == "textarea" %}
-                        <textarea
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            placeholder="{{ field.placeholder }}"
-                            {% if field.readonly %}readonly{% endif %}
-                            {% if field.required %}required{% endif %}
-                        >{{ value }}</textarea>
-                    {% elif field.type == "select" %}
-                        <select
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            {% if field.required %}required{% endif %}
-                            {% if field.readonly %}disabled{% endif %}
-                        >
-                            <option value="">-- wybierz --</option>
-                            {% for option in field.options %}
-                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    {% elif field.type == "radio" %}
-                        <div class="option-list">
-                            {% for option in field.options %}
-                                <label class="option-item">
-                                    <input
-                                        type="radio"
-                                        name="{{ field.name }}"
-                                        value="{{ option }}"
-                                        {% if value == option %}checked{% endif %}
-                                        {% if field.required %}required{% endif %}
-                                        {% if field.readonly %}disabled{% endif %}
-                                    >
-                                    <span>{{ option }}</span>
-                                </label>
-                            {% endfor %}
-                        </div>
-                    {% elif field.type == "checkbox" %}
-                        <label class="checkbox-item">
-                            <input
-                                type="checkbox"
-                                id="{{ field.name }}"
-                                name="{{ field.name }}"
-                                value="Tak"
-                                {% if value == 'Tak' %}checked{% endif %}
-                                {% if field.required %}required{% endif %}
-                                {% if field.readonly %}disabled{% endif %}
-                            >
-                            <span>{{ field.label }}</span>
-                        </label>
-                    {% endif %}
-
-                    {% if field.help_text %}
-                        <div class="help-text">{{ field.help_text }}</div>
-                    {% endif %}
-
-                    {% if has_error %}
-                        <div class="error-text">{{ has_error }}</div>
+                    <h3>{{ item.title }}</h3>
+                    {% if loop.first %}
+                        <span class="form-tile__arrow">→</span>
                     {% endif %}
                 </div>
-            {% endif %}
+            </a>
         {% endfor %}
-
-        <div class="submit-row">
-            <button type="submit" class="btn-primary">Podpisz</button>
-        </div>
-    </form>
-</div>
-
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    const dynamicRows = document.querySelectorAll("[data-visible-field]");
-
-    function getFieldValue(fieldName) {
-        const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
-        if (radioChecked) return radioChecked.value;
-
-        const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
-        if (checkbox) return checkbox.checked ? "Tak" : "Nie";
-
-        const input = document.querySelector(`[name="${fieldName}"]`);
-        return input ? input.value : "";
-    }
-
-    function updateVisibility() {
-        dynamicRows.forEach(row => {
-            const watchedField = row.dataset.visibleField;
-            const operator = row.dataset.visibleOperator || "equals";
-            const expectedValue = row.dataset.visibleValue || "";
-            const currentValue = getFieldValue(watchedField);
-
-            let visible = true;
-
-            if (operator === "equals") visible = currentValue === expectedValue;
-            if (operator === "not_equals") visible = currentValue !== expectedValue;
-
-            row.style.display = visible ? "" : "none";
-
-            row.querySelectorAll("input, select, textarea").forEach(el => {
-                if (!visible) {
-                    if (el.type === "checkbox" || el.type === "radio") {
-                        el.checked = false;
-                    } else {
-                        el.value = "";
-                    }
-                }
-            });
-        });
-    }
-
-    document.querySelectorAll("input, select, textarea").forEach(el => {
-        el.addEventListener("change", updateVisibility);
-        el.addEventListener("input", updateVisibility);
-    });
-
-    updateVisibility();
-});
-</script>
+    </div>
+</section>
 {% endblock %}

@@ -481,6 +481,26 @@ textarea:focus {
 
 /* FORMS SHOWCASE */
 
+.card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.form-header-image {
+    width: 100%;
+}
+
+.form-header-image img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    object-fit: cover;
+    border-radius: 12px;
+}
+
+
 .forms-showcase {
     margin-top: 5vh;
     margin-bottom: 40px;
@@ -579,6 +599,13 @@ textarea:focus {
     font-weight: 700;
     line-height: 1;
     border: 1px solid var(--border);
+}
+
+.field-description {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #4b5563;
 }
 
 .form-tile__arrow {

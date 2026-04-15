@@ -1,6 +1,7 @@
 {
-  "title": "Formularz zgłoszeniowy",
-  "description": "Proszę uzupełnić wszystkie wymagane pola. Dokument PDF wygenerowany po wysłaniu formularza jest przeznaczony do podpisu kwalifikowanego jako zewnętrzny proces podpisu.",
+  "title": "Projekt „Wiedza kluczem do sukcesu”",
+  "description": "FORMULARZ ZGŁOSZENIOWY do projektu „Wiedza kluczem do sukcesu” nr FELB.06.08-IZ.00-0021/25. Proszę uzupełnić wszystkie wymagane pola. Dokument PDF wygenerowany po wysłaniu formularza jest przeznaczony do podpisu elektronicznego jako zewnętrzny proces podpisu. ",
+  "header_image": "forms/Logo-iwona.png",
   "submit_label": "Generuj i wyślij",
   "fields": [
     {
@@ -193,6 +194,7 @@
     {
       "type": "radio",
       "name": "osoba_niepelnosprawna",
+      "description": "Za osoby z niepełnosprawnościami uznaje się osoby w świetle przepisów ustawy z dnia 27 sierpnia 1997 r. o rehabilitacji zawodowej i społecznej oraz  zatrudnianiu osób niepełnosprawnych (Dz. U. z 2018 r. poz. 511 z późn. zm.), a także osoby z zaburzeniami psychicznymi, o których mowa w ustawie z dnia 19 sierpnia 1994 r. o ochronie zdrowia psychicznego (Dz. U. 2017 poz. 882, z późn. zm.), tj. osoby z odpowiednim orzeczeniem lub innym dokumentem poświadczającym stan zdrowia.",
       "label": "Osoba z niepełnosprawnościami",
       "required": true,
       "options": ["Tak", "Nie", "Odmowa podania informacji"],
@@ -231,65 +233,110 @@
     {
       "type": "checkbox",
       "name": "osw_regulamin",
-      "label": "Zapoznałem/am się z Regulaminem rekrutacji i uczestnictwa w Projekcie i akceptuję jego treść.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zapoznałem/am się z Regulaminem rekrutacji i uczestnictwa w Projekcie „Wiedza kluczem do sukcesu”, w tym z zasadami rekrutacji oraz udziału w projekcie i bez zastrzeżeń akceptuję jego treść. Jednocześnie zobowiązuję się do niezwłocznego poinformowania Projektodawcy – Województwo Lubuskie – Urząd Marszałkowski Województwa Lubuskiego o zmianach danych zawartych w dokumentacji zgłoszeniowej."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_kryteria",
-      "label": "Oświadczam, że spełniam kryteria uczestnictwa w Projekcie.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Oświadczam, że spełniam kryteria uczestnictwa w Projekcie określone w Regulaminie rekrutacji i uczestnictwa w Projekcie „Poznaj nowe szanse na rozwój”."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_finansowanie",
-      "label": "Zostałem/am poinformowany/a, że projekt jest współfinansowany ze środków Unii Europejskiej.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zostałem/am poinformowany/a, że Projekt jest współfinansowany ze środków Unii Europejskiej w ramach Programu Regionalnego Fundusze Europejskie dla Lubuskiego na lata 2021-2027."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_brak_gwarancji",
-      "label": "Zostałem/am poinformowany/a, że złożenie formularza nie jest równoznaczne z zakwalifikowaniem do udziału w projekcie.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zostałem/am poinformowany/a o tym, iż złożenie Formularza zgłoszeniowego nie jest równoznaczne z zakwalifikowaniem do udziału w Projekcie. "
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_rodo",
-      "label": "Wyrażam zgodę na gromadzenie i przetwarzanie danych osobowych dla potrzeb rekrutacji.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Wyrażam zgodę na gromadzenie, przetwarzanie moich danych osobowych zawartych w niniejszym formularzu (zgodnie z Ustawą o ochronie danych osobowych z dnia 10.05.2018 r. (Dz. U. z 2018 r., poz. 1000) dla potrzeb niezbędnych do przeprowadzenia rekrutacji w ramach Projektu „Wiedza kluczem do sukcesu”."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_ewaluacja",
-      "label": "Zostałem/am poinformowany/a o obowiązku udziału w badaniach ewaluacyjnych.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zostałem/am poinformowany/a o obowiązku udziału w badaniach ewaluacyjnych prowadzonych przez Projektodawcę oraz podmioty zewnętrzne na zlecenie Województwa Lubuskiego – Urząd Marszałkowski Województwa Lubuskiego."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_zatrudnienie",
-      "label": "Zobowiązuję się do przekazania zaświadczenia od pracodawcy potwierdzającego zatrudnienie.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zobowiązuję się do przekazania Projektodawcy zaświadczenia od pracodawcy potwierdzającego zatrudnienie."
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_monitoring",
-      "label": "Zobowiązuję się do przekazania danych niezbędnych do monitoringu efektów projektu.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zobowiązuję się do przekazania danych niezbędnych do monitoringu efektów projektu, tj. statusu na rynku pracy, informacji dotyczących otrzymanej oferty pracy, możliwości kształcenia ustawicznego, przygotowania zawodowego lub odbycia stażu do 4 tygodni od zakończenia udziału w projekcie"
+        }
+      ]
     },
     {
       "type": "checkbox",
       "name": "osw_prawdziwosc",
-      "label": "Oświadczam, że dane zawarte w formularzu są zgodne ze stanem prawnym i faktycznym.",
       "required": true,
-      "width": "full"
+      "width": "full",
+      "options": [
+        {
+          "value": "Tak",
+          "label": "Zostałem/am poinformowany/a o odpowiedzialności cywilnej (wynikającej z Kodeksu Cywilnego) za składanie oświadczeń niezgodnych z prawdą, niniejszym oświadczam, że dane zawarte w Formularzu zgłoszeniowym są zgodne ze stanem prawnym i faktycznym."
+        }
+      ]
     }
   ]
 }

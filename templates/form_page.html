@@ -4,173 +4,203 @@
 
 {% block content %}
 
-
     <div class="back-link">
         <a href="{{ url_for('index') }}">← Powrót do listy formularzy</a>
     </div>
 
+    <div class="card">
+        <div class="card-header">
+            <h2>{{ form_definition.title }}</h2>
 
-<div class="card">
-    <div class="card-header">
-        <h2>{{ form_definition.title }}</h2>
-        {% if form_definition.description %}
-            <p>{{ form_definition.description }}</p>
-        {% endif %}
-    </div>
+            {% if form_definition.header_image %}
+                <div class="form-header-image">
+                    <img
+                        src="{{ url_for('static', filename=form_definition.header_image) }}"
+                        alt="Zdjęcie formularza"
+                        loading="lazy"
+                    >
+                </div>
+            {% endif %}
 
-    <form method="post" action="{{ url_for('submit', slug=slug) }}" novalidate class="dynamic-form">
-        {% for field in form_definition.fields %}
-            {% if field.type == "section" %}
-                <section class="form-section">
-                    <h3>{{ field.label }}</h3>
-                </section>
+            {% if form_definition.description %}
+                <p class="form-description">{{ form_definition.description }}</p>
+            {% endif %}
+        </div>
 
-            {% elif field.type == "static_text" %}
-                <div class="static-text">{{ field.label|safe }}</div>
+        <form method="post" action="{{ url_for('submit', slug=slug) }}" novalidate class="dynamic-form">
+            {% for field in form_definition.fields %}
+                {% if field.type == "section" %}
+                    <section class="form-section">
+                        <h3>{{ field.label }}</h3>
+                    </section>
 
-            {% else %}
-                {% set value = values.get(field.name, field.default) %}
-                {% set has_error = errors.get(field.name) %}
-                <div
-                    class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
-                    {% if field.visible_if %}
-                        data-visible-field="{{ field.visible_if.field }}"
-                        data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
-                        data-visible-value="{{ field.visible_if.value or '' }}"
-                    {% endif %}
-                >
-                    <label for="{{ field.name }}">
-                        {{ field.label }}
-                        {% if field.required %}
-                            <span class="required">*</span>
+                {% elif field.type == "static_text" %}
+                    <div class="static-text">{{ field.label|safe }}</div>
+
+                {% else %}
+                    {% set value = values.get(field.name, field.default) %}
+                    {% set has_error = errors.get(field.name) %}
+
+                    <div
+                        class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
+                        {% if field.visible_if %}
+                            data-visible-field="{{ field.visible_if.field }}"
+                            data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
+                            data-visible-value="{{ field.visible_if.value or '' }}"
                         {% endif %}
-                    </label>
+                    >
+                        {% if field.type != "checkbox" %}
+                            <label for="{{ field.name }}">
+                                {{ field.label }}
+                                {% if field.required %}
+                                    <span class="required">*</span>
+                                {% endif %}
+                            </label>
+                        {% endif %}
 
-                    {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
-                        <input
-                            type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            value="{{ value }}"
-                            placeholder="{{ field.placeholder }}"
-                            {% if field.readonly %}readonly{% endif %}
-                            {% if field.required %}required{% endif %}
-                        >
-                    {% elif field.type == "textarea" %}
-                        <textarea
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            placeholder="{{ field.placeholder }}"
-                            {% if field.readonly %}readonly{% endif %}
-                            {% if field.required %}required{% endif %}
-                        >{{ value }}</textarea>
-                    {% elif field.type == "select" %}
-                        <select
-                            id="{{ field.name }}"
-                            name="{{ field.name }}"
-                            {% if field.required %}required{% endif %}
-                            {% if field.readonly %}disabled{% endif %}
-                        >
-                            <option value="">-- wybierz --</option>
-                            {% for option in field.options %}
-                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    {% elif field.type == "radio" %}
-                        <div class="option-list">
-                            {% for option in field.options %}
-                                <label class="option-item">
-                                    <input
-                                        type="radio"
-                                        name="{{ field.name }}"
-                                        value="{{ option }}"
-                                        {% if value == option %}checked{% endif %}
-                                        {% if field.required %}required{% endif %}
-                                        {% if field.readonly %}disabled{% endif %}
-                                    >
-                                    <span>{{ option }}</span>
-                                </label>
-                            {% endfor %}
-                        </div>
-                    {% elif field.type == "checkbox" %}
-                        <label class="checkbox-item">
+                        {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
                             <input
-                                type="checkbox"
+                                type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
-                                value="Tak"
-                                {% if value == 'Tak' %}checked{% endif %}
+                                value="{{ value }}"
+                                placeholder="{{ field.placeholder }}"
+                                {% if field.readonly %}readonly{% endif %}
+                                {% if field.required %}required{% endif %}
+                            >
+
+                        {% elif field.type == "textarea" %}
+                            <textarea
+                                id="{{ field.name }}"
+                                name="{{ field.name }}"
+                                placeholder="{{ field.placeholder }}"
+                                {% if field.readonly %}readonly{% endif %}
+                                {% if field.required %}required{% endif %}
+                            >{{ value }}</textarea>
+
+                        {% elif field.type == "select" %}
+                            <select
+                                id="{{ field.name }}"
+                                name="{{ field.name }}"
                                 {% if field.required %}required{% endif %}
                                 {% if field.readonly %}disabled{% endif %}
                             >
-                            <span>{{ field.label }}</span>
-                        </label>
-                    {% endif %}
+                                <option value="">-- wybierz --</option>
+                                {% for option in field.options %}
+                                    <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                {% endfor %}
+                            </select>
 
-                    {% if field.help_text %}
-                        <div class="help-text">{{ field.help_text }}</div>
-                    {% endif %}
+                        {% elif field.type == "radio" %}
+                            {% if field.description %}
+                                <div class="field-description">{{ field.description }}</div>
+                            {% endif %}
 
-                    {% if has_error %}
-                        <div class="error-text">{{ has_error }}</div>
-                    {% endif %}
-                </div>
-            {% endif %}
-        {% endfor %}
+                            <div class="option-list">
+                                {% for option in field.options %}
+                                    <label class="option-item">
+                                        <input
+                                            type="radio"
+                                            name="{{ field.name }}"
+                                            value="{{ option }}"
+                                            {% if value == option %}checked{% endif %}
+                                            {% if field.required %}required{% endif %}
+                                            {% if field.readonly %}disabled{% endif %}
+                                        >
+                                        <span>{{ option }}</span>
+                                    </label>
+                                {% endfor %}
+                            </div>
 
-        <div class="submit-row">
-            <button type="submit" class="btn-primary">Podpisz</button>
-        </div>
-    </form>
-</div>
+                        {% elif field.type == "checkbox" %}
+                            <div class="option-list">
+                                {% for option in field.options %}
+                                    <label class="checkbox-item">
+                                        <input
+                                            type="checkbox"
+                                            id="{{ field.name }}_{{ loop.index }}"
+                                            name="{{ field.name }}"
+                                            value="{{ option.value }}"
+                                            {% if value == option.value %}checked{% endif %}
+                                            {% if field.required %}required{% endif %}
+                                            {% if field.readonly %}disabled{% endif %}
+                                        >
+                                        <span>
+                                            {{ option.label }}
+                                            {% if field.required %}
+                                                <span class="required">*</span>
+                                            {% endif %}
+                                        </span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
 
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    const dynamicRows = document.querySelectorAll("[data-visible-field]");
+                        {% if field.help_text %}
+                            <div class="help-text">{{ field.help_text }}</div>
+                        {% endif %}
 
-    function getFieldValue(fieldName) {
-        const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
-        if (radioChecked) return radioChecked.value;
+                        {% if has_error %}
+                            <div class="error-text">{{ has_error }}</div>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% endfor %}
 
-        const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
-        if (checkbox) return checkbox.checked ? "Tak" : "Nie";
+            <div class="submit-row">
+                <button type="submit" class="btn-primary">Podpisz</button>
+            </div>
+        </form>
+    </div>
 
-        const input = document.querySelector(`[name="${fieldName}"]`);
-        return input ? input.value : "";
-    }
+    <script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const dynamicRows = document.querySelectorAll("[data-visible-field]");
 
-    function updateVisibility() {
-        dynamicRows.forEach(row => {
-            const watchedField = row.dataset.visibleField;
-            const operator = row.dataset.visibleOperator || "equals";
-            const expectedValue = row.dataset.visibleValue || "";
-            const currentValue = getFieldValue(watchedField);
+        function getFieldValue(fieldName) {
+            const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
+            if (radioChecked) return radioChecked.value;
 
-            let visible = true;
+            const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
+            if (checkbox) return checkbox.checked ? "Tak" : "Nie";
 
-            if (operator === "equals") visible = currentValue === expectedValue;
-            if (operator === "not_equals") visible = currentValue !== expectedValue;
+            const input = document.querySelector(`[name="${fieldName}"]`);
+            return input ? input.value : "";
+        }
 
-            row.style.display = visible ? "" : "none";
+        function updateVisibility() {
+            dynamicRows.forEach(row => {
+                const watchedField = row.dataset.visibleField;
+                const operator = row.dataset.visibleOperator || "equals";
+                const expectedValue = row.dataset.visibleValue || "";
+                const currentValue = getFieldValue(watchedField);
 
-            row.querySelectorAll("input, select, textarea").forEach(el => {
-                if (!visible) {
-                    if (el.type === "checkbox" || el.type === "radio") {
-                        el.checked = false;
-                    } else {
-                        el.value = "";
+                let visible = true;
+
+                if (operator === "equals") visible = currentValue === expectedValue;
+                if (operator === "not_equals") visible = currentValue !== expectedValue;
+
+                row.style.display = visible ? "" : "none";
+
+                row.querySelectorAll("input, select, textarea").forEach(el => {
+                    if (!visible) {
+                        if (el.type === "checkbox" || el.type === "radio") {
+                            el.checked = false;
+                        } else {
+                            el.value = "";
+                        }
                     }
-                }
+                });
             });
+        }
+
+        document.querySelectorAll("input, select, textarea").forEach(el => {
+            el.addEventListener("change", updateVisibility);
+            el.addEventListener("input", updateVisibility);
         });
-    }
 
-    document.querySelectorAll("input, select, textarea").forEach(el => {
-        el.addEventListener("change", updateVisibility);
-        el.addEventListener("input", updateVisibility);
+        updateVisibility();
     });
+    </script>
 
-    updateVisibility();
-});
-</script>
 {% endblock %}

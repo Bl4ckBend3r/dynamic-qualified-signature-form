@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 from uuid import uuid4
+import base64
+import mimetypes
 
 from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory, abort
 
@@ -10,6 +12,7 @@ from form_loader import (
     validate_submission,
     extract_submission_data,
     build_submission_view,
+    build_consents_view,
 )
 from pdf_generator import generate_pdf
 from csv_exporter import append_submission
@@ -31,7 +34,21 @@ for directory in [
     app.config["SIGNED_OUTPUT_DIR"],
 ]:
     Path(directory).mkdir(parents=True, exist_ok=True)
+    
+    
+    
 
+def resolve_pdf_image_url(form_definition: dict) -> str | None:
+    image_value = form_definition.get("header_image")
+    if not image_value:
+        return None
+
+    normalized = str(image_value).replace("\\", "/").lstrip("/")
+
+    if normalized.startswith("static/"):
+        normalized = normalized[len("static/"):]
+
+    return request.url_root.rstrip("/") + "/static/" + normalized
 
 def slug_to_title(slug: str) -> str:
     return slug.replace("-", " ").replace("_", " ").strip().title()
@@ -92,6 +109,27 @@ def get_form_definition(slug: str) -> dict | None:
     return load_form_definition(form_meta["definition_path"])
 
 
+def resolve_pdf_image_data_uri(app: Flask, form_definition: dict) -> str | None:
+    image_value = form_definition.get("header_image")
+    if not image_value:
+        return None
+
+    image_path = Path(image_value)
+
+    if not image_path.is_absolute():
+        image_path = Path(app.root_folder) / "static"/ image_value
+
+    if not image_path.exists():
+        logger.warning("Nie znaleziono obrazu do PDF: %s", image_path)
+        return None
+
+    mime_type, _ = mimetypes.guess_type(image_path.name)
+    if not mime_type:
+        mime_type = "image/png"
+
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
 @app.context_processor
 def inject_globals():
     return {
@@ -138,6 +176,8 @@ def submit(slug: str):
     submission_id = str(uuid4())
     submission_data = extract_submission_data(form_definition, request.form)
     errors = validate_submission(form_definition, submission_data)
+    logger.info("Validation errors: %s", errors)
+
 
     if errors:
         flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
@@ -158,7 +198,15 @@ def submit(slug: str):
             "form_definition": form_definition,
             "submission_view": build_submission_view(form_definition, submission_data),
             "submission_id": submission_id,
+            "pdf_image_url": resolve_pdf_image_url(form_definition),
+            "pdf_image_alt": form_definition.get("title", ""),
+            "consents_view": build_consents_view(form_definition, submission_data),
         }
+
+        logger.info("header_image: %s", form_definition.get("header_image"))
+        logger.info("pdf_image_url: %s", pdf_context.get("pdf_image_url"))
+        
+
 
         generate_pdf(
             app=app,
@@ -318,6 +366,8 @@ def download_pdf(filename: str):
 @app.route("/downloads/signed/<path:filename>", methods=["GET"])
 def download_signed_pdf(filename: str):
     return send_from_directory(app.config["SIGNED_OUTPUT_DIR"], filename, as_attachment=True)
+
+
 
 
 if __name__ == "__main__":

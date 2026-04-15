@@ -23,6 +23,24 @@
         color: #0f172a;
       }
 
+      h2 {
+        font-family: "DejaVuSans-Bold";
+        font-size: 16px;
+        margin: 0 0 10px 0;
+        color: #0f172a;
+      }
+
+      .header-image {
+        width: 100%;
+        margin: 12px 0 18px 0;
+      }
+
+      .header-image img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
       .description {
         font-size: 12px;
         color: #475569;
@@ -40,6 +58,7 @@
         border: 1px solid #dbe3ef;
         border-radius: 8px;
         padding: 12px;
+        page-break-inside: avoid;
       }
 
       .section-title {
@@ -72,6 +91,34 @@
         width: 62%;
       }
 
+      .consents {
+        margin-top: 24px;
+      }
+
+      .consent-item {
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        page-break-inside: avoid;
+      }
+
+      .consent-title {
+        font-family: "DejaVuSans-Bold";
+        margin-bottom: 6px;
+        color: #0f172a;
+      }
+
+      .consent-text {
+        white-space: pre-line;
+        color: #334155;
+      }
+
+      .consent-status {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #475569;
+      }
+
       .footer-note {
         margin-top: 20px;
         font-size: 10px;
@@ -82,13 +129,19 @@
   <body>
     <h1>{{ form_definition.title }}</h1>
 
-    {% if form_definition.description %}
+    {% if pdf_image_url %}
+    <div class="header-image">
+      <img
+        src="{{ pdf_image_url }}"
+        alt="{{ pdf_image_alt or 'Obraz formularza' }}"
+      />
+    </div>
+    {% endif %} {% if form_definition.description %}
     <div class="description">{{ form_definition.description }}</div>
     {% endif %}
 
     <div class="meta">
       <div><strong>Id zgłoszenia:</strong> {{ submission_id }}</div>
-     
     </div>
 
     {% for section in submission_view %}
@@ -105,8 +158,26 @@
         </tbody>
       </table>
     </div>
-    {% endfor %}
+    {% endfor %} {% if consents_view %}
+    <div class="section consents">
+      <div class="section-title">Zgody i oświadczenia</div>
 
+      {% for consent in consents_view %}
+      <div class="consent-item">
+        {% if consent.title %}
+        <div class="consent-title">{{ consent.title }}</div>
+        {% endif %}
 
+        <div class="consent-text">{{ consent.text }}</div>
+
+        {% if consent.accepted_label %}
+        <div class="consent-status">
+          <strong>Status:</strong> {{ consent.accepted_label }}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </body>
 </html>

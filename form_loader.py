@@ -25,6 +25,46 @@ EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TEL_REGEX = re.compile(r"^[0-9+\s\-()]{7,20}$")
 PESEL_REGEX = re.compile(r"^\d{11}$")
 
+def build_consents_view(form_definition: Dict[str, Any], submission_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    consents_view: List[Dict[str, Any]] = []
+
+    for field in form_definition.get("fields", []):
+        if field.get("type") != "checkbox":
+            continue
+
+        field_name = field.get("name")
+        if not field_name:
+            continue
+
+        if not evaluate_visible_if(field.get("visible_if"), submission_data):
+            continue
+
+        accepted = submission_data.get(field_name, "Nie") == "Tak"
+
+        options = field.get("options", [])
+        option_label = ""
+        if options and isinstance(options, list):
+            first_option = options[0] or {}
+            option_label = first_option.get("label", "")
+
+        consent_text = (
+            field.get("pdf_text")
+            or option_label
+            or field.get("label", "")
+        )
+
+        consents_view.append(
+            {
+                "name": field_name,
+                "title": field.get("label", ""),
+                "text": consent_text,
+                "accepted": accepted,
+                "accepted_label": "Tak" if accepted else "Nie",
+                "required": bool(field.get("required", False)),
+            }
+        )
+
+    return consents_view
 
 def load_form_definition(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as file:
@@ -183,12 +223,17 @@ def build_submission_view(form_definition: Dict[str, Any], submission_data: Dict
         "items": [],
     }
 
+    def should_skip_section(section: Dict[str, Any]) -> bool:
+        title = (section.get("title") or "").strip().lower()
+        return title == "oświadczenia"
+
     for field in form_definition["fields"]:
         field_type = field["type"]
 
         if field_type == "section":
-            if current_section["items"]:
+            if current_section["items"] and not should_skip_section(current_section):
                 view.append(current_section)
+
             current_section = {
                 "title": field.get("label", "Sekcja"),
                 "items": [],
@@ -210,7 +255,7 @@ def build_submission_view(form_definition: Dict[str, Any], submission_data: Dict
             "value": format_value_for_pdf(field_type, submission_data.get(field_name, "")),
         })
 
-    if current_section["items"]:
+    if current_section["items"] and not should_skip_section(current_section):
         view.append(current_section)
 
     return view

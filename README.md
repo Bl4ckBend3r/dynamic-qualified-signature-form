@@ -37,6 +37,7 @@ Przykład dla Debian/Ubuntu:
 ```bash
 sudo apt-get update
 sudo apt-get install -y python3-dev build-essential libpango-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info
+```
 
 
 # Instrukcja budowy formularza w pliku JSON

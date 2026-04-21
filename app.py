@@ -1,22 +1,38 @@
+import base64
 import logging
+import mimetypes
+import tempfile
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
-import base64
-import mimetypes
 
-from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory, abort
+from dotenv import load_dotenv
+from flask import (
+    Flask,
+    abort,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
 
 from config import Config
 from form_loader import (
-    load_form_definition,
     validate_submission,
     extract_submission_data,
     build_submission_view,
     build_consents_view,
 )
 from pdf_generator import generate_pdf
-from csv_exporter import append_submission
 from signature_verifier import verify_signed_pdf
+from services.nextcloud_storage import (
+    NextcloudStorageError,
+    create_nextcloud_storage_from_env,
+)
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,16 +43,14 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_object(Config)
 
-for directory in [
-    app.config["OUTPUT_DIR"],
-    app.config["PDF_OUTPUT_DIR"],
-    app.config["CSV_OUTPUT_DIR"],
-    app.config["SIGNED_OUTPUT_DIR"],
-]:
-    Path(directory).mkdir(parents=True, exist_ok=True)
-    
-    
-    
+Path(app.config["TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
+
+storage = create_nextcloud_storage_from_env()
+
+logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
+logger.info("NEXTCLOUD_USERNAME=%s", app.config["NEXTCLOUD_USERNAME"])
+logger.info("NEXTCLOUD_FORMS_DIR=%s", app.config["NEXTCLOUD_FORMS_DIR"])
+logger.info("NEXTCLOUD_OUTPUT_DIR=%s", app.config["NEXTCLOUD_OUTPUT_DIR"])
 
 def resolve_pdf_image_url(form_definition: dict) -> str | None:
     image_value = form_definition.get("header_image")
@@ -50,30 +64,30 @@ def resolve_pdf_image_url(form_definition: dict) -> str | None:
 
     return request.url_root.rstrip("/") + "/static/" + normalized
 
+
 def slug_to_title(slug: str) -> str:
     return slug.replace("-", " ").replace("_", " ").strip().title()
 
 
-def detect_form_files() -> list[Path]:
-    forms_dir = Path("forms")
-    forms_dir.mkdir(parents=True, exist_ok=True)
-    return sorted(forms_dir.glob("*.json"))
+def detect_form_files() -> list[str]:
+    return storage.list_form_files()
 
 
 def build_forms_registry() -> list[dict]:
     forms = []
 
-    for index, file_path in enumerate(detect_form_files()):
+    for index, filename in enumerate(detect_form_files()):
         try:
-            form_definition = load_form_definition(str(file_path))
-            slug = file_path.stem
+            form_definition = storage.read_form_json(filename)
+            slug = Path(filename).stem
+            storage.ensure_form_output_structure(slug)
 
             forms.append(
                 {
                     "slug": slug,
                     "title": form_definition.get("title") or slug_to_title(slug),
                     "description": form_definition.get("description", ""),
-                    "definition_path": str(file_path),
+                    "definition_path": filename,
                     "tile_variant": (
                         "featured"
                         if index == 0
@@ -86,7 +100,7 @@ def build_forms_registry() -> list[dict]:
                 }
             )
         except Exception as exc:
-            logger.warning("Nie udało się załadować formularza %s: %s", file_path, exc)
+            logger.warning("Nie udało się załadować formularza %s: %s", filename, exc)
 
     return forms
 
@@ -106,7 +120,7 @@ def get_form_definition(slug: str) -> dict | None:
     form_meta = get_form_meta(slug)
     if not form_meta:
         return None
-    return load_form_definition(form_meta["definition_path"])
+    return storage.read_form_json(form_meta["definition_path"])
 
 
 def resolve_pdf_image_data_uri(app: Flask, form_definition: dict) -> str | None:
@@ -117,7 +131,7 @@ def resolve_pdf_image_data_uri(app: Flask, form_definition: dict) -> str | None:
     image_path = Path(image_value)
 
     if not image_path.is_absolute():
-        image_path = Path(app.root_folder) / "static"/ image_value
+        image_path = Path(app.root_folder) / "static" / image_value
 
     if not image_path.exists():
         logger.warning("Nie znaleziono obrazu do PDF: %s", image_path)
@@ -130,6 +144,19 @@ def resolve_pdf_image_data_uri(app: Flask, form_definition: dict) -> str | None:
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
+
+def build_pdf_filename(slug: str, submission_id: str) -> str:
+    return f"{slug}-{submission_id}.pdf"
+
+
+def build_signed_pdf_filename(slug: str, submission_id: str) -> str:
+    return f"{slug}-{submission_id}-signed.pdf"
+
+
+def pdf_exists(slug: str, filename: str) -> bool:
+    return storage.exists(f"{app.config['NEXTCLOUD_OUTPUT_DIR']}/{slug}/pdf/{filename}")
+
+
 @app.context_processor
 def inject_globals():
     return {
@@ -139,8 +166,14 @@ def inject_globals():
 
 @app.route("/", methods=["GET"])
 def index():
-    forms = get_forms()
-    return render_template("index.html", forms=forms)
+    try:
+        storage.ensure_base_structure()
+        storage.ensure_outputs_for_all_forms()
+        forms = get_forms()
+        return render_template("index.html", forms=forms)
+    except NextcloudStorageError as exc:
+        logger.exception("Błąd Nextcloud: %s", exc)
+        return f"Błąd Nextcloud: {exc}", 500
 
 
 @app.route("/form/<slug>", methods=["GET"])
@@ -178,7 +211,6 @@ def submit(slug: str):
     errors = validate_submission(form_definition, submission_data)
     logger.info("Validation errors: %s", errors)
 
-
     if errors:
         flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
         return render_template(
@@ -191,8 +223,9 @@ def submit(slug: str):
         ), 400
 
     try:
-        pdf_filename = f"{slug}-{submission_id}.pdf"
-        pdf_path = Path(app.config["PDF_OUTPUT_DIR"]) / pdf_filename
+        storage.ensure_form_output_structure(slug)
+
+        pdf_filename = build_pdf_filename(slug, submission_id)
 
         pdf_context = {
             "form_definition": form_definition,
@@ -205,16 +238,26 @@ def submit(slug: str):
 
         logger.info("header_image: %s", form_definition.get("header_image"))
         logger.info("pdf_image_url: %s", pdf_context.get("pdf_image_url"))
-        
 
+        with tempfile.NamedTemporaryFile(
+            suffix=".pdf",
+            delete=False,
+            dir=app.config["TEMP_DIR"],
+        ) as tmp_pdf:
+            tmp_pdf_path = Path(tmp_pdf.name)
 
-        generate_pdf(
-            app=app,
-            template_name="pdf_template.html",
-            context=pdf_context,
-            output_path=pdf_path,
-        )
-        logger.info("Wygenerowano PDF: %s", pdf_path)
+        try:
+            generate_pdf(
+                app=app,
+                template_name="pdf_template.html",
+                context=pdf_context,
+                output_path=tmp_pdf_path,
+            )
+            pdf_bytes = tmp_pdf_path.read_bytes()
+            storage.save_pdf(slug, pdf_filename, pdf_bytes)
+            logger.info("Wygenerowano i zapisano PDF do Nextcloud: %s", pdf_filename)
+        finally:
+            tmp_pdf_path.unlink(missing_ok=True)
 
         signature_status = "manual"
         signed_pdf_filename = ""
@@ -231,17 +274,13 @@ def submit(slug: str):
             **submission_data,
         }
 
-        append_submission(
-            csv_file_path=Path(app.config["CSV_OUTPUT_DIR"]) / app.config["CSV_FILENAME"],
-            form_definition=form_definition,
-            row=csv_row,
-        )
+        storage.append_csv_row(slug, csv_row)
 
         result = {
             "submission_id": submission_id,
             "form_slug": slug,
             "pdf_filename": pdf_filename,
-            "pdf_url": url_for("download_pdf", filename=pdf_filename),
+            "pdf_url": url_for("download_pdf", slug=slug, filename=pdf_filename),
             "signature_request_id": "mobywatel-manual",
             "signature_status": signature_status,
             "signed_pdf_filename": signed_pdf_filename,
@@ -287,21 +326,31 @@ def upload_signed_pdf(slug: str, submission_id: str):
             flash("Dozwolony jest wyłącznie plik PDF.", "error")
             return redirect(url_for("show_result", slug=slug, submission_id=submission_id))
 
-        signed_pdf_filename = f"{slug}-{submission_id}-signed.pdf"
-        signed_pdf_path = Path(app.config["SIGNED_OUTPUT_DIR"]) / signed_pdf_filename
-        uploaded_file.save(signed_pdf_path)
+        signed_pdf_filename = build_signed_pdf_filename(slug, submission_id)
+        uploaded_bytes = uploaded_file.read()
 
-        verification = verify_signed_pdf(signed_pdf_path)
+        with tempfile.NamedTemporaryFile(
+            suffix=".pdf",
+            delete=False,
+            dir=app.config["TEMP_DIR"],
+        ) as tmp_signed:
+            tmp_signed_path = Path(tmp_signed.name)
+            tmp_signed.write(uploaded_bytes)
+
+        try:
+            verification = verify_signed_pdf(tmp_signed_path)
+        finally:
+            tmp_signed_path.unlink(missing_ok=True)
 
         if not verification["is_signed"]:
-            signed_pdf_path.unlink(missing_ok=True)
             flash("Przesłany plik nie zawiera podpisu PDF.", "error")
             return redirect(url_for("show_result", slug=slug, submission_id=submission_id))
 
         if not verification["is_szafir_signature"]:
-            signed_pdf_path.unlink(missing_ok=True)
             flash("Przesłany plik nie jest podpisem Szafir / KIR.", "error")
             return redirect(url_for("show_result", slug=slug, submission_id=submission_id))
+
+        storage.save_pdf(slug, signed_pdf_filename, uploaded_bytes)
 
         flash("Wykryto poprawny podpis Szafir / KIR.", "success")
         return redirect(url_for("show_result", slug=slug, submission_id=submission_id))
@@ -322,14 +371,28 @@ def show_result(slug: str, submission_id: str):
     if not form_definition:
         abort(404)
 
-    pdf_filename = f"{slug}-{submission_id}.pdf"
-    signed_pdf_filename = f"{slug}-{submission_id}-signed.pdf"
-    signed_pdf_path = Path(app.config["SIGNED_OUTPUT_DIR"]) / signed_pdf_filename
+    pdf_filename = build_pdf_filename(slug, submission_id)
+    signed_pdf_filename = build_signed_pdf_filename(slug, submission_id)
 
     verification = None
-    if signed_pdf_path.exists():
+    signed_exists = pdf_exists(slug, signed_pdf_filename)
+
+    if signed_exists:
         try:
-            verification = verify_signed_pdf(signed_pdf_path)
+            signed_pdf_bytes = storage.get_pdf_bytes(slug, signed_pdf_filename)
+            with tempfile.NamedTemporaryFile(
+                suffix=".pdf",
+                delete=False,
+                dir=app.config["TEMP_DIR"],
+            ) as tmp_signed:
+                tmp_signed_path = Path(tmp_signed.name)
+                tmp_signed.write(signed_pdf_bytes)
+
+            try:
+                verification = verify_signed_pdf(tmp_signed_path)
+            finally:
+                tmp_signed_path.unlink(missing_ok=True)
+
         except Exception as exc:
             logger.warning("Nie udało się odczytać podpisu: %s", exc)
 
@@ -337,17 +400,17 @@ def show_result(slug: str, submission_id: str):
         "submission_id": submission_id,
         "form_slug": slug,
         "pdf_filename": pdf_filename,
-        "pdf_url": url_for("download_pdf", filename=pdf_filename),
+        "pdf_url": url_for("download_pdf", slug=slug, filename=pdf_filename),
         "signature_request_id": "mobywatel-manual",
         "signature_status": (
             "szafir"
             if verification and verification.get("is_szafir_signature")
-            else "uploaded" if signed_pdf_path.exists() else "manual"
+            else "uploaded" if signed_exists else "manual"
         ),
-        "signed_pdf_filename": signed_pdf_filename if signed_pdf_path.exists() else "",
+        "signed_pdf_filename": signed_pdf_filename if signed_exists else "",
         "signed_pdf_url": (
-            url_for("download_signed_pdf", filename=signed_pdf_filename)
-            if signed_pdf_path.exists()
+            url_for("download_signed_pdf", slug=slug, filename=signed_pdf_filename)
+            if signed_exists
             else None
         ),
         "upload_url": url_for("upload_signed_pdf", slug=slug, submission_id=submission_id),
@@ -358,16 +421,32 @@ def show_result(slug: str, submission_id: str):
     return render_template("result.html", result=result)
 
 
-@app.route("/downloads/pdfs/<path:filename>", methods=["GET"])
-def download_pdf(filename: str):
-    return send_from_directory(app.config["PDF_OUTPUT_DIR"], filename, as_attachment=True)
+@app.route("/downloads/pdfs/<slug>/<path:filename>", methods=["GET"])
+def download_pdf(slug: str, filename: str):
+    try:
+        pdf_bytes = storage.get_pdf_bytes(slug, filename)
+        return send_file(
+            BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=filename,
+        )
+    except Exception:
+        abort(404)
 
 
-@app.route("/downloads/signed/<path:filename>", methods=["GET"])
-def download_signed_pdf(filename: str):
-    return send_from_directory(app.config["SIGNED_OUTPUT_DIR"], filename, as_attachment=True)
-
-
+@app.route("/downloads/signed/<slug>/<path:filename>", methods=["GET"])
+def download_signed_pdf(slug: str, filename: str):
+    try:
+        pdf_bytes = storage.get_pdf_bytes(slug, filename)
+        return send_file(
+            BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=filename,
+        )
+    except Exception:
+        abort(404)
 
 
 if __name__ == "__main__":

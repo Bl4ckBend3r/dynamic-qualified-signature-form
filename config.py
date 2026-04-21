@@ -10,16 +10,29 @@ class Config:
     BASE_DIR = Path(__file__).resolve().parent
     TEMPLATE_DIR = BASE_DIR / "templates"
     STATIC_DIR = BASE_DIR / "static"
+
+    # Tymczasowy katalog roboczy używany lokalnie do generowania i weryfikacji PDF.
+    TEMP_DIR = Path(os.getenv("TEMP_DIR", str(BASE_DIR / "tmp")))
+
+    # Konfiguracja Nextcloud
+    NEXTCLOUD_BASE_URL = os.getenv("NEXTCLOUD_BASE_URL", "")
+    NEXTCLOUD_USERNAME = os.getenv("NEXTCLOUD_USERNAME", "")
+    NEXTCLOUD_APP_PASSWORD = os.getenv("NEXTCLOUD_APP_PASSWORD", "")
+    NEXTCLOUD_FORMS_DIR = os.getenv("NEXTCLOUD_FORMS_DIR", "Formularze")
+    NEXTCLOUD_OUTPUT_DIR = os.getenv("NEXTCLOUD_OUTPUT_DIR", "output")
+
+    # Zachowane tylko dla kompatybilności z dotychczasowym kodem.
+    # Nie są już głównym storage dla formularzy i wyników.
     FORMS_DIR = BASE_DIR / "forms"
     OUTPUT_DIR = BASE_DIR / "output"
 
+    # Tymczasowe katalogi lokalne
+    PDF_OUTPUT_DIR = TEMP_DIR / "pdfs"
+    CSV_OUTPUT_DIR = TEMP_DIR / "csv"
+    SIGNED_OUTPUT_DIR = TEMP_DIR / "signed"
+    SIGNATURE_WORK_DIR = TEMP_DIR / "signatures"
+
     FORM_DEFINITION_PATH = FORMS_DIR / os.getenv("FORM_JSON_FILE", "sample_form.json")
-
-    PDF_OUTPUT_DIR = OUTPUT_DIR / "pdfs"
-    CSV_OUTPUT_DIR = OUTPUT_DIR / "csv"
-    SIGNED_OUTPUT_DIR = OUTPUT_DIR / "signed"
-    SIGNATURE_WORK_DIR = OUTPUT_DIR / "signatures"
-
     CSV_FILENAME = os.getenv("CSV_FILENAME", "submissions.csv")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")

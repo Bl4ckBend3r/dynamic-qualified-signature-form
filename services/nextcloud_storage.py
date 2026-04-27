@@ -72,6 +72,7 @@ class NextcloudStorage:
 
     def _encode_path(self, path: str) -> str:
         clean = path.strip("/")
+
         if not clean:
             return self.dav_root
 
@@ -91,6 +92,7 @@ class NextcloudStorage:
                 **kwargs,
             )
             return response
+
         except requests.exceptions.SSLError as exc:
             verify_description = (
                 self.verify_ssl if isinstance(self.verify_ssl, str) else str(self.verify_ssl)
@@ -102,6 +104,7 @@ class NextcloudStorage:
                 f"NEXTCLOUD_CA_BUNDLE / NEXTCLOUD_VERIFY_SSL. "
                 f"Original error: {exc}"
             ) from exc
+
         except requests.exceptions.RequestException as exc:
             raise NextcloudStorageError(
                 f"HTTP request failed for URL '{url}'. Original error: {exc}"
@@ -127,11 +130,13 @@ class NextcloudStorage:
             return
 
         response = self._request("MKCOL", path)
+
         if response.status_code in (201, 405):
             return
 
         raise NextcloudStorageError(
-            f"Cannot create directory '{path}'. HTTP {response.status_code}. Response: {response.text}"
+            f"Cannot create directory '{path}'. "
+            f"HTTP {response.status_code}. Response: {response.text}"
         )
 
     def ensure_base_structure(self) -> None:
@@ -177,15 +182,18 @@ class NextcloudStorage:
             },
             data=xml_body.encode("utf-8"),
         )
+
         self._check_status(response, (207,), f"Cannot list forms in '{self.forms_dir}'")
 
         ns = {"d": "DAV:"}
         root = ET.fromstring(response.text)
 
         files: list[str] = []
+
         for item in root.findall("d:response", ns):
             href = item.findtext("d:href", default="", namespaces=ns)
             relative_path = self._extract_relative_path_from_href(href)
+
             if not relative_path:
                 continue
 
@@ -211,8 +219,10 @@ class NextcloudStorage:
 
     def read_text_or_empty(self, path: str) -> str:
         response = self._request("GET", path)
+
         if response.status_code == 404:
             return ""
+
         self._check_status(response, (200,), f"Cannot read file '{path}'")
         return response.text
 
@@ -228,6 +238,7 @@ class NextcloudStorage:
             headers={"Content-Type": content_type},
             data=content.encode("utf-8"),
         )
+
         self._check_status(response, (200, 201, 204), f"Cannot write file '{path}'")
 
     def write_bytes(self, path: str, content: bytes, content_type: str) -> None:
@@ -237,12 +248,13 @@ class NextcloudStorage:
             headers={"Content-Type": content_type},
             data=content,
         )
+
         self._check_status(response, (200, 201, 204), f"Cannot write file '{path}'")
 
     def append_csv_row(self, slug: str, row: dict) -> None:
         self.ensure_form_output_structure(slug)
 
-        csv_path = f"{self.output_dir}/{slug}/data.csv"
+        csv_path = f"{self.output_dir}/{slug}/dane.csv"
         existing = self.read_text_or_empty(csv_path)
 
         new_fieldnames = list(row.keys())
@@ -253,20 +265,28 @@ class NextcloudStorage:
             existing_fieldnames = existing_reader.fieldnames or []
 
             merged_fieldnames = list(existing_fieldnames)
+
             for key in new_fieldnames:
                 if key not in merged_fieldnames:
                     merged_fieldnames.append(key)
 
             all_rows = []
-            for existing_row in existing_reader:
-                all_rows.append({k: existing_row.get(k, "") for k in merged_fieldnames})
 
-            all_rows.append({k: row.get(k, "") for k in merged_fieldnames})
+            for existing_row in existing_reader:
+                all_rows.append(
+                    {key: existing_row.get(key, "") for key in merged_fieldnames}
+                )
+
+            all_rows.append(
+                {key: row.get(key, "") for key in merged_fieldnames}
+            )
 
             writer = csv.DictWriter(buffer, fieldnames=merged_fieldnames)
             writer.writeheader()
+
             for item in all_rows:
                 writer.writerow(item)
+
         else:
             writer = csv.DictWriter(buffer, fieldnames=new_fieldnames)
             writer.writeheader()
@@ -274,8 +294,19 @@ class NextcloudStorage:
 
         self.write_text(csv_path, buffer.getvalue(), "text/csv; charset=utf-8")
 
+    def read_csv_rows(self, slug: str) -> list[dict]:
+        csv_path = f"{self.output_dir}/{slug}/dane.csv"
+        existing = self.read_text_or_empty(csv_path)
+
+        if not existing.strip():
+            return []
+
+        reader = csv.DictReader(io.StringIO(existing))
+        return list(reader)
+
     def save_pdf(self, slug: str, filename: str, pdf_bytes: bytes) -> None:
         self.ensure_form_output_structure(slug)
+
         self.write_bytes(
             f"{self.output_dir}/{slug}/pdf/{filename}",
             pdf_bytes,
@@ -285,10 +316,54 @@ class NextcloudStorage:
     def get_pdf_bytes(self, slug: str, filename: str) -> bytes:
         return self.read_bytes(f"{self.output_dir}/{slug}/pdf/{filename}")
 
+    def get_file_bytes(self, path: str) -> bytes:
+        normalized_path = str(path).replace("\\", "/").lstrip("/")
+        return self.read_bytes(normalized_path)
+
     def ensure_outputs_for_all_forms(self) -> None:
         for filename in self.list_form_files():
             slug = Path(filename).stem
             self.ensure_form_output_structure(slug)
+            
+    def update_csv_row_by_submission_id(
+        self,
+        slug: str,
+        submission_id: str,
+        updates: dict,
+    ) -> bool:
+        csv_path = f"{self.output_dir}/{slug}/dane.csv"
+        existing = self.read_text_or_empty(csv_path)
+
+        if not existing.strip():
+            return False
+
+        reader = csv.DictReader(io.StringIO(existing))
+        fieldnames = list(reader.fieldnames or [])
+
+        for key in updates.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+        rows = []
+        found = False
+
+        for row in reader:
+            if row.get("submission_id", "").strip() == submission_id:
+                row.update(updates)
+                found = True
+
+            rows.append({key: row.get(key, "") for key in fieldnames})
+
+        if not found:
+            return False
+
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+        self.write_text(csv_path, buffer.getvalue(), "text/csv; charset=utf-8")
+        return True
 
 
 def create_nextcloud_storage_from_env() -> NextcloudStorage:
@@ -296,6 +371,7 @@ def create_nextcloud_storage_from_env() -> NextcloudStorage:
     verify_ssl_raw = os.environ.get("NEXTCLOUD_VERIFY_SSL", "true").strip()
 
     verify_ssl: Union[bool, str]
+
     if ca_bundle:
         verify_ssl = ca_bundle
     else:

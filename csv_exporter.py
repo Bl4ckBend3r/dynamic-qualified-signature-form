@@ -20,6 +20,9 @@ def build_csv_headers(form_definition: Dict[str, Any]) -> list[str]:
         "signature_status",
         "signature_request_id",
         *dynamic_fields,
+        "acceptance_required",
+        "acceptance_email_sent",
+        "akceptacja",
     ]
 
 

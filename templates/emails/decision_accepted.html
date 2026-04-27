@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pl">
+<head>
+    <meta charset="utf-8">
+    <title>Wniosek zaakceptowany</title>
+</head>
+<body style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
+    <h2>Wniosek zaakceptowany</h2>
+
+    <p>Dzień dobry,</p>
+
+    <p>
+        wniosek dotyczący formularza <strong>{{ form_title }}</strong>
+        został zaakceptowany przez urzędnika.
+    </p>
+
+    <p>
+        Możesz przejść do podpisywania dokumentów.
+        W zakładce <strong>Do podpisania</strong> wpisz poniższy identyfikator wniosku:
+    </p>
+
+    <p style="font-size: 18px; font-weight: bold;">
+        {{ submission_id }}
+    </p>
+
+    <p>
+        Po pozytywnej weryfikacji system umożliwi przejście do dalszego procesu podpisywania dokumentów.
+    </p>
+
+    <p>Pozdrawiamy</p>
+</body>
+</html>

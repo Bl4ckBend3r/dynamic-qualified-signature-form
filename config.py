@@ -33,9 +33,16 @@ class Config:
     SIGNATURE_WORK_DIR = TEMP_DIR / "signatures"
 
     FORM_DEFINITION_PATH = FORMS_DIR / os.getenv("FORM_JSON_FILE", "sample_form.json")
-    CSV_FILENAME = os.getenv("CSV_FILENAME", "submissions.csv")
+    CSV_FILENAME = os.getenv("CSV_FILENAME", "data.csv")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()
     SIGNATURE_API_BASE_URL = os.getenv("SIGNATURE_API_BASE_URL", "")
     SIGNATURE_API_TOKEN = os.getenv("SIGNATURE_API_TOKEN", "")
+    
+    
+    SMTP_HOST = os.getenv("SMTP_HOST", "")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)

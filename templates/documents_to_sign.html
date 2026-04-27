@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Do podpisania{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>Dokumenty do podpisania</h2>
+        <p>
+            Podaj ID wniosku. System sprawdzi, czy formularz został zaakceptowany przez urzędnika.
+            Dopiero po akceptacji możliwe będzie przejście do podpisywania dokumentów.
+        </p>
+    </div>
+
+    <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" novalidate>
+    <div class="form-field sign-id-field">
+        <label for="submission_id">ID wniosku</label>
+
+        <input
+            type="text"
+            id="submission_id"
+            name="submission_id"
+            value="{{ submission_id }}"
+            placeholder="Wpisz ID wniosku"
+            autocomplete="off"
+            required
+        >
+
+        {% if errors.get("submission_id") %}
+            <div class="field-error">{{ errors.get("submission_id") }}</div>
+        {% endif %}
+
+        <div id="acceptance-status" class="field-help"></div>
+    </div>
+
+    <div class="form-field" id="documents-section" style="display: none;">
+        <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
+    </div>
+
+    <div class="form-actions sign-actions">
+        <button type="submit" class="button-primary" id="generate-button" disabled>
+            Przejdź do podpisywania dokumentów
+        </button>
+    </div>
+</form>
+    {% if result %}
+        <div class="result-box">
+            <p>{{ result.message }}</p>
+            <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
+            <p><strong>Formularz:</strong> {{ result.form_title }}</p>
+        </div>
+    {% endif %}
+</div>
+
+<script>
+const submissionInput = document.getElementById("submission_id");
+const statusBox = document.getElementById("acceptance-status");
+const documentsSection = document.getElementById("documents-section");
+const generateButton = document.getElementById("generate-button");
+const acceptanceSelect = document.getElementById("akceptacja");
+
+let timeoutId = null;
+
+function resetState() {
+    statusBox.textContent = "";
+    documentsSection.style.display = "none";
+    generateButton.disabled = true;
+    acceptanceSelect.value = "";
+}
+
+async function checkAcceptanceStatus() {
+    const submissionId = submissionInput.value.trim();
+
+    resetState();
+
+    if (!submissionId) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/submissions/${encodeURIComponent(submissionId)}/acceptance-status`);
+        const data = await response.json();
+
+        statusBox.textContent = data.message || "";
+
+        if (data.exists && data.can_sign_documents) {
+            documentsSection.style.display = "block";
+            generateButton.disabled = false;
+        }
+    } catch (error) {
+        statusBox.textContent = "Nie udało się sprawdzić statusu wniosku.";
+        documentsSection.style.display = "none";
+        generateButton.disabled = true;
+    }
+}
+
+submissionInput.addEventListener("input", () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(checkAcceptanceStatus, 500);
+});
+
+if (submissionInput.value.trim()) {
+    checkAcceptanceStatus();
+}
+</script>
+{% endblock %}

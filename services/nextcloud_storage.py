@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Union
 from urllib.parse import quote, unquote, urlparse
 import xml.etree.ElementTree as ET
 
@@ -25,7 +26,7 @@ class NextcloudStorage:
         forms_dir: str = "Formularze",
         output_dir: str = "output",
         timeout: int = 30,
-        verify_ssl: bool | str = True,
+        verify_ssl: Union[bool, str] = True,
     ) -> None:
         if not base_url:
             raise ValueError("NEXTCLOUD_BASE_URL is required")
@@ -40,7 +41,7 @@ class NextcloudStorage:
         self.forms_dir = forms_dir.strip("/")
         self.output_dir = output_dir.strip("/")
         self.timeout = timeout
-        self.verify_ssl = verify_ssl
+        self.verify_ssl = self._normalize_verify_ssl(verify_ssl)
 
         self.auth = (self.username, self.app_password)
         self.dav_root = f"{self.base_url}/remote.php/dav/files/{quote(self.username)}"
@@ -48,17 +49,40 @@ class NextcloudStorage:
         logger.info("Nextcloud verify_ssl=%r", self.verify_ssl)
         logger.info("Nextcloud DAV root=%s", self.dav_root)
 
+        if self.verify_ssl is False:
+            logger.warning("Nextcloud SSL verification is DISABLED. Use only for local diagnostics.")
+
+    @staticmethod
+    def _normalize_verify_ssl(value: Union[bool, str]) -> Union[bool, str]:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            normalized = value.strip()
+            lowered = normalized.lower()
+
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+
+            return normalized
+
+        return True
+
     def _encode_path(self, path: str) -> str:
         clean = path.strip("/")
         if not clean:
             return self.dav_root
+
         encoded = "/".join(quote(part) for part in clean.split("/"))
         return f"{self.dav_root}/{encoded}"
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = self._encode_path(path)
+
         try:
-            return requests.request(
+            response = requests.request(
                 method=method,
                 url=url,
                 auth=self.auth,
@@ -66,10 +90,16 @@ class NextcloudStorage:
                 verify=self.verify_ssl,
                 **kwargs,
             )
+            return response
         except requests.exceptions.SSLError as exc:
+            verify_description = (
+                self.verify_ssl if isinstance(self.verify_ssl, str) else str(self.verify_ssl)
+            )
             raise NextcloudStorageError(
                 f"SSL error for URL '{url}'. "
-                f"Check certificate chain or configure NEXTCLOUD_CA_BUNDLE / NEXTCLOUD_VERIFY_SSL. "
+                f"verify={verify_description!r}. "
+                f"Check server certificate chain or configure "
+                f"NEXTCLOUD_CA_BUNDLE / NEXTCLOUD_VERIFY_SSL. "
                 f"Original error: {exc}"
             ) from exc
         except requests.exceptions.RequestException as exc:
@@ -116,9 +146,14 @@ class NextcloudStorage:
         parsed = urlparse(href)
         path = unquote(parsed.path)
 
-        dav_prefix = f"/remote.php/dav/files/{self.username}/"
-        if dav_prefix in path:
-            return path.split(dav_prefix, 1)[1]
+        raw_prefix = f"/remote.php/dav/files/{self.username}/"
+        encoded_prefix = f"/remote.php/dav/files/{quote(self.username)}/"
+
+        if raw_prefix in path:
+            return path.split(raw_prefix, 1)[1]
+
+        if encoded_prefix in path:
+            return path.split(encoded_prefix, 1)[1]
 
         return path.lstrip("/")
 
@@ -258,13 +293,13 @@ class NextcloudStorage:
 
 def create_nextcloud_storage_from_env() -> NextcloudStorage:
     ca_bundle = os.environ.get("NEXTCLOUD_CA_BUNDLE", "").strip()
-    verify_ssl_flag = os.environ.get("NEXTCLOUD_VERIFY_SSL", "true").lower() == "true"
+    verify_ssl_raw = os.environ.get("NEXTCLOUD_VERIFY_SSL", "true").strip()
 
-    verify_ssl: bool | str
+    verify_ssl: Union[bool, str]
     if ca_bundle:
         verify_ssl = ca_bundle
     else:
-        verify_ssl = verify_ssl_flag
+        verify_ssl = verify_ssl_raw
 
     return NextcloudStorage(
         base_url=os.environ["NEXTCLOUD_BASE_URL"],

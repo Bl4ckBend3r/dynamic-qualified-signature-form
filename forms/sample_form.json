@@ -3,6 +3,13 @@
   "description": "FORMULARZ ZGŁOSZENIOWY do projektu „Wiedza kluczem do sukcesu” nr FELB.06.08-IZ.00-0021/25. Proszę uzupełnić wszystkie wymagane pola. Dokument PDF wygenerowany po wysłaniu formularza jest przeznaczony do podpisu elektronicznego jako zewnętrzny proces podpisu. ",
   "header_image": "forms/Logo-iwona.png",
   "submit_label": "Generuj i wyślij",
+  "signature": {
+    "mode": "none",
+    "allow_trusted_profile": false,
+    "allow_qualified_signature": false,
+    "require_before_submit": false,
+    "show_user_choice": false
+  },
   "fields": [
     {
       "type": "section",
@@ -19,6 +26,7 @@
     {
       "type": "text",
       "name": "nazwisko",
+      "placeholder":"Podaj nazwisko",
       "label": "Nazwisko",
       "required": true,
       "width": "half"
@@ -27,6 +35,7 @@
       "type": "text",
       "name": "obywatelstwo",
       "label": "Obywatelstwo",
+      "placeholder":"Wpisz obywatelstwo",
       "required": true,
       "width": "half"
     },
@@ -41,6 +50,7 @@
       "type": "text",
       "name": "miejsce_urodzenia",
       "label": "Miejsce urodzenia",
+      "placeholder":"Podaj miejsce urodzenia",
       "required": true,
       "width": "half"
     },
@@ -155,6 +165,7 @@
       "type": "tel",
       "name": "telefon",
       "label": "Telefon kontaktowy",
+      "placeholder":"XXX XXX XXX",
       "required": true,
       "width": "half"
     },

@@ -57,6 +57,10 @@ a {
     background: var(--bg);
 }
 
+main{
+    padding-top: 32px;
+}
+
 main,
 .page-content {
     flex: 1 0 auto;

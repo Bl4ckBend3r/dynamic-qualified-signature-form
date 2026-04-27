@@ -3,7 +3,7 @@ import re
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 SUPPORTED_FIELD_TYPES = {
@@ -21,11 +21,30 @@ SUPPORTED_FIELD_TYPES = {
     "static_text",
 }
 
+ALLOWED_SIGNATURE_MODES = {
+    "none",
+    "qualified",
+    "trusted_profile",
+    "optional",
+}
+
+DEFAULT_SIGNATURE_CONFIG = {
+    "mode": "none",
+    "allow_trusted_profile": False,
+    "allow_qualified_signature": False,
+    "require_before_submit": False,
+    "show_user_choice": False,
+}
+
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TEL_REGEX = re.compile(r"^[0-9+\s\-()]{7,20}$")
 PESEL_REGEX = re.compile(r"^\d{11}$")
 
-def build_consents_view(form_definition: Dict[str, Any], submission_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+
+def build_consents_view(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     consents_view: List[Dict[str, Any]] = []
 
     for field in form_definition.get("fields", []):
@@ -66,6 +85,7 @@ def build_consents_view(form_definition: Dict[str, Any], submission_data: Dict[s
 
     return consents_view
 
+
 def load_form_definition(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
@@ -80,6 +100,27 @@ def validate_form_definition(form_definition: Dict[str, Any]) -> None:
     if "fields" not in form_definition or not isinstance(form_definition["fields"], list):
         raise ValueError("Brak listy 'fields' w definicji formularza.")
 
+    signature = form_definition.get("signature")
+    if signature is not None:
+        if not isinstance(signature, dict):
+            raise ValueError("Pole 'signature' musi być obiektem.")
+
+        mode = signature.get("mode", "none")
+        if mode not in ALLOWED_SIGNATURE_MODES:
+            raise ValueError(
+                f"Nieobsługiwany tryb podpisu: {mode}. "
+                f"Dozwolone: {', '.join(sorted(ALLOWED_SIGNATURE_MODES))}"
+            )
+
+        if mode == "optional":
+            allow_trusted_profile = bool(signature.get("allow_trusted_profile", False))
+            allow_qualified_signature = bool(signature.get("allow_qualified_signature", False))
+
+            if not allow_trusted_profile and not allow_qualified_signature:
+                raise ValueError(
+                    "Dla trybu podpisu 'optional' co najmniej jedna metoda podpisu musi być dozwolona."
+                )
+
     for field in form_definition["fields"]:
         field_type = field.get("type")
         if field_type not in SUPPORTED_FIELD_TYPES:
@@ -92,10 +133,47 @@ def validate_form_definition(form_definition: Dict[str, Any]) -> None:
             raise ValueError(f"Pole '{field.get('name')}' musi zawierać listę 'options'.")
 
 
+def normalize_signature_config(form_definition: Dict[str, Any]) -> Dict[str, Any]:
+    signature = deepcopy(form_definition.get("signature") or {})
+    normalized_signature = {**DEFAULT_SIGNATURE_CONFIG, **signature}
+
+    mode = normalized_signature["mode"]
+    if mode not in ALLOWED_SIGNATURE_MODES:
+        mode = "none"
+        normalized_signature["mode"] = mode
+
+    if mode == "none":
+        normalized_signature["allow_trusted_profile"] = False
+        normalized_signature["allow_qualified_signature"] = False
+        normalized_signature["require_before_submit"] = False
+        normalized_signature["show_user_choice"] = False
+
+    elif mode == "qualified":
+        normalized_signature["allow_trusted_profile"] = False
+        normalized_signature["allow_qualified_signature"] = True
+        normalized_signature["show_user_choice"] = False
+
+    elif mode == "trusted_profile":
+        normalized_signature["allow_trusted_profile"] = True
+        normalized_signature["allow_qualified_signature"] = False
+        normalized_signature["show_user_choice"] = False
+
+    elif mode == "optional":
+        normalized_signature["show_user_choice"] = (
+            normalized_signature["allow_trusted_profile"]
+            or normalized_signature["allow_qualified_signature"]
+        )
+
+    form_definition["signature"] = normalized_signature
+    return form_definition
+
+
 def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]:
     normalized = deepcopy(form_definition)
     normalized.setdefault("description", "")
     normalized.setdefault("submit_label", "Generuj i wyślij")
+
+    normalized = normalize_signature_config(normalized)
 
     for field in normalized["fields"]:
         field.setdefault("label", "")
@@ -127,6 +205,10 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
         else:
             data[field_name] = request_form.get(field_name, "").strip()
 
+    signature = form_definition.get("signature", {})
+    if signature.get("show_user_choice"):
+        data["signature_method"] = request_form.get("signature_method", "").strip()
+
     return data
 
 
@@ -151,7 +233,10 @@ def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
     return True
 
 
-def validate_submission(form_definition: Dict[str, Any], submission_data: Dict[str, Any]) -> Dict[str, str]:
+def validate_submission(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+) -> Dict[str, str]:
     errors: Dict[str, str] = {}
 
     for field in form_definition["fields"]:
@@ -203,6 +288,50 @@ def validate_submission(form_definition: Dict[str, Any], submission_data: Dict[s
         if field_type in {"select", "radio"} and value not in field.get("options", []):
             errors[field_name] = "Wybrano nieprawidłową wartość."
 
+    signature_errors = validate_signature_submission(form_definition, submission_data)
+    errors.update(signature_errors)
+
+    return errors
+
+
+def validate_signature_submission(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+) -> Dict[str, str]:
+    errors: Dict[str, str] = {}
+
+    signature = form_definition.get("signature", {})
+    mode = signature.get("mode", "none")
+    require_before_submit = bool(signature.get("require_before_submit", False))
+    selected_method = (submission_data.get("signature_method") or "").strip()
+
+    if mode == "none":
+        return errors
+
+    if mode == "qualified":
+        if selected_method and selected_method != "qualified":
+            errors["signature_method"] = "Dla tego formularza dozwolony jest wyłącznie podpis kwalifikowany."
+        return errors
+
+    if mode == "trusted_profile":
+        if selected_method and selected_method != "trusted_profile":
+            errors["signature_method"] = "Dla tego formularza dozwolony jest wyłącznie Profil Zaufany."
+        return errors
+
+    if mode == "optional":
+        allowed_methods = set()
+        if signature.get("allow_qualified_signature"):
+            allowed_methods.add("qualified")
+        if signature.get("allow_trusted_profile"):
+            allowed_methods.add("trusted_profile")
+
+        if require_before_submit and not selected_method:
+            errors["signature_method"] = "Wybierz metodę podpisu."
+            return errors
+
+        if selected_method and selected_method not in allowed_methods:
+            errors["signature_method"] = "Wybrano nieprawidłową metodę podpisu."
+
     return errors
 
 
@@ -216,7 +345,10 @@ def validate_pesel(pesel: str) -> bool:
     return control_digit == int(pesel[10])
 
 
-def build_submission_view(form_definition: Dict[str, Any], submission_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def build_submission_view(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     view: List[Dict[str, Any]] = []
     current_section = {
         "title": "Dane formularza",
@@ -265,3 +397,27 @@ def format_value_for_pdf(field_type: str, value: str) -> str:
     if field_type == "checkbox":
         return "Tak" if value == "Tak" else "Nie"
     return value if value != "" else "—"
+
+
+def resolve_signature_method(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+) -> Optional[str]:
+    signature = form_definition.get("signature", {})
+    mode = signature.get("mode", "none")
+
+    if mode == "none":
+        return None
+
+    if mode == "qualified":
+        return "qualified"
+
+    if mode == "trusted_profile":
+        return "trusted_profile"
+
+    if mode == "optional":
+        selected_method = (submission_data.get("signature_method") or "").strip()
+        if selected_method in {"qualified", "trusted_profile"}:
+            return selected_method
+
+    return None

@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}Wynik operacji{% endblock %}
+{% block title %}Zgłosznie zapisane{% endblock %}
 
 {% block content %}
+{% set signature = result.signature if result.signature is defined and result.signature else {} %}
+{% set signature_mode = signature.mode if signature.mode is defined else "none" %}
+{% set has_signature_flow = signature_mode != "none" %}
+
 <div class="card result-card">
     <div class="card-header">
-        <h2>Wynik operacji</h2>
+        <h2>Zgłosznie zapisane</h2>
         <p>Formularz został przetworzony.</p>
     </div>
 
@@ -14,18 +18,35 @@
             <span class="result-label">Nazwa formularza</span>
             <span class="result-value">{{ result.form_title }}</span>
         </div>
+
         <div class="result-item">
             <span class="result-label">Identyfikator zgłoszenia</span>
             <span class="result-value">{{ result.submission_id }}</span>
         </div>
+
+        {% if has_signature_flow %}
         <div class="result-item">
             <span class="result-label">Tryb podpisu</span>
-            <span class="result-value">mObywatel</span>
+            <span class="result-value">
+                {% if signature_mode == "trusted_profile" %}
+                    mObywatel
+                {% elif signature_mode == "qualified" %}
+                    Podpis kwalifikowany
+                {% elif signature_mode == "optional" %}
+                    {{ result.signature_method_label if result.signature_method_label is defined and result.signature_method_label else "Opcjonalny" }}
+                {% else %}
+                    -
+                {% endif %}
+            </span>
         </div>
+        {% endif %}
+
         <div class="result-item">
             <span class="result-label">Status PDF</span>
             <span class="badge badge-success">Utworzono</span>
         </div>
+
+        {% if has_signature_flow %}
         <div class="result-item">
             <span class="result-label">Status podpisu</span>
             {% if result.signed_pdf_url %}
@@ -34,29 +55,59 @@
                 <span class="badge badge-warning">Oczekuje na podpis</span>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 
     <div class="download-links">
         <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
 
-        {% if result.signed_pdf_url %}
+        {% if has_signature_flow and result.signed_pdf_url %}
             <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>
         {% endif %}
     </div>
 
+    {% if has_signature_flow and signature_mode == "trusted_profile" %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Podpis w mObywatelu</h3>
         </div>
         <ol style="padding-left: 20px; margin: 0;">
             <li>Pobierz wygenerowany plik PDF.</li>
-            <li>Otwórz aplikację <a href="https://podpis.mobywatel.gov.pl/" target="_blank">mObywatel</a>.</li>
-            <li>Wybierz dostwace <b>"mSzafir"</b></li>
+            <li>Otwórz aplikację <a href="https://podpis.mobywatel.gov.pl/" target="_blank" rel="noopener noreferrer">mObywatel</a>.</li>
+            <li>Wybierz dostawcę <b>„mSzafir”</b>.</li>
             <li>Podpisz dokument PDF.</li>
             <li>Wróć do tej strony i wgraj podpisany plik.</li>
         </ol>
     </div>
+    {% endif %}
 
+    {% if has_signature_flow and signature_mode == "qualified" %}
+    <div class="card" style="margin-top: 24px;">
+        <div class="card-header">
+            <h3>Podpis kwalifikowany</h3>
+        </div>
+        <ol style="padding-left: 20px; margin: 0;">
+            <li>Pobierz wygenerowany plik PDF.</li>
+            <li>Podpisz dokument przy użyciu kwalifikowanego podpisu elektronicznego.</li>
+            <li>Wróć do tej strony i wgraj podpisany plik.</li>
+        </ol>
+    </div>
+    {% endif %}
+
+    {% if has_signature_flow and signature_mode == "optional" %}
+    <div class="card" style="margin-top: 24px;">
+        <div class="card-header">
+            <h3>Podpis dokumentu</h3>
+        </div>
+        <ol style="padding-left: 20px; margin: 0;">
+            <li>Pobierz wygenerowany plik PDF.</li>
+            <li>Podpisz dokument wybraną metodą.</li>
+            <li>Wróć do tej strony i wgraj podpisany plik.</li>
+        </ol>
+    </div>
+    {% endif %}
+
+    {% if has_signature_flow %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Wgraj podpisany PDF</h3>
@@ -73,40 +124,43 @@
             </div>
         </form>
     </div>
-{% if result.verification %}
-<div class="card" style="margin-top: 24px;">
-    <div class="card-header">
-        <h3>Rozpoznanie podpisu</h3>
-    </div>
+    {% endif %}
 
-    <div class="result-grid">
-        <div class="result-item">
-            <span class="result-label">PDF podpisany</span>
-            <span class="result-value">{{ "Tak" if result.verification.is_signed else "Nie" }}</span>
+    {% if has_signature_flow and result.verification %}
+    <div class="card" style="margin-top: 24px;">
+        <div class="card-header">
+            <h3>Rozpoznanie podpisu</h3>
         </div>
-        <div class="result-item">
-            <span class="result-label">Dostawca</span>
-            <span class="result-value">{{ result.verification.provider or "-" }}</span>
-        </div>
-        <div class="result-item">
-            <span class="result-label">Podpis Szafir / KIR</span>
-            <span class="result-value">{{ "Tak" if result.verification.is_szafir_signature else "Nie" }}</span>
-        </div>
-        <div class="result-item">
-            <span class="result-label">Podpisujący</span>
-            <span class="result-value">{{ result.verification.signer_subject or "-" }}</span>
-        </div>
-        <div class="result-item">
-            <span class="result-label">Wystawca</span>
-            <span class="result-value">{{ result.verification.signer_issuer or "-" }}</span>
-        </div>
-        <div class="result-item">
-            <span class="result-label">Opis</span>
-            <span class="result-value">{{ result.verification.reason or "-" }}</span>
+
+        <div class="result-grid">
+            <div class="result-item">
+                <span class="result-label">PDF podpisany</span>
+                <span class="result-value">{{ "Tak" if result.verification.is_signed else "Nie" }}</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Dostawca</span>
+                <span class="result-value">{{ result.verification.provider or "-" }}</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Podpis Szafir / KIR</span>
+                <span class="result-value">{{ "Tak" if result.verification.is_szafir_signature else "Nie" }}</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Podpisujący</span>
+                <span class="result-value">{{ result.verification.signer_subject or "-" }}</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Wystawca</span>
+                <span class="result-value">{{ result.verification.signer_issuer or "-" }}</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Opis</span>
+                <span class="result-value">{{ result.verification.reason or "-" }}</span>
+            </div>
         </div>
     </div>
-</div>
-{% endif %}
+    {% endif %}
+
     <div class="back-link">
         <a href="{{ url_for('index') }}">Powrót do formularza</a>
     </div>

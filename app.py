@@ -277,15 +277,8 @@ def ensure_declaration_generated(submission: dict) -> dict:
 
 def build_signature_update_fields(verification: dict, signed_filename: str) -> dict[str, str]:
     is_signed = bool(verification.get("is_signed"))
-    is_mszafir = bool(verification.get("is_szafir_signature"))
-    is_valid = is_signed and is_mszafir
-
-    if is_mszafir:
-        signature_type = "mszafir"
-    elif is_signed:
-        signature_type = "unsupported"
-    else:
-        signature_type = "unknown"
+    is_valid = bool(verification.get("is_allowed_signature"))
+    signature_type = verification.get("signature_type") or "unknown"
 
     return {
         "declaration_signed": "Tak" if is_signed else "Nie",
@@ -597,7 +590,7 @@ def upload_signed_declaration(slug: str, submission_id: str):
         if not verification.get("is_signed"):
             flash("Przesłany plik nie zawiera podpisu PDF.", "error")
         elif not signature_is_valid:
-            flash("Podpis deklaracji nie jest dopuszczalnym podpisem mSzafir.", "error")
+            flash("Podpis deklaracji nie jest dopuszczalnym podpisem mSzafir ani Profilem Zaufanym.", "error")
         else:
             flash("Deklaracja została podpisana i poprawnie zweryfikowana.", "success")
 

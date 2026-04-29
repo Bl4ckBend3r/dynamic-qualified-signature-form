@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from flask import Flask
 
-from pdf_generator import generate_pdf
+from pdf_generator import generate_pdf, generate_pdf_from_html
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
@@ -18,8 +18,21 @@ class DocumentType:
     AGREEMENT = "agreement"
 
 
+DEFAULT_DOCUMENT_CONFIG = {
+    "enabled": False,
+    "template": "",
+    "filename_pattern": "",
+    "signature_required": True,
+}
+
+
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def is_enabled(value: Any) -> bool:
+    normalized = normalize_text(value).lower()
+    return normalized in {"true", "1", "yes", "tak"}
 
 
 def sanitize_filename_part(value: Any, fallback: str = "dokument") -> str:
@@ -78,18 +91,73 @@ def build_participant_name(row: Mapping[str, Any]) -> str:
     return full_name or "Uczestnik"
 
 
-def build_declaration_filename(row: Mapping[str, Any]) -> str:
+def get_project_documents_config(form_definition: Mapping[str, Any]) -> dict:
+    process = form_definition.get("process") or {}
+
+    if not isinstance(process, Mapping):
+        process = {}
+
+    documents = process.get("documents") or form_definition.get("documents") or {}
+
+    if not isinstance(documents, Mapping):
+        documents = {}
+
+    return dict(documents)
+
+
+def get_document_config(form_definition: Mapping[str, Any], document_type: str) -> dict:
+    documents = get_project_documents_config(form_definition)
+    raw_config = documents.get(document_type) or {}
+
+    if not isinstance(raw_config, Mapping):
+        raw_config = {}
+
+    config = {**DEFAULT_DOCUMENT_CONFIG, **dict(raw_config)}
+    config["enabled"] = bool(config.get("enabled"))
+    config["signature_required"] = bool(config.get("signature_required", True))
+
+    return config
+
+
+def is_document_enabled(form_definition: Mapping[str, Any], document_type: str) -> bool:
+    return bool(get_document_config(form_definition, document_type).get("enabled"))
+
+
+def build_filename_from_pattern(pattern: str, row: Mapping[str, Any], fallback: str) -> str:
+    if not pattern:
+        return fallback
+
+    values = {
+        "first_name": sanitize_filename_part(get_participant_first_name(row), "Imie"),
+        "last_name": sanitize_filename_part(get_participant_last_name(row), "Nazwisko"),
+        "participant_name": sanitize_filename_part(build_participant_name(row), "Uczestnik"),
+        "submission_id": sanitize_filename_part(row.get("submission_id"), "wniosek"),
+    }
+
+    try:
+        filename = pattern.format(**values)
+    except KeyError:
+        return fallback
+
+    filename = sanitize_filename_part(filename.replace(".pdf", ""), Path(fallback).stem)
+
+    return f"{filename}.pdf"
+
+
+def build_declaration_filename(row: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> str:
     first_name = sanitize_filename_part(get_participant_first_name(row), "Imie")
     last_name = sanitize_filename_part(get_participant_last_name(row), "Nazwisko")
+    fallback = f"{first_name}_{last_name}-deklaracja.pdf"
 
-    return f"{first_name}_{last_name}-deklaracja.pdf"
+    return build_filename_from_pattern(normalize_text((config or {}).get("filename_pattern")), row, fallback)
 
 
-def build_agreement_filename(row: Mapping[str, Any]) -> str:
+def build_agreement_filename(row: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> str:
     first_name = sanitize_filename_part(get_participant_first_name(row), "Imie")
     last_name = sanitize_filename_part(get_participant_last_name(row), "Nazwisko")
+    fallback = f"{first_name}_{last_name}-umowa.pdf"
 
-    return f"{first_name}_{last_name}-umowa.pdf"
+    return build_filename_from_pattern(normalize_text((config or {}).get("filename_pattern")), row, fallback)
 
 
 def build_document_pdf_context(
@@ -106,6 +174,7 @@ def build_document_pdf_context(
         "form_definition": form_definition,
         "submission_id": submission_id,
         "participant_name": build_participant_name(row),
+        "submission": row,
         "submission_view": submission_view,
         "consents_view": consents_view,
         "pdf_image_url": pdf_image_url,
@@ -119,6 +188,7 @@ def generate_document_pdf_bytes(
     app: Flask,
     template_name: str,
     context: dict,
+    template_html: str | None = None,
 ) -> bytes:
     with tempfile.NamedTemporaryFile(
         suffix=".pdf",
@@ -128,12 +198,21 @@ def generate_document_pdf_bytes(
         tmp_pdf_path = Path(tmp_pdf.name)
 
     try:
-        generate_pdf(
-            app=app,
-            template_name=template_name,
-            context=context,
-            output_path=tmp_pdf_path,
-        )
+        if template_html:
+            generate_pdf_from_html(
+                app=app,
+                template_html=template_html,
+                context=context,
+                output_path=tmp_pdf_path,
+            )
+        else:
+            generate_pdf(
+                app=app,
+                template_name=template_name,
+                context=context,
+                output_path=tmp_pdf_path,
+            )
+
         return tmp_pdf_path.read_bytes()
     finally:
         tmp_pdf_path.unlink(missing_ok=True)

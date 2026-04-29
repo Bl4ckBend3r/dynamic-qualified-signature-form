@@ -25,6 +25,7 @@ class NextcloudStorage:
         app_password: str,
         forms_dir: str = "Formularze",
         output_dir: str = "output",
+        csv_filename: str = "dane.csv",
         timeout: int = 30,
         verify_ssl: Union[bool, str] = True,
     ) -> None:
@@ -40,6 +41,7 @@ class NextcloudStorage:
         self.app_password = app_password
         self.forms_dir = forms_dir.strip("/")
         self.output_dir = output_dir.strip("/")
+        self.csv_filename = csv_filename.strip("/") or "dane.csv"
         self.timeout = timeout
         self.verify_ssl = self._normalize_verify_ssl(verify_ssl)
 
@@ -48,6 +50,7 @@ class NextcloudStorage:
 
         logger.info("Nextcloud verify_ssl=%r", self.verify_ssl)
         logger.info("Nextcloud DAV root=%s", self.dav_root)
+        logger.info("Nextcloud CSV filename=%s", self.csv_filename)
 
         if self.verify_ssl is False:
             logger.warning("Nextcloud SSL verification is DISABLED. Use only for local diagnostics.")
@@ -78,6 +81,9 @@ class NextcloudStorage:
 
         encoded = "/".join(quote(part) for part in clean.split("/"))
         return f"{self.dav_root}/{encoded}"
+
+    def _csv_path(self, slug: str) -> str:
+        return f"{self.output_dir}/{slug}/{self.csv_filename}"
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = self._encode_path(path)
@@ -254,7 +260,7 @@ class NextcloudStorage:
     def append_csv_row(self, slug: str, row: dict) -> None:
         self.ensure_form_output_structure(slug)
 
-        csv_path = f"{self.output_dir}/{slug}/dane.csv"
+        csv_path = self._csv_path(slug)
         existing = self.read_text_or_empty(csv_path)
 
         new_fieldnames = list(row.keys())
@@ -295,8 +301,7 @@ class NextcloudStorage:
         self.write_text(csv_path, buffer.getvalue(), "text/csv; charset=utf-8")
 
     def read_csv_rows(self, slug: str) -> list[dict]:
-        csv_path = f"{self.output_dir}/{slug}/dane.csv"
-        existing = self.read_text_or_empty(csv_path)
+        existing = self.read_text_or_empty(self._csv_path(slug))
 
         if not existing.strip():
             return []
@@ -324,14 +329,14 @@ class NextcloudStorage:
         for filename in self.list_form_files():
             slug = Path(filename).stem
             self.ensure_form_output_structure(slug)
-            
+
     def update_csv_row_by_submission_id(
         self,
         slug: str,
         submission_id: str,
         updates: dict,
     ) -> bool:
-        csv_path = f"{self.output_dir}/{slug}/dane.csv"
+        csv_path = self._csv_path(slug)
         existing = self.read_text_or_empty(csv_path)
 
         if not existing.strip():
@@ -383,5 +388,6 @@ def create_nextcloud_storage_from_env() -> NextcloudStorage:
         app_password=os.environ["NEXTCLOUD_APP_PASSWORD"],
         forms_dir=os.environ.get("NEXTCLOUD_FORMS_DIR", "Formularze"),
         output_dir=os.environ.get("NEXTCLOUD_OUTPUT_DIR", "output"),
+        csv_filename=os.environ.get("CSV_FILENAME", "dane.csv"),
         verify_ssl=verify_ssl,
     )

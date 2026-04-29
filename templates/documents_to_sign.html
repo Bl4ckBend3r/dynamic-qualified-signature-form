@@ -39,7 +39,7 @@
 
     <div class="form-actions sign-actions">
         <button type="submit" class="button-primary" id="generate-button" disabled>
-            Przejdź do podpisywania dokumentów
+            Wygeneruj deklarację do podpisu
         </button>
     </div>
 </form>
@@ -48,6 +48,18 @@
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
+
+            {% if result.declaration_filename %}
+                <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
+            {% endif %}
+
+            {% if result.declaration_url %}
+                <div class="download-links" style="margin-top: 16px;">
+                    <a class="btn-primary" href="{{ result.declaration_url }}">
+                        Pobierz deklarację PDF
+                    </a>
+                </div>
+            {% endif %}
         </div>
     {% endif %}
 </div>

@@ -60,6 +60,41 @@
                     </a>
                 </div>
             {% endif %}
+
+            {% if result.declaration_upload_url %}
+                <div class="card" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h3>Wgraj podpisaną deklarację</h3>
+                        <p>
+                            Wgraj deklarację podpisaną elektronicznie. Aktualnie akceptowany jest podpis mSzafir.
+                        </p>
+                    </div>
+
+                    <form
+                        method="post"
+                        action="{{ result.declaration_upload_url }}"
+                        enctype="multipart/form-data"
+                        class="dynamic-form"
+                    >
+                        <div class="form-row width-full">
+                            <label for="signed_declaration_pdf">Podpisana deklaracja PDF</label>
+                            <input
+                                type="file"
+                                id="signed_declaration_pdf"
+                                name="signed_declaration_pdf"
+                                accept="application/pdf"
+                                required
+                            >
+                        </div>
+
+                        <div class="submit-row">
+                            <button type="submit" class="btn-primary">
+                                Wyślij podpisaną deklarację
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            {% endif %}
         </div>
     {% endif %}
 </div>

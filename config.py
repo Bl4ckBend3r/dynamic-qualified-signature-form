@@ -33,7 +33,7 @@ class Config:
     SIGNATURE_WORK_DIR = TEMP_DIR / "signatures"
 
     FORM_DEFINITION_PATH = FORMS_DIR / os.getenv("FORM_JSON_FILE", "sample_form.json")
-    CSV_FILENAME = os.getenv("CSV_FILENAME", "data.csv")
+    CSV_FILENAME = os.getenv("CSV_FILENAME", "dane.csv")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()

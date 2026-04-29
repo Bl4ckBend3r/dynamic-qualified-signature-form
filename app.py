@@ -33,6 +33,14 @@ from services.nextcloud_storage import (
     create_nextcloud_storage_from_env,
 )
 from services.email_service import send_submission_decision_email
+from services.process_service import (
+    OfficerDecision,
+    build_initial_process_fields,
+    build_legacy_process_fields,
+    build_process_state,
+    get_officer_decision,
+    should_send_officer_decision_email,
+)
 
 load_dotenv()
 
@@ -53,6 +61,7 @@ logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
 logger.info("NEXTCLOUD_USERNAME=%s", app.config["NEXTCLOUD_USERNAME"])
 logger.info("NEXTCLOUD_FORMS_DIR=%s", app.config["NEXTCLOUD_FORMS_DIR"])
 logger.info("NEXTCLOUD_OUTPUT_DIR=%s", app.config["NEXTCLOUD_OUTPUT_DIR"])
+
 
 def resolve_pdf_image_url(form_definition: dict) -> str | None:
     image_value = form_definition.get("header_image")
@@ -110,36 +119,6 @@ def build_forms_registry() -> list[dict]:
 def get_forms() -> list[dict]:
     return build_forms_registry()
 
-    template_name = (
-        "emails/decision_accepted.html"
-        if accepted
-        else "emails/decision_rejected.html"
-    )
-
-    html_body = render_template(
-        template_name,
-        submission_id=submission["submission_id"],
-        form_title=submission["form_title"],
-    )
-
-    if accepted:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"Możesz przejść do podpisywania dokumentów w zakładce „Do podpisania”.\n\n"
-            f"Pozdrawiamy\n"
-        )
-    else:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” nie został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"W razie pytań prosimy o kontakt z urzędem.\n\n"
-            f"Pozdrawiamy\n"
-        )
-
-    return html_body, text_body
 
 def get_form_meta(slug: str) -> dict | None:
     for form in get_forms():
@@ -188,9 +167,6 @@ def build_signed_pdf_filename(slug: str, submission_id: str) -> str:
 def pdf_exists(slug: str, filename: str) -> bool:
     return storage.exists(f"{app.config['NEXTCLOUD_OUTPUT_DIR']}/{slug}/pdf/{filename}")
 
-def is_yes(value: str | None) -> bool:
-    return str(value or "").strip().lower() == "tak"
-
 
 def read_submission_rows(slug: str) -> list[dict]:
     csv_path = f"{app.config['NEXTCLOUD_OUTPUT_DIR']}/{slug}/{app.config['CSV_FILENAME']}"
@@ -215,18 +191,20 @@ def find_submission_acceptance_by_id(submission_id: str) -> dict | None:
             if row.get("submission_id", "").strip() != submission_id:
                 continue
 
-            acceptance_required = row.get("acceptance_required", "")
+            process_state = build_process_state(row)
 
             return {
                 "submission_id": submission_id,
                 "form_slug": slug,
                 "form_title": row.get("form_name") or form["title"],
-                "acceptance_required": acceptance_required,
-                "can_sign_documents": is_yes(acceptance_required),
+                "officer_decision": process_state.officer_decision.value,
+                "process_status": process_state.status.value,
+                "can_sign_documents": process_state.can_sign_documents,
                 "row": row,
             }
 
     return None
+
 
 def build_decision_email_content(submission: dict, accepted: bool) -> tuple[str, str]:
     template_name = (
@@ -260,6 +238,7 @@ def build_decision_email_content(submission: dict, accepted: bool) -> tuple[str,
 
     return html_body, text_body
 
+
 def maybe_send_decision_email(submission: dict) -> None:
     row = submission["row"]
 
@@ -271,24 +250,16 @@ def maybe_send_decision_email(submission: dict) -> None:
         )
         return
 
-    decision = str(row.get("acceptance_required", "")).strip()
-    send_email_flag = str(row.get("acceptance_email_sent", "")).strip()
-    email_sent = str(row.get("decision_email_sent", "")).strip()
-    already_sent_for = str(row.get("decision_email_sent_for", "")).strip()
+    officer_decision = get_officer_decision(row)
 
-    # Brak decyzji urzędnika.
-    if decision not in {"Tak", "Nie"}:
+    if officer_decision == OfficerDecision.MISSING:
         return
 
-    # Urzędnik nie zlecił wysyłki maila.
-    if send_email_flag != "Tak":
+    if not should_send_officer_decision_email(row):
         return
 
-    # Mail dla tej samej decyzji został już wysłany.
-    if email_sent == "Tak" and already_sent_for == decision:
-        return
-
-    accepted = decision == "Tak"
+    accepted = officer_decision == OfficerDecision.ACCEPTED
+    decision_value = officer_decision.value
     html_body, text_body = build_decision_email_content(submission, accepted)
 
     send_submission_decision_email(
@@ -309,19 +280,20 @@ def maybe_send_decision_email(submission: dict) -> None:
         submission["form_slug"],
         submission["submission_id"],
         {
+            "officer_decision_email_sent": "Tak",
             "decision_email_sent": "Tak",
-            "decision_email_sent_for": decision,
+            "decision_email_sent_for": decision_value,
         },
     )
 
     logger.info(
         "Wysłano e-mail decyzji '%s' na adres %s dla wniosku %s",
-        decision,
+        decision_value,
         email,
         submission["submission_id"],
     )
-    
-    
+
+
 @app.context_processor
 def inject_globals():
     return {
@@ -373,13 +345,9 @@ def submit(slug: str):
 
     submission_id = str(uuid4())
     submission_data = extract_submission_data(form_definition, request.form)
-    
-    submission_data["acceptance_required"] = ""
-    submission_data["acceptance_email_sent"] = ""
-    submission_data["decision_email_sent"] = ""
-    submission_data["decision_email_sent_for"] = ""
-    submission_data["akceptacja"] = ""
-        
+    submission_data.update(build_initial_process_fields())
+    submission_data.update(build_legacy_process_fields())
+
     errors = validate_submission(form_definition, submission_data)
     logger.info("Validation errors: %s", errors)
 
@@ -592,6 +560,7 @@ def show_result(slug: str, submission_id: str):
 
     return render_template("result.html", result=result)
 
+
 @app.get("/api/submissions/<submission_id>/acceptance-status")
 def api_acceptance_status(submission_id: str):
     submission_id = submission_id.strip()
@@ -619,10 +588,20 @@ def api_acceptance_status(submission_id: str):
             "can_sign_documents": False,
             "message": "Nie znaleziono wniosku o podanym ID.",
         }, 200
+
     try:
         maybe_send_decision_email(submission)
     except Exception as exc:
         logger.exception("Nie udało się wysłać e-maila decyzji: %s", exc)
+
+    if submission["officer_decision"] == OfficerDecision.REJECTED.value:
+        return {
+            "exists": True,
+            "can_sign_documents": False,
+            "message": "Wniosek został odrzucony przez urzędnika.",
+            "form_title": submission["form_title"],
+            "process_status": submission["process_status"],
+        }, 200
 
     if not submission["can_sign_documents"]:
         return {
@@ -630,6 +609,7 @@ def api_acceptance_status(submission_id: str):
             "can_sign_documents": False,
             "message": "Wniosek nie został jeszcze zaakceptowany przez urzędnika.",
             "form_title": submission["form_title"],
+            "process_status": submission["process_status"],
         }, 200
 
     return {
@@ -638,7 +618,9 @@ def api_acceptance_status(submission_id: str):
         "message": "Wniosek został zaakceptowany. Możesz przejść do podpisywania dokumentów.",
         "form_title": submission["form_title"],
         "form_slug": submission["form_slug"],
+        "process_status": submission["process_status"],
     }, 200
+
 
 @app.route("/do-podpisania", methods=["GET", "POST"])
 def documents_to_sign():
@@ -692,8 +674,8 @@ def documents_to_sign():
         errors={},
         result=result,
     )
-    
-    
+
+
 @app.route("/downloads/pdfs/<slug>/<path:filename>", methods=["GET"])
 def download_pdf(slug: str, filename: str):
     try:

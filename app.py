@@ -38,6 +38,8 @@ from services.document_service import (
     build_declaration_filename,
     build_document_pdf_context,
     generate_document_pdf_bytes,
+    get_document_config,
+    is_document_enabled,
 )
 from services.process_service import (
     OfficerDecision,
@@ -46,6 +48,7 @@ from services.process_service import (
     build_legacy_process_fields,
     build_process_state,
     get_officer_decision,
+    is_agreement_required,
     should_send_officer_decision_email,
 )
 
@@ -196,6 +199,26 @@ def read_submission_rows(slug: str) -> list[dict]:
     return list(reader)
 
 
+def resolve_nextcloud_template_html(template_path: str) -> str | None:
+    normalized_path = str(template_path or "").replace("\\", "/").strip().strip("/")
+
+    if not normalized_path:
+        return None
+
+    forms_dir = app.config["NEXTCLOUD_FORMS_DIR"].strip("/")
+    output_dir = app.config["NEXTCLOUD_OUTPUT_DIR"].strip("/")
+
+    if not normalized_path.startswith((f"{forms_dir}/", f"{output_dir}/")):
+        normalized_path = f"{forms_dir}/{normalized_path}"
+
+    template_html = storage.read_text_or_empty(normalized_path)
+
+    if not template_html.strip():
+        raise RuntimeError(f"Nie znaleziono szablonu dokumentu w Nextcloud: {normalized_path}")
+
+    return template_html
+
+
 def find_submission_acceptance_by_id(submission_id: str) -> dict | None:
     for form in get_forms():
         slug = form["slug"]
@@ -226,17 +249,42 @@ def ensure_declaration_generated(submission: dict) -> dict:
     submission_id = submission["submission_id"]
     existing_filename = row.get("declaration_filename", "").strip()
 
-    if row.get("declaration_generated", "").strip().lower() == "tak" and existing_filename:
-        return {
-            "filename": existing_filename,
-            "created": False,
-        }
-
     form_definition = get_form_definition(slug)
     if not form_definition:
         raise RuntimeError("Nie znaleziono definicji formularza dla deklaracji.")
 
-    declaration_filename = build_declaration_filename(row)
+    declaration_config = get_document_config(form_definition, DocumentType.DECLARATION)
+    agreement_enabled = is_document_enabled(form_definition, DocumentType.AGREEMENT)
+
+    if not declaration_config.get("enabled"):
+        next_status = (
+            ProcessStatus.AGREEMENT_READY.value
+            if agreement_enabled
+            else ProcessStatus.PARTICIPANT_ACCEPTED.value
+        )
+        storage.update_csv_row_by_submission_id(
+            slug,
+            submission_id,
+            {
+                "declaration_required": "Nie",
+                "declaration_generated": "Nie",
+                "process_status": next_status,
+            },
+        )
+        return {
+            "enabled": False,
+            "filename": "",
+            "created": False,
+        }
+
+    if row.get("declaration_generated", "").strip().lower() == "tak" and existing_filename:
+        return {
+            "enabled": True,
+            "filename": existing_filename,
+            "created": False,
+        }
+
+    declaration_filename = build_declaration_filename(row, declaration_config)
     declaration_context = build_document_pdf_context(
         form_definition=form_definition,
         submission_id=submission_id,
@@ -246,9 +294,13 @@ def ensure_declaration_generated(submission: dict) -> dict:
         pdf_image_url=resolve_pdf_image_url(form_definition),
         document_type=DocumentType.DECLARATION,
     )
+    declaration_template_html = resolve_nextcloud_template_html(
+        declaration_config.get("template", "")
+    )
     declaration_bytes = generate_document_pdf_bytes(
         app=app,
         template_name="declaration_template.html",
+        template_html=declaration_template_html,
         context=declaration_context,
     )
 
@@ -257,6 +309,7 @@ def ensure_declaration_generated(submission: dict) -> dict:
         slug,
         submission_id,
         {
+            "declaration_required": "Tak",
             "declaration_generated": "Tak",
             "declaration_filename": declaration_filename,
             "process_status": ProcessStatus.DECLARATION_WAITING_FOR_SIGNATURE.value,
@@ -270,12 +323,17 @@ def ensure_declaration_generated(submission: dict) -> dict:
     )
 
     return {
+        "enabled": True,
         "filename": declaration_filename,
         "created": True,
     }
 
 
-def build_signature_update_fields(verification: dict, signed_filename: str) -> dict[str, str]:
+def build_signature_update_fields(
+    verification: dict,
+    signed_filename: str,
+    row: dict,
+) -> dict[str, str]:
     is_signed = bool(verification.get("is_signed"))
     is_valid = bool(verification.get("is_allowed_signature"))
     signature_type = verification.get("signature_type") or "unknown"
@@ -288,6 +346,8 @@ def build_signature_update_fields(verification: dict, signed_filename: str) -> d
         "declaration_signature_error": "" if is_valid else verification.get("reason", "Niepoprawny podpis deklaracji."),
         "process_status": (
             ProcessStatus.AGREEMENT_READY.value
+            if is_valid and is_agreement_required(row)
+            else ProcessStatus.PARTICIPANT_ACCEPTED.value
             if is_valid
             else ProcessStatus.DECLARATION_SIGNATURE_INVALID.value
         ),
@@ -433,7 +493,12 @@ def submit(slug: str):
 
     submission_id = str(uuid4())
     submission_data = extract_submission_data(form_definition, request.form)
-    submission_data.update(build_initial_process_fields())
+    submission_data.update(
+        build_initial_process_fields(
+            declaration_required=is_document_enabled(form_definition, DocumentType.DECLARATION),
+            agreement_required=is_document_enabled(form_definition, DocumentType.AGREEMENT),
+        )
+    )
     submission_data.update(build_legacy_process_fields())
 
     errors = validate_submission(form_definition, submission_data)
@@ -579,7 +644,7 @@ def upload_signed_declaration(slug: str, submission_id: str):
         finally:
             tmp_signed_path.unlink(missing_ok=True)
 
-        update_fields = build_signature_update_fields(verification, signed_filename)
+        update_fields = build_signature_update_fields(verification, signed_filename, row)
         signature_is_valid = update_fields["declaration_signature_valid"] == "Tak"
 
         if signature_is_valid:
@@ -836,19 +901,29 @@ def documents_to_sign():
         "form_title": submission["form_title"],
         "message": (
             "Deklaracja została wygenerowana i jest gotowa do podpisania."
-            if declaration["created"]
+            if declaration.get("enabled") and declaration["created"]
             else "Deklaracja była już wygenerowana i jest gotowa do podpisania."
+            if declaration.get("enabled")
+            else "Dla tego formularza deklaracja nie jest wymagana."
         ),
         "declaration_filename": declaration["filename"],
-        "declaration_url": url_for(
-            "download_pdf",
-            slug=submission["form_slug"],
-            filename=declaration["filename"],
+        "declaration_url": (
+            url_for(
+                "download_pdf",
+                slug=submission["form_slug"],
+                filename=declaration["filename"],
+            )
+            if declaration.get("enabled") and declaration.get("filename")
+            else None
         ),
-        "declaration_upload_url": url_for(
-            "upload_signed_declaration",
-            slug=submission["form_slug"],
-            submission_id=submission_id,
+        "declaration_upload_url": (
+            url_for(
+                "upload_signed_declaration",
+                slug=submission["form_slug"],
+                submission_id=submission_id,
+            )
+            if declaration.get("enabled")
+            else None
         ),
     }
 

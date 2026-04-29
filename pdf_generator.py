@@ -1,13 +1,11 @@
 from pathlib import Path
-from flask import render_template
+
+from flask import render_template, render_template_string
 from playwright.sync_api import sync_playwright
 
 
-def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> Path:
+def write_pdf_from_html(html_string: str, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with app.app_context():
-        html_string = render_template(template_name, **context)
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -30,3 +28,17 @@ def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> P
         browser.close()
 
     return output_path
+
+
+def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> Path:
+    with app.app_context():
+        html_string = render_template(template_name, **context)
+
+    return write_pdf_from_html(html_string, output_path)
+
+
+def generate_pdf_from_html(app, template_html: str, context: dict, output_path: Path) -> Path:
+    with app.app_context():
+        html_string = render_template_string(template_html, **context)
+
+    return write_pdf_from_html(html_string, output_path)

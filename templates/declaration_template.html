@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Deklaracja uczestnictwa</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 20mm;
+      }
+
+      body {
+        font-family: "DejaVuSans";
+        color: #1f2937;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      h1 {
+        font-family: "DejaVuSans-Bold";
+        font-size: 22px;
+        margin-bottom: 6px;
+        color: #0f172a;
+      }
+
+      h2 {
+        font-family: "DejaVuSans-Bold";
+        font-size: 16px;
+        margin: 0 0 10px 0;
+        color: #0f172a;
+      }
+
+      .header-image {
+        width: 100%;
+        margin: 12px 0 18px 0;
+      }
+
+      .header-image img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .description {
+        font-size: 12px;
+        color: #475569;
+        margin-bottom: 18px;
+      }
+
+      .meta {
+        margin-bottom: 20px;
+        font-size: 11px;
+        color: #475569;
+      }
+
+      .section {
+        margin-bottom: 20px;
+        border: 1px solid #dbe3ef;
+        border-radius: 8px;
+        padding: 12px;
+        page-break-inside: avoid;
+      }
+
+      .section-title {
+        font-family: "DejaVuSans-Bold";
+        font-size: 15px;
+        margin-bottom: 10px;
+        color: #0f172a;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 6px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      td {
+        padding: 8px 6px;
+        border-bottom: 1px solid #edf2f7;
+        vertical-align: top;
+      }
+
+      td.label {
+        width: 38%;
+        font-family: "DejaVuSans-Bold";
+        color: #334155;
+      }
+
+      td.value {
+        width: 62%;
+      }
+
+      .statement {
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        page-break-inside: avoid;
+      }
+
+      .statement-title {
+        font-family: "DejaVuSans-Bold";
+        margin-bottom: 6px;
+        color: #0f172a;
+      }
+
+      .statement-text {
+        white-space: pre-line;
+        color: #334155;
+      }
+
+      .statement-status {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #475569;
+      }
+
+      .signature-box {
+        margin-top: 28px;
+        padding-top: 16px;
+        border-top: 1px solid #cbd5e1;
+        color: #334155;
+      }
+
+      .footer-note {
+        margin-top: 20px;
+        font-size: 10px;
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Deklaracja uczestnictwa</h1>
+
+    {% if pdf_image_url %}
+    <div class="header-image">
+      <img
+        src="{{ pdf_image_url }}"
+        alt="{{ pdf_image_alt or 'Obraz formularza' }}"
+      />
+    </div>
+    {% endif %}
+
+    <div class="description">
+      Deklaracja uczestnictwa wygenerowana automatycznie na podstawie danych z formularza:
+      <strong>{{ form_definition.title }}</strong>.
+    </div>
+
+    <div class="meta">
+      <div><strong>Id zgłoszenia:</strong> {{ submission_id }}</div>
+      <div><strong>Uczestnik:</strong> {{ participant_name }}</div>
+    </div>
+
+    {% for section in submission_view %}
+    <div class="section">
+      <div class="section-title">{{ section["title"] }}</div>
+      <table>
+        <tbody>
+          {% for item in section["items"] %}
+          <tr>
+            <td class="label">{{ item["label"] }}</td>
+            <td class="value">{{ item["value"] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+
+    {% if consents_view %}
+    <div class="section">
+      <div class="section-title">Oświadczenia i zgody</div>
+
+      {% for consent in consents_view %}
+      <div class="statement">
+        {% if consent.title %}
+        <div class="statement-title">{{ consent.title }}</div>
+        {% endif %}
+
+        <div class="statement-text">{{ consent.text }}</div>
+
+        {% if consent.accepted_label %}
+        <div class="statement-status">
+          <strong>Status:</strong> {{ consent.accepted_label }}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="signature-box">
+      Dokument wymaga podpisu elektronicznego uczestnika. Dopuszczalne podpisy: mSzafir lub Profil Zaufany.
+    </div>
+  </body>
+</html>

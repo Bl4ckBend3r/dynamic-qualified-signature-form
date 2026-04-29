@@ -13,9 +13,26 @@
         </a>
 
         <nav class="site-nav" aria-label="Nawigacja główna">
-            <a href="{{ url_for('index') }}" class="is-active">Strona główna</a>
-            <a href="{{ url_for('documents_to_sign')}}">Do Podpisania</a>
-            <a href="#">Kontakt</a>
-        </nav>
+    <a
+        href="{{ url_for('index') }}"
+        class="{% if request.endpoint == 'index' %}is-active{% endif %}"
+    >
+        Strona główna
+    </a>
+
+    <a
+        href="{{ url_for('documents_to_sign') }}"
+        class="{% if request.endpoint == 'documents_to_sign' %}is-active{% endif %}"
+    >
+        Do Podpisania
+    </a>
+
+    <a
+        href="#"
+        class="{% if request.endpoint == 'contact' %}is-active{% endif %}"
+    >
+        Kontakt
+    </a>
+</nav>
     </div>
 </header>

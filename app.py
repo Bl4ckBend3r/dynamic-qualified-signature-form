@@ -171,6 +171,13 @@ def build_signed_pdf_filename(slug: str, submission_id: str) -> str:
     return f"{slug}-{submission_id}-signed.pdf"
 
 
+def build_signed_declaration_filename(declaration_filename: str) -> str:
+    declaration_path = Path(declaration_filename)
+    stem = declaration_path.stem or "deklaracja"
+    suffix = declaration_path.suffix or ".pdf"
+    return f"{stem}-signed{suffix}"
+
+
 def pdf_exists(slug: str, filename: str) -> bool:
     return storage.exists(f"{app.config['NEXTCLOUD_OUTPUT_DIR']}/{slug}/pdf/{filename}")
 
@@ -265,6 +272,32 @@ def ensure_declaration_generated(submission: dict) -> dict:
     return {
         "filename": declaration_filename,
         "created": True,
+    }
+
+
+def build_signature_update_fields(verification: dict, signed_filename: str) -> dict[str, str]:
+    is_signed = bool(verification.get("is_signed"))
+    is_mszafir = bool(verification.get("is_szafir_signature"))
+    is_valid = is_signed and is_mszafir
+
+    if is_mszafir:
+        signature_type = "mszafir"
+    elif is_signed:
+        signature_type = "unsupported"
+    else:
+        signature_type = "unknown"
+
+    return {
+        "declaration_signed": "Tak" if is_signed else "Nie",
+        "declaration_signed_filename": signed_filename if is_valid else "",
+        "declaration_signature_type": signature_type,
+        "declaration_signature_valid": "Tak" if is_valid else "Nie",
+        "declaration_signature_error": "" if is_valid else verification.get("reason", "Niepoprawny podpis deklaracji."),
+        "process_status": (
+            ProcessStatus.AGREEMENT_READY.value
+            if is_valid
+            else ProcessStatus.DECLARATION_SIGNATURE_INVALID.value
+        ),
     }
 
 
@@ -507,6 +540,74 @@ def submit(slug: str):
         ), 500
 
 
+@app.route("/upload-declaration-signed/<slug>/<submission_id>", methods=["POST"])
+def upload_signed_declaration(slug: str, submission_id: str):
+    submission = find_submission_acceptance_by_id(submission_id)
+
+    if not submission or submission["form_slug"] != slug:
+        flash("Nie znaleziono wniosku dla podpisanej deklaracji.", "error")
+        return redirect(url_for("documents_to_sign"))
+
+    if not submission["can_sign_documents"]:
+        flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
+        return redirect(url_for("documents_to_sign"))
+
+    row = submission["row"]
+    declaration_filename = row.get("declaration_filename", "").strip()
+
+    if not declaration_filename:
+        flash("Najpierw wygeneruj deklarację do podpisu.", "error")
+        return redirect(url_for("documents_to_sign"))
+
+    uploaded_file = request.files.get("signed_declaration_pdf")
+
+    if not uploaded_file or not uploaded_file.filename:
+        flash("Nie wybrano podpisanej deklaracji PDF.", "error")
+        return redirect(url_for("documents_to_sign"))
+
+    if not uploaded_file.filename.lower().endswith(".pdf"):
+        flash("Dozwolony jest wyłącznie plik PDF.", "error")
+        return redirect(url_for("documents_to_sign"))
+
+    signed_filename = build_signed_declaration_filename(declaration_filename)
+    uploaded_bytes = uploaded_file.read()
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".pdf",
+        delete=False,
+        dir=app.config["TEMP_DIR"],
+    ) as tmp_signed:
+        tmp_signed_path = Path(tmp_signed.name)
+        tmp_signed.write(uploaded_bytes)
+
+    try:
+        try:
+            verification = verify_signed_pdf(tmp_signed_path)
+        finally:
+            tmp_signed_path.unlink(missing_ok=True)
+
+        update_fields = build_signature_update_fields(verification, signed_filename)
+        signature_is_valid = update_fields["declaration_signature_valid"] == "Tak"
+
+        if signature_is_valid:
+            storage.save_pdf(slug, signed_filename, uploaded_bytes)
+
+        storage.update_csv_row_by_submission_id(slug, submission_id, update_fields)
+
+        if not verification.get("is_signed"):
+            flash("Przesłany plik nie zawiera podpisu PDF.", "error")
+        elif not signature_is_valid:
+            flash("Podpis deklaracji nie jest dopuszczalnym podpisem mSzafir.", "error")
+        else:
+            flash("Deklaracja została podpisana i poprawnie zweryfikowana.", "success")
+
+    except Exception as exc:
+        logger.exception("Błąd uploadu podpisanej deklaracji: %s", exc)
+        flash("Wystąpił błąd podczas wgrywania lub weryfikacji deklaracji.", "error")
+
+    return redirect(url_for("documents_to_sign"))
+
+
 @app.route("/upload-signed/<slug>/<submission_id>", methods=["POST"])
 def upload_signed_pdf(slug: str, submission_id: str):
     form_meta = get_form_meta(slug)
@@ -738,6 +839,7 @@ def documents_to_sign():
 
     result = {
         "submission_id": submission_id,
+        "form_slug": submission["form_slug"],
         "form_title": submission["form_title"],
         "message": (
             "Deklaracja została wygenerowana i jest gotowa do podpisania."
@@ -749,6 +851,11 @@ def documents_to_sign():
             "download_pdf",
             slug=submission["form_slug"],
             filename=declaration["filename"],
+        ),
+        "declaration_upload_url": url_for(
+            "upload_signed_declaration",
+            slug=submission["form_slug"],
+            submission_id=submission_id,
         ),
     }
 

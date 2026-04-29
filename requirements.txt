@@ -5,3 +5,5 @@ python-dotenv
 playwright
 pypdf
 asn1crypto
+pytest
+pytest-cov

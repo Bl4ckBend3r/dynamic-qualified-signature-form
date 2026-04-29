@@ -33,8 +33,15 @@ from services.nextcloud_storage import (
     create_nextcloud_storage_from_env,
 )
 from services.email_service import send_submission_decision_email
+from services.document_service import (
+    DocumentType,
+    build_declaration_filename,
+    build_document_pdf_context,
+    generate_document_pdf_bytes,
+)
 from services.process_service import (
     OfficerDecision,
+    ProcessStatus,
     build_initial_process_fields,
     build_legacy_process_fields,
     build_process_state,
@@ -204,6 +211,61 @@ def find_submission_acceptance_by_id(submission_id: str) -> dict | None:
             }
 
     return None
+
+
+def ensure_declaration_generated(submission: dict) -> dict:
+    row = submission["row"]
+    slug = submission["form_slug"]
+    submission_id = submission["submission_id"]
+    existing_filename = row.get("declaration_filename", "").strip()
+
+    if row.get("declaration_generated", "").strip().lower() == "tak" and existing_filename:
+        return {
+            "filename": existing_filename,
+            "created": False,
+        }
+
+    form_definition = get_form_definition(slug)
+    if not form_definition:
+        raise RuntimeError("Nie znaleziono definicji formularza dla deklaracji.")
+
+    declaration_filename = build_declaration_filename(row)
+    declaration_context = build_document_pdf_context(
+        form_definition=form_definition,
+        submission_id=submission_id,
+        row=row,
+        submission_view=build_submission_view(form_definition, row),
+        consents_view=build_consents_view(form_definition, row),
+        pdf_image_url=resolve_pdf_image_url(form_definition),
+        document_type=DocumentType.DECLARATION,
+    )
+    declaration_bytes = generate_document_pdf_bytes(
+        app=app,
+        template_name="declaration_template.html",
+        context=declaration_context,
+    )
+
+    storage.save_pdf(slug, declaration_filename, declaration_bytes)
+    storage.update_csv_row_by_submission_id(
+        slug,
+        submission_id,
+        {
+            "declaration_generated": "Tak",
+            "declaration_filename": declaration_filename,
+            "process_status": ProcessStatus.DECLARATION_WAITING_FOR_SIGNATURE.value,
+        },
+    )
+
+    logger.info(
+        "Wygenerowano deklarację %s dla wniosku %s",
+        declaration_filename,
+        submission_id,
+    )
+
+    return {
+        "filename": declaration_filename,
+        "created": True,
+    }
 
 
 def build_decision_email_content(submission: dict, accepted: bool) -> tuple[str, str]:
@@ -661,10 +723,33 @@ def documents_to_sign():
             result=None,
         ), 400
 
+    try:
+        declaration = ensure_declaration_generated(submission)
+    except Exception as exc:
+        logger.exception("Nie udało się wygenerować deklaracji: %s", exc)
+        errors["submission_id"] = "Nie udało się wygenerować deklaracji do podpisu."
+        return render_template(
+            "documents_to_sign.html",
+            submission_id=submission_id,
+            acceptance_value=acceptance_value,
+            errors=errors,
+            result=None,
+        ), 500
+
     result = {
         "submission_id": submission_id,
         "form_title": submission["form_title"],
-        "message": "Wniosek został zaakceptowany. Można przejść do podpisywania dokumentów.",
+        "message": (
+            "Deklaracja została wygenerowana i jest gotowa do podpisania."
+            if declaration["created"]
+            else "Deklaracja była już wygenerowana i jest gotowa do podpisania."
+        ),
+        "declaration_filename": declaration["filename"],
+        "declaration_url": url_for(
+            "download_pdf",
+            slug=submission["form_slug"],
+            filename=declaration["filename"],
+        ),
     }
 
     return render_template(

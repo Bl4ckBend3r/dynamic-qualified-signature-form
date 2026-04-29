@@ -10,10 +10,12 @@ class ProcessStatus(StrEnum):
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
     OFFICER_ACCEPTED = "OFFICER_ACCEPTED"
     OFFICER_REJECTED = "OFFICER_REJECTED"
+    DECLARATION_NOT_REQUIRED = "DECLARATION_NOT_REQUIRED"
     DECLARATION_READY = "DECLARATION_READY"
     DECLARATION_WAITING_FOR_SIGNATURE = "DECLARATION_WAITING_FOR_SIGNATURE"
     DECLARATION_SIGNED = "DECLARATION_SIGNED"
     DECLARATION_SIGNATURE_INVALID = "DECLARATION_SIGNATURE_INVALID"
+    AGREEMENT_NOT_REQUIRED = "AGREEMENT_NOT_REQUIRED"
     AGREEMENT_BLOCKED = "AGREEMENT_BLOCKED"
     AGREEMENT_READY = "AGREEMENT_READY"
     AGREEMENT_WAITING_FOR_SIGNATURE = "AGREEMENT_WAITING_FOR_SIGNATURE"
@@ -137,6 +139,14 @@ def get_agreement_block_reason(row: Mapping[str, Any]) -> str:
     return get_field(row, "agreement_block_reason")
 
 
+def is_declaration_required(row: Mapping[str, Any]) -> bool:
+    return is_yes(row.get("declaration_required"))
+
+
+def is_agreement_required(row: Mapping[str, Any]) -> bool:
+    return is_yes(row.get("agreement_required"))
+
+
 def is_agreement_blocked(row: Mapping[str, Any]) -> bool:
     return is_yes(row.get("agreement_blocked"))
 
@@ -166,6 +176,11 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
     if decision == OfficerDecision.MISSING:
         return ProcessStatus.WAITING_FOR_OFFICER_DECISION
 
+    if not is_declaration_required(row):
+        if not is_agreement_required(row):
+            return ProcessStatus.PARTICIPANT_ACCEPTED
+        return ProcessStatus.DECLARATION_NOT_REQUIRED
+
     if is_agreement_signature_valid(row):
         return ProcessStatus.PARTICIPANT_ACCEPTED
 
@@ -179,6 +194,8 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
         return ProcessStatus.AGREEMENT_BLOCKED
 
     if is_declaration_signature_valid(row):
+        if not is_agreement_required(row):
+            return ProcessStatus.AGREEMENT_NOT_REQUIRED
         return ProcessStatus.AGREEMENT_READY
 
     if is_yes(row.get("declaration_signed")) and not is_declaration_signature_valid(row):
@@ -196,10 +213,14 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
     agreement_blocked = is_agreement_blocked(row)
     block_reason = get_agreement_block_reason(row)
 
-    can_generate_declaration = status == ProcessStatus.OFFICER_ACCEPTED
+    can_generate_declaration = (
+        status == ProcessStatus.OFFICER_ACCEPTED
+        and is_declaration_required(row)
+    )
     can_sign_documents = decision == OfficerDecision.ACCEPTED
     can_generate_agreement = (
-        is_declaration_signature_valid(row)
+        is_agreement_required(row)
+        and (is_declaration_signature_valid(row) or not is_declaration_required(row))
         and not agreement_blocked
         and not is_yes(row.get("agreement_generated"))
     )
@@ -215,13 +236,18 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
     )
 
 
-def build_initial_process_fields() -> dict[str, str]:
+def build_initial_process_fields(
+    *,
+    declaration_required: bool = False,
+    agreement_required: bool = False,
+) -> dict[str, str]:
     return {
         FIELD_PROCESS_STATUS: ProcessStatus.FORM_SUBMITTED.value,
         FIELD_OFFICER_DECISION: "",
         FIELD_OFFICER_DECISION_REASON: "",
         FIELD_OFFICER_DECISION_EMAIL_REQUESTED: "",
         FIELD_OFFICER_DECISION_EMAIL_SENT: "",
+        "declaration_required": "Tak" if declaration_required else "Nie",
         "declaration_generated": "",
         "declaration_filename": "",
         "declaration_signed": "",
@@ -229,7 +255,7 @@ def build_initial_process_fields() -> dict[str, str]:
         "declaration_signature_valid": "",
         "declaration_signature_error": "",
         "declaration_signed_filename": "",
-        "agreement_required": "",
+        "agreement_required": "Tak" if agreement_required else "Nie",
         "agreement_blocked": "",
         "agreement_block_reason": "",
         "agreement_generated": "",

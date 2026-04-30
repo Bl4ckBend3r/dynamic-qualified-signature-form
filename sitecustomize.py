@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable
 
 from flask import Flask, abort, flash, redirect, render_template, request, url_for
@@ -42,6 +44,32 @@ def _is_yes(value: Any) -> bool:
     return str(value or "").strip().lower() in {"tak", "yes", "true", "1"}
 
 
+def _build_signed_document_filename(document_filename: str) -> str:
+    document_path = Path(document_filename)
+    stem = document_path.stem or "dokument"
+    suffix = document_path.suffix or ".pdf"
+    return f"{stem}-signed{suffix}"
+
+
+def _build_agreement_signature_update_fields(verification: dict, signed_filename: str) -> dict[str, str]:
+    is_signed = bool(verification.get("is_signed"))
+    is_valid = bool(verification.get("is_allowed_signature"))
+    signature_type = verification.get("signature_type") or "unknown"
+
+    return {
+        "agreement_signed": "Tak" if is_signed else "Nie",
+        "agreement_signed_filename": signed_filename if is_valid else "",
+        "agreement_signature_type": signature_type,
+        "agreement_signature_valid": "Tak" if is_valid else "Nie",
+        "agreement_signature_error": "" if is_valid else verification.get("reason", "Niepoprawny podpis umowy."),
+        "process_status": (
+            ProcessStatus.PARTICIPANT_ACCEPTED.value
+            if is_valid
+            else ProcessStatus.AGREEMENT_SIGNATURE_INVALID.value
+        ),
+    }
+
+
 def _build_declaration_form_definition(declaration_config: dict) -> dict:
     fields = declaration_config.get("fields") or []
 
@@ -79,11 +107,15 @@ def _build_documents_result(app_module: Any, submission: dict, message: str = ""
 
     declaration_filename = str(row.get("declaration_filename", "")).strip()
     agreement_filename = str(row.get("agreement_filename", "")).strip()
+    agreement_signed_filename = str(row.get("agreement_signed_filename", "")).strip()
     agreement_blocked = _is_yes(row.get("agreement_blocked"))
     agreement_block_reason = str(row.get("agreement_block_reason", "")).strip()
+    agreement_signature_valid = _is_yes(row.get("agreement_signature_valid"))
 
     if not message:
-        if agreement_blocked:
+        if agreement_signature_valid:
+            message = "Umowa została podpisana i poprawnie zweryfikowana."
+        elif agreement_blocked:
             message = "Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana."
         elif agreement_filename:
             message = "Deklaracja została podpisana i poprawnie zweryfikowana. Umowa jest gotowa do podpisania."
@@ -116,6 +148,20 @@ def _build_documents_result(app_module: Any, submission: dict, message: str = ""
             if agreement_filename
             else None
         ),
+        "agreement_upload_url": (
+            url_for("upload_signed_agreement", slug=slug, submission_id=submission_id)
+            if agreement_filename and not agreement_signature_valid
+            else None
+        ),
+        "agreement_signed_filename": agreement_signed_filename,
+        "agreement_signed_url": (
+            url_for("download_pdf", slug=slug, filename=agreement_signed_filename)
+            if agreement_signed_filename
+            else None
+        ),
+        "agreement_signature_valid": agreement_signature_valid,
+        "agreement_signature_type": row.get("agreement_signature_type", ""),
+        "agreement_signature_error": row.get("agreement_signature_error", ""),
     }
 
 
@@ -233,7 +279,9 @@ def _render_documents_for_get(func: Callable) -> Callable:
 
                 if submission:
                     message = ""
-                    if agreement_result.get("generated") or agreement_result.get("already_exists"):
+                    if _is_yes(submission["row"].get("agreement_signature_valid")):
+                        message = "Umowa została podpisana i poprawnie zweryfikowana."
+                    elif agreement_result.get("generated") or agreement_result.get("already_exists"):
                         message = "Deklaracja została podpisana i poprawnie zweryfikowana. Umowa jest gotowa do podpisania."
                     elif agreement_result.get("blocked"):
                         message = "Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana."
@@ -382,6 +430,10 @@ def _register_declaration_route(app: Flask) -> None:
             ),
             "agreement_filename": "",
             "agreement_url": None,
+            "agreement_upload_url": None,
+            "agreement_signed_filename": "",
+            "agreement_signed_url": None,
+            "agreement_signature_valid": False,
         }
 
         return render_template(
@@ -393,9 +445,82 @@ def _register_declaration_route(app: Flask) -> None:
         )
 
 
+def _register_agreement_upload_route(app: Flask) -> None:
+    if "upload_signed_agreement" in app.view_functions:
+        return
+
+    @app.route("/upload-agreement-signed/<slug>/<submission_id>", methods=["POST"], endpoint="upload_signed_agreement")
+    def upload_signed_agreement(slug: str, submission_id: str):
+        app_module = _get_app_module()
+
+        if app_module is None:
+            abort(500)
+
+        submission = app_module.find_submission_acceptance_by_id(submission_id)
+
+        if not submission or submission["form_slug"] != slug:
+            flash("Nie znaleziono wniosku dla podpisanej umowy.", "error")
+            return redirect(url_for("documents_to_sign", submission_id=submission_id))
+
+        row = submission["row"]
+        agreement_filename = str(row.get("agreement_filename", "")).strip()
+
+        if not agreement_filename:
+            flash("Najpierw wygeneruj umowę do podpisu.", "error")
+            return redirect(url_for("documents_to_sign", submission_id=submission_id))
+
+        uploaded_file = request.files.get("signed_agreement_pdf")
+
+        if not uploaded_file or not uploaded_file.filename:
+            flash("Nie wybrano podpisanej umowy PDF.", "error")
+            return redirect(url_for("documents_to_sign", submission_id=submission_id))
+
+        if not uploaded_file.filename.lower().endswith(".pdf"):
+            flash("Dozwolony jest wyłącznie plik PDF.", "error")
+            return redirect(url_for("documents_to_sign", submission_id=submission_id))
+
+        signed_filename = _build_signed_document_filename(agreement_filename)
+        uploaded_bytes = uploaded_file.read()
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".pdf",
+            delete=False,
+            dir=app_module.app.config["TEMP_DIR"],
+        ) as tmp_signed:
+            tmp_signed_path = Path(tmp_signed.name)
+            tmp_signed.write(uploaded_bytes)
+
+        try:
+            try:
+                verification = app_module.verify_signed_pdf(tmp_signed_path)
+            finally:
+                tmp_signed_path.unlink(missing_ok=True)
+
+            update_fields = _build_agreement_signature_update_fields(verification, signed_filename)
+            signature_is_valid = update_fields["agreement_signature_valid"] == "Tak"
+
+            if signature_is_valid:
+                app_module.storage.save_pdf(slug, signed_filename, uploaded_bytes)
+
+            app_module.storage.update_csv_row_by_submission_id(slug, submission_id, update_fields)
+
+            if not verification.get("is_signed"):
+                flash("Przesłany plik nie zawiera podpisu PDF.", "error")
+            elif not signature_is_valid:
+                flash("Podpis umowy nie jest dopuszczalnym podpisem mSzafir ani Profilem Zaufanym.", "error")
+            else:
+                flash("Umowa została podpisana i poprawnie zweryfikowana.", "success")
+
+        except Exception:
+            flash("Wystąpił błąd podczas wgrywania lub weryfikacji umowy.", "error")
+
+        return redirect(url_for("documents_to_sign", submission_id=submission_id))
+
+
 def _patched_flask_init(self: Flask, *args, **kwargs):
     _original_flask_init(self, *args, **kwargs)
     _register_declaration_route(self)
+    _register_agreement_upload_route(self)
 
 
 if not getattr(Flask, "_declaration_route_patch_applied", False):

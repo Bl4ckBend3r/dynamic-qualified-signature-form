@@ -24,11 +24,16 @@ TRUSTED_PROFILE_HINTS = [
     "PODPIS OSOBISTY",
     "EPUAP",
     "MINISTER CYFRYZACJI",
+    "MINISTER WŁAŚCIWY DO SPRAW INFORMATYZACJI",
+    "MINISTRA WŁAŚCIWEGO DO SPRAW INFORMATYZACJI",
     "MINISTRY OF DIGITAL AFFAIRS",
     "CENTRALNY OSRODEK INFORMATYKI",
     "CENTRALNY OŚRODEK INFORMATYKI",
     "COI",
     "PWPW",
+    "PIECZĘCIĄ MINISTRA",
+    "PIECZECIA MINISTRA",
+    "PZ ID",
 ]
 
 QUALIFIED_PROVIDER_HINTS = [
@@ -59,12 +64,22 @@ def _normalize_name_dict(name_dict: dict | None) -> str:
     return " | ".join(parts)
 
 
+def _normalize_pdf_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
 def _match_any(text: str, hints: list[str]) -> bool:
     text_upper = text.upper()
     return any(hint in text_upper for hint in hints)
 
 
-def _extract_pdf_signature_contents(pdf_path: Path) -> bytes | None:
+def _extract_pdf_signature(pdf_path: Path) -> dict[str, Any] | None:
     reader = PdfReader(str(pdf_path))
     root = reader.trailer["/Root"]
 
@@ -85,10 +100,30 @@ def _extract_pdf_signature_contents(pdf_path: Path) -> bytes | None:
             continue
 
         contents = signature_dict.get("/Contents")
-        if contents:
-            return bytes(contents)
+        if not contents:
+            continue
+
+        byte_range = signature_dict.get("/ByteRange")
+
+        return {
+            "contents": bytes(contents),
+            "name": _normalize_pdf_value(signature_dict.get("/Name")),
+            "reason": _normalize_pdf_value(signature_dict.get("/Reason")),
+            "date": _normalize_pdf_value(signature_dict.get("/M")),
+            "filter": _normalize_pdf_value(signature_dict.get("/Filter")),
+            "subfilter": _normalize_pdf_value(signature_dict.get("/SubFilter")),
+            "byte_range": list(byte_range) if byte_range else None,
+        }
 
     return None
+
+
+def _extract_pdf_signature_contents(pdf_path: Path) -> bytes | None:
+    signature = _extract_pdf_signature(pdf_path)
+    if not signature:
+        return None
+
+    return signature.get("contents")
 
 
 def _build_default_result() -> dict:
@@ -103,6 +138,10 @@ def _build_default_result() -> dict:
         "is_trusted_profile_signature": False,
         "signer_subject": None,
         "signer_issuer": None,
+        "pdf_signature_name": None,
+        "pdf_signature_reason": None,
+        "pdf_signature_date": None,
+        "pdf_signature_subfilter": None,
         "reason": None,
     }
 
@@ -155,10 +194,20 @@ def _classify_signature(combined_text: str) -> dict[str, Any]:
 def verify_signed_pdf(pdf_path: Path) -> dict:
     result = _build_default_result()
 
-    signature_contents = _extract_pdf_signature_contents(pdf_path)
-    if not signature_contents:
+    pdf_signature = _extract_pdf_signature(pdf_path)
+    if not pdf_signature:
         result["reason"] = "Brak pola podpisu PDF."
         return result
+
+    signature_contents = pdf_signature.get("contents")
+    if not signature_contents:
+        result["reason"] = "Brak zawartości podpisu PDF."
+        return result
+
+    result["pdf_signature_name"] = pdf_signature.get("name") or None
+    result["pdf_signature_reason"] = pdf_signature.get("reason") or None
+    result["pdf_signature_date"] = pdf_signature.get("date") or None
+    result["pdf_signature_subfilter"] = pdf_signature.get("subfilter") or None
 
     try:
         content_info = cms.ContentInfo.load(signature_contents)
@@ -202,7 +251,17 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
 
     subject_text = _normalize_name_dict(signer_cert.subject.native)
     issuer_text = _normalize_name_dict(signer_cert.issuer.native)
-    combined_text = f"{subject_text} || {issuer_text}"
+    pdf_metadata_text = " || ".join(
+        part
+        for part in [
+            pdf_signature.get("name"),
+            pdf_signature.get("reason"),
+            pdf_signature.get("filter"),
+            pdf_signature.get("subfilter"),
+        ]
+        if part
+    )
+    combined_text = f"{subject_text} || {issuer_text} || {pdf_metadata_text}"
 
     result["is_signed"] = True
     result["is_valid_structure"] = True

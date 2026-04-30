@@ -3,6 +3,8 @@
 {% block title %}Do podpisania{% endblock %}
 
 {% block content %}
+{% set initial_submission_id = submission_id or request.args.get('submission_id', '') %}
+
 <div class="card">
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
@@ -20,7 +22,7 @@
             type="text"
             id="submission_id"
             name="submission_id"
-            value="{{ submission_id }}"
+            value="{{ initial_submission_id }}"
             placeholder="Wpisz ID wniosku"
             autocomplete="off"
             required
@@ -66,7 +68,7 @@
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
                         <p>
-                            Wgraj deklarację podpisaną elektronicznie. Aktualnie akceptowany jest podpis mSzafir.
+                            Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.
                         </p>
                     </div>
 
@@ -133,6 +135,7 @@ async function checkAcceptanceStatus() {
         if (data.exists && data.can_sign_documents) {
             documentsSection.style.display = "block";
             generateButton.disabled = false;
+            acceptanceSelect.value = "Tak";
         }
     } catch (error) {
         statusBox.textContent = "Nie udało się sprawdzić statusu wniosku.";

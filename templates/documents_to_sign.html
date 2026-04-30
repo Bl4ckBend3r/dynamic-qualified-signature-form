@@ -132,6 +132,51 @@
                             </a>
                         </div>
                     {% endif %}
+
+                    {% if result.agreement_upload_url %}
+                        <form
+                            method="post"
+                            action="{{ result.agreement_upload_url }}"
+                            enctype="multipart/form-data"
+                            class="dynamic-form"
+                            style="margin-top: 20px;"
+                        >
+                            <div class="form-row width-full">
+                                <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
+                                <input
+                                    type="file"
+                                    id="signed_agreement_pdf"
+                                    name="signed_agreement_pdf"
+                                    accept="application/pdf"
+                                    required
+                                >
+                            </div>
+
+                            <div class="submit-row">
+                                <button type="submit" class="btn-primary">
+                                    Wyślij podpisaną umowę
+                                </button>
+                            </div>
+                        </form>
+                    {% endif %}
+
+                    {% if result.agreement_signature_valid %}
+                        <p style="margin-top: 16px;"><strong>Status podpisu umowy:</strong> Poprawny</p>
+                        {% if result.agreement_signature_type %}
+                            <p><strong>Typ podpisu:</strong> {{ result.agreement_signature_type }}</p>
+                        {% endif %}
+                    {% elif result.agreement_signature_error %}
+                        <p style="margin-top: 16px;"><strong>Status podpisu umowy:</strong> Niepoprawny</p>
+                        <p><strong>Błąd:</strong> {{ result.agreement_signature_error }}</p>
+                    {% endif %}
+
+                    {% if result.agreement_signed_url %}
+                        <div class="download-links" style="margin-top: 16px;">
+                            <a class="btn-secondary" href="{{ result.agreement_signed_url }}">
+                                Pobierz podpisaną umowę PDF
+                            </a>
+                        </div>
+                    {% endif %}
                 </div>
             {% endif %}
         </div>

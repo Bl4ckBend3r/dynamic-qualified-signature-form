@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sys
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 from flask import Flask, abort, flash, redirect, render_template, request, url_for
 
@@ -11,6 +12,7 @@ from services.process_service import ProcessStatus
 
 
 _original_flask_init = Flask.__init__
+_original_flask_route = Flask.route
 
 CRITICAL_DECLARATION_REQUIREMENTS = {
     "deklaracja_18_lat": "1. Ukończenie 18 roku życia",
@@ -53,6 +55,40 @@ def _build_agreement_block_reason(failed_requirements: list[str]) -> str:
         return ""
 
     return "Warunki nie zostały spełnione. Odpowiedź 'Nie' wskazano dla: " + "; ".join(failed_requirements) + "."
+
+
+def _preserve_submission_redirect(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        response = func(*args, **kwargs)
+        submission_id = kwargs.get("submission_id")
+
+        if not submission_id or not hasattr(response, "headers"):
+            return response
+
+        status_code = getattr(response, "status_code", None)
+        location = response.headers.get("Location", "")
+
+        if status_code in {301, 302, 303, 307, 308} and location.endswith(url_for("documents_to_sign")):
+            response.headers["Location"] = url_for("documents_to_sign", submission_id=submission_id)
+
+        return response
+
+    return wrapper
+
+
+def _patched_flask_route(self: Flask, rule: str, **options):
+    original_decorator = _original_flask_route(self, rule, **options)
+
+    def decorator(func: Callable):
+        endpoint = options.get("endpoint") or func.__name__
+
+        if endpoint == "upload_signed_declaration" or func.__name__ == "upload_signed_declaration":
+            return original_decorator(_preserve_submission_redirect(func))
+
+        return original_decorator(func)
+
+    return decorator
 
 
 def _register_declaration_route(app: Flask) -> None:
@@ -183,4 +219,5 @@ def _patched_flask_init(self: Flask, *args, **kwargs):
 
 if not getattr(Flask, "_declaration_route_patch_applied", False):
     Flask.__init__ = _patched_flask_init
+    Flask.route = _patched_flask_route
     Flask._declaration_route_patch_applied = True

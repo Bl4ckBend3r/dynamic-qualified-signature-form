@@ -6,8 +6,19 @@ from typing import Any, Callable
 
 from flask import Flask, abort, flash, redirect, render_template, request, url_for
 
-from form_loader import extract_submission_data, validate_submission
-from services.document_service import DocumentType, get_document_config
+from form_loader import (
+    build_consents_view,
+    build_submission_view,
+    extract_submission_data,
+    validate_submission,
+)
+from services.document_service import (
+    DocumentType,
+    build_agreement_filename,
+    build_document_pdf_context,
+    generate_document_pdf_bytes,
+    get_document_config,
+)
 from services.process_service import ProcessStatus
 
 
@@ -25,6 +36,10 @@ CRITICAL_DECLARATION_REQUIREMENTS = {
 
 def _get_app_module() -> Any:
     return sys.modules.get("app") or sys.modules.get("__main__")
+
+
+def _is_yes(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"tak", "yes", "true", "1"}
 
 
 def _build_declaration_form_definition(declaration_config: dict) -> dict:
@@ -57,13 +72,142 @@ def _build_agreement_block_reason(failed_requirements: list[str]) -> str:
     return "Warunki nie zostały spełnione. Odpowiedź 'Nie' wskazano dla: " + "; ".join(failed_requirements) + "."
 
 
+def _build_documents_result(app_module: Any, submission: dict, message: str = "") -> dict:
+    row = submission["row"]
+    slug = submission["form_slug"]
+    submission_id = submission["submission_id"]
+
+    declaration_filename = str(row.get("declaration_filename", "")).strip()
+    agreement_filename = str(row.get("agreement_filename", "")).strip()
+    agreement_blocked = _is_yes(row.get("agreement_blocked"))
+    agreement_block_reason = str(row.get("agreement_block_reason", "")).strip()
+
+    if not message:
+        if agreement_blocked:
+            message = "Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana."
+        elif agreement_filename:
+            message = "Deklaracja została podpisana i poprawnie zweryfikowana. Umowa jest gotowa do podpisania."
+        elif declaration_filename:
+            message = "Deklaracja jest gotowa do podpisania."
+        else:
+            message = "Dokumenty są gotowe do obsługi."
+
+    return {
+        "submission_id": submission_id,
+        "form_slug": slug,
+        "form_title": submission["form_title"],
+        "message": message,
+        "agreement_blocked": agreement_blocked,
+        "agreement_block_reason": agreement_block_reason,
+        "declaration_filename": declaration_filename,
+        "declaration_url": (
+            url_for("download_pdf", slug=slug, filename=declaration_filename)
+            if declaration_filename
+            else None
+        ),
+        "declaration_upload_url": (
+            url_for("upload_signed_declaration", slug=slug, submission_id=submission_id)
+            if declaration_filename
+            else None
+        ),
+        "agreement_filename": agreement_filename,
+        "agreement_url": (
+            url_for("download_pdf", slug=slug, filename=agreement_filename)
+            if agreement_filename
+            else None
+        ),
+    }
+
+
+def _ensure_agreement_generated(app_module: Any, submission_id: str) -> dict:
+    submission = app_module.find_submission_acceptance_by_id(submission_id)
+
+    if not submission:
+        return {"generated": False, "reason": "Nie znaleziono wniosku."}
+
+    row = submission["row"]
+    slug = submission["form_slug"]
+
+    if not _is_yes(row.get("declaration_signature_valid")):
+        return {"generated": False, "reason": "Deklaracja nie została poprawnie podpisana."}
+
+    if not _is_yes(row.get("agreement_required")):
+        return {"generated": False, "reason": "Umowa nie jest wymagana."}
+
+    if _is_yes(row.get("agreement_blocked")):
+        return {
+            "generated": False,
+            "blocked": True,
+            "reason": row.get("agreement_block_reason") or "Warunki nie zostały spełnione.",
+        }
+
+    existing_filename = str(row.get("agreement_filename", "")).strip()
+    if _is_yes(row.get("agreement_generated")) and existing_filename:
+        return {"generated": False, "filename": existing_filename, "already_exists": True}
+
+    form_definition = app_module.get_form_definition(slug)
+    if not form_definition:
+        return {"generated": False, "reason": "Nie znaleziono definicji formularza."}
+
+    agreement_config = get_document_config(form_definition, DocumentType.AGREEMENT)
+    if not agreement_config.get("enabled"):
+        return {"generated": False, "reason": "Umowa jest wyłączona w konfiguracji formularza."}
+
+    agreement_filename = build_agreement_filename(row, agreement_config)
+    agreement_context = build_document_pdf_context(
+        form_definition=form_definition,
+        submission_id=submission_id,
+        row=row,
+        submission_view=build_submission_view(form_definition, row),
+        consents_view=build_consents_view(form_definition, row),
+        pdf_image_url=app_module.resolve_pdf_image_url(form_definition),
+        document_type=DocumentType.AGREEMENT,
+    )
+    agreement_template_html = app_module.resolve_nextcloud_template_html(
+        agreement_config.get("template", "")
+    )
+    agreement_bytes = generate_document_pdf_bytes(
+        app=app_module.app,
+        template_name="agreement_template.html",
+        template_html=agreement_template_html,
+        context=agreement_context,
+    )
+
+    app_module.storage.save_pdf(slug, agreement_filename, agreement_bytes)
+    app_module.storage.update_csv_row_by_submission_id(
+        slug,
+        submission_id,
+        {
+            "agreement_required": "Tak",
+            "agreement_blocked": "Nie",
+            "agreement_block_reason": "",
+            "agreement_generated": "Tak",
+            "agreement_filename": agreement_filename,
+            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+        },
+    )
+
+    return {"generated": True, "filename": agreement_filename}
+
+
 def _preserve_submission_redirect(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         response = func(*args, **kwargs)
         submission_id = kwargs.get("submission_id")
 
-        if not submission_id or not hasattr(response, "headers"):
+        if not submission_id:
+            return response
+
+        app_module = _get_app_module()
+        if app_module is not None:
+            agreement_result = _ensure_agreement_generated(app_module, submission_id)
+            if agreement_result.get("generated"):
+                flash("Umowa została wygenerowana i jest gotowa do podpisania.", "success")
+            elif agreement_result.get("blocked"):
+                flash("Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana.", "error")
+
+        if not hasattr(response, "headers"):
             return response
 
         status_code = getattr(response, "status_code", None)
@@ -77,6 +221,31 @@ def _preserve_submission_redirect(func: Callable) -> Callable:
     return wrapper
 
 
+def _render_documents_for_get(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if request.method == "GET":
+            submission_id = request.args.get("submission_id", "").strip()
+            app_module = _get_app_module()
+
+            if submission_id and app_module is not None:
+                submission = app_module.find_submission_acceptance_by_id(submission_id)
+
+                if submission:
+                    result = _build_documents_result(app_module, submission)
+                    return render_template(
+                        "documents_to_sign.html",
+                        submission_id=submission_id,
+                        acceptance_value="Tak",
+                        errors={},
+                        result=result,
+                    )
+
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _patched_flask_route(self: Flask, rule: str, **options):
     original_decorator = _original_flask_route(self, rule, **options)
 
@@ -85,6 +254,9 @@ def _patched_flask_route(self: Flask, rule: str, **options):
 
         if endpoint == "upload_signed_declaration" or func.__name__ == "upload_signed_declaration":
             return original_decorator(_preserve_submission_redirect(func))
+
+        if endpoint == "documents_to_sign" or func.__name__ == "documents_to_sign":
+            return original_decorator(_render_documents_for_get(func))
 
         return original_decorator(func)
 
@@ -201,6 +373,8 @@ def _register_declaration_route(app: Flask) -> None:
                 if declaration.get("enabled")
                 else None
             ),
+            "agreement_filename": "",
+            "agreement_url": None,
         }
 
         return render_template(

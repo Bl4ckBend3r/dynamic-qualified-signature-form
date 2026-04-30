@@ -12,6 +12,14 @@ from services.process_service import ProcessStatus
 
 _original_flask_init = Flask.__init__
 
+CRITICAL_DECLARATION_REQUIREMENTS = {
+    "deklaracja_18_lat": "1. Ukończenie 18 roku życia",
+    "deklaracja_lubuskie": "2. Praca, zamieszkanie lub przebywanie na terenie województwa lubuskiego",
+    "deklaracja_brak_dzialalnosci": "4. Brak prowadzenia działalności gospodarczej lub oświatowej",
+    "deklaracja_brak_ksztalcenia": "5. Brak uczestnictwa w dalszym kształceniu w systemie oświaty",
+    "deklaracja_umiejetnosci_podstawowe": "8. Posiadanie umiejętności podstawowych na poziomie 1 i 2 PRK",
+}
+
 
 def _get_app_module() -> Any:
     return sys.modules.get("app") or sys.modules.get("__main__")
@@ -30,6 +38,21 @@ def _build_declaration_form_definition(declaration_config: dict) -> dict:
         "signature": {"mode": "none"},
         "fields": fields,
     }
+
+
+def _find_failed_declaration_requirements(declaration_data: dict) -> list[str]:
+    return [
+        label
+        for field_name, label in CRITICAL_DECLARATION_REQUIREMENTS.items()
+        if str(declaration_data.get(field_name, "")).strip().lower() == "nie"
+    ]
+
+
+def _build_agreement_block_reason(failed_requirements: list[str]) -> str:
+    if not failed_requirements:
+        return ""
+
+    return "Warunki nie zostały spełnione. Odpowiedź 'Nie' wskazano dla: " + "; ".join(failed_requirements) + "."
 
 
 def _register_declaration_route(app: Flask) -> None:
@@ -89,12 +112,22 @@ def _register_declaration_route(app: Flask) -> None:
                 action_url=action_url,
             ), 400
 
+        failed_requirements = _find_failed_declaration_requirements(declaration_data)
+        agreement_block_reason = _build_agreement_block_reason(failed_requirements)
+        agreement_blocked = bool(failed_requirements)
+
         updates = {
             **declaration_data,
             "declaration_form_completed": "Tak",
             "declaration_generated": "",
             "declaration_filename": "",
-            "process_status": ProcessStatus.OFFICER_ACCEPTED.value,
+            "agreement_blocked": "Tak" if agreement_blocked else "Nie",
+            "agreement_block_reason": agreement_block_reason,
+            "process_status": (
+                ProcessStatus.AGREEMENT_BLOCKED.value
+                if agreement_blocked
+                else ProcessStatus.OFFICER_ACCEPTED.value
+            ),
         }
         app_module.storage.update_csv_row_by_submission_id(slug, submission_id, updates)
 
@@ -105,13 +138,22 @@ def _register_declaration_route(app: Flask) -> None:
 
         declaration = app_module.ensure_declaration_generated(refreshed_submission)
 
-        flash("Deklaracja została uzupełniona i wygenerowana jako PDF.", "success")
+        if agreement_blocked:
+            flash("Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana.", "error")
+        else:
+            flash("Deklaracja została uzupełniona i wygenerowana jako PDF.", "success")
 
         result = {
             "submission_id": submission_id,
             "form_slug": slug,
             "form_title": refreshed_submission["form_title"],
-            "message": "Deklaracja została uzupełniona i jest gotowa do podpisania.",
+            "message": (
+                "Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana."
+                if agreement_blocked
+                else "Deklaracja została uzupełniona i jest gotowa do podpisania."
+            ),
+            "agreement_blocked": agreement_blocked,
+            "agreement_block_reason": agreement_block_reason,
             "declaration_filename": declaration.get("filename", ""),
             "declaration_url": (
                 url_for("download_pdf", slug=slug, filename=declaration.get("filename"))

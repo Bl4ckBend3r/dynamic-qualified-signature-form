@@ -61,6 +61,13 @@
     <div class="download-links">
         <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
 
+        <a
+            class="btn-primary"
+            href="{{ url_for('documents_to_sign', submission_id=result.submission_id) }}"
+        >
+            Przejdź do dokumentów do podpisania
+        </a>
+
         {% if has_signature_flow and result.signed_pdf_url %}
             <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>
         {% endif %}

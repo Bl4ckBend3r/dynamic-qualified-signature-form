@@ -49,7 +49,7 @@ def test_submit_valid_form_generates_pdf_and_csv_row(client, app, valid_form_dat
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "Wynik operacji" in html
+    assert "Formularz został przetworzony." in html
     assert "Formularz zgłoszeniowy" in html
 
     storage = app.testing_storage
@@ -86,7 +86,7 @@ def test_download_pdf_returns_generated_pdf(client, app, valid_form_data, monkey
     assert submit_response.status_code == 200
 
     row = app.testing_storage.csv_rows[0]
-    response = client.get(f"/download/formularz_zgloszeniowy/{row['pdf_filename']}")
+    response = client.get(f"/downloads/pdfs/formularz_zgloszeniowy/{row['pdf_filename']}")
 
     assert response.status_code == 200
     assert response.mimetype == "application/pdf"

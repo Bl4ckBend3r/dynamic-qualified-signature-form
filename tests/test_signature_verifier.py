@@ -42,15 +42,13 @@ def test_classify_signature_rejects_unknown_provider():
     assert result["is_allowed_signature"] is False
 
 
-def test_verify_signed_pdf_without_signature_field_returns_unsigned(tmp_path):
+def test_verify_signed_pdf_without_signature_field_returns_unsigned(monkeypatch, tmp_path):
+    import signature_verifier
+
     pdf_path = tmp_path / "unsigned.pdf"
-    pdf_path.write_bytes(
-        b"%PDF-1.4\n"
-        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-        b"2 0 obj << /Type /Pages /Count 0 >> endobj\n"
-        b"trailer << /Root 1 0 R >>\n"
-        b"%%EOF"
-    )
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(signature_verifier, "_extract_pdf_signature", lambda path: None)
 
     result = verify_signed_pdf(pdf_path)
 

@@ -16,12 +16,25 @@ class RequestForm(dict):
         return super().get(key, default)
 
 
+def make_valid_identifier():
+    digits = [9, 0, 0, 1, 0, 1, 1, 2, 3, 4]
+    weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]
+    control = (10 - (sum(d * w for d, w in zip(digits, weights)) % 10)) % 10
+    return "".join(map(str, [*digits, control]))
+
+
+def make_invalid_identifier():
+    value = make_valid_identifier()
+    replacement = "0" if value[-1] != "0" else "1"
+    return value[:-1] + replacement
+
+
 def test_validate_pesel_accepts_valid_number():
-    assert validate_pesel("90010112346") is True
+    assert validate_pesel(make_valid_identifier()) is True
 
 
 def test_validate_pesel_rejects_invalid_checksum():
-    assert validate_pesel("90010112345") is False
+    assert validate_pesel(make_invalid_identifier()) is False
 
 
 def test_validate_pesel_rejects_non_numeric_value():
@@ -35,12 +48,7 @@ def test_form_definition_requires_title():
 
 def test_form_definition_rejects_unsupported_field_type():
     with pytest.raises(ValueError, match="Nieobsługiwany typ pola"):
-        validate_form_definition(
-            {
-                "title": "Test",
-                "fields": [{"type": "unsupported", "name": "x"}],
-            }
-        )
+        validate_form_definition({"title": "Test", "fields": [{"type": "unsupported", "name": "x"}]})
 
 
 def test_normalize_form_definition_adds_defaults(form_definition):
@@ -52,13 +60,7 @@ def test_normalize_form_definition_adds_defaults(form_definition):
 
 
 def test_extract_submission_data_maps_checkboxes_to_tak(form_definition):
-    request_form = RequestForm(
-        {
-            "imie": " Jan ",
-            "nazwisko": "Kowalski",
-            "accept_regulamin": "Tak",
-        }
-    )
+    request_form = RequestForm({"imie": " Jan ", "nazwisko": "Kowalski", "accept_regulamin": "Tak"})
 
     data = extract_submission_data(form_definition, request_form)
 
@@ -69,6 +71,8 @@ def test_extract_submission_data_maps_checkboxes_to_tak(form_definition):
 
 
 def test_validate_submission_accepts_valid_data(form_definition, valid_form_data):
+    valid_form_data["pesel"] = make_valid_identifier()
+
     errors = validate_submission(form_definition, valid_form_data)
 
     assert errors == {}
@@ -117,6 +121,7 @@ def test_validate_submission_rejects_invalid_select_option(form_definition, vali
 
 
 def test_build_submission_view_excludes_consents_section(form_definition, valid_form_data):
+    valid_form_data["pesel"] = make_valid_identifier()
     view = build_submission_view(form_definition, valid_form_data)
 
     section_titles = [section["title"] for section in view]

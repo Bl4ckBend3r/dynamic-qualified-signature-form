@@ -51,6 +51,13 @@
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
 
+            {% if result.agreement_blocked %}
+                <p><strong>Status umowy:</strong> Umowa zablokowana</p>
+                {% if result.agreement_block_reason %}
+                    <p><strong>Powód:</strong> {{ result.agreement_block_reason }}</p>
+                {% endif %}
+            {% endif %}
+
             {% if result.declaration_filename %}
                 <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
             {% endif %}
@@ -104,6 +111,27 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            {% endif %}
+
+            {% if result.agreement_filename %}
+                <div class="card" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h3>Umowa do podpisania</h3>
+                        <p>
+                            Deklaracja została poprawnie zweryfikowana. Umowa została wygenerowana i jest gotowa do podpisania.
+                        </p>
+                    </div>
+
+                    <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
+
+                    {% if result.agreement_url %}
+                        <div class="download-links" style="margin-top: 16px;">
+                            <a class="btn-primary" href="{{ result.agreement_url }}">
+                                Pobierz umowę PDF
+                            </a>
+                        </div>
+                    {% endif %}
                 </div>
             {% endif %}
         </div>

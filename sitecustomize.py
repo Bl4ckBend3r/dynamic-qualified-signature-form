@@ -131,9 +131,6 @@ def _ensure_agreement_generated(app_module: Any, submission_id: str) -> dict:
     if not _is_yes(row.get("declaration_signature_valid")):
         return {"generated": False, "reason": "Deklaracja nie została poprawnie podpisana."}
 
-    if not _is_yes(row.get("agreement_required")):
-        return {"generated": False, "reason": "Umowa nie jest wymagana."}
-
     if _is_yes(row.get("agreement_blocked")):
         return {
             "generated": False,
@@ -206,6 +203,8 @@ def _preserve_submission_redirect(func: Callable) -> Callable:
                 flash("Umowa została wygenerowana i jest gotowa do podpisania.", "success")
             elif agreement_result.get("blocked"):
                 flash("Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana.", "error")
+            elif agreement_result.get("reason"):
+                flash(agreement_result["reason"], "info")
 
         if not hasattr(response, "headers"):
             return response
@@ -229,10 +228,18 @@ def _render_documents_for_get(func: Callable) -> Callable:
             app_module = _get_app_module()
 
             if submission_id and app_module is not None:
+                agreement_result = _ensure_agreement_generated(app_module, submission_id)
                 submission = app_module.find_submission_acceptance_by_id(submission_id)
 
                 if submission:
-                    result = _build_documents_result(app_module, submission)
+                    message = ""
+                    if agreement_result.get("generated") or agreement_result.get("already_exists"):
+                        message = "Deklaracja została podpisana i poprawnie zweryfikowana. Umowa jest gotowa do podpisania."
+                    elif agreement_result.get("blocked"):
+                        message = "Warunki nie zostały spełnione. Umowa nie zostanie wygenerowana."
+
+                    refreshed_submission = app_module.find_submission_acceptance_by_id(submission_id) or submission
+                    result = _build_documents_result(app_module, refreshed_submission, message=message)
                     return render_template(
                         "documents_to_sign.html",
                         submission_id=submission_id,

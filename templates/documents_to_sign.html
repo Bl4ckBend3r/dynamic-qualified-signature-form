@@ -55,13 +55,22 @@
                 <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
             {% endif %}
 
-            {% if result.declaration_url %}
-                <div class="download-links" style="margin-top: 16px;">
+            <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
+                {% if result.form_slug and result.submission_id %}
+                    <a
+                        class="btn-primary"
+                        href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                    >
+                        Wypełnij deklarację
+                    </a>
+                {% endif %}
+
+                {% if result.declaration_url %}
                     <a class="btn-primary" href="{{ result.declaration_url }}">
                         Pobierz deklarację PDF
                     </a>
-                </div>
-            {% endif %}
+                {% endif %}
+            </div>
 
             {% if result.declaration_upload_url %}
                 <div class="card" style="margin-top: 24px;">

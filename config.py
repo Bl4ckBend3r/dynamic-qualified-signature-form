@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 
+# Ensures the /declaration/<slug>/<submission_id> route is registered before Flask app creation.
+import sitecustomize  # noqa: F401
+
 
 class Config:
     APP_NAME = "Formularze Lubuskie"

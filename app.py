@@ -3,6 +3,7 @@ import csv
 import logging
 import mimetypes
 import tempfile
+from datetime import datetime
 from io import BytesIO, StringIO
 from pathlib import Path
 from uuid import uuid4
@@ -558,7 +559,7 @@ def submit(slug: str):
         csv_row = {
             "submission_id": submission_id,
             "form_slug": slug,
-            "created_at": "",
+            "created_at": datetime.now().strftime("%d.%m.%Y"),
             "form_name": form_definition["title"],
             "pdf_filename": pdf_filename,
             "signed_pdf_filename": signed_pdf_filename,

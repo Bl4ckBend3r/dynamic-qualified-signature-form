@@ -46,8 +46,7 @@
     </div>
 </form>
     {% if result %}
-        {% set declaration_download_enabled = result.declaration_download_enabled|default(false) %}
-
+        {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
         <div class="result-box">
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>

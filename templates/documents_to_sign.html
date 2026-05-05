@@ -46,6 +46,8 @@
     </div>
 </form>
     {% if result %}
+        {% set declaration_download_enabled = result.declaration_download_enabled|default(false) %}
+
         <div class="result-box">
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
@@ -72,10 +74,20 @@
                     </a>
                 {% endif %}
 
-                {% if result.declaration_url %}
+                {% if result.declaration_url and declaration_download_enabled %}
                     <a class="btn-primary" href="{{ result.declaration_url }}">
                         Pobierz deklarację PDF
                     </a>
+                {% else %}
+                    <button
+                        type="button"
+                        class="btn-primary"
+                        disabled
+                        aria-disabled="true"
+                        title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
+                    >
+                        Pobierz deklarację PDF
+                    </button>
                 {% endif %}
             </div>
 

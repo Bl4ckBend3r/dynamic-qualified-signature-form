@@ -386,6 +386,29 @@ textarea:focus {
     color: var(--gold-dark);
 }
 
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-primary[aria-disabled="true"],
+.btn-secondary[aria-disabled="true"] {
+    background: #d1d5db;
+    color: #6b7280;
+    border-color: #d1d5db;
+    cursor: not-allowed;
+    opacity: 1;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-primary:disabled:hover,
+.btn-secondary:disabled:hover,
+.btn-primary[aria-disabled="true"]:hover,
+.btn-secondary[aria-disabled="true"]:hover {
+    background: #d1d5db;
+    color: #6b7280;
+    border-color: #d1d5db;
+    transform: none;
+}
+
 /* FLASH / STATUS */
 
 .flash-stack {

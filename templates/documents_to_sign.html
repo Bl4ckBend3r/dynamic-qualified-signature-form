@@ -14,39 +14,53 @@
         </p>
     </div>
 
+    <div class="static-text" style="margin-bottom: 24px;">
+        <strong>Instrukcja podpisania dokumentów:</strong>
+        <ol style="margin-bottom: 0;">
+            <li>Wypełnij wymagany dokument.</li>
+            <li>Pobierz wygenerowany plik PDF.</li>
+            <li>Podpisz PDF podpisem elektronicznym: mSzafir albo Profilem Zaufanym.</li>
+            <li>Wgraj podpisany plik PDF w odpowiednim kroku.</li>
+            <li>Po poprawnej weryfikacji podpisu system przejdzie do kolejnego dokumentu.</li>
+        </ol>
+    </div>
+
     <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" novalidate>
-    <div class="form-field sign-id-field">
-        <label for="submission_id">ID wniosku</label>
+        <div class="form-field sign-id-field">
+            <label for="submission_id">ID wniosku</label>
+            <input
+                type="text"
+                id="submission_id"
+                name="submission_id"
+                value="{{ initial_submission_id }}"
+                placeholder="Wpisz ID wniosku"
+                autocomplete="off"
+                required
+            >
 
-        <input
-            type="text"
-            id="submission_id"
-            name="submission_id"
-            value="{{ initial_submission_id }}"
-            placeholder="Wpisz ID wniosku"
-            autocomplete="off"
-            required
-        >
+            {% if errors.get("submission_id") %}
+                <div class="field-error">{{ errors.get("submission_id") }}</div>
+            {% endif %}
 
-        {% if errors.get("submission_id") %}
-            <div class="field-error">{{ errors.get("submission_id") }}</div>
-        {% endif %}
+            <div id="acceptance-status" class="field-help"></div>
+        </div>
 
-        <div id="acceptance-status" class="field-help"></div>
-    </div>
+        <div class="form-field" id="documents-section" style="display: none;">
+            <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
+        </div>
 
-    <div class="form-field" id="documents-section" style="display: none;">
-        <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
-    </div>
+        <div class="form-actions sign-actions">
+            <button type="submit" class="btn-primary" id="generate-button" disabled>
+                Wygeneruj deklarację do podpisu
+            </button>
+        </div>
+    </form>
 
-    <div class="form-actions sign-actions">
-        <button type="submit" class="btn-primary" id="generate-button" disabled>
-            Wygeneruj deklarację do podpisu
-        </button>
-    </div>
-</form>
     {% if result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
+        {% set show_declaration_upload = result.declaration_upload_url and not result.declaration_signature_valid and not result.agreement_filename %}
+        {% set show_agreement_step = result.agreement_filename or result.can_generate_agreement %}
+
         <div class="result-box">
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
@@ -59,116 +73,107 @@
                 {% endif %}
             {% endif %}
 
-            {% if result.declaration_filename %}
+            {% if result.declaration_filename and not result.declaration_signature_valid %}
                 <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
             {% endif %}
 
-            <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
-                {% if result.form_slug and result.submission_id %}
-                    <a
-                        class="btn-primary"
-                        href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
-                    >
-                        Wypełnij deklarację
-                    </a>
-                {% endif %}
+            {% if not result.declaration_signature_valid and not result.agreement_filename %}
+                <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
+                    {% if result.form_slug and result.submission_id %}
+                        <a class="btn-primary" href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}">
+                            Wypełnij deklarację
+                        </a>
+                    {% endif %}
 
-                {% if result.declaration_url and declaration_download_enabled %}
-                    <a class="btn-primary" href="{{ result.declaration_url }}">
-                        Pobierz deklarację PDF
-                    </a>
-                {% else %}
-                    <button
-                        type="button"
-                        class="btn-primary"
-                        disabled
-                        aria-disabled="true"
-                        title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
-                    >
-                        Pobierz deklarację PDF
-                    </button>
-                {% endif %}
-            </div>
+                    {% if result.declaration_url and declaration_download_enabled %}
+                        <a class="btn-primary" href="{{ result.declaration_url }}">
+                            Pobierz deklarację PDF
+                        </a>
+                    {% else %}
+                        <button
+                            type="button"
+                            class="btn-primary"
+                            disabled
+                            aria-disabled="true"
+                            title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
+                        >
+                            Pobierz deklarację PDF
+                        </button>
+                    {% endif %}
+                </div>
+            {% endif %}
 
-            {% if result.declaration_upload_url %}
+            {% if show_declaration_upload %}
                 <div class="card" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
-                        <p>
-                            Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.
-                        </p>
+                        <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
                     </div>
 
-                    <form
-                        method="post"
-                        action="{{ result.declaration_upload_url }}"
-                        enctype="multipart/form-data"
-                        class="dynamic-form"
-                    >
+                    <form method="post" action="{{ result.declaration_upload_url }}" enctype="multipart/form-data" class="dynamic-form">
                         <div class="form-row width-full">
                             <label for="signed_declaration_pdf">Podpisana deklaracja PDF</label>
-                            <input
-                                type="file"
-                                id="signed_declaration_pdf"
-                                name="signed_declaration_pdf"
-                                accept="application/pdf"
-                                required
-                            >
+                            <input type="file" id="signed_declaration_pdf" name="signed_declaration_pdf" accept="application/pdf" required>
                         </div>
 
                         <div class="submit-row">
-                            <button type="submit" class="btn-primary">
-                                Wyślij podpisaną deklarację
-                            </button>
+                            <button type="submit" class="btn-primary">Wyślij podpisaną deklarację</button>
                         </div>
                     </form>
                 </div>
             {% endif %}
 
-            {% if result.agreement_filename %}
+            {% if show_agreement_step %}
                 <div class="card" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Umowa do podpisania</h3>
-                        <p>
-                            Deklaracja została poprawnie zweryfikowana. Umowa została wygenerowana i jest gotowa do podpisania.
-                        </p>
+                        <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
                     </div>
 
-                    <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
-
-                    {% if result.agreement_url %}
-                        <div class="download-links" style="margin-top: 16px;">
-                            <a class="btn-primary" href="{{ result.agreement_url }}">
-                                Pobierz umowę PDF
-                            </a>
-                        </div>
-                    {% endif %}
-
-                    {% if result.agreement_upload_url %}
-                        <form
-                            method="post"
-                            action="{{ result.agreement_upload_url }}"
-                            enctype="multipart/form-data"
-                            class="dynamic-form"
-                            style="margin-top: 20px;"
-                        >
+                    {% if result.can_generate_agreement and result.generate_agreement_url %}
+                        <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form">
                             <div class="form-row width-full">
-                                <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
+                                <label for="agreement_generated_at">Data wygenerowania umowy</label>
                                 <input
-                                    type="file"
-                                    id="signed_agreement_pdf"
-                                    name="signed_agreement_pdf"
-                                    accept="application/pdf"
+                                    type="date"
+                                    id="agreement_generated_at"
+                                    name="agreement_generated_at"
+                                    value="{{ result.agreement_generated_at_iso }}"
                                     required
                                 >
                             </div>
 
                             <div class="submit-row">
-                                <button type="submit" class="btn-primary">
-                                    Wyślij podpisaną umowę
-                                </button>
+                                <button type="submit" class="btn-primary">Wygeneruj umowę</button>
                             </div>
                         </form>
+                    {% endif %}
+
+                    {% if result.agreement_filename %}
+                        <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
+
+                        {% if result.agreement_generated_at %}
+                            <p><strong>Data wygenerowania umowy:</strong> {{ result.agreement_generated_at }}</p>
+                        {% endif %}
+
+                        {% if result.agreement_url %}
+                            <div class="download-links" style="margin-top: 16px;">
+                                <a class="btn-primary" href="{{ result.agreement_url }}">Pobierz umowę PDF</a>
+                            </div>
+                        {% endif %}
+
+                        {% if result.agreement_upload_url and not result.agreement_signature_valid %}
+                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                                <div class="form-row width-full">
+                                    <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
+                                    <input type="file" id="signed_agreement_pdf" name="signed_agreement_pdf" accept="application/pdf" required>
+                                </div>
+
+                                <div class="submit-row">
+                                    <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
+                                </div>
+                            </form>
+                        {% endif %}
                     {% endif %}
 
                     {% if result.agreement_signature_valid %}
@@ -183,9 +188,7 @@
 
                     {% if result.agreement_signed_url %}
                         <div class="download-links" style="margin-top: 16px;">
-                            <a class="btn-secondary" href="{{ result.agreement_signed_url }}">
-                                Pobierz podpisaną umowę PDF
-                            </a>
+                            <a class="btn-secondary" href="{{ result.agreement_signed_url }}">Pobierz podpisaną umowę PDF</a>
                         </div>
                     {% endif %}
                 </div>

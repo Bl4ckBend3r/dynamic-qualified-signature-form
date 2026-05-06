@@ -69,7 +69,7 @@
         {% set show_agreement_upload = agreement_generated and result.agreement_upload_url and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
 
-        <div class="result-box">
+        <div class="result-box" id="signing-result-box">
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
@@ -86,37 +86,39 @@
             {% endif %}
 
             {% if show_declaration_stage %}
-                {% if result.declaration_filename %}
-                    <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
-                {% endif %}
-
-                <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
-                    {% if result.form_slug and result.submission_id %}
-                        <a class="btn-primary" href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}">
-                            Wypełnij deklarację
-                        </a>
+                <div data-stage="declaration">
+                    {% if result.declaration_filename %}
+                        <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
                     {% endif %}
 
-                    {% if result.declaration_url and declaration_download_enabled %}
-                        <a class="btn-primary" href="{{ result.declaration_url }}">
-                            Pobierz deklarację PDF
-                        </a>
-                    {% else %}
-                        <button
-                            type="button"
-                            class="btn-primary"
-                            disabled
-                            aria-disabled="true"
-                            title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
-                        >
-                            Pobierz deklarację PDF
-                        </button>
-                    {% endif %}
+                    <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
+                        {% if result.form_slug and result.submission_id %}
+                            <a class="btn-primary" href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}">
+                                Wypełnij deklarację
+                            </a>
+                        {% endif %}
+
+                        {% if result.declaration_url and declaration_download_enabled %}
+                            <a class="btn-primary" href="{{ result.declaration_url }}">
+                                Pobierz deklarację PDF
+                            </a>
+                        {% else %}
+                            <button
+                                type="button"
+                                class="btn-primary"
+                                disabled
+                                aria-disabled="true"
+                                title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
+                            >
+                                Pobierz deklarację PDF
+                            </button>
+                        {% endif %}
+                    </div>
                 </div>
             {% endif %}
 
             {% if show_declaration_upload %}
-                <div class="card" style="margin-top: 24px;">
+                <div class="card" data-stage="declaration-upload" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
                         <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
@@ -136,14 +138,14 @@
             {% endif %}
 
             {% if show_agreement_stage %}
-                <div class="card" style="margin-top: 24px;">
+                <div class="card" data-stage="agreement" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Umowa do podpisania</h3>
                         <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
                     </div>
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
-                        <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form">
+                        <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
                             <div class="form-row width-full">
                                 <label for="agreement_generated_at">Data wygenerowania umowy</label>
                                 <input
@@ -162,30 +164,32 @@
                     {% endif %}
 
                     {% if show_agreement_upload %}
-                        {% if result.agreement_filename %}
-                            <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
-                        {% endif %}
+                        <div data-stage="agreement-upload">
+                            {% if result.agreement_filename %}
+                                <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
+                            {% endif %}
 
-                        {% if result.agreement_generated_at %}
-                            <p><strong>Data wygenerowania umowy:</strong> {{ result.agreement_generated_at }}</p>
-                        {% endif %}
+                            {% if result.agreement_generated_at %}
+                                <p><strong>Data wygenerowania umowy:</strong> {{ result.agreement_generated_at }}</p>
+                            {% endif %}
 
-                        {% if result.agreement_url %}
-                            <div class="download-links" style="margin-top: 16px;">
-                                <a class="btn-primary" href="{{ result.agreement_url }}">Pobierz umowę PDF</a>
-                            </div>
-                        {% endif %}
+                            {% if result.agreement_url %}
+                                <div class="download-links" style="margin-top: 16px;">
+                                    <a class="btn-primary" href="{{ result.agreement_url }}">Pobierz umowę PDF</a>
+                                </div>
+                            {% endif %}
 
-                        <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
-                            <div class="form-row width-full">
-                                <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
-                                <input type="file" id="signed_agreement_pdf" name="signed_agreement_pdf" accept="application/pdf" required>
-                            </div>
+                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                                <div class="form-row width-full">
+                                    <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
+                                    <input type="file" id="signed_agreement_pdf" name="signed_agreement_pdf" accept="application/pdf" required>
+                                </div>
 
-                            <div class="submit-row">
-                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
-                            </div>
-                        </form>
+                                <div class="submit-row">
+                                    <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
+                                </div>
+                            </form>
+                        </div>
                     {% endif %}
 
                     {% if result.agreement_signature_error %}
@@ -194,6 +198,8 @@
                     {% endif %}
                 </div>
             {% endif %}
+
+            <p id="completed-stage-message" style="display: none; margin-top: 16px;"></p>
 
             {% if declaration_completed and not show_agreement_stage and not agreement_completed %}
                 <p style="margin-top: 16px;"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
@@ -214,6 +220,54 @@ const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
 
 let timeoutId = null;
+
+const DECLARATION_COMPLETED_STATUSES = new Set([
+    "AGREEMENT_READY",
+    "AGREEMENT_WAITING_FOR_SIGNATURE",
+    "AGREEMENT_SIGNED",
+    "AGREEMENT_SIGNATURE_INVALID",
+    "AGREEMENT_NOT_REQUIRED",
+    "PARTICIPANT_ACCEPTED",
+    "PROCESS_COMPLETED",
+]);
+
+const AGREEMENT_COMPLETED_STATUSES = new Set([
+    "AGREEMENT_SIGNED",
+    "PARTICIPANT_ACCEPTED",
+    "PROCESS_COMPLETED",
+]);
+
+function hideElements(selector) {
+    document.querySelectorAll(selector).forEach((element) => {
+        element.style.display = "none";
+    });
+}
+
+function showCompletedMessage(message) {
+    const messageBox = document.getElementById("completed-stage-message");
+
+    if (!messageBox) {
+        return;
+    }
+
+    messageBox.innerHTML = message;
+    messageBox.style.display = "block";
+}
+
+function applyProcessStageVisibility(data) {
+    const processStatus = data.process_status || "";
+
+    if (DECLARATION_COMPLETED_STATUSES.has(processStatus)) {
+        hideElements('[data-stage="declaration"]');
+        hideElements('[data-stage="declaration-upload"]');
+        showCompletedMessage("<strong>Deklaracja:</strong> etap zakończony poprawnie.");
+    }
+
+    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
+        hideElements('[data-stage="agreement"]');
+        showCompletedMessage("<strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.");
+    }
+}
 
 function resetState() {
     statusBox.textContent = "";
@@ -236,6 +290,7 @@ async function checkAcceptanceStatus() {
         const data = await response.json();
 
         statusBox.textContent = data.message || "";
+        applyProcessStageVisibility(data);
 
         if (data.exists && data.can_sign_documents) {
             documentsSection.style.display = "block";

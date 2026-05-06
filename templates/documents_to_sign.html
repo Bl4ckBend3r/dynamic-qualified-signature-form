@@ -63,8 +63,8 @@
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
 
-        {% set show_declaration_stage = not declaration_completed %}
-        {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed %}
+        {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
+        {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
         {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
         {% set show_agreement_upload = agreement_generated and result.agreement_upload_url and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
@@ -228,6 +228,7 @@ const DECLARATION_COMPLETED_STATUSES = new Set([
     "AGREEMENT_SIGNATURE_INVALID",
     "AGREEMENT_NOT_REQUIRED",
     "PARTICIPANT_ACCEPTED",
+    "PARTICIPANT_REJECTED",
     "PROCESS_COMPLETED",
 ]);
 
@@ -243,6 +244,15 @@ function hideElements(selector) {
     });
 }
 
+function disableGenerateButton() {
+    if (!generateButton) {
+        return;
+    }
+
+    generateButton.disabled = true;
+    generateButton.setAttribute("aria-disabled", "true");
+}
+
 function showCompletedMessage(message) {
     const messageBox = document.getElementById("completed-stage-message");
 
@@ -254,17 +264,31 @@ function showCompletedMessage(message) {
     messageBox.style.display = "block";
 }
 
+function hideDeclarationStage() {
+    hideElements('[data-stage="declaration"]');
+    hideElements('[data-stage="declaration-upload"]');
+}
+
+function hideAgreementStage() {
+    hideElements('[data-stage="agreement"]');
+    hideElements('[data-stage="agreement-generate"]');
+    hideElements('[data-stage="agreement-upload"]');
+}
+
 function applyProcessStageVisibility(data) {
     const processStatus = data.process_status || "";
+    const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
+    const declarationIsCompleted = agreementIsCompleted || DECLARATION_COMPLETED_STATUSES.has(processStatus);
 
-    if (DECLARATION_COMPLETED_STATUSES.has(processStatus)) {
-        hideElements('[data-stage="declaration"]');
-        hideElements('[data-stage="declaration-upload"]');
+    if (declarationIsCompleted) {
+        hideDeclarationStage();
         showCompletedMessage("<strong>Deklaracja:</strong> etap zakończony poprawnie.");
     }
 
-    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
-        hideElements('[data-stage="agreement"]');
+    if (agreementIsCompleted) {
+        hideDeclarationStage();
+        hideAgreementStage();
+        disableGenerateButton();
         showCompletedMessage("<strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.");
     }
 }
@@ -292,7 +316,7 @@ async function checkAcceptanceStatus() {
         statusBox.textContent = data.message || "";
         applyProcessStageVisibility(data);
 
-        if (data.exists && data.can_sign_documents) {
+        if (data.exists && data.can_sign_documents && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")) {
             documentsSection.style.display = "block";
             generateButton.disabled = false;
             acceptanceSelect.value = "Tak";

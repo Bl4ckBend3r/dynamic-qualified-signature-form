@@ -25,7 +25,7 @@
         </ol>
     </div>
 
-    <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" novalidate>
+    <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
         <div class="form-field sign-id-field">
             <label for="submission_id">ID wniosku</label>
             <input
@@ -55,6 +55,10 @@
             </button>
         </div>
     </form>
+
+    <div id="process-completed-box" class="result-box" style="display: none; margin-top: 24px;">
+        <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
+    </div>
 
     {% if result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
@@ -218,6 +222,8 @@ const statusBox = document.getElementById("acceptance-status");
 const documentsSection = document.getElementById("documents-section");
 const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
+const signDocumentsForm = document.getElementById("sign-documents-form");
+const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
@@ -251,6 +257,18 @@ function disableGenerateButton() {
 
     generateButton.disabled = true;
     generateButton.setAttribute("aria-disabled", "true");
+}
+
+function hideInitialSigningForm() {
+    if (signDocumentsForm) {
+        signDocumentsForm.style.display = "none";
+    }
+}
+
+function showProcessCompletedBox() {
+    if (processCompletedBox) {
+        processCompletedBox.style.display = "block";
+    }
 }
 
 function showCompletedMessage(message) {
@@ -288,8 +306,10 @@ function applyProcessStageVisibility(data) {
     if (agreementIsCompleted) {
         hideDeclarationStage();
         hideAgreementStage();
+        hideInitialSigningForm();
         disableGenerateButton();
         showCompletedMessage("<strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.");
+        showProcessCompletedBox();
     }
 }
 

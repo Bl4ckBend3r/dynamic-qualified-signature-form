@@ -160,6 +160,25 @@ def is_agreement_signature_valid(row: Mapping[str, Any]) -> bool:
 
 
 def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
+    if is_agreement_signature_valid(row):
+        return ProcessStatus.PARTICIPANT_ACCEPTED
+
+    if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
+        return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
+
+    if is_declaration_signature_valid(row):
+        if is_yes(row.get("agreement_generated")):
+            return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
+
+        if not is_agreement_required(row):
+            return ProcessStatus.AGREEMENT_NOT_REQUIRED
+
+        if not is_agreement_blocked(row):
+            return ProcessStatus.AGREEMENT_READY
+
+    if is_yes(row.get("declaration_signed")) and not is_declaration_signature_valid(row):
+        return ProcessStatus.DECLARATION_SIGNATURE_INVALID
+
     explicit_status = normalize_text(row.get(FIELD_PROCESS_STATUS))
 
     if explicit_status:
@@ -181,25 +200,11 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
             return ProcessStatus.PARTICIPANT_ACCEPTED
         return ProcessStatus.DECLARATION_NOT_REQUIRED
 
-    if is_agreement_signature_valid(row):
-        return ProcessStatus.PARTICIPANT_ACCEPTED
-
-    if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
-        return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
-
     if is_yes(row.get("agreement_generated")):
         return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
 
     if is_agreement_blocked(row):
         return ProcessStatus.AGREEMENT_BLOCKED
-
-    if is_declaration_signature_valid(row):
-        if not is_agreement_required(row):
-            return ProcessStatus.AGREEMENT_NOT_REQUIRED
-        return ProcessStatus.AGREEMENT_READY
-
-    if is_yes(row.get("declaration_signed")) and not is_declaration_signature_valid(row):
-        return ProcessStatus.DECLARATION_SIGNATURE_INVALID
 
     if is_yes(row.get("declaration_generated")):
         return ProcessStatus.DECLARATION_WAITING_FOR_SIGNATURE
@@ -223,6 +228,7 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
         and (is_declaration_signature_valid(row) or not is_declaration_required(row))
         and not agreement_blocked
         and not is_yes(row.get("agreement_generated"))
+        and not is_agreement_signature_valid(row)
     )
 
     return ProcessState(

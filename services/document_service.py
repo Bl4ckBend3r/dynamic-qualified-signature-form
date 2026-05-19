@@ -11,6 +11,11 @@ from pdf_generator import generate_pdf, generate_pdf_from_html
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
+PDF_LOGO_FOOTER_PATTERN = re.compile(
+    r"<footer\b[^>]*class=[\"'][^\"']*pdf-logo-footer[^\"']*[\"'][^>]*>.*?</footer>",
+    re.IGNORECASE | re.DOTALL,
+)
+BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
 
 class DocumentType:
@@ -183,16 +188,8 @@ def build_document_pdf_context(
     }
 
 
-def append_logo_footer_if_needed(template_html: str, context: Mapping[str, Any]) -> str:
-    pdf_image_url = normalize_text(context.get("pdf_image_url"))
-
-    if not pdf_image_url:
-        return template_html
-
-    if "pdf-logo-footer" in template_html:
-        return template_html
-
-    footer_html = """
+def build_logo_footer_html() -> str:
+    return """
 <footer class=\"pdf-logo-footer\">
   <div class=\"pdf-logo-row\">
     <div class=\"pdf-logo-area\">
@@ -206,10 +203,22 @@ def append_logo_footer_if_needed(template_html: str, context: Mapping[str, Any])
 </footer>
 """
 
-    if "</body>" in template_html:
-        return template_html.replace("</body>", f"{footer_html}\n</body>", 1)
 
-    return f"{template_html}\n{footer_html}"
+def append_logo_footer_if_needed(template_html: str, context: Mapping[str, Any]) -> str:
+    pdf_image_url = normalize_text(context.get("pdf_image_url"))
+
+    if not pdf_image_url:
+        return template_html
+
+    footer_html = build_logo_footer_html()
+    template_html = PDF_LOGO_FOOTER_PATTERN.sub("", template_html)
+    body_match = BODY_OPEN_PATTERN.search(template_html)
+
+    if body_match:
+        insert_at = body_match.end()
+        return f"{template_html[:insert_at]}\n{footer_html}\n{template_html[insert_at:]}"
+
+    return f"{footer_html}\n{template_html}"
 
 
 def generate_document_pdf_bytes(

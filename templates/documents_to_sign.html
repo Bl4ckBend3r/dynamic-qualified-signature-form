@@ -90,20 +90,34 @@
             {% endif %}
 
             {% if show_declaration_stage %}
-                <div data-stage="declaration">
+                <div
+                    class="signing-document-card"
+                    data-stage="declaration"
+                    data-download-replace-card
+                >
                     {% if result.declaration_filename %}
                         <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
                     {% endif %}
 
                     <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
                         {% if result.form_slug and result.submission_id %}
-                            <a class="btn-primary" href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}">
+                            <a
+                                class="btn-primary"
+                                href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                            >
                                 Wypełnij deklarację
                             </a>
                         {% endif %}
 
                         {% if result.declaration_url and declaration_download_enabled %}
-                            <a class="btn-primary" href="{{ result.declaration_url }}">
+                            <a
+                                class="btn-primary"
+                                href="{{ result.declaration_url }}"
+                                data-download-replace-trigger
+                                data-edit-url="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                                data-edit-title="Edytuj deklarację"
+                                data-edit-description="Wróć do formularza deklaracji i popraw dane przed ponownym pobraniem PDF."
+                            >
                                 Pobierz deklarację PDF
                             </a>
                         {% else %}
@@ -216,6 +230,66 @@
     {% endif %}
 </div>
 
+<style>
+.signing-document-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    padding: 18px;
+}
+
+.download-replaced-card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 160px;
+    padding: 28px;
+    border: 2px dashed var(--gold);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    color: var(--navy);
+    text-align: center;
+    text-decoration: none;
+    transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.download-replaced-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--gold-dark);
+    background: #fffaf0;
+}
+
+.download-replaced-card__content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.download-replaced-card__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: #fff;
+    font-size: 1.35rem;
+    font-weight: 800;
+}
+
+.download-replaced-card__title {
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.download-replaced-card__description {
+    max-width: 420px;
+    color: var(--muted);
+}
+</style>
+
 <script>
 const submissionInput = document.getElementById("submission_id");
 const statusBox = document.getElementById("acceptance-status");
@@ -293,6 +367,40 @@ function hideAgreementStage() {
     hideElements('[data-stage="agreement-upload"]');
 }
 
+function replaceDownloadedCard(trigger) {
+    const card = trigger.closest("[data-download-replace-card]");
+
+    if (!card) {
+        return;
+    }
+
+    const editUrl = trigger.dataset.editUrl;
+    const title = trigger.dataset.editTitle || "Edytuj";
+    const description = trigger.dataset.editDescription || "Wróć do edycji dokumentu.";
+
+    if (!editUrl) {
+        return;
+    }
+
+    window.setTimeout(() => {
+        card.innerHTML = `
+            <a class="download-replaced-card" href="${editUrl}">
+                <span class="download-replaced-card__content">
+                    <span class="download-replaced-card__icon" aria-hidden="true">✎</span>
+                    <span class="download-replaced-card__title">${title}</span>
+                    <span class="download-replaced-card__description">${description}</span>
+                </span>
+            </a>
+        `;
+    }, 250);
+}
+
+function bindDownloadReplacementCards() {
+    document.querySelectorAll("[data-download-replace-trigger]").forEach((trigger) => {
+        trigger.addEventListener("click", () => replaceDownloadedCard(trigger));
+    });
+}
+
 function applyProcessStageVisibility(data) {
     const processStatus = data.process_status || "";
     const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
@@ -352,6 +460,8 @@ submissionInput.addEventListener("input", () => {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(checkAcceptanceStatus, 500);
 });
+
+bindDownloadReplacementCards();
 
 if (submissionInput.value.trim()) {
     checkAcceptanceStatus();

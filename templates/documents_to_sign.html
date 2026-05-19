@@ -116,7 +116,6 @@
                                 data-download-replace-trigger
                                 data-edit-url="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
                                 data-edit-title="Edytuj deklarację"
-                                data-edit-description="Wróć do formularza deklaracji i popraw dane przed ponownym pobraniem PDF."
                             >
                                 Pobierz deklarację PDF
                             </a>
@@ -238,55 +237,10 @@
     padding: 18px;
 }
 
-.download-replaced-card {
+.download-replaced-actions {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 160px;
-    padding: 28px;
-    border: 2px dashed var(--gold);
-    border-radius: var(--radius-sm);
-    background: var(--surface-alt);
-    color: var(--navy);
-    text-align: center;
-    text-decoration: none;
-    transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
-}
-
-.download-replaced-card:hover {
-    transform: translateY(-2px);
-    border-color: var(--gold-dark);
-    background: #fffaf0;
-}
-
-.download-replaced-card__content {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-}
-
-.download-replaced-card__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 999px;
-    background: var(--gold);
-    color: #fff;
-    font-size: 1.35rem;
-    font-weight: 800;
-}
-
-.download-replaced-card__title {
-    font-size: 1.25rem;
-    font-weight: 800;
-}
-
-.download-replaced-card__description {
-    max-width: 420px;
-    color: var(--muted);
+    justify-content: flex-start;
+    margin-top: 16px;
 }
 </style>
 
@@ -376,7 +330,6 @@ function replaceDownloadedCard(trigger) {
 
     const editUrl = trigger.dataset.editUrl;
     const title = trigger.dataset.editTitle || "Edytuj";
-    const description = trigger.dataset.editDescription || "Wróć do edycji dokumentu.";
 
     if (!editUrl) {
         return;
@@ -384,13 +337,9 @@ function replaceDownloadedCard(trigger) {
 
     window.setTimeout(() => {
         card.innerHTML = `
-            <a class="download-replaced-card" href="${editUrl}">
-                <span class="download-replaced-card__content">
-                    <span class="download-replaced-card__icon" aria-hidden="true">✎</span>
-                    <span class="download-replaced-card__title">${title}</span>
-                    <span class="download-replaced-card__description">${description}</span>
-                </span>
-            </a>
+            <div class="download-replaced-actions">
+                <a class="btn-primary" href="${editUrl}">${title}</a>
+            </div>
         `;
     }, 250);
 }

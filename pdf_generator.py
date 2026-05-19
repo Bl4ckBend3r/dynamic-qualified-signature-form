@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from flask import render_template, render_template_string
 from playwright.sync_api import sync_playwright
@@ -27,7 +28,39 @@ def inject_pdf_styles(app, html_string: str) -> str:
     return f"{style_tag}\n{html_string}"
 
 
-def write_pdf_from_html(html_string: str, output_path: Path) -> Path:
+def build_footer_template(footer_image_url: str | None) -> str:
+    if not footer_image_url:
+        return "<div></div>"
+
+    return f"""
+    <div style="
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0 18mm 5mm 18mm;
+        background: #ffffff;
+        font-size: 0;
+        line-height: 0;
+    ">
+        <img
+            src="{footer_image_url}"
+            style="
+                display: block;
+                width: 100%;
+                max-width: 100%;
+                height: 14mm;
+                object-fit: contain;
+                object-position: left center;
+            "
+        />
+    </div>
+    """
+
+
+def write_pdf_from_html(
+    html_string: str,
+    output_path: Path,
+    footer_image_url: str | None = None,
+) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
@@ -40,10 +73,13 @@ def write_pdf_from_html(html_string: str, output_path: Path) -> Path:
             path=str(output_path),
             format="A4",
             print_background=True,
+            display_header_footer=bool(footer_image_url),
+            header_template="<div></div>",
+            footer_template=build_footer_template(footer_image_url),
             margin={
                 "top": "20mm",
                 "right": "20mm",
-                "bottom": "20mm",
+                "bottom": "28mm" if footer_image_url else "20mm",
                 "left": "20mm",
             },
         )
@@ -53,12 +89,21 @@ def write_pdf_from_html(html_string: str, output_path: Path) -> Path:
     return output_path
 
 
+def get_footer_image_url(context: dict[str, Any]) -> str | None:
+    value = str(context.get("pdf_image_url") or "").strip()
+    return value or None
+
+
 def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> Path:
     with app.app_context():
         html_string = render_template(template_name, **context)
         html_string = inject_pdf_styles(app, html_string)
 
-    return write_pdf_from_html(html_string, output_path)
+    return write_pdf_from_html(
+        html_string,
+        output_path,
+        footer_image_url=get_footer_image_url(context),
+    )
 
 
 def generate_pdf_from_html(app, template_html: str, context: dict, output_path: Path) -> Path:
@@ -66,4 +111,8 @@ def generate_pdf_from_html(app, template_html: str, context: dict, output_path: 
         html_string = render_template_string(template_html, **context)
         html_string = inject_pdf_styles(app, html_string)
 
-    return write_pdf_from_html(html_string, output_path)
+    return write_pdf_from_html(
+        html_string,
+        output_path,
+        footer_image_url=get_footer_image_url(context),
+    )

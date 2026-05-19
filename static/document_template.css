@@ -131,7 +131,7 @@ body {
 }
 
 .pdf-logo-area {
-    width: calc(100% - 128px);
+    width: calc(100% - 235px);
     padding: 0;
     margin: 0;
     background: #ffffff !important;
@@ -156,7 +156,7 @@ body {
     position: absolute;
     top: 0;
     right: 0;
-    width: 112px;
+    width: 235px;
     min-height: 50px;
     padding: 0;
     margin: 0;
@@ -190,7 +190,7 @@ body {
 .document-logo-strip__logos,
 .form-header-image > img {
     display: block;
-    width: calc(100% - 128px);
+    width: calc(100% - 235px);
     padding: 0;
     margin: 0;
 }
@@ -345,6 +345,17 @@ body {
     .form-header-image > img,
     .document-logo-strip__logos img {
         height: 58px;
+    }
+
+    .pdf-logo-area,
+    .document-logo-strip__logos,
+    .form-header-image > img {
+        width: calc(100% - 235px);
+    }
+
+    .trusted-signature-placeholder,
+    .document-trusted-signature-slot {
+        width: 235px;
     }
 }
 

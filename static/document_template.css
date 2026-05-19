@@ -1,0 +1,111 @@
+.document,
+.document--declaration,
+.document--agreement,
+.document--form {
+    text-align: justify;
+    text-justify: inter-word;
+}
+
+.document p,
+.document li,
+.document td,
+.document th,
+.document .statement-text,
+.document .paragraph,
+.document .legal-note,
+.document .footnote {
+    text-align: justify;
+    text-justify: inter-word;
+}
+
+.document-logo-header,
+.form-header-image {
+    width: 100%;
+    margin: 0 0 24px;
+}
+
+.document-logo-strip,
+.form-header-image {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 176px;
+    align-items: start;
+    column-gap: 20px;
+}
+
+.document-logo-strip__logos img,
+.form-header-image > img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: 84px;
+    object-fit: contain;
+    object-position: left top;
+    border-radius: 0;
+}
+
+.document-trusted-signature-slot {
+    width: 176px;
+    min-height: 84px;
+    padding: 6px;
+    border: 1px dashed #9ca3af;
+    background: #ffffff;
+    font-size: 10px;
+    line-height: 1.25;
+    color: #374151;
+    text-align: left;
+    page-break-inside: avoid;
+}
+
+.document-title,
+.document-subtitle,
+.document-meta,
+.document-eyebrow,
+.section-title,
+.subsection-title,
+.field-label,
+.field-value,
+.signature-block,
+.signature-line,
+.signature-label,
+.choice-item,
+.choice-label {
+    text-align: left;
+}
+
+.document-header .document-title,
+.document-header .document-subtitle,
+.document-header .document-meta,
+.document-header .document-eyebrow {
+    text-align: center;
+}
+
+@media print {
+    .document-logo-strip,
+    .form-header-image {
+        grid-template-columns: minmax(0, 1fr) 176px;
+        column-gap: 16px;
+        page-break-inside: avoid;
+    }
+
+    .document-logo-strip__logos img,
+    .form-header-image > img {
+        height: 76px;
+    }
+
+    .document-trusted-signature-slot {
+        min-height: 76px;
+    }
+}
+
+@media (max-width: 700px) {
+    .document-logo-strip,
+    .form-header-image {
+        grid-template-columns: 1fr;
+        row-gap: 12px;
+    }
+
+    .document-trusted-signature-slot {
+        width: 100%;
+        min-height: 72px;
+    }
+}

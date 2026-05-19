@@ -135,7 +135,7 @@
             {% endif %}
 
             {% if show_declaration_upload %}
-                <div class="card" data-stage="declaration-upload" style="margin-top: 24px;">
+                <div class="card upload-card" data-stage="declaration-upload" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
                         <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
@@ -170,7 +170,7 @@
             {% endif %}
 
             {% if show_agreement_stage %}
-                <div class="card" data-stage="agreement" style="margin-top: 24px;">
+                <div class="card upload-card" data-stage="agreement" style="margin-top: 24px;">
                     <div class="card-header">
                         <h3>Umowa do podpisania</h3>
                         <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
@@ -270,7 +270,17 @@
 .download-replaced-actions {
     display: flex;
     justify-content: flex-start;
-    margin-top: 16px;
+    margin: 16px 0 24px;
+}
+
+.upload-card .card-header {
+    gap: 6px;
+    margin-bottom: 30px;
+}
+
+.upload-card .card-header h3,
+.upload-card .card-header p {
+    margin: 0;
 }
 
 .upload-dropzone {
@@ -454,8 +464,8 @@ function replaceDownloadedCard(trigger) {
     }
 
     window.setTimeout(() => {
-        card.innerHTML = `
-            <div class="download-replaced-actions">
+        card.outerHTML = `
+            <div class="download-replaced-actions" data-stage="declaration">
                 <a class="btn-primary" href="${editUrl}">${title}</a>
             </div>
         `;

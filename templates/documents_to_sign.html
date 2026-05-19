@@ -9,7 +9,7 @@
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
-            Podaj ID wniosku. System sprawdzi, czy formularz został zaakceptowany przez urzędnika.
+            Podaj ID wniosku. System najpierw sprawdzi, czy formularz został zaakceptowany przez urzędnika.
             Dopiero po akceptacji możliwe będzie przejście do podpisywania dokumentów.
         </p>
     </div>
@@ -55,6 +55,8 @@
             </button>
         </div>
     </form>
+
+    <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
 
     <div id="process-completed-box" class="result-box" style="display: none; margin-top: 24px;">
         <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
@@ -267,6 +269,69 @@
     padding: 18px;
 }
 
+.status-tiles {
+    display: grid;
+    gap: 14px;
+    margin-top: 24px;
+}
+
+.status-tile {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 14px;
+    align-items: start;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+}
+
+.status-tile__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: #fff;
+    font-weight: 800;
+}
+
+.status-tile__title {
+    margin: 0 0 4px;
+    color: var(--navy);
+    font-weight: 800;
+}
+
+.status-tile__description {
+    margin: 0;
+    color: var(--muted);
+}
+
+.status-tile--success {
+    border-color: rgba(31, 122, 77, 0.35);
+    background: #f2fbf6;
+}
+
+.status-tile--success .status-tile__icon {
+    background: var(--success);
+}
+
+.status-tile--warning {
+    border-color: rgba(183, 121, 31, 0.35);
+    background: #fffaf0;
+}
+
+.status-tile--danger {
+    border-color: rgba(180, 35, 24, 0.35);
+    background: #fff5f5;
+}
+
+.status-tile--danger .status-tile__icon {
+    background: var(--danger);
+}
+
 .download-replaced-actions {
     display: flex;
     justify-content: flex-start;
@@ -375,6 +440,7 @@
 <script>
 const submissionInput = document.getElementById("submission_id");
 const statusBox = document.getElementById("acceptance-status");
+const statusTiles = document.getElementById("submission-status-tiles");
 const documentsSection = document.getElementById("documents-section");
 const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
@@ -447,6 +513,79 @@ function hideAgreementStage() {
     hideElements('[data-stage="agreement"]');
     hideElements('[data-stage="agreement-generate"]');
     hideElements('[data-stage="agreement-upload"]');
+}
+
+function renderStatusTile({ variant = "neutral", icon = "i", title, description }) {
+    if (!statusTiles) {
+        return;
+    }
+
+    statusTiles.innerHTML = `
+        <div class="status-tile status-tile--${variant}">
+            <span class="status-tile__icon" aria-hidden="true">${icon}</span>
+            <div>
+                <p class="status-tile__title">${title}</p>
+                <p class="status-tile__description">${description}</p>
+            </div>
+        </div>
+    `;
+}
+
+function clearStatusTile() {
+    if (statusTiles) {
+        statusTiles.innerHTML = "";
+    }
+}
+
+function renderSubmissionStatus(data) {
+    const processStatus = data.process_status || "";
+
+    if (!data.exists) {
+        renderStatusTile({
+            variant: "warning",
+            icon: "?",
+            title: "Nie znaleziono wniosku",
+            description: data.message || "Sprawdź poprawność wpisanego ID wniosku.",
+        });
+        return;
+    }
+
+    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
+        renderStatusTile({
+            variant: "success",
+            icon: "✓",
+            title: "Proces podpisywania zakończony",
+            description: data.message || "Wszystkie wymagane dokumenty zostały poprawnie obsłużone.",
+        });
+        return;
+    }
+
+    if (processStatus === "PARTICIPANT_REJECTED") {
+        renderStatusTile({
+            variant: "danger",
+            icon: "!",
+            title: "Wniosek odrzucony przez urzędnika",
+            description: data.message || "Dla tego wniosku nie można przejść do podpisywania dokumentów.",
+        });
+        return;
+    }
+
+    if (!data.can_sign_documents) {
+        renderStatusTile({
+            variant: "warning",
+            icon: "…",
+            title: "Wniosek oczekuje na akceptację urzędnika",
+            description: data.message || "Dokumenty do podpisu będą dostępne dopiero po akceptacji wniosku.",
+        });
+        return;
+    }
+
+    renderStatusTile({
+        variant: "success",
+        icon: "✓",
+        title: "Wniosek zaakceptowany przez urzędnika",
+        description: data.message || "Możesz wygenerować dokumenty do podpisu.",
+    });
 }
 
 function replaceDownloadedCard(trigger) {
@@ -559,6 +698,7 @@ function resetState() {
     documentsSection.style.display = "none";
     generateButton.disabled = true;
     acceptanceSelect.value = "";
+    clearStatusTile();
 }
 
 async function checkAcceptanceStatus() {
@@ -567,14 +707,28 @@ async function checkAcceptanceStatus() {
     resetState();
 
     if (!submissionId) {
+        renderStatusTile({
+            variant: "warning",
+            icon: "i",
+            title: "Podaj ID wniosku",
+            description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
+        });
         return;
     }
+
+    renderStatusTile({
+        variant: "warning",
+        icon: "…",
+        title: "Sprawdzanie statusu wniosku",
+        description: "System weryfikuje, czy urzędnik zaakceptował wniosek.",
+    });
 
     try {
         const response = await fetch(`/api/submissions/${encodeURIComponent(submissionId)}/acceptance-status`);
         const data = await response.json();
 
         statusBox.textContent = data.message || "";
+        renderSubmissionStatus(data);
         applyProcessStageVisibility(data);
 
         if (data.exists && data.can_sign_documents && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")) {
@@ -584,6 +738,12 @@ async function checkAcceptanceStatus() {
         }
     } catch (error) {
         statusBox.textContent = "Nie udało się sprawdzić statusu wniosku.";
+        renderStatusTile({
+            variant: "danger",
+            icon: "!",
+            title: "Błąd sprawdzania statusu",
+            description: "Spróbuj ponownie albo sprawdź połączenie z serwerem.",
+        });
         documentsSection.style.display = "none";
         generateButton.disabled = true;
     }
@@ -599,6 +759,13 @@ bindUploadDropzones();
 
 if (submissionInput.value.trim()) {
     checkAcceptanceStatus();
+} else {
+    renderStatusTile({
+        variant: "warning",
+        icon: "i",
+        title: "Podaj ID wniosku",
+        description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
+    });
 }
 </script>
 {% endblock %}

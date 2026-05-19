@@ -183,6 +183,35 @@ def build_document_pdf_context(
     }
 
 
+def append_logo_footer_if_needed(template_html: str, context: Mapping[str, Any]) -> str:
+    pdf_image_url = normalize_text(context.get("pdf_image_url"))
+
+    if not pdf_image_url:
+        return template_html
+
+    if "pdf-logo-footer" in template_html:
+        return template_html
+
+    footer_html = """
+<footer class=\"pdf-logo-footer\">
+  <div class=\"pdf-logo-row\">
+    <div class=\"pdf-logo-area\">
+      <img
+        src=\"{{ pdf_image_url }}\"
+        alt=\"{{ pdf_image_alt or 'Logotypy projektu' }}\"
+        class=\"pdf-logo-image\"
+      >
+    </div>
+  </div>
+</footer>
+"""
+
+    if "</body>" in template_html:
+        return template_html.replace("</body>", f"{footer_html}\n</body>", 1)
+
+    return f"{template_html}\n{footer_html}"
+
+
 def generate_document_pdf_bytes(
     *,
     app: Flask,
@@ -199,6 +228,7 @@ def generate_document_pdf_bytes(
 
     try:
         if template_html:
+            template_html = append_logo_footer_if_needed(template_html, context)
             generate_pdf_from_html(
                 app=app,
                 template_html=template_html,

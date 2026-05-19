@@ -114,7 +114,12 @@ body {
     margin-top: 16px;
 }
 
-.pdf-logo-header,
+.pdf-logo-header {
+    display: none !important;
+}
+
+.pdf-logo-footer,
+.document-logo-footer,
 .document-logo-header,
 .header-image,
 .form-header-image {
@@ -311,7 +316,12 @@ body {
         background: #ffffff !important;
     }
 
-    .pdf-logo-header,
+    .pdf-logo-header {
+        display: none !important;
+    }
+
+    .pdf-logo-footer,
+    .document-logo-footer,
     .document-logo-header,
     .document-logo-strip,
     .form-header-image,
@@ -340,7 +350,8 @@ body {
 }
 
 @media (max-width: 700px) {
-    .pdf-logo-header,
+    .pdf-logo-footer,
+    .document-logo-footer,
     .document-logo-header,
     .header-image,
     .form-header-image {

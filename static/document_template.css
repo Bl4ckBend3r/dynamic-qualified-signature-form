@@ -1,6 +1,6 @@
 @page {
     size: A4;
-    margin: 18mm;
+    margin: 18mm 18mm 28mm;
     background: #ffffff;
 }
 
@@ -53,7 +53,7 @@ body {
 }
 
 .document h1 {
-    margin: 8px 0 8px;
+    margin: 0 0 8px;
     font-size: 17px;
     line-height: 1.25;
     color: #001f5b;
@@ -118,24 +118,37 @@ body {
 .document-logo-header,
 .header-image,
 .form-header-image {
-    width: 100%;
-    margin: 0 0 10px;
+    position: fixed;
+    left: 18mm;
+    right: 18mm;
+    bottom: 8mm;
+    width: auto;
+    height: 18mm;
+    margin: 0;
     padding: 0;
     background: #ffffff !important;
     page-break-inside: avoid;
+    z-index: 10;
 }
 
-.pdf-logo-row {
+.pdf-logo-row,
+.document-logo-strip,
+.form-header-image {
     position: relative;
+    display: block;
     width: 100%;
-    min-height: 72px;
+    height: 18mm;
+    min-height: 0;
     background: #ffffff !important;
     page-break-inside: avoid;
 }
 
-.pdf-logo-area {
-    width: calc(100% - 235px);
-    padding: 12px 0 0;
+.pdf-logo-area,
+.document-logo-strip__logos,
+.form-header-image > img {
+    display: block;
+    width: 100%;
+    padding: 0;
     margin: 0;
     background: #ffffff !important;
 }
@@ -147,7 +160,7 @@ body {
     display: block;
     width: 100%;
     max-width: 100%;
-    height: 46px;
+    height: 16mm;
     object-fit: contain;
     object-position: left center;
     border-radius: 0;
@@ -156,21 +169,7 @@ body {
 
 .trusted-signature-placeholder,
 .document-trusted-signature-slot {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 235px;
-    min-height: 72px;
-    padding: 0;
-    margin: 0;
-    border: none;
-    background: transparent !important;
-    color: transparent;
-    font-size: 0;
-    line-height: 0;
-    text-align: left;
-    page-break-inside: avoid;
-    box-sizing: border-box;
+    display: none !important;
 }
 
 .trusted-signature-placeholder *,
@@ -178,24 +177,6 @@ body {
     color: transparent;
     font-size: 0;
     line-height: 0;
-}
-
-.document-logo-strip,
-.form-header-image {
-    position: relative;
-    display: block;
-    width: 100%;
-    min-height: 72px;
-    background: #ffffff !important;
-    page-break-inside: avoid;
-}
-
-.document-logo-strip__logos,
-.form-header-image > img {
-    display: block;
-    width: calc(100% - 235px);
-    padding: 12px 0 0;
-    margin: 0;
 }
 
 .section-title {
@@ -331,50 +312,47 @@ body {
     }
 
     .pdf-logo-header,
+    .document-logo-header,
     .document-logo-strip,
     .form-header-image,
     .header-image {
+        position: fixed;
+        left: 18mm;
+        right: 18mm;
+        bottom: 8mm;
+        height: 18mm;
         page-break-inside: avoid;
     }
 
     .pdf-logo-row,
     .document-logo-strip,
     .form-header-image {
-        min-height: 72px;
+        height: 18mm;
+        min-height: 0;
     }
 
     .pdf-logo-image,
     .header-image img,
     .form-header-image > img,
     .document-logo-strip__logos img {
-        height: 46px;
-    }
-
-    .pdf-logo-area,
-    .document-logo-strip__logos,
-    .form-header-image > img {
-        width: calc(100% - 235px);
-    }
-
-    .trusted-signature-placeholder,
-    .document-trusted-signature-slot {
-        width: 235px;
-        min-height: 72px;
+        height: 16mm;
     }
 }
 
 @media (max-width: 700px) {
-    .pdf-logo-area,
-    .document-logo-strip__logos,
-    .form-header-image > img {
-        width: 100%;
-        padding-top: 0;
-    }
-
-    .trusted-signature-placeholder,
-    .document-trusted-signature-slot {
+    .pdf-logo-header,
+    .document-logo-header,
+    .header-image,
+    .form-header-image {
         position: static;
         width: 100%;
-        min-height: 0;
+        height: auto;
+    }
+
+    .pdf-logo-image,
+    .header-image img,
+    .form-header-image > img,
+    .document-logo-strip__logos img {
+        height: auto;
     }
 }

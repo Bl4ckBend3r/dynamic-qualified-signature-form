@@ -99,28 +99,36 @@
 .form-header-image {
     width: 100%;
     margin: 0 0 14px;
+    padding: 0;
     page-break-inside: avoid;
 }
 
 .pdf-logo-row {
-    display: table;
     width: 100%;
-    table-layout: fixed;
+    min-height: 62px;
+    clear: both;
+    page-break-inside: avoid;
+}
+
+.pdf-logo-row::after {
+    content: "";
+    display: block;
+    clear: both;
 }
 
 .pdf-logo-area {
-    display: table-cell;
-    width: auto;
-    vertical-align: top;
-    padding-right: 12px;
+    float: left;
+    width: calc(100% - 164px);
+    padding: 0;
+    margin: 0;
 }
 
 .trusted-signature-placeholder {
-    display: table-cell;
+    float: right;
     width: 150px;
     min-height: 58px;
-    vertical-align: top;
     padding: 5px 6px;
+    margin: 0;
     border: 1px dashed #94a3b8;
     background: #ffffff;
     color: #334155;
@@ -128,6 +136,7 @@
     line-height: 1.2;
     text-align: left;
     page-break-inside: avoid;
+    box-sizing: border-box;
 }
 
 .trusted-signature-title,
@@ -164,20 +173,39 @@
     object-fit: contain;
     object-position: left center;
     border-radius: 0;
+    margin: 0;
 }
 
 .document-logo-strip,
 .form-header-image {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 150px;
-    align-items: start;
-    column-gap: 12px;
+    display: block;
+    width: 100%;
+    min-height: 62px;
+    clear: both;
+    page-break-inside: avoid;
+}
+
+.document-logo-strip::after,
+.form-header-image::after {
+    content: "";
+    display: block;
+    clear: both;
+}
+
+.document-logo-strip__logos,
+.form-header-image > img {
+    float: left;
+    width: calc(100% - 164px);
+    padding: 0;
+    margin: 0;
 }
 
 .document-trusted-signature-slot {
+    float: right;
     width: 150px;
     min-height: 58px;
     padding: 5px 6px;
+    margin: 0;
     border: 1px dashed #94a3b8;
     background: #ffffff;
     font-size: 7.5px;
@@ -185,6 +213,7 @@
     color: #334155;
     text-align: left;
     page-break-inside: avoid;
+    box-sizing: border-box;
 }
 
 .section-title {
@@ -312,6 +341,12 @@
         page-break-inside: avoid;
     }
 
+    .pdf-logo-row,
+    .document-logo-strip,
+    .form-header-image {
+        min-height: 58px;
+    }
+
     .pdf-logo-image,
     .header-image img,
     .form-header-image > img,
@@ -326,15 +361,18 @@
 }
 
 @media (max-width: 700px) {
-    .document-logo-strip,
-    .form-header-image {
-        grid-template-columns: 1fr;
-        row-gap: 12px;
+    .pdf-logo-area,
+    .document-logo-strip__logos,
+    .form-header-image > img,
+    .trusted-signature-placeholder,
+    .document-trusted-signature-slot {
+        float: none;
+        width: 100%;
     }
 
     .document-trusted-signature-slot,
     .trusted-signature-placeholder {
-        width: 100%;
         min-height: 72px;
+        margin-top: 10px;
     }
 }

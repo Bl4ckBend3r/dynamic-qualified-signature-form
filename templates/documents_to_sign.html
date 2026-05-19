@@ -143,8 +143,23 @@
 
                     <form method="post" action="{{ result.declaration_upload_url }}" enctype="multipart/form-data" class="dynamic-form">
                         <div class="form-row width-full">
-                            <label for="signed_declaration_pdf">Podpisana deklaracja PDF</label>
-                            <input type="file" id="signed_declaration_pdf" name="signed_declaration_pdf" accept="application/pdf" required>
+                            <label class="upload-dropzone" data-upload-dropzone>
+                                <input
+                                    type="file"
+                                    id="signed_declaration_pdf"
+                                    name="signed_declaration_pdf"
+                                    accept="application/pdf"
+                                    required
+                                    class="upload-dropzone__input"
+                                    data-upload-input
+                                >
+                                <span class="upload-dropzone__inner">
+                                    <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                    <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną deklarację PDF</span>
+                                    <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
+                                    <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
+                                </span>
+                            </label>
                         </div>
 
                         <div class="submit-row">
@@ -198,8 +213,23 @@
 
                             <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
                                 <div class="form-row width-full">
-                                    <label for="signed_agreement_pdf">Podpisana umowa PDF</label>
-                                    <input type="file" id="signed_agreement_pdf" name="signed_agreement_pdf" accept="application/pdf" required>
+                                    <label class="upload-dropzone" data-upload-dropzone>
+                                        <input
+                                            type="file"
+                                            id="signed_agreement_pdf"
+                                            name="signed_agreement_pdf"
+                                            accept="application/pdf"
+                                            required
+                                            class="upload-dropzone__input"
+                                            data-upload-input
+                                        >
+                                        <span class="upload-dropzone__inner">
+                                            <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                            <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
+                                            <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
+                                            <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
+                                        </span>
+                                    </label>
                                 </div>
 
                                 <div class="submit-row">
@@ -241,6 +271,94 @@
     display: flex;
     justify-content: flex-start;
     margin-top: 16px;
+}
+
+.upload-dropzone {
+    display: block;
+    width: 100%;
+    cursor: pointer;
+}
+
+.upload-dropzone__input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+    border: 0;
+    padding: 0;
+}
+
+.upload-dropzone__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 190px;
+    padding: 28px;
+    border: 2px dashed var(--gold);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    color: var(--navy);
+    text-align: center;
+    transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.upload-dropzone:hover .upload-dropzone__inner,
+.upload-dropzone.is-dragover .upload-dropzone__inner,
+.upload-dropzone.has-file .upload-dropzone__inner {
+    border-color: var(--gold-dark);
+    background: #fffaf0;
+    box-shadow: 0 10px 28px rgba(29, 46, 91, 0.08);
+}
+
+.upload-dropzone:hover .upload-dropzone__inner,
+.upload-dropzone.is-dragover .upload-dropzone__inner {
+    transform: translateY(-2px);
+}
+
+.upload-dropzone__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    margin-bottom: 14px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: #fff;
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+.upload-dropzone__title {
+    font-size: 1.2rem;
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.upload-dropzone__description {
+    margin-top: 8px;
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.upload-dropzone__filename {
+    margin-top: 14px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.92rem;
+    font-weight: 700;
+    word-break: break-word;
+}
+
+.upload-dropzone.has-file .upload-dropzone__filename {
+    color: var(--success);
 }
 </style>
 
@@ -350,6 +468,62 @@ function bindDownloadReplacementCards() {
     });
 }
 
+function getPdfFiles(dataTransfer) {
+    return Array.from(dataTransfer.files || []).filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+}
+
+function updateDropzoneFilename(dropzone, input) {
+    const filenameBox = dropzone.querySelector("[data-upload-filename]");
+    const filename = input.files && input.files.length ? input.files[0].name : "Nie wybrano pliku";
+
+    dropzone.classList.toggle("has-file", Boolean(input.files && input.files.length));
+
+    if (filenameBox) {
+        filenameBox.textContent = filename;
+    }
+}
+
+function bindUploadDropzones() {
+    document.querySelectorAll("[data-upload-dropzone]").forEach((dropzone) => {
+        const input = dropzone.querySelector("[data-upload-input]");
+
+        if (!input) {
+            return;
+        }
+
+        input.addEventListener("change", () => updateDropzoneFilename(dropzone, input));
+
+        ["dragenter", "dragover"].forEach((eventName) => {
+            dropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                dropzone.classList.add("is-dragover");
+            });
+        });
+
+        ["dragleave", "drop"].forEach((eventName) => {
+            dropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                dropzone.classList.remove("is-dragover");
+            });
+        });
+
+        dropzone.addEventListener("drop", (event) => {
+            const pdfFiles = getPdfFiles(event.dataTransfer);
+
+            if (!pdfFiles.length) {
+                return;
+            }
+
+            const transfer = new DataTransfer();
+            transfer.items.add(pdfFiles[0]);
+            input.files = transfer.files;
+            updateDropzoneFilename(dropzone, input);
+        });
+    });
+}
+
 function applyProcessStageVisibility(data) {
     const processStatus = data.process_status || "";
     const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
@@ -411,6 +585,7 @@ submissionInput.addEventListener("input", () => {
 });
 
 bindDownloadReplacementCards();
+bindUploadDropzones();
 
 if (submissionInput.value.trim()) {
     checkAcceptanceStatus();

@@ -1,6 +1,12 @@
 @page {
     size: A4;
     margin: 18mm;
+    background: #ffffff;
+}
+
+html,
+body {
+    background: #ffffff !important;
 }
 
 .document,
@@ -11,8 +17,16 @@
     font-size: 11px;
     line-height: 1.45;
     color: #111827;
+    background: #ffffff !important;
     text-align: justify;
     text-justify: inter-word;
+}
+
+.document *,
+.document--declaration *,
+.document--agreement *,
+.document--form * {
+    box-shadow: none;
 }
 
 .document p,
@@ -104,6 +118,7 @@
     width: 100%;
     margin: 0 0 18px;
     padding: 0;
+    background: #ffffff !important;
     page-break-inside: avoid;
 }
 
@@ -111,6 +126,7 @@
     position: relative;
     width: 100%;
     min-height: 58px;
+    background: #ffffff !important;
     page-break-inside: avoid;
 }
 
@@ -118,6 +134,7 @@
     width: calc(100% - 128px);
     padding: 0;
     margin: 0;
+    background: #ffffff !important;
 }
 
 .pdf-logo-image,
@@ -144,7 +161,7 @@
     padding: 0;
     margin: 0;
     border: none;
-    background: transparent;
+    background: transparent !important;
     color: transparent;
     font-size: 0;
     line-height: 0;
@@ -166,6 +183,7 @@
     display: block;
     width: 100%;
     min-height: 58px;
+    background: #ffffff !important;
     page-break-inside: avoid;
 }
 
@@ -206,6 +224,7 @@
     width: 100%;
     border-collapse: collapse;
     margin: 12px 0 10px;
+    background: #ffffff !important;
     page-break-inside: avoid;
     font-size: 11px;
     line-height: 1.35;
@@ -216,11 +235,12 @@
     border: 1px solid #9ca3af;
     padding: 8px 8px;
     vertical-align: middle;
+    background: #ffffff !important;
 }
 
 .criteria-table th {
     font-family: "DejaVuSans-Bold", Arial, sans-serif;
-    background: #f3f4f6;
+    background: #ffffff !important;
     text-align: center;
 }
 
@@ -241,6 +261,7 @@
 
 .statement {
     margin-bottom: 12px;
+    background: #ffffff !important;
     page-break-inside: avoid;
 }
 
@@ -255,6 +276,7 @@
     width: 100%;
     margin-top: 34px;
     border-collapse: collapse;
+    background: #ffffff !important;
     page-break-inside: avoid;
 }
 
@@ -263,6 +285,7 @@
     text-align: center;
     vertical-align: bottom;
     padding-top: 26px;
+    background: #ffffff !important;
 }
 
 .signature-line {
@@ -295,6 +318,15 @@
 }
 
 @media print {
+    html,
+    body,
+    .document,
+    .document--declaration,
+    .document--agreement,
+    .document--form {
+        background: #ffffff !important;
+    }
+
     .pdf-logo-header,
     .document-logo-strip,
     .form-header-image,

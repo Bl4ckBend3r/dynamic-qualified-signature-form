@@ -134,7 +134,16 @@ class NextcloudStorage:
 
     def exists(self, path: str) -> bool:
         response = self._request("PROPFIND", path, headers={"Depth": "0"})
-        return response.status_code in (200, 207)
+
+        if response.status_code in (200, 207):
+            return True
+
+        for fallback_path in self._pdf_lookup_paths_from_storage_path(path):
+            fallback_response = self._request("PROPFIND", fallback_path, headers={"Depth": "0"})
+            if fallback_response.status_code in (200, 207):
+                return True
+
+        return False
 
     def mkdir(self, path: str) -> None:
         if self.exists(path):
@@ -177,6 +186,21 @@ class NextcloudStorage:
 
         return None
 
+    def _infer_pdf_document_type_from_filename(self, filename: str) -> str | None:
+        normalized = Path(filename).name.lower()
+
+        if "deklar" in normalized or "declaration" in normalized:
+            return self.PDF_DECLARATION_DIR
+
+        if "umow" in normalized or "agreement" in normalized:
+            return self.PDF_AGREEMENT_DIR
+
+        return None
+
+    def _infer_pdf_signed_from_filename(self, filename: str) -> bool:
+        normalized = Path(filename).name.lower()
+        return any(marker in normalized for marker in ("-signed", "_signed", "podpisane", "podpisany"))
+
     def _pdf_directory(
         self,
         slug: str,
@@ -199,15 +223,52 @@ class NextcloudStorage:
         if "/" in clean_filename:
             return [f"{pdf_root}/{clean_filename}"]
 
-        paths = [
-            f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
-            f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
-            f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
-            f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
-            f"{pdf_root}/{clean_filename}",
-        ]
+        inferred_document_type = self._infer_pdf_document_type_from_filename(clean_filename)
+        inferred_signed = self._infer_pdf_signed_from_filename(clean_filename)
 
-        return paths
+        paths = []
+
+        if inferred_document_type:
+            preferred_signature_dir = self.PDF_SIGNED_DIR if inferred_signed else self.PDF_UNSIGNED_DIR
+            fallback_signature_dir = self.PDF_UNSIGNED_DIR if inferred_signed else self.PDF_SIGNED_DIR
+            paths.extend(
+                [
+                    f"{pdf_root}/{inferred_document_type}/{preferred_signature_dir}/{clean_filename}",
+                    f"{pdf_root}/{inferred_document_type}/{fallback_signature_dir}/{clean_filename}",
+                ]
+            )
+
+        paths.extend(
+            [
+                f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
+                f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
+                f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
+                f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
+                f"{pdf_root}/{clean_filename}",
+            ]
+        )
+
+        return list(dict.fromkeys(paths))
+
+    def _pdf_lookup_paths_from_storage_path(self, path: str) -> list[str]:
+        normalized = str(path or "").replace("\\", "/").strip("/")
+        parts = normalized.split("/")
+
+        if len(parts) < 4 or "pdf" not in parts:
+            return []
+
+        pdf_index = parts.index("pdf")
+
+        if pdf_index < 1 or pdf_index + 1 >= len(parts):
+            return []
+
+        slug = parts[pdf_index - 1]
+        filename = parts[-1]
+
+        if "/" in filename or not filename.lower().endswith(".pdf"):
+            return []
+
+        return [lookup_path for lookup_path in self._pdf_lookup_paths(slug, filename) if lookup_path != normalized]
 
     def _extract_relative_path_from_href(self, href: str) -> str:
         parsed = urlparse(href)
@@ -375,10 +436,13 @@ class NextcloudStorage:
     ) -> None:
         self.ensure_form_output_structure(slug)
 
+        resolved_document_type = document_type or self._infer_pdf_document_type_from_filename(filename)
+        resolved_signed = self._infer_pdf_signed_from_filename(filename) if signed is None else signed
+
         pdf_directory = self._pdf_directory(
             slug=slug,
-            document_type=document_type,
-            signed=signed,
+            document_type=resolved_document_type,
+            signed=resolved_signed,
         )
 
         self.write_bytes(

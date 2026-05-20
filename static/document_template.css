@@ -189,13 +189,23 @@ body {
     font-size: 12px;
     line-height: 1.3;
     text-align: center !important;
+    text-justify: auto;
     font-weight: bold;
 }
 
-.paragraph-title {
+.paragraph-title,
+.document .paragraph-title,
+.document .section-title .paragraph-title,
+.document--agreement .section-title .paragraph-title,
+.document--declaration .section-title .paragraph-title,
+.document--form .section-title .paragraph-title {
+    display: block;
+    width: 100%;
     margin: 4px 0 10px;
     font-size: 11px;
-    text-align: center;
+    line-height: 1.3;
+    text-align: center !important;
+    text-justify: auto;
 }
 
 .line {

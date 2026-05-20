@@ -12,7 +12,14 @@ body {
 .document,
 .document--declaration,
 .document--agreement,
-.document--form {
+.document--form,
+.document table,
+.document td,
+.document th,
+.document p,
+.document li,
+.document div,
+.document span {
     font-family: "DejaVuSans", Arial, sans-serif;
     font-size: 11px;
     line-height: 1.45;
@@ -29,27 +36,20 @@ body {
     box-shadow: none;
 }
 
-.document p,
-.document li,
-.document td,
-.document th,
-.document .statement-text,
-.document .paragraph,
-.document .legal-note,
-.document .footnote {
-    text-align: justify;
-    text-justify: inter-word;
-}
-
 .document h1,
 .document h2,
 .document h3,
 .document strong,
 .document b,
-.section-title,
-.paragraph-title,
-.statement-status {
+.document th,
+.document .section-title,
+.document .paragraph-title,
+.document .statement-status,
+.document .field-label,
+.document .label,
+.document .consent-title {
     font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-weight: normal;
 }
 
 .document h1 {
@@ -114,14 +114,14 @@ body {
     margin-top: 16px;
 }
 
-.pdf-logo-header {
+.pdf-logo-header,
+.header-image {
     display: none !important;
 }
 
 .pdf-logo-footer,
 .document-logo-footer,
 .document-logo-header,
-.header-image,
 .form-header-image {
     position: fixed;
     left: 18mm;
@@ -159,7 +159,6 @@ body {
 }
 
 .pdf-logo-image,
-.header-image img,
 .form-header-image > img,
 .document-logo-strip__logos img {
     display: block;
@@ -188,9 +187,9 @@ body {
     margin: 18px 0 6px;
     font-size: 12px;
     line-height: 1.3;
+    color: #001f5b;
     text-align: center !important;
     text-justify: auto;
-    font-weight: bold;
 }
 
 .paragraph-title,
@@ -239,7 +238,6 @@ body {
 }
 
 .criteria-table th {
-    font-family: "DejaVuSans-Bold", Arial, sans-serif;
     background: #ffffff !important;
     text-align: center;
 }
@@ -327,7 +325,8 @@ body {
         background: #ffffff !important;
     }
 
-    .pdf-logo-header {
+    .pdf-logo-header,
+    .header-image {
         display: none !important;
     }
 
@@ -335,8 +334,7 @@ body {
     .document-logo-footer,
     .document-logo-header,
     .document-logo-strip,
-    .form-header-image,
-    .header-image {
+    .form-header-image {
         position: fixed;
         left: 18mm;
         right: 18mm;
@@ -353,7 +351,6 @@ body {
     }
 
     .pdf-logo-image,
-    .header-image img,
     .form-header-image > img,
     .document-logo-strip__logos img {
         height: 16mm;
@@ -364,7 +361,6 @@ body {
     .pdf-logo-footer,
     .document-logo-footer,
     .document-logo-header,
-    .header-image,
     .form-header-image {
         position: static;
         width: 100%;
@@ -372,7 +368,6 @@ body {
     }
 
     .pdf-logo-image,
-    .header-image img,
     .form-header-image > img,
     .document-logo-strip__logos img {
         height: auto;

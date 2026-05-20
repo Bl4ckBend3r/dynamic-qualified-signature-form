@@ -4,7 +4,7 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
-
+from datetime import datetime
 from flask import Flask
 
 from pdf_generator import generate_pdf, generate_pdf_from_html
@@ -197,6 +197,7 @@ def build_document_pdf_context(
         "pdf_image_url": pdf_image_url,
         "pdf_image_alt": form_definition.get("title", ""),
         "document_type": document_type,
+        "generated_at": datetime.now().strftime("%d.%m.%Y"),
     }
 
 

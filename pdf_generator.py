@@ -1,8 +1,16 @@
+import base64
+import mimetypes
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from flask import render_template, render_template_string
 from playwright.sync_api import sync_playwright
+
+from services.nextcloud_storage import create_nextcloud_storage_from_env
+
+
+NEXTCLOUD_LOGO_DIR = "Strona WWW/Formularze/Logo"
 
 
 def inject_pdf_styles(app, html_string: str) -> str:
@@ -28,7 +36,48 @@ def inject_pdf_styles(app, html_string: str) -> str:
     return f"{style_tag}\n{html_string}"
 
 
+def get_logo_filename_from_url(footer_image_url: str) -> str:
+    parsed = urlparse(footer_image_url)
+    path = unquote(parsed.path or footer_image_url).replace("\\", "/").strip("/")
+
+    if "/static/" in path:
+        path = path.split("/static/", 1)[1]
+
+    return Path(path).name
+
+
+def read_nextcloud_logo_as_data_uri(footer_image_url: str | None) -> str | None:
+    if not footer_image_url:
+        return None
+
+    if footer_image_url.startswith("data:"):
+        return footer_image_url
+
+    logo_filename = get_logo_filename_from_url(footer_image_url)
+
+    if not logo_filename:
+        return footer_image_url
+
+    logo_path = f"{NEXTCLOUD_LOGO_DIR}/{logo_filename}"
+
+    try:
+        storage = create_nextcloud_storage_from_env()
+        image_bytes = storage.get_file_bytes(logo_path)
+    except Exception:
+        return footer_image_url
+
+    mime_type, _ = mimetypes.guess_type(logo_filename)
+
+    if not mime_type:
+        mime_type = "image/png"
+
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
 def build_footer_template(footer_image_url: str | None) -> str:
+    footer_image_url = read_nextcloud_logo_as_data_uri(footer_image_url)
+
     if not footer_image_url:
         return "<div></div>"
 
@@ -63,6 +112,9 @@ def write_pdf_from_html(
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    footer_template = build_footer_template(footer_image_url)
+    has_footer = footer_template != "<div></div>"
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
@@ -73,13 +125,13 @@ def write_pdf_from_html(
             path=str(output_path),
             format="A4",
             print_background=True,
-            display_header_footer=bool(footer_image_url),
+            display_header_footer=has_footer,
             header_template="<div></div>",
-            footer_template=build_footer_template(footer_image_url),
+            footer_template=footer_template,
             margin={
                 "top": "20mm",
                 "right": "20mm",
-                "bottom": "28mm" if footer_image_url else "20mm",
+                "bottom": "28mm" if has_footer else "20mm",
                 "left": "20mm",
             },
         )

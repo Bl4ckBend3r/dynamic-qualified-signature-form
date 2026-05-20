@@ -18,6 +18,11 @@ class NextcloudStorageError(Exception):
 
 
 class NextcloudStorage:
+    PDF_DECLARATION_DIR = "deklaracja"
+    PDF_AGREEMENT_DIR = "umowy"
+    PDF_SIGNED_DIR = "podpisane"
+    PDF_UNSIGNED_DIR = "niepodpisane"
+
     def __init__(
         self,
         base_url: str,
@@ -150,8 +155,59 @@ class NextcloudStorage:
         self.mkdir(self.output_dir)
 
     def ensure_form_output_structure(self, slug: str) -> None:
+        pdf_root = f"{self.output_dir}/{slug}/pdf"
+
         self.mkdir(f"{self.output_dir}/{slug}")
-        self.mkdir(f"{self.output_dir}/{slug}/pdf")
+        self.mkdir(pdf_root)
+        self.mkdir(f"{pdf_root}/{self.PDF_DECLARATION_DIR}")
+        self.mkdir(f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_SIGNED_DIR}")
+        self.mkdir(f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_UNSIGNED_DIR}")
+        self.mkdir(f"{pdf_root}/{self.PDF_AGREEMENT_DIR}")
+        self.mkdir(f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_SIGNED_DIR}")
+        self.mkdir(f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_UNSIGNED_DIR}")
+
+    def _normalize_pdf_document_type(self, document_type: str | None) -> str | None:
+        normalized = str(document_type or "").strip().lower()
+
+        if normalized in {"declaration", "deklaracja", "declarations", "deklaracje"}:
+            return self.PDF_DECLARATION_DIR
+
+        if normalized in {"agreement", "umowa", "umowy", "agreements"}:
+            return self.PDF_AGREEMENT_DIR
+
+        return None
+
+    def _pdf_directory(
+        self,
+        slug: str,
+        document_type: str | None = None,
+        signed: bool | None = None,
+    ) -> str:
+        pdf_root = f"{self.output_dir}/{slug}/pdf"
+        normalized_document_type = self._normalize_pdf_document_type(document_type)
+
+        if not normalized_document_type:
+            return pdf_root
+
+        signature_dir = self.PDF_SIGNED_DIR if signed else self.PDF_UNSIGNED_DIR
+        return f"{pdf_root}/{normalized_document_type}/{signature_dir}"
+
+    def _pdf_lookup_paths(self, slug: str, filename: str) -> list[str]:
+        pdf_root = f"{self.output_dir}/{slug}/pdf"
+        clean_filename = filename.strip("/")
+
+        if "/" in clean_filename:
+            return [f"{pdf_root}/{clean_filename}"]
+
+        paths = [
+            f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
+            f"{pdf_root}/{self.PDF_DECLARATION_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
+            f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_UNSIGNED_DIR}/{clean_filename}",
+            f"{pdf_root}/{self.PDF_AGREEMENT_DIR}/{self.PDF_SIGNED_DIR}/{clean_filename}",
+            f"{pdf_root}/{clean_filename}",
+        ]
+
+        return paths
 
     def _extract_relative_path_from_href(self, href: str) -> str:
         parsed = urlparse(href)
@@ -309,17 +365,71 @@ class NextcloudStorage:
         reader = csv.DictReader(io.StringIO(existing))
         return list(reader)
 
-    def save_pdf(self, slug: str, filename: str, pdf_bytes: bytes) -> None:
+    def save_pdf(
+        self,
+        slug: str,
+        filename: str,
+        pdf_bytes: bytes,
+        document_type: str | None = None,
+        signed: bool | None = None,
+    ) -> None:
         self.ensure_form_output_structure(slug)
 
+        pdf_directory = self._pdf_directory(
+            slug=slug,
+            document_type=document_type,
+            signed=signed,
+        )
+
         self.write_bytes(
-            f"{self.output_dir}/{slug}/pdf/{filename}",
+            f"{pdf_directory}/{filename}",
             pdf_bytes,
             "application/pdf",
         )
 
+    def save_declaration_pdf(
+        self,
+        slug: str,
+        filename: str,
+        pdf_bytes: bytes,
+        signed: bool = False,
+    ) -> None:
+        self.save_pdf(
+            slug=slug,
+            filename=filename,
+            pdf_bytes=pdf_bytes,
+            document_type=self.PDF_DECLARATION_DIR,
+            signed=signed,
+        )
+
+    def save_agreement_pdf(
+        self,
+        slug: str,
+        filename: str,
+        pdf_bytes: bytes,
+        signed: bool = False,
+    ) -> None:
+        self.save_pdf(
+            slug=slug,
+            filename=filename,
+            pdf_bytes=pdf_bytes,
+            document_type=self.PDF_AGREEMENT_DIR,
+            signed=signed,
+        )
+
     def get_pdf_bytes(self, slug: str, filename: str) -> bytes:
-        return self.read_bytes(f"{self.output_dir}/{slug}/pdf/{filename}")
+        last_error: Exception | None = None
+
+        for path in self._pdf_lookup_paths(slug, filename):
+            try:
+                return self.read_bytes(path)
+            except NextcloudStorageError as exc:
+                last_error = exc
+
+        if last_error:
+            raise last_error
+
+        raise NextcloudStorageError(f"Cannot read PDF file '{filename}'")
 
     def get_file_bytes(self, path: str) -> bytes:
         normalized_path = str(path).replace("\\", "/").lstrip("/")

@@ -15,6 +15,18 @@ PDF_LOGO_FOOTER_PATTERN = re.compile(
     r"<footer\b[^>]*class=[\"'][^\"']*pdf-logo-footer[^\"']*[\"'][^>]*>.*?</footer>",
     re.IGNORECASE | re.DOTALL,
 )
+PDF_LOGO_HEADER_PATTERN = re.compile(
+    r"<header\b[^>]*class=[\"'][^\"']*pdf-logo-header[^\"']*[\"'][^>]*>.*?</header>",
+    re.IGNORECASE | re.DOTALL,
+)
+DOCUMENT_LOGO_HEADER_PATTERN = re.compile(
+    r"<header\b[^>]*class=[\"'][^\"']*document-logo-header[^\"']*[\"'][^>]*>.*?</header>",
+    re.IGNORECASE | re.DOTALL,
+)
+FORM_HEADER_IMAGE_PATTERN = re.compile(
+    r"<div\b[^>]*class=[\"'][^\"']*form-header-image[^\"']*[\"'][^>]*>.*?</div>",
+    re.IGNORECASE | re.DOTALL,
+)
 BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
 
@@ -188,37 +200,26 @@ def build_document_pdf_context(
     }
 
 
-def build_logo_footer_html() -> str:
-    return """
-<footer class=\"pdf-logo-footer\">
-  <div class=\"pdf-logo-row\">
-    <div class=\"pdf-logo-area\">
-      <img
-        src=\"{{ pdf_image_url }}\"
-        alt=\"{{ pdf_image_alt or 'Logotypy projektu' }}\"
-        class=\"pdf-logo-image\"
-      >
-    </div>
-  </div>
-</footer>
-"""
+def remove_inline_logo_markup(template_html: str) -> str:
+    """Remove logo blocks from the document body.
+
+    Repeated logos are now rendered only by Playwright's PDF footer_template.
+    Keeping HTML logo blocks causes an additional logo on the first page header.
+    """
+
+    cleaned = PDF_LOGO_FOOTER_PATTERN.sub("", template_html)
+    cleaned = PDF_LOGO_HEADER_PATTERN.sub("", cleaned)
+    cleaned = DOCUMENT_LOGO_HEADER_PATTERN.sub("", cleaned)
+    cleaned = FORM_HEADER_IMAGE_PATTERN.sub("", cleaned)
+
+    return cleaned
 
 
-def append_logo_footer_if_needed(template_html: str, context: Mapping[str, Any]) -> str:
-    pdf_image_url = normalize_text(context.get("pdf_image_url"))
+def prepare_document_template_html(template_html: str, context: Mapping[str, Any]) -> str:
+    if normalize_text(context.get("pdf_image_url")):
+        return remove_inline_logo_markup(template_html)
 
-    if not pdf_image_url:
-        return template_html
-
-    footer_html = build_logo_footer_html()
-    template_html = PDF_LOGO_FOOTER_PATTERN.sub("", template_html)
-    body_match = BODY_OPEN_PATTERN.search(template_html)
-
-    if body_match:
-        insert_at = body_match.end()
-        return f"{template_html[:insert_at]}\n{footer_html}\n{template_html[insert_at:]}"
-
-    return f"{footer_html}\n{template_html}"
+    return template_html
 
 
 def generate_document_pdf_bytes(
@@ -237,7 +238,7 @@ def generate_document_pdf_bytes(
 
     try:
         if template_html:
-            template_html = append_logo_footer_if_needed(template_html, context)
+            template_html = prepare_document_template_html(template_html, context)
             generate_pdf_from_html(
                 app=app,
                 template_html=template_html,

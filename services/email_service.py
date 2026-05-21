@@ -1,5 +1,8 @@
+import logging
 import smtplib
 from email.message import EmailMessage
+
+logger = logging.getLogger(__name__)
 
 
 def _as_bool(value: str | bool | None, default: bool = False) -> bool:
@@ -8,6 +11,10 @@ def _as_bool(value: str | bool | None, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "tak", "on"}
+
+
+def _normalize_smtp_host(value: str) -> str:
+    return str(value or "").strip().strip("'\"").strip()
 
 
 def _send_email(
@@ -25,6 +32,10 @@ def _send_email(
     use_ssl: bool = False,
     timeout: int = 30,
 ) -> None:
+    smtp_host = _normalize_smtp_host(smtp_host)
+    smtp_user = str(smtp_user or "").strip()
+    mail_from = str(mail_from or "").strip()
+
     if not smtp_host or not smtp_user or not smtp_password or not mail_from:
         raise RuntimeError("Brak konfiguracji SMTP.")
 
@@ -41,6 +52,7 @@ def _send_email(
     message.add_alternative(html_body, subtype="html")
 
     smtp_class = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+    logger.info("SMTP connect host=%r port=%s ssl=%s tls=%s", smtp_host, smtp_port, use_ssl, use_tls)
 
     with smtp_class(smtp_host, smtp_port, timeout=timeout) as smtp:
         if use_tls and not use_ssl:

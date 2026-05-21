@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
 
-# Ensures the /declaration/<slug>/<submission_id> route is registered before Flask app creation.
+# Ensures extra Flask routes and hooks are registered before Flask app creation.
 import sitecustomize  # noqa: F401
+import form_notifications_patch  # noqa: F401
 
 
 def _env_bool(name: str, default: str = "false") -> bool:

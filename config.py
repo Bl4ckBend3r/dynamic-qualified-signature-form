@@ -5,6 +5,15 @@ from pathlib import Path
 import sitecustomize  # noqa: F401
 
 
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "tak", "on"}
+
+
+def _env_list(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
+
+
 class Config:
     APP_NAME = "Formularze Lubuskie"
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
@@ -42,10 +51,17 @@ class Config:
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()
     SIGNATURE_API_BASE_URL = os.getenv("SIGNATURE_API_BASE_URL", "")
     SIGNATURE_API_TOKEN = os.getenv("SIGNATURE_API_TOKEN", "")
-    
-    
+
+    # Konfiguracja SMTP / Zimbra
     SMTP_HOST = os.getenv("SMTP_HOST", "")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USER = os.getenv("SMTP_USER", "")
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
     MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)
+    SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", "true")
+    SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", "false")
+    SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "30"))
+
+    # Globalni odbiorcy powiadomień o nowych zgłoszeniach.
+    # Można nadpisać per formularz w JSON polem: "notification_emails": ["adres@domena.pl"]
+    FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")

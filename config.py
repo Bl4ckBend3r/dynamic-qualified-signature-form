@@ -1,9 +1,13 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Ensures extra Flask routes and hooks are registered before Flask app creation.
-import sitecustomize  # noqa: F401
-import form_notifications_patch  # noqa: F401
+import sitecustomize  # noqa: F401,E402
+import form_notifications_patch  # noqa: F401,E402
 
 
 def _env_bool(name: str, default: str = "false") -> bool:

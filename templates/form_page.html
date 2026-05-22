@@ -31,7 +31,7 @@
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">
-                        <h3>{{ field.label }}</h3>
+                        <h3>{{ field.label|safe }}</h3>
                     </section>
 
                 {% elif field.type == "static_text" %}
@@ -51,7 +51,7 @@
                     >
                         {% if field.type != "checkbox" %}
                             <label for="{{ field.name }}">
-                                {{ field.label }}
+                                {{ field.label|safe }}
                                 {% if field.required %}
                                     <span class="required">*</span>
                                 {% endif %}
@@ -93,7 +93,7 @@
 
                         {% elif field.type == "radio" %}
                             {% if field.description %}
-                                <div class="field-description">{{ field.description }}</div>
+                                <div class="field-description">{{ field.description|safe }}</div>
                             {% endif %}
 
                             <div class="option-list">
@@ -107,7 +107,7 @@
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
-                                        <span>{{ option }}</span>
+                                        <span>{{ option|safe }}</span>
                                     </label>
                                 {% endfor %}
                             </div>
@@ -126,7 +126,7 @@
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>
-                                            {{ option.label }}
+                                            {{ option.label|safe }}
                                             {% if field.required %}
                                                 <span class="required">*</span>
                                             {% endif %}
@@ -137,7 +137,7 @@
                         {% endif %}
 
                         {% if field.help_text %}
-                            <div class="help-text">{{ field.help_text }}</div>
+                            <div class="help-text">{{ field.help_text|safe }}</div>
                         {% endif %}
 
                         {% if has_error %}

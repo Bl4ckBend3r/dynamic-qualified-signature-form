@@ -7,6 +7,7 @@ load_dotenv(override=True)
 
 import sitecustomize  # noqa: F401,E402
 import nextcloud_assets_patch  # noqa: F401,E402
+import documents_status_patch  # noqa: F401,E402
 import form_notifications_patch  # noqa: F401,E402
 
 

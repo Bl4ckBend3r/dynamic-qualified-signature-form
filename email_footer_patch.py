@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import mimetypes
 import smtplib
@@ -47,6 +48,13 @@ def _get_form_definition_for_title(app_module: Any, form_title: str) -> dict:
     return {}
 
 
+def _current_form_definition() -> dict:
+    app_module = _app_module()
+    if app_module is None:
+        return {}
+    return _get_form_definition_for_title(app_module, _CURRENT_FORM_TITLE)
+
+
 def _footer_logo_from_form_definition(form_definition: dict) -> str:
     footer_config = form_definition.get("email_footer") or {}
 
@@ -64,8 +72,25 @@ def _footer_logo_from_form_definition(form_definition: dict) -> str:
     return ""
 
 
+def _footer_text_from_form_definition(form_definition: dict) -> str:
+    footer_config = form_definition.get("email_footer") or {}
+
+    if isinstance(footer_config, dict):
+        for key in ("text", "content", "description"):
+            value = str(footer_config.get(key, "")).strip()
+            if value:
+                return value
+
+    for key in ("email_footer_text", "email_footer_content", "footer_text", "footer_content"):
+        value = str(form_definition.get(key, "")).strip()
+        if value:
+            return value
+
+    return "Wiadomość została wygenerowana automatycznie przez system formularzy."
+
+
 def _resolve_logo_path(app_module: Any) -> str:
-    form_definition = _get_form_definition_for_title(app_module, _CURRENT_FORM_TITLE)
+    form_definition = _current_form_definition()
     configured = _footer_logo_from_form_definition(form_definition)
 
     if not configured:
@@ -104,6 +129,9 @@ def _read_logo() -> tuple[bytes | None, str]:
 
 
 def _append_footer(html_body: str, has_logo: bool) -> str:
+    form_definition = _current_form_definition()
+    footer_text = html.escape(_footer_text_from_form_definition(form_definition)).replace("\n", "<br>")
+
     logo = ""
     if has_logo:
         logo = '<div style="margin-top:12px"><img src="cid:%s" alt="Logo" style="max-width:260px;height:auto;display:block"></div>' % FOOTER_CID
@@ -111,7 +139,7 @@ def _append_footer(html_body: str, has_logo: bool) -> str:
     footer = (
         '<hr style="border:none;border-top:1px solid #d8d8d8;margin:24px 0 12px 0">'
         '<div style="font-size:12px;line-height:1.45;color:#555">'
-        '<p style="margin:0 0 8px 0">Wiadomość została wygenerowana automatycznie przez system formularzy.</p>'
+        f'<p style="margin:0 0 8px 0">{footer_text}</p>'
         + logo +
         '</div>'
     )

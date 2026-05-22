@@ -12,6 +12,10 @@ from services import email_service
 
 logger = logging.getLogger(__name__)
 FOOTER_CID = "email-footer-logo"
+_CURRENT_FORM_TITLE = ""
+
+_original_send_decision_email = email_service.send_submission_decision_email
+_original_send_form_notification_email = email_service.send_form_submission_notification_email
 
 
 def _app_module() -> Any:
@@ -22,13 +26,56 @@ def _clean_host(value: str) -> str:
     return str(value or "").strip().strip("'\"").strip()
 
 
-def _resolve_logo_path(app_module: Any) -> str:
-    configured = str(app_module.app.config.get("EMAIL_FOOTER_LOGO_PATH", "Logo/logo.png") or "").replace("\\", "/").strip().strip("/")
-    if not configured:
-        return ""
+def _normalize_path(value: Any) -> str:
+    return str(value or "").replace("\\", "/").strip().strip("/")
 
-    forms_dir = str(app_module.app.config.get("NEXTCLOUD_FORMS_DIR", "Formularze") or "Formularze").strip("/")
-    output_dir = str(app_module.app.config.get("NEXTCLOUD_OUTPUT_DIR", "output") or "output").strip("/")
+
+def _get_form_definition_for_title(app_module: Any, form_title: str) -> dict:
+    title = str(form_title or "").strip()
+    if not title or not hasattr(app_module, "get_forms") or not hasattr(app_module, "get_form_definition"):
+        return {}
+
+    try:
+        for form in app_module.get_forms():
+            slug = form.get("slug", "")
+            candidate_title = str(form.get("title", "")).strip()
+            if title == candidate_title or title == slug:
+                return app_module.get_form_definition(slug) or {}
+    except Exception as exc:
+        logger.warning("Cannot resolve form definition for email footer: %s", exc)
+
+    return {}
+
+
+def _footer_logo_from_form_definition(form_definition: dict) -> str:
+    footer_config = form_definition.get("email_footer") or {}
+
+    if isinstance(footer_config, dict):
+        for key in ("logo", "logo_path", "image", "image_path"):
+            path = _normalize_path(footer_config.get(key))
+            if path:
+                return path
+
+    for key in ("email_footer_logo", "email_footer_logo_path", "footer_logo", "footer_logo_path"):
+        path = _normalize_path(form_definition.get(key))
+        if path:
+            return path
+
+    return ""
+
+
+def _resolve_logo_path(app_module: Any) -> str:
+    form_definition = _get_form_definition_for_title(app_module, _CURRENT_FORM_TITLE)
+    configured = _footer_logo_from_form_definition(form_definition)
+
+    if not configured:
+        configured = _normalize_path(app_module.app.config.get("EMAIL_FOOTER_LOGO_PATH", ""))
+
+    if not configured:
+        configured = "Logo/logo.png"
+
+    forms_dir = _normalize_path(app_module.app.config.get("NEXTCLOUD_FORMS_DIR", "Formularze")) or "Formularze"
+    output_dir = _normalize_path(app_module.app.config.get("NEXTCLOUD_OUTPUT_DIR", "output")) or "output"
 
     if configured.startswith((forms_dir + "/", output_dir + "/")):
         return configured
@@ -133,4 +180,26 @@ def _send_email_with_footer(
         smtp.send_message(message)
 
 
+def _send_submission_decision_email_with_form_context(*args, **kwargs):
+    global _CURRENT_FORM_TITLE
+    previous_title = _CURRENT_FORM_TITLE
+    _CURRENT_FORM_TITLE = str(kwargs.get("form_title", "") or "")
+    try:
+        return _original_send_decision_email(*args, **kwargs)
+    finally:
+        _CURRENT_FORM_TITLE = previous_title
+
+
+def _send_form_submission_notification_email_with_form_context(*args, **kwargs):
+    global _CURRENT_FORM_TITLE
+    previous_title = _CURRENT_FORM_TITLE
+    _CURRENT_FORM_TITLE = str(kwargs.get("form_title", "") or "")
+    try:
+        return _original_send_form_notification_email(*args, **kwargs)
+    finally:
+        _CURRENT_FORM_TITLE = previous_title
+
+
 email_service._send_email = _send_email_with_footer
+email_service.send_submission_decision_email = _send_submission_decision_email_with_form_context
+email_service.send_form_submission_notification_email = _send_form_submission_notification_email_with_form_context

@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from flask import Flask, request
 
+import decision_email_request_patch  # noqa: F401
 import email_templates_patch  # noqa: F401
 from services.email_service import send_form_submission_notification_email
 

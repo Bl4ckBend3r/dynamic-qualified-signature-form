@@ -6,7 +6,7 @@ import re
 import sys
 from typing import Any
 
-import email_footer_patch  # noqa: F401
+import email_footer_patch
 from services import email_service
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,15 @@ def _html_to_text(value: str) -> str:
     return html.unescape(text).strip()
 
 
+def _with_form_footer_context(form_title: str, html_body: str) -> str:
+    previous_title = email_footer_patch._CURRENT_FORM_TITLE
+    email_footer_patch._CURRENT_FORM_TITLE = str(form_title or "")
+    try:
+        return email_footer_patch._append_footer(html_body, has_logo=True)
+    finally:
+        email_footer_patch._CURRENT_FORM_TITLE = previous_title
+
+
 def _send_custom_email(
     *,
     smtp_host: str,
@@ -117,10 +126,13 @@ def _send_custom_email(
     to_emails: list[str],
     subject: str,
     html_body: str,
+    form_title: str,
     use_tls: bool = True,
     use_ssl: bool = False,
     timeout: int = 30,
 ) -> None:
+    html_body = _with_form_footer_context(form_title, html_body)
+
     email_service._send_email(
         smtp_host=smtp_host,
         smtp_port=smtp_port,
@@ -169,6 +181,7 @@ def send_form_submission_notification_email(*args, **kwargs):
         to_emails=kwargs["to_emails"],
         subject=subject,
         html_body=html_body,
+        form_title=form_title,
         use_tls=kwargs.get("use_tls", True),
         use_ssl=kwargs.get("use_ssl", False),
         timeout=kwargs.get("timeout", 30),
@@ -209,6 +222,7 @@ def send_submission_decision_email(*args, **kwargs):
         to_emails=[kwargs["to_email"]],
         subject=subject,
         html_body=html_body,
+        form_title=form_title,
         use_tls=kwargs.get("use_tls", True),
         use_ssl=kwargs.get("use_ssl", False),
         timeout=kwargs.get("timeout", 30),

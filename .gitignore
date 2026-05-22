@@ -1,7 +1,8 @@
+forms/sample_form.json
 output/
 .venv/
+
 __pycache__/
 *.pyc
 .env
 .coverage
-forms/

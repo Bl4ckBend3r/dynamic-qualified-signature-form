@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from flask import Flask, request
 
+import email_footer_patch  # noqa: F401
 from services.email_service import send_form_submission_notification_email
 
 logger = logging.getLogger(__name__)

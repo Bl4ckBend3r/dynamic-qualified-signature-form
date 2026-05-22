@@ -571,7 +571,16 @@ textarea:focus {
     object-fit: cover;
     border-radius: 12px;
 }
+.form-footnote {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: #555;
+}
 
+.form-footnote sup {
+    font-weight: 700;
+}
 
 .forms-showcase {
     margin-top: 5vh;

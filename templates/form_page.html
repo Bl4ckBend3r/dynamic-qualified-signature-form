@@ -15,7 +15,7 @@
             {% if form_definition.header_image %}
                 <div class="form-header-image">
                     <img
-                        src="{{ url_for('static', filename=form_definition.header_image) }}"
+                        src="{{ url_for('nextcloud_asset', asset_path=form_definition.header_image) }}"
                         alt="Zdjęcie formularza"
                         loading="lazy"
                     >

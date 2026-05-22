@@ -449,6 +449,11 @@ const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
+const REJECTED_STATUSES = new Set([
+    "OFFICER_REJECTED",
+    "PARTICIPANT_REJECTED",
+]);
+
 const DECLARATION_COMPLETED_STATUSES = new Set([
     "AGREEMENT_READY",
     "AGREEMENT_WAITING_FOR_SIGNATURE",
@@ -456,7 +461,6 @@ const DECLARATION_COMPLETED_STATUSES = new Set([
     "AGREEMENT_SIGNATURE_INVALID",
     "AGREEMENT_NOT_REQUIRED",
     "PARTICIPANT_ACCEPTED",
-    "PARTICIPANT_REJECTED",
     "PROCESS_COMPLETED",
 ]);
 
@@ -465,6 +469,12 @@ const AGREEMENT_COMPLETED_STATUSES = new Set([
     "PARTICIPANT_ACCEPTED",
     "PROCESS_COMPLETED",
 ]);
+
+function isRejectedStatus(data) {
+    const processStatus = data.process_status || "";
+    const message = (data.message || "").toLowerCase();
+    return REJECTED_STATUSES.has(processStatus) || message.includes("odrzucon");
+}
 
 function hideElements(selector) {
     document.querySelectorAll(selector).forEach((element) => {
@@ -550,22 +560,22 @@ function renderSubmissionStatus(data) {
         return;
     }
 
+    if (isRejectedStatus(data)) {
+        renderStatusTile({
+            variant: "danger",
+            icon: "!",
+            title: "Wniosek odrzucony przez urzędnika",
+            description: data.message || "Dla tego wniosku nie można przejść do podpisywania dokumentów.",
+        });
+        return;
+    }
+
     if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
         renderStatusTile({
             variant: "success",
             icon: "✓",
             title: "Proces podpisywania zakończony",
             description: data.message || "Wszystkie wymagane dokumenty zostały poprawnie obsłużone.",
-        });
-        return;
-    }
-
-    if (processStatus === "PARTICIPANT_REJECTED") {
-        renderStatusTile({
-            variant: "danger",
-            icon: "!",
-            title: "Wniosek odrzucony przez urzędnika",
-            description: data.message || "Dla tego wniosku nie można przejść do podpisywania dokumentów.",
         });
         return;
     }
@@ -675,6 +685,14 @@ function bindUploadDropzones() {
 
 function applyProcessStageVisibility(data) {
     const processStatus = data.process_status || "";
+
+    if (isRejectedStatus(data)) {
+        hideDeclarationStage();
+        hideAgreementStage();
+        disableGenerateButton();
+        return;
+    }
+
     const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
     const declarationIsCompleted = agreementIsCompleted || DECLARATION_COMPLETED_STATUSES.has(processStatus);
 
@@ -731,7 +749,12 @@ async function checkAcceptanceStatus() {
         renderSubmissionStatus(data);
         applyProcessStageVisibility(data);
 
-        if (data.exists && data.can_sign_documents && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")) {
+        if (
+            data.exists
+            && data.can_sign_documents
+            && !isRejectedStatus(data)
+            && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")
+        ) {
             documentsSection.style.display = "block";
             generateButton.disabled = false;
             acceptanceSelect.value = "Tak";

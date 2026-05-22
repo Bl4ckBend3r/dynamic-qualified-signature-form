@@ -72,6 +72,24 @@ def _footer_logo_from_form_definition(form_definition: dict) -> str:
     return ""
 
 
+def _footer_logo_width_from_form_definition(form_definition: dict) -> int:
+    footer_config = form_definition.get("email_footer") or {}
+    raw_value = ""
+
+    if isinstance(footer_config, dict):
+        raw_value = footer_config.get("logo_width") or footer_config.get("logo_width_px") or ""
+
+    if not raw_value:
+        raw_value = form_definition.get("email_footer_logo_width") or form_definition.get("footer_logo_width") or ""
+
+    try:
+        width = int(str(raw_value).replace("px", "").strip()) if raw_value else 420
+    except ValueError:
+        width = 420
+
+    return max(120, min(width, 700))
+
+
 def _footer_text_from_form_definition(form_definition: dict) -> str:
     footer_config = form_definition.get("email_footer") or {}
 
@@ -131,10 +149,11 @@ def _read_logo() -> tuple[bytes | None, str]:
 def _append_footer(html_body: str, has_logo: bool) -> str:
     form_definition = _current_form_definition()
     footer_text = html.escape(_footer_text_from_form_definition(form_definition)).replace("\n", "<br>")
+    logo_width = _footer_logo_width_from_form_definition(form_definition)
 
     logo = ""
     if has_logo:
-        logo = '<div style="margin-top:12px"><img src="cid:%s" alt="Logo" style="max-width:260px;height:auto;display:block"></div>' % FOOTER_CID
+        logo = '<div style="margin-top:12px"><img src="cid:%s" alt="Logo" style="max-width:%spx;width:100%%;height:auto;display:block"></div>' % (FOOTER_CID, logo_width)
 
     footer = (
         '<hr style="border:none;border-top:1px solid #d8d8d8;margin:24px 0 12px 0">'

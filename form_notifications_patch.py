@@ -25,30 +25,20 @@ def _has_error_status(response: Any) -> bool:
     return isinstance(status_code, int) and status_code >= 400
 
 
-def _split_addresses(value: Any) -> list[str]:
-    if not value:
-        return []
-    if isinstance(value, str):
-        values = value.replace(";", ",").split(",")
-    else:
-        values = value
-    return [str(item).strip() for item in values if str(item).strip()]
-
-
-def _notification_addresses(app_module: Any, form_definition: dict) -> list[str]:
-    return (
-        _split_addresses(form_definition.get("notification_emails"))
-        or list(app_module.app.config.get("FORM_NOTIFICATION_EMAILS", []))
-    )
-
-
 def _notify(app_module: Any, slug: str, form_definition: dict, row: dict) -> None:
     submission_id = str(row.get("submission_id", "")).strip()
+    to_email = str(row.get("email", "")).strip()
+
     if not submission_id:
         return
 
-    addresses = _notification_addresses(app_module, form_definition)
-    if not addresses:
+    if not to_email:
+        logger.info("Brak adresu e-mail uczestnika dla zgłoszenia %s", submission_id)
+        app_module.storage.update_csv_row_by_submission_id(
+            slug,
+            submission_id,
+            {"form_notification_email_sent": "Nie", "form_notification_email_error": "Brak adresu e-mail uczestnika."},
+        )
         return
 
     applicant_name = " ".join(
@@ -64,11 +54,11 @@ def _notify(app_module: Any, slug: str, form_definition: dict, row: dict) -> Non
             smtp_user=app_module.app.config["SMTP_USER"],
             smtp_password=app_module.app.config["SMTP_PASSWORD"],
             mail_from=app_module.app.config["MAIL_FROM"],
-            to_emails=addresses,
+            to_emails=[to_email],
             submission_id=submission_id,
             form_title=row.get("form_name") or form_definition.get("title") or slug,
             applicant_name=applicant_name,
-            applicant_email=str(row.get("email", "")).strip(),
+            applicant_email=to_email,
             use_tls=app_module.app.config.get("SMTP_USE_TLS", True),
             use_ssl=app_module.app.config.get("SMTP_USE_SSL", False),
             timeout=app_module.app.config.get("SMTP_TIMEOUT", 30),
@@ -78,6 +68,7 @@ def _notify(app_module: Any, slug: str, form_definition: dict, row: dict) -> Non
             submission_id,
             {"form_notification_email_sent": "Tak", "form_notification_email_error": ""},
         )
+        logger.info("Wysłano potwierdzenie zgłoszenia %s na adres %s", submission_id, to_email)
     except Exception as exc:
         logger.exception("Form notification failed for %s: %s", submission_id, exc)
         app_module.storage.update_csv_row_by_submission_id(

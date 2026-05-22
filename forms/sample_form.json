@@ -1,8 +1,12 @@
 {
   "title": "Projekt „Wiedza kluczem do sukcesu”",
   "description": "FORMULARZ ZGŁOSZENIOWY do projektu „Wiedza kluczem do sukcesu” nr FELB.06.08-IZ.00-0021/25. Proszę uzupełnić wszystkie wymagane pola. Dokument PDF wygenerowany po wysłaniu formularza jest przeznaczony do podpisu elektronicznego jako zewnętrzny proces podpisu. ",
-  "header_image": "forms/Logo-iwona.png",
+  "header_image": "Logo/Logo-Iwona.png",
   "submit_label": "Generuj i wyślij",
+	"email_footer": {
+    "text": "Projekt „Wiedza kluczem do sukcesu” jest współfinansowany ze środków Unii Europejskiej w ramach Programu Regionalnego Fundusze Europejskie dla Lubuskiego 2021–2027.",
+    "logo": "Logo/Logo-Iwona.png"
+  },
   "signature": {
     "mode": "none",
     "allow_trusted_profile": false,
@@ -10,6 +14,131 @@
     "require_before_submit": false,
     "show_user_choice": false
   },
+  "process": {
+  "documents": {
+    "declaration": {
+      "enabled": true,
+      "template": "Template/deklaracja-wiedza-kluczem.html",
+      "filename_pattern": "{first_name}_{last_name}-deklaracja.pdf",
+      "signature_required": true,
+      "form_title": "Uzupełnienie deklaracji uczestnictwa",
+      "form_description": "Uzupełnij pola wymagane do wygenerowania deklaracji uczestnictwa.",
+      "form_submit_label": "Wygeneruj deklarację PDF",
+      "fields": [
+        {
+          "type": "section",
+          "label": "Kryteria formalne udziału w projekcie"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_18_lat",
+          "label": "Ukończyłem/-am 18 r. życia",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_lubuskie",
+          "label": "Pracuję lub zamieszkuję lub przebywam na terenie województwa lubuskiego w rozumieniu Kodeksu Cywilnego",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_wlasna_inicjatywa",
+          "label": "Przystępuję do Projektu z własnej inicjatywy i jestem zainteresowany/a podniesieniem swoich umiejętności i nabyciem kompetencji/kwalifikacji lub przekwalifikowaniem się",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_brak_dzialalnosci",
+          "label": "Nie prowadzę działalności gospodarczej lub oświatowej, w tym ze statusem zawieszona",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_brak_ksztalcenia",
+          "label": "Nie uczestniczę w dalszym kształceniu w systemie oświaty",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_obszar_wiejski",
+          "label": "Pochodzę z obszarów wiejskich",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_niepelnosprawnosc",
+          "label": "Jestem osobą z niepełnosprawnościami",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_umiejetnosci_podstawowe",
+          "label": "Posiadam umiejętności podstawowe odpowiadające poziomowi 1 i 2 Polskiej Ramy Kwalifikacji",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "radio",
+          "name": "deklaracja_grupa_niekorzystna",
+          "label": "Jestem osobą z grup w niekorzystnej sytuacji",
+          "required": true,
+          "options": ["Tak", "Nie"],
+          "width": "full"
+        },
+        {
+          "type": "section",
+          "label": "Oświadczenia uczestnika"
+        },
+        {
+          "type": "checkbox",
+          "name": "deklaracja_zgoda_wizerunek",
+          "required": false,
+          "width": "full",
+          "options": [
+            {
+              "value": "Tak",
+              "label": "Wyrażam zgodę na nieodpłatne i nieograniczone czasowo wykorzystanie mojego wizerunku do celów ewaluacji i monitoringu realizowanych w ramach Projektu wsparć oraz do celów archiwizacyjnych Projektu „Wiedza kluczem do sukcesu” nr FELB.06.08-IZ.00-0021/25, realizowanego przez Województwo Lubuskie – Urząd Marszałkowski Województwa Lubuskiego. Moja zgoda może być w każdym czasie odwołana w formie pisemnego oświadczenia."
+            }
+          ]
+        },
+        {
+          "type": "checkbox",
+          "name": "deklaracja_prawdziwosc_danych",
+          "required": true,
+          "width": "full",
+          "options": [
+            {
+              "value": "Tak",
+              "label": "Oświadczam, że nie posiadam/posiadam* pełną zdolność do czynności prawnych oraz korzystam z pełni praw publicznych. Uprzedzony/a o odpowiedzialności cywilnej (wynikającej z Kodeksu Cywilnego) za składanie oświadczeń niezgodnych  z  prawdą,  niniejszym  oświadczam, że  ww.  informacje  są  zgodne  ze  stanem  faktycznym i prawnym."
+            }
+          ]
+        }
+      ]
+    },
+    "agreement": {
+      "enabled": true,
+      "template": "Template/umowa-wiedza-kluczem.html",
+      "filename_pattern": "{first_name}_{last_name}-umowa.pdf",
+      "signature_required": true
+    }
+  }
+},
   "fields": [
     {
       "type": "section",
@@ -223,7 +352,7 @@
     {
       "type": "textarea",
       "name": "specjalne_potrzeby_opis",
-      "label": "Opis specjalnych potrzeb",
+      "label": "Opis specjalnych potrzeb w związku z niepełnosprawnością",
       "required": true,
       "width": "full",
       "visible_if": {
@@ -232,14 +361,43 @@
         "value": "Tak"
       }
     },
+    {
+     "type":"radio",
+     "name": "mniejszosc_narodowa",
+     "label": "Osoba należąca do mniejszości narodowej lub etnicznej, migrant, osoba obcego pochodzenia",
+     "required":true,
+     "options":["Tak","Nie","Odmowa podania informacji"]
+
+    },
+    {
+      "type":"radio",
+      "name":"osoba_bezdomna",
+      "label":"Osoba bezdomna lub dotknięta wykluczeniem z dostępu do mieszkań",
+      "required":true,
+      "options":["Tak", "Nie"]
+    },
+    {
+      "type":"radio",
+      "name":"niekorzystna_sytuacja",
+      "label":"Osoba w innej niekorzystnej sytuacji społecznej (innej niż wymienione powyżej)",
+      "required":true,
+      "options":["Tak","Nie","Odmowa podania informacji"]
+    },
+    {
+      "type":"radio",
+      "name":"dzial_wsparcia",
+      "label":"Nie korzystały do tej pory ze wsparcia i nie wykorzystały obowiązujących limitów dofinansowania usług rozwojowych w Działaniu FELB.06.08",
+      "required":true,
+      "options":["Tak","Nie"]
+    },
+    {
+      "type":"static_text",
+      "label":"W tabeli zawarte są informacje dotyczące danych wrażliwych. Kandydat/ka ma możliwość odmowy podania danych wrażliwych. Odmowa podania informacji dotyczących danych wrażliwych w przypadku projektu skierowanego do grup charakteryzujących się przedmiotowymi cechami, skutkuje brakiem możliwości weryfikacji kwalifikowalności oraz prowadzi do niezakwalifikowania się do udziału w projekcie."
+    },
 
     {
       "type": "section",
       "label": "Oświadczenia"
-    },
-    {
-      "type": "static_text",
-      "label": "Poniższe oświadczenia są zatwierdzane w formularzu, natomiast formalny podpis dotyczy całego wygenerowanego dokumentu PDF i realizowany jest wyłącznie przez zewnętrzny proces kwalifikowanego podpisu elektronicznego."
     },
     {
       "type": "checkbox",
@@ -345,9 +503,13 @@
       "options": [
         {
           "value": "Tak",
-          "label": "Zostałem/am poinformowany/a o odpowiedzialności cywilnej (wynikającej z Kodeksu Cywilnego) za składanie oświadczeń niezgodnych z prawdą, niniejszym oświadczam, że dane zawarte w Formularzu zgłoszeniowym są zgodne ze stanem prawnym i faktycznym."
+          "label": "Zostałem/am poinformowany/a o odpowiedzialności cywilnej (wynikającej z Kodeksu Cywilnego<p class='form-footnote'><sup>1</sup>) za składanie oświadczeń niezgodnych z prawdą, niniejszym oświadczam, że dane zawarte w Formularzu zgłoszeniowym są zgodne ze stanem prawnym i faktycznym."
         }
       ]
+    },
+    {
+      "type": "static_text",
+      "label": "<p class='form-footnote'><sup>1</sup>Zgodnie z art. 25 Ustawy z dnia 23 kwietnia 1964 r. - Kodeks Cywilny (Dz.U. 1964 nr 16 poz. 93) „Miejscem zamieszkania osoby fizycznej jest miejscowość, w której osoba ta przebywa z zamiarem stałego pobytu”. "
     }
   ]
 }

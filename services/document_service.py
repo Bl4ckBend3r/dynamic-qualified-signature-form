@@ -43,6 +43,40 @@ DEFAULT_DOCUMENT_CONFIG = {
 }
 
 
+class DocumentService:
+    def get_documents_config(self, form_config: dict) -> list[dict]:
+        from services.form_config_service import FormConfigService
+
+        return FormConfigService().normalize_documents_config(form_config)
+
+    def generate_document(
+        self,
+        submission: dict,
+        form_config: dict,
+        document_id: str,
+    ) -> dict:
+        document = self.get_document_by_id(form_config, document_id)
+        if not document:
+            raise ValueError(f"Unknown document_id: {document_id}")
+        return {
+            "document_id": document_id,
+            "kind": document.get("kind"),
+            "filename": self.build_filename(document.get("filename_pattern", ""), submission),
+            "generated": False,
+            "document": document,
+        }
+
+    def build_filename(self, pattern: str, submission: dict) -> str:
+        fallback = f"{sanitize_filename_part(submission.get('submission_id'), 'dokument')}.pdf"
+        return build_filename_from_pattern(pattern, submission, fallback)
+
+    def get_document_by_id(self, form_config: dict, document_id: str) -> dict | None:
+        for document in self.get_documents_config(form_config):
+            if document.get("id") == document_id:
+                return document
+        return None
+
+
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
 

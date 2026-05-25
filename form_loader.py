@@ -19,6 +19,7 @@ SUPPORTED_FIELD_TYPES = {
     "pesel",
     "section",
     "static_text",
+    "training_selection",
 }
 
 ALLOWED_SIGNATURE_MODES = {
@@ -202,6 +203,8 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
 
         if field_type == "checkbox":
             data[field_name] = "Tak" if field_name in request_form else "Nie"
+        elif field_type == "training_selection":
+            data[field_name] = ",".join(request_form.getlist(field_name))
         else:
             data[field_name] = request_form.get(field_name, "").strip()
 

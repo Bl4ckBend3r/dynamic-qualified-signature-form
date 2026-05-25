@@ -5,11 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-import sitecustomize  # noqa: F401,E402
-import nextcloud_assets_patch  # noqa: F401,E402
-import documents_status_patch  # noqa: F401,E402
-import form_notifications_patch  # noqa: F401,E402
-
 
 def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "tak", "on"}

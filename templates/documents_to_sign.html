@@ -68,11 +68,12 @@
         {% set agreement_completed = result.agreement_signature_valid|default(false) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
+        {% set training_agreements = result.training_agreements|default([]) %}
 
         {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
         {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
         {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = agreement_generated and result.agreement_upload_url and not agreement_completed %}
+        {% set show_agreement_upload = ((agreement_generated and result.agreement_upload_url) or training_agreements) and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
 
         <div class="result-box" id="signing-result-box">
@@ -197,7 +198,62 @@
                         </form>
                     {% endif %}
 
-                    {% if show_agreement_upload %}
+                    {% if training_agreements %}
+                        <div data-stage="agreement-upload">
+                            {% for agreement in training_agreements %}
+                                <div class="signing-document-card" style="margin-top: 16px;">
+                                    <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
+                                    <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
+                                    <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+
+                                    {% if agreement.generated_at %}
+                                        <p><strong>Data wygenerowania umowy:</strong> {{ agreement.generated_at }}</p>
+                                    {% endif %}
+
+                                    {% if agreement.url %}
+                                        <div class="download-links" style="margin-top: 16px;">
+                                            <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
+                                        </div>
+                                    {% endif %}
+
+                                    {% if agreement.signature_valid %}
+                                        <p style="margin-top: 16px;"><strong>Status podpisu:</strong> poprawny</p>
+                                    {% else %}
+                                        {% if agreement.signature_error %}
+                                            <p style="margin-top: 16px;"><strong>Status podpisu:</strong> niepoprawny</p>
+                                            <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
+                                        {% endif %}
+
+                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                                            <div class="form-row width-full">
+                                                <label class="upload-dropzone" data-upload-dropzone>
+                                                    <input
+                                                        type="file"
+                                                        id="signed_agreement_pdf_{{ loop.index }}"
+                                                        name="signed_agreement_pdf"
+                                                        accept="application/pdf"
+                                                        required
+                                                        class="upload-dropzone__input"
+                                                        data-upload-input
+                                                    >
+                                                    <span class="upload-dropzone__inner">
+                                                        <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                                        <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
+                                                        <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
+                                                        <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
+                                                    </span>
+                                                </label>
+                                            </div>
+
+                                            <div class="submit-row">
+                                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
+                                            </div>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% elif show_agreement_upload %}
                         <div data-stage="agreement-upload">
                             {% if result.agreement_filename %}
                                 <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>

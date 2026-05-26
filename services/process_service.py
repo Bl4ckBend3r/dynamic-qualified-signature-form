@@ -161,7 +161,7 @@ def is_agreement_signature_valid(row: Mapping[str, Any]) -> bool:
 
 def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
     if is_agreement_signature_valid(row):
-        return ProcessStatus.PARTICIPANT_ACCEPTED
+        return ProcessStatus.AGREEMENT_SIGNED
 
     if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
         return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
@@ -271,7 +271,10 @@ def build_initial_process_fields(
         "agreement_signature_valid": "",
         "agreement_signature_error": "",
         "agreement_signed_filename": "",
+        "office_agreement_signed_email_sent": "",
+        "office_agreement_signed_email_sent_for": "",
         "agreement_success_email_sent": "",
+        "agreement_success_email_sent_for": "",
         "requirements_rejection_email_sent": "",
     }
 

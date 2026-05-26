@@ -7,8 +7,9 @@ from uuid import uuid4
 
 
 class AuditLogService:
-    def __init__(self, log_path: str | Path = "data/audit_log.jsonl") -> None:
+    def __init__(self, log_path: str | Path = "data/audit_log.jsonl", repository=None) -> None:
         self.log_path = Path(log_path)
+        self.repository = repository
 
     def log_event(
         self,
@@ -31,6 +32,13 @@ class AuditLogService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": metadata or {},
         }
+        if self.repository:
+            try:
+                self.repository.append(entry)
+                return entry
+            except Exception:
+                pass
+
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")

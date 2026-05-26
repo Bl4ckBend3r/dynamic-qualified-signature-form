@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 
@@ -14,6 +16,9 @@ class SubmissionRepository:
         raise NotImplementedError
 
     def list_by_form(self, form_slug: str) -> list[dict]:
+        raise NotImplementedError
+
+    def find_by_pdf(self, form_slug: str, filename: str) -> dict | None:
         raise NotImplementedError
 
 
@@ -63,3 +68,35 @@ class CsvSubmissionRepository(SubmissionRepository):
             row.setdefault("form_slug", form_slug)
             normalized.append(row)
         return normalized
+
+    def find_by_pdf(self, form_slug: str, filename: str) -> dict | None:
+        wanted = Path(filename).name
+        for row in self.list_by_form(form_slug):
+            known_filenames = {
+                row.get("pdf_filename", ""),
+                row.get("signed_pdf_filename", ""),
+                row.get("declaration_filename", ""),
+                row.get("declaration_signed_filename", ""),
+                row.get("agreement_filename", ""),
+                row.get("agreement_signed_filename", ""),
+            }
+            for agreement in self._parse_json_list(row.get("training_agreements")):
+                known_filenames.add(agreement.get("filename", ""))
+                known_filenames.add(agreement.get("signed_filename", ""))
+            if wanted in known_filenames:
+                return row
+        return None
+
+    def _parse_json_list(self, value: str | list | None) -> list[dict]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict)]

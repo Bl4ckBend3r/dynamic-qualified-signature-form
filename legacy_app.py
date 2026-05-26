@@ -188,6 +188,14 @@ def build_signed_declaration_filename(declaration_filename: str) -> str:
     return f"{stem}-signed{suffix}"
 
 
+def build_pdf_download_url(slug: str, filename: str, submission: dict | None = None) -> str:
+    values = {"slug": slug, "filename": filename}
+    access_token = str((submission or {}).get("access_token") or "").strip()
+    if access_token:
+        values["token"] = access_token
+    return url_for("documents.download_pdf", **values)
+
+
 def pdf_exists(slug: str, filename: str) -> bool:
     return storage.exists(f"{app.config['NEXTCLOUD_OUTPUT_DIR']}/{slug}/pdf/{filename}")
 

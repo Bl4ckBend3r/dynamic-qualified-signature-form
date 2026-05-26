@@ -5,7 +5,7 @@
 {% block content %}
 
     <div class="back-link">
-        <a href="{{ url_for('index') }}">← Powrót do listy formularzy</a>
+        <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
     </div>
 
     <div class="card">
@@ -15,7 +15,7 @@
             {% if form_definition.header_image %}
                 <div class="form-header-image">
                     <img
-                        src="{{ url_for('nextcloud_asset', asset_path=form_definition.header_image) }}"
+                        src="{{ url_for('documents.nextcloud_asset', asset_path=form_definition.header_image) }}"
                         alt="Zdjęcie formularza"
                         loading="lazy"
                     >
@@ -27,7 +27,7 @@
             {% endif %}
         </div>
 
-        <form method="post" action="{{ url_for('submit', slug=slug) }}" novalidate class="dynamic-form">
+        <form method="post" action="{{ url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">

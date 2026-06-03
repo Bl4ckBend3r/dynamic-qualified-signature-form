@@ -1,0 +1,59 @@
+{% extends "admin/base.html" %}
+{% block title %}Upload formularza{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Formularze</p>
+        <h1>Wgraj formularz</h1>
+    </div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrot</a>
+</div>
+<div class="admin-card">
+    <form method="post" enctype="multipart/form-data" class="admin-form">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <div class="admin-form-grid">
+            <label>
+                <span>Plik formularza</span>
+                <input type="file" name="form_file" accept="application/json,.json,text/html,.html,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required>
+                <small>Obslugiwane formaty: JSON, HTML, DOCX.</small>
+            </label>
+            <label>
+                <span>Nazwa formularza</span>
+                <input type="text" name="name" placeholder="np. Formularz rekrutacyjny">
+            </label>
+            <label>
+                <span>Slug</span>
+                <input type="text" name="slug" placeholder="np. formularz_rekrutacyjny">
+            </label>
+            <label>
+                <span>Kolejnosc sortowania</span>
+                <input type="number" name="sort_order" value="0">
+            </label>
+            <label>
+                <span>Etykieta projektu</span>
+                <input type="text" name="label_text" placeholder="np. PROJEKT 6.08">
+            </label>
+            <label>
+                <span>Kolor tekstu etykiety</span>
+                <input type="text" name="label_color" value="#b38d45">
+            </label>
+            <label>
+                <span>Tlo etykiety</span>
+                <input type="text" name="label_background" value="#f7f3ec">
+            </label>
+            <label class="admin-check">
+                <input type="checkbox" name="is_active" checked>
+                <span>Aktywny po wgraniu</span>
+            </label>
+            <label class="admin-check">
+                <input type="checkbox" name="is_public" checked>
+                <span>Widoczny publicznie</span>
+            </label>
+        </div>
+        <div class="admin-form-actions">
+            <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
+            <button class="admin-button" type="submit">Wgraj i wykryj pola</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

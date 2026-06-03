@@ -1,0 +1,15 @@
+{% extends "admin/base.html" %}
+{% block title %}Logowanie{% endblock %}
+{% block content %}
+<section class="form-card">
+    <h1>Logowanie do panelu</h1>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <label>E-mail</label>
+        <input type="email" name="email" value="{{ email|default('') }}" required>
+        <label>Haslo</label>
+        <input type="password" name="password" required>
+        <button class="btn-primary" type="submit">Zaloguj</button>
+    </form>
+</section>
+{% endblock %}

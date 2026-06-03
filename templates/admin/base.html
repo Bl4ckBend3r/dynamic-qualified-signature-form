@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Admin{% endblock %} - {{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body class="admin-body">
+    <div class="admin-layout">
+        <header class="admin-header">
+            <div class="admin-header-inner">
+                <a class="admin-brand" href="{{ url_for('admin.dashboard') }}">
+                    <span>Admin</span>
+                    <small>{{ app_name }}</small>
+                </a>
+                {% if g.admin_user %}
+                    <nav class="admin-nav" aria-label="Menu administracyjne">
+                        <a class="{% if admin_is_active('admin.dashboard') %}is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
+                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.form') %}is-active{% endif %}" href="{{ url_for('admin.forms_list') }}">Formularze</a>
+                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.submission') %}is-active{% endif %}" href="{{ url_for('admin.submissions_all') }}">Zgloszenia</a>
+                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.mail_template') %}is-active{% endif %}" href="{{ url_for('admin.mail_templates_index') }}">Szablony maili</a>
+                        {% if g.admin_user.role == "super_admin" %}
+                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.logo') %}is-active{% endif %}" href="{{ url_for('admin.logos_list') }}">Logo</a>
+                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Uzytkownicy</a>
+                        {% endif %}
+                        <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
+                    </nav>
+                {% endif %}
+            </div>
+        </header>
+        <main class="admin-main">
+            <div class="admin-container">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        <div class="admin-flash-stack">
+                            {% for category, message in messages %}
+                                <div class="admin-flash admin-flash-{{ category }}">{{ message }}</div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+</body>
+</html>

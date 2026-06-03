@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import logging
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -15,7 +16,11 @@ from form_loader import (
 )
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
+from services.file_metadata import record_submission_file
+from services.form_submission_mapper import build_submission_from_form, validate_required_submission_fields
 from services.process_service import build_initial_process_fields, build_legacy_process_fields
+
+logger = logging.getLogger(__name__)
 
 
 class SubmissionService:
@@ -42,7 +47,21 @@ class SubmissionService:
     def submit_form(self, form_slug: str, form_config: dict, request_form) -> dict:
         submission_id = str(uuid4())
         submission_data = extract_submission_data(form_config, request_form)
+        mapped_submission, map_meta = build_submission_from_form(
+            submission_data,
+            form_config,
+            include_metadata=True,
+        )
+        logger.info(
+            "Mapowanie formularza %s: pola zapisane=%s; pola pominiete=%s.",
+            form_slug,
+            ", ".join(map_meta["saved_fields"]) or "-",
+            ", ".join(map_meta["skipped_fields"]) or "-",
+        )
+
         errors = self._validate(form_config, submission_data)
+        mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
+        errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
         if errors:
             return {
                 "ok": False,
@@ -54,6 +73,20 @@ class SubmissionService:
 
         self.storage.ensure_form_output_structure(form_slug)
         pdf_filename = self.build_pdf_filename(form_slug, submission_id)
+        submission = self.create_submission(
+            form_slug,
+            form_config,
+            {
+                **submission_data,
+                "data_json": submission_data,
+                "pdf_filename": "",
+                "signed_pdf_filename": "",
+                "signature_status": "manual",
+                "signature_request_id": "mobywatel-manual",
+            },
+            submission_id=submission_id,
+        )
+
         pdf_context = {
             "form_definition": form_config,
             "submission_view": build_submission_view(form_config, submission_data),
@@ -76,21 +109,24 @@ class SubmissionService:
                 context=pdf_context,
                 output_path=tmp_pdf_path,
             )
-            self.storage.save_pdf(form_slug, pdf_filename, tmp_pdf_path.read_bytes())
+            pdf_bytes = tmp_pdf_path.read_bytes()
+            self.storage.save_pdf(form_slug, pdf_filename, pdf_bytes)
+            logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
         finally:
             tmp_pdf_path.unlink(missing_ok=True)
 
-        submission = self.create_submission(
-            form_slug,
-            form_config,
-            {
-                **submission_data,
-                "pdf_filename": pdf_filename,
-                "signed_pdf_filename": "",
-                "signature_status": "manual",
-                "signature_request_id": "mobywatel-manual",
-            },
+        self.submission_repository.update(submission_id, {"pdf_filename": pdf_filename})
+        submission["pdf_filename"] = pdf_filename
+        record_submission_file(
+            submission_repository=self.submission_repository,
             submission_id=submission_id,
+            form_slug=form_slug,
+            filename=pdf_filename,
+            storage=self.storage,
+            file_bytes=pdf_bytes,
+            document_id="form_submission",
+            document_type="",
+            signed=False,
         )
         if self.audit_log_service:
             self.audit_log_service.log_event("PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename})
@@ -139,6 +175,7 @@ class SubmissionService:
             **build_legacy_process_fields(),
         }
         self.submission_repository.create(submission)
+        logger.info("Zapis zgloszenia %s zakonczony sukcesem.", submission_id)
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
         if self.notification_service:
@@ -188,12 +225,16 @@ class SubmissionService:
         return {document.get("id") for document in documents if document.get("enabled", True)}
 
     def _resolve_pdf_image_url(self, form_config: dict) -> str | None:
-        image_value = form_config.get("header_image")
+        image_value = form_config.get("header_image") or form_config.get("logo_url")
         if not image_value:
             return None
         normalized = str(image_value).replace("\\", "/").lstrip("/")
+        if normalized.startswith(("http://", "https://")):
+            return normalized
         if normalized.startswith("static/"):
             normalized = normalized[len("static/"):]
+        if normalized.startswith("assets/"):
+            return request.url_root.rstrip("/") + "/" + normalized
         return request.url_root.rstrip("/") + "/static/" + normalized
 
     def _validate(self, form_config: dict, submission_data: dict) -> dict:

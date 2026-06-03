@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+{% block title %}Logo{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Biblioteka</p>
+        <h1>Logo</h1>
+    </div>
+</div>
+{% if g.admin_user.role == "super_admin" %}
+    <form method="post" enctype="multipart/form-data" class="admin-form-card admin-form admin-logo-upload">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <div class="admin-form-grid">
+            <div class="admin-field">
+                <label class="admin-field-label" for="logo-name">Nazwa</label>
+                <input id="logo-name" name="name" placeholder="np. Logo projektu">
+                <p class="admin-field-help">Nazwa będzie widoczna przy wyborze logo w formularzach i stopkach.</p>
+            </div>
+            <div class="admin-field">
+                <label class="admin-field-label" for="logo-file">Plik logo</label>
+                <input id="logo-file" type="file" name="logo_file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" required>
+                <p class="admin-field-help">Dozwolone są pliki graficzne obsługiwane przez przeglądarkę.</p>
+            </div>
+        </div>
+        <div class="admin-form-actions">
+            <button class="admin-button" type="submit">Dodaj logo</button>
+        </div>
+    </form>
+{% else %}
+    <div class="admin-preview-card admin-logo-library-note">
+        <p>Aktywne logo są dostępne jako biblioteka wyboru w formularzach i stopkach maili.</p>
+    </div>
+{% endif %}
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>Podgląd</th>
+                <th>Nazwa</th>
+                <th>Plik</th>
+                <th>Status</th>
+                <th>Data</th>
+                {% if g.admin_user.role == "super_admin" %}<th>Akcje</th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for logo in logos %}
+            <tr>
+                <td>
+                    <div class="admin-logo-preview admin-logo-preview-small">
+                        <img src="{{ url_for('admin.logo_asset', logo_id=logo.id) }}" alt="{{ logo.name }}">
+                    </div>
+                </td>
+                <td>{{ logo.name }}</td>
+                <td>{{ logo.filename }}</td>
+                <td><span class="admin-badge {% if logo.active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywne" if logo.active else "Nieaktywne" }}</span></td>
+                <td>{{ logo.created_at.strftime("%Y-%m-%d") if logo.created_at else "-" }}</td>
+                {% if g.admin_user.role == "super_admin" %}
+                    <td>
+                        <a class="admin-link-button" href="{{ url_for('admin.logo_edit', logo_id=logo.id) }}">Edytuj</a>
+                        <form method="post" action="{{ url_for('admin.logo_toggle', logo_id=logo.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                            <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if logo.active else "Aktywuj" }}</button>
+                        </form>
+                    </td>
+                {% endif %}
+            </tr>
+        {% else %}
+            <tr><td colspan="{{ 6 if g.admin_user.role == 'super_admin' else 5 }}">Brak logo.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

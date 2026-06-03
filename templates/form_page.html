@@ -10,6 +10,17 @@
 
     <div class="card">
         <div class="card-header">
+            {% if form_definition.logo_url %}
+                <div class="form-logo-row">
+                    <img class="form-logo" src="{{ form_definition.logo_url }}" alt="">
+                </div>
+            {% endif %}
+            {% if form_definition.label_text %}
+                <div
+                    class="project-label form-project-label"
+                    style="color: {{ form_definition.label_color or '#b38d45' }}; background: {{ form_definition.label_background or '#f7f3ec' }};"
+                >{{ form_definition.label_text }}</div>
+            {% endif %}
             <h2>{{ form_definition.title }}</h2>
 
             {% if form_definition.header_image %}

@@ -1,0 +1,48 @@
+{% extends "admin/base.html" %}
+{% block title %}Uzytkownicy{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Dostep</p>
+        <h1>Uzytkownicy</h1>
+    </div>
+    <a class="admin-button" href="{{ url_for('admin.user_edit') }}">Dodaj uzytkownika</a>
+</div>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead><tr><th>Email</th><th>Rola</th><th>Status</th><th>Data utworzenia</th><th>Akcje</th></tr></thead>
+        <tbody>
+        {% for user in users %}
+            <tr>
+                <td><strong>{{ user.email }}</strong></td>
+                <td>{{ user.role }}</td>
+                <td>
+                    {% if user.is_blocked %}
+                        <span class="admin-badge admin-badge-danger">Zablokowany</span>
+                    {% elif user.is_active %}
+                        <span class="admin-badge admin-badge-success">Aktywny</span>
+                    {% else %}
+                        <span class="admin-badge admin-badge-muted">Nieaktywny</span>
+                    {% endif %}
+                </td>
+                <td>{{ user.created_at.strftime("%Y-%m-%d") if user.created_at else "-" }}</td>
+                <td>
+                    <div class="admin-actions">
+                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edytuj</a>
+                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Przypisz formularze</a>
+                        {% if user.id != g.admin_user.id %}
+                            <form method="post" action="{{ url_for('admin.user_toggle_block', user_id=user.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                <button class="admin-link-button" type="submit">{{ "Odblokuj" if user.is_blocked else "Zablokuj" }}</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5">Brak uzytkownikow.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 
+import click
 from dotenv import load_dotenv
 from flask import Flask, current_app
 
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 def create_app(config_object=None, storage_override=None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_object or Config)
+    _apply_runtime_env_overrides(app, enabled=config_object is None)
     if os.getenv("TEMP_DIR"):
         app.config["TEMP_DIR"] = Path(os.getenv("TEMP_DIR", ""))
 
@@ -38,12 +40,25 @@ def create_app(config_object=None, storage_override=None) -> Flask:
 
     register_context_processors(app)
     register_blueprints(app)
+    register_cli_commands(app)
 
     logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
     logger.info("NEXTCLOUD_USERNAME=%s", app.config["NEXTCLOUD_USERNAME"])
     logger.info("NEXTCLOUD_FORMS_DIR=%s", app.config["NEXTCLOUD_FORMS_DIR"])
     logger.info("NEXTCLOUD_OUTPUT_DIR=%s", app.config["NEXTCLOUD_OUTPUT_DIR"])
     return app
+
+
+def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
+    if not enabled:
+        return
+
+    if "DATABASE_URL" in os.environ:
+        app.config["DATABASE_URL"] = os.getenv("DATABASE_URL", "").strip()
+    if "AUTO_CREATE_DB_SCHEMA" in os.environ:
+        app.config["AUTO_CREATE_DB_SCHEMA"] = os.getenv(
+            "AUTO_CREATE_DB_SCHEMA", "false"
+        ).strip().lower() in {"1", "true", "yes", "tak", "on"}
 
 
 def _register_legacy_extension_aliases(app: Flask, container) -> None:
@@ -64,6 +79,45 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(public_forms_bp)
     app.register_blueprint(documents_bp)
     app.register_blueprint(api_bp)
+    try:
+        from routes.admin import bp as admin_bp
+    except ModuleNotFoundError as exc:
+        if app.config.get("DATABASE_URL") or exc.name != "sqlalchemy":
+            raise
+        logger.warning("Panel /admin nie zostal zarejestrowany: brak SQLAlchemy.")
+    else:
+        app.register_blueprint(admin_bp)
+
+
+def register_cli_commands(app: Flask) -> None:
+    @app.cli.command("create-admin")
+    @click.option("--email", required=True)
+    @click.option("--password", required=True)
+    def create_admin(email: str, password: str) -> None:
+        from database import create_session_factory
+        from models import User
+        from werkzeug.security import generate_password_hash
+
+        database_url = app.config.get("DATABASE_URL")
+        if not database_url:
+            raise click.ClickException("DATABASE_URL is required.")
+        session_factory = create_session_factory(database_url)
+        normalized_email = email.strip().lower()
+        with session_factory() as db:
+            existing = db.query(User).filter(User.email == normalized_email).one_or_none()
+            if existing:
+                click.echo("Uzytkownik juz istnieje.")
+                return
+            user = User(
+                email=normalized_email,
+                password_hash=generate_password_hash(password),
+                role="super_admin",
+                is_active=True,
+                is_blocked=False,
+            )
+            db.add(user)
+            db.commit()
+        click.echo("Utworzono uzytkownika super_admin.")
 
 
 def register_context_processors(app: Flask) -> None:

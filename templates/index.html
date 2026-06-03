@@ -20,8 +20,14 @@
                 {% endif %}
 
                 <div class="form-tile__content">
-                    {% if loop.first %}
-                        <div class="form-tile__eyebrow">Projekt 6.08</div>
+                    {% if item.logo_url %}
+                        <img class="form-tile__logo" src="{{ item.logo_url }}" alt="">
+                    {% endif %}
+                    {% if item.label_text %}
+                        <div
+                            class="form-tile__eyebrow project-label"
+                            style="color: {{ item.label_color or '#b38d45' }}; background: {{ item.label_background or '#f7f3ec' }};"
+                        >{{ item.label_text }}</div>
                     {% endif %}
                     <h3>{{ item.title }}</h3>
                     {% if loop.first %}

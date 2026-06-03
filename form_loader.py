@@ -202,17 +202,50 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
             continue
 
         if field_type == "checkbox":
-            data[field_name] = "Tak" if field_name in request_form else "Nie"
+            data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
         elif field_type == "training_selection":
-            data[field_name] = ",".join(request_form.getlist(field_name))
+            data[field_name] = ",".join(_getlist(request_form, field_name))
         else:
-            data[field_name] = request_form.get(field_name, "").strip()
+            data[field_name] = str(_get(request_form, field_name, "") or "").strip()
 
     signature = form_definition.get("signature", {})
     if signature.get("show_user_choice"):
-        data["signature_method"] = request_form.get("signature_method", "").strip()
+        data["signature_method"] = str(_get(request_form, "signature_method", "") or "").strip()
 
     return data
+
+
+def _get(request_data, key: str, default: Any = None) -> Any:
+    if hasattr(request_data, "get"):
+        return request_data.get(key, default)
+    return default
+
+
+def _getlist(request_data, key: str) -> list[str]:
+    if hasattr(request_data, "getlist"):
+        return [str(item).strip() for item in request_data.getlist(key) if str(item).strip()]
+    value = _get(request_data, key, [])
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value in (None, ""):
+        return []
+    return [str(value).strip()]
+
+
+def _is_checked(request_data, key: str) -> bool:
+    if hasattr(request_data, "getlist"):
+        values = request_data.getlist(key)
+        if not values:
+            return False
+        return any(str(value).strip().lower() not in {"", "0", "false", "nie", "no", "off"} for value in values)
+    if key not in request_data:
+        return False
+    value = _get(request_data, key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list):
+        return any(str(item).strip().lower() in {"1", "true", "tak", "yes", "on", "checked"} for item in value)
+    return str(value or "").strip().lower() in {"1", "true", "tak", "yes", "on", "checked"}
 
 
 def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:

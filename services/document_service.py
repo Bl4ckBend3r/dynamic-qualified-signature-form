@@ -12,6 +12,7 @@ from pdf_generator import generate_pdf, generate_pdf_from_html
 from form_loader import build_consents_view, build_submission_view
 from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
+from services.file_metadata import record_submission_file
 from services.process_service import ProcessStatus, is_agreement_required
 
 
@@ -135,6 +136,18 @@ class DocumentService:
             document_type=self._storage_document_type(document_id),
             signed=False,
         )
+        current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
+        record_submission_file(
+            submission_repository=self.submission_repository,
+            submission_id=submission_id,
+            form_slug=slug,
+            filename=filename,
+            storage=self.storage,
+            file_bytes=document_bytes,
+            document_id=document_id,
+            document_type=self._storage_document_type(document_id) or "",
+            signed=False,
+        )
         updates = self._generated_updates(document_id, filename)
         self._update_submission(submission, updates)
         self._audit("DOCUMENT_GENERATED", submission, metadata={"document_id": document_id, "filename": filename})
@@ -217,6 +230,18 @@ class DocumentService:
                 document_type=self._storage_document_type(document_id),
                 signed=False,
             )
+            current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
+            record_submission_file(
+                submission_repository=self.submission_repository,
+                submission_id=submission_id,
+                form_slug=slug,
+                filename=filename,
+                storage=self.storage,
+                file_bytes=document_bytes,
+                document_id=document_id,
+                document_type=self._storage_document_type(document_id) or "",
+                signed=False,
+            )
             generated_documents.append(
                 {
                     "id": str(item_id),
@@ -284,6 +309,18 @@ class DocumentService:
                 signed_filename,
                 uploaded_bytes,
                 document_type=self._storage_document_type(document_id),
+                signed=True,
+            )
+            current_app.logger.info("Upload podpisanego dokumentu do Nextcloud zakonczony sukcesem: %s", signed_filename)
+            record_submission_file(
+                submission_repository=self.submission_repository,
+                submission_id=self._submission_id(submission),
+                form_slug=slug,
+                filename=signed_filename,
+                storage=self.storage,
+                file_bytes=uploaded_bytes,
+                document_id=document_id,
+                document_type=self._storage_document_type(document_id) or "",
                 signed=True,
             )
 
@@ -387,12 +424,16 @@ class DocumentService:
         return template_html
 
     def resolve_pdf_image_url(self, form_definition: dict) -> str | None:
-        image_value = form_definition.get("header_image")
+        image_value = form_definition.get("header_image") or form_definition.get("logo_url")
         if not image_value:
             return None
         normalized = str(image_value).replace("\\", "/").lstrip("/")
+        if normalized.startswith(("http://", "https://")):
+            return normalized
         if normalized.startswith("static/"):
             normalized = normalized[len("static/"):]
+        if normalized.startswith("assets/"):
+            return request.url_root.rstrip("/") + "/" + normalized
         return request.url_root.rstrip("/") + "/static/" + normalized
 
     def build_document_number(

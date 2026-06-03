@@ -1,0 +1,83 @@
+{% extends "admin/base.html" %}
+{% block title %}Pola formularza{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Pola formularza</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Ustawienia</a>
+    </div>
+</div>
+<form method="post" class="admin-card">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Kolejnosc</th>
+                    <th>Nazwa pola</th>
+                    <th>Etykieta</th>
+                    <th>Typ</th>
+                    <th>Opcje</th>
+                    <th>Wymagane</th>
+                    <th>Sekcja</th>
+                    <th>Akcje</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for field in fields %}
+                <tr>
+                    <td><input class="admin-input-small" name="field_{{ field.id }}_sort_order" value="{{ field.sort_order }}" inputmode="numeric"></td>
+                    <td><code>{{ field.name }}</code></td>
+                    <td><input name="field_{{ field.id }}_label" value="{{ field.label }}"></td>
+                    <td>
+                        <select name="field_{{ field.id }}_type">
+                            {% for option in field_types %}
+                                <option value="{{ option }}" {% if field.type == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td><textarea class="admin-textarea-small" name="field_{{ field.id }}_options" placeholder="Jedna opcja w linii">{{ field_options_text(field) }}</textarea></td>
+                    <td>
+                        <label class="admin-check compact"><input type="checkbox" name="field_{{ field.id }}_required" {% if field.required %}checked{% endif %}><span>Tak</span></label>
+                    </td>
+                    <td><input name="field_{{ field.id }}_section" value="{{ field.section }}"></td>
+                    <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usun pole</button></td>
+                </tr>
+            {% else %}
+                <tr><td colspan="8">Brak aktywnych pol.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="admin-section">
+        <h2>Dodaj pole</h2>
+        <div class="admin-form-grid">
+            <label><span>Nazwa pola</span><input name="new_name" placeholder="np. numer_telefonu"></label>
+            <label><span>Etykieta</span><input name="new_label" placeholder="np. Numer telefonu"></label>
+            <label>
+                <span>Typ</span>
+                <select name="new_type">
+                    {% for option in field_types %}
+                        <option value="{{ option }}">{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label><span>Kolejnosc</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
+            <label><span>Sekcja</span><input name="new_section"></label>
+            <label class="admin-check"><input type="checkbox" name="new_required"><span>Wymagane</span></label>
+            <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox mozna uzyc value|label."></textarea></label>
+        </div>
+        <div class="admin-form-actions">
+            <button class="admin-button-secondary" type="submit" name="action" value="add">Dodaj pole</button>
+        </div>
+    </div>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
+        <button class="admin-button" type="submit" name="action" value="save">Zapisz</button>
+    </div>
+</form>
+{% endblock %}

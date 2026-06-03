@@ -1,0 +1,42 @@
+{% extends "admin/base.html" %}
+{% block title %}Wyslij mail{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }} / {{ submission.submission_id }}</p>
+        <h1>Wyslij mail</h1>
+    </div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Powrot</a>
+</div>
+<form method="post" class="admin-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-form-grid">
+        <label><span>Adresat</span><input name="to_email" value="{{ submission.email }}" required></label>
+        <label>
+            <span>Szablon</span>
+            <select name="template_id">
+                <option value="">Bez szablonu</option>
+                {% for template in templates %}
+                    <option value="{{ template.id }}">{{ template.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="admin-form-wide"><span>Temat</span><input name="subject" value=""></label>
+        <label class="admin-form-wide"><span>Tresc HTML</span><textarea name="html_body" rows="12"></textarea></label>
+        <label class="admin-form-wide"><span>Tresc TXT</span><textarea name="text_body" rows="6"></textarea></label>
+        <label>
+            <span>Stopka</span>
+            <select name="footer_id">
+                <option value="">Bez stopki</option>
+                {% for footer in footers %}
+                    <option value="{{ footer.id }}" {% if footer.is_default %}selected{% endif %}>{{ footer.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Anuluj</a>
+        <button class="admin-button" type="submit">Wyslij</button>
+    </div>
+</form>
+{% endblock %}

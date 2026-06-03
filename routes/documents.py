@@ -13,6 +13,7 @@ from werkzeug.exceptions import HTTPException
 import legacy_app
 from form_loader import extract_submission_data, validate_submission
 from services.document_service import DocumentType, parse_json_list, serialize_json_list
+from services.file_metadata import record_submission_file
 from services.process_service import build_process_state
 from signature_verifier import verify_signed_pdf
 
@@ -388,7 +389,19 @@ def upload_signed_pdf(slug: str, submission_id: str):
             return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
 
         storage().save_pdf(slug, signed_pdf_filename, uploaded_bytes, signed=True)
+        logger.info("Upload podpisanego PDF do Nextcloud zakonczony sukcesem: %s", signed_pdf_filename)
         get_services().submission_repository.update(submission_id, {"signed_pdf_filename": signed_pdf_filename})
+        record_submission_file(
+            submission_repository=get_services().submission_repository,
+            submission_id=submission_id,
+            form_slug=slug,
+            filename=signed_pdf_filename,
+            storage=storage(),
+            file_bytes=uploaded_bytes,
+            document_id="form_submission",
+            document_type="",
+            signed=True,
+        )
         flash("Wykryto poprawny podpis Szafir / KIR.", "success")
         return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
     except Exception as exc:

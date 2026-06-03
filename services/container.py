@@ -5,7 +5,7 @@ from pathlib import Path
 
 from repositories.audit_log_repository import StorageAuditLogRepository
 from repositories.storage_repository import StorageRepository
-from repositories.submission_repository import CsvSubmissionRepository
+from repositories.submission_repository import CsvSubmissionRepository, PostgresSubmissionRepository
 from services.access_token_service import AccessTokenService
 from services.audit_log_service import AuditLogService
 from services.document_service import DocumentService
@@ -21,7 +21,7 @@ from services.workflow_service import WorkflowService
 class ServiceContainer:
     storage: object
     storage_repository: StorageRepository
-    submission_repository: CsvSubmissionRepository
+    submission_repository: object
     submission_service: SubmissionService
     workflow_service: WorkflowService
     document_service: DocumentService
@@ -44,7 +44,15 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         app.logger.warning("Nie udało się odczytać listy formularzy podczas startu aplikacji.", exc_info=True)
 
     storage_repository = StorageRepository(storage)
-    submission_repository = CsvSubmissionRepository(storage, form_slugs=form_slugs)
+    if app.config.get("DATABASE_URL"):
+        submission_repository = PostgresSubmissionRepository(
+            app.config["DATABASE_URL"],
+            create_schema=bool(app.config.get("AUTO_CREATE_DB_SCHEMA")),
+        )
+        app.logger.info("Submission repository: PostgreSQL")
+    else:
+        submission_repository = CsvSubmissionRepository(storage, form_slugs=form_slugs)
+        app.logger.info("Submission repository: CSV/Nextcloud")
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
     workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)

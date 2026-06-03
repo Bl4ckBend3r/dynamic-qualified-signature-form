@@ -1,0 +1,46 @@
+{% extends "admin/base.html" %}
+{% block title %}Szablony maili{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Szablony maili</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_html', form_id=form.id) }}">Importuj HTML</a>
+        <a class="admin-button" href="{{ url_for('admin.mail_template_edit', form_id=form.id) }}">Dodaj szablon</a>
+    </div>
+</div>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>Nazwa</th>
+                <th>Typ</th>
+                <th>Tytul</th>
+                <th>Temat</th>
+                <th>Trigger event</th>
+                <th>Status/decyzja</th>
+                <th>Aktywny</th>
+                <th>Akcje</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for template in templates %}
+            <tr>
+                <td>{{ template.name }}</td>
+                <td>{{ template.mail_type }}</td>
+                <td>{{ template.content_title or "-" }}</td>
+                <td>{{ template.subject }}</td>
+                <td>{{ template.trigger_event or "-" }}</td>
+                <td>{{ template.trigger_status or "-" }} / {{ template.trigger_decision or "-" }}{% if template.is_default_for_status %} <span class="admin-badge">domyslny</span>{% endif %}</td>
+                <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if template.is_active else "Nie" }}</span></td>
+                <td><a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="8">Brak szablonow.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

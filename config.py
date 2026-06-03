@@ -3,7 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -40,6 +40,8 @@ class Config:
 
     FORM_DEFINITION_PATH = FORMS_DIR / os.getenv("FORM_JSON_FILE", "sample_form.json")
     CSV_FILENAME = os.getenv("CSV_FILENAME", "dane.csv")
+    DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+    AUTO_CREATE_DB_SCHEMA = _env_bool("AUTO_CREATE_DB_SCHEMA", "false")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()

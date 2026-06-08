@@ -171,12 +171,11 @@ def test_regular_admin_cannot_delete_form(admin_app, admin_client):
 
 
 def test_workflow_status_tile_has_no_border():
-    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
-    status_block = template.split(".status-tile {", 1)[1].split("}", 1)[0]
+    stylesheet = Path("static/documents_to_sign.css").read_text(encoding="utf-8")
+    status_block = stylesheet.split(".status-tile {", 1)[1].split("}", 1)[0]
 
     assert "border: 0;" in status_block
     assert "border: 1px solid var(--border)" not in status_block
-
 
 def test_super_admin_delete_removes_form_from_database(admin_app, admin_client):
     create_user(admin_app)

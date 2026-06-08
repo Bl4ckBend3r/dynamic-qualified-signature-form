@@ -153,6 +153,34 @@ Uruchomiona komenda:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
+## Etap P2.1 — frontend, admin form service i plan migracji
+
+Wykonano bez zmiany publicznych URL-i, bez migracji bazy i bez usuwania `legacy_app.py`:
+
+- dodano bloki `extra_css` i `extra_js` w `templates/base.html`,
+- dodano `static/documents_to_sign.css` z wydzielonymi stylami widoku dokumentow,
+- dodano `static/documents_to_sign.js` z logika statusu, kafli, podmiany karty po pobraniu oraz drag-and-drop uploadu,
+- nie usunieto jeszcze inline blokow z `templates/documents_to_sign.html`; zostalo to rozdzielone na osobny template-only commit opisany w `FRONTEND_SPLIT_PLAN.md`,
+- dodano `services/admin_form_service.py` z helperami formularzy admina,
+- `routes/admin.py` zachowuje kompatybilnosc i nie zmienia endpointow; pelne przepiecie na nowy serwis zostalo opisane w `ADMIN_SPLIT_PLAN.md`,
+- dodano `MIGRATION_PLAN.md` dla modelu `FormSubmission` i pol legacy,
+- zaktualizowano `ADMIN_SPLIT_PLAN.md` oraz `FRONTEND_SPLIT_PLAN.md`,
+- nie usuwano artefaktow repozytorium i nie zmieniano bazy danych.
+
+Testy dodane lub zmienione w P2.1:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_admin_form_service.py` | Parser HTML/JSON, wykrywanie pol, normalizacja stage, budowa definicji workflow i synchronizacja pol. |
+| `tests/test_p2_1_frontend_assets.py` | Bloki `extra_css`/`extra_js`, istnienie plikow CSS/JS i kontrola braku lokalnych list statusow w nowym JS. |
+| `tests/test_migration_plan.py` | Obecnosc wymaganych sekcji i pol legacy w `MIGRATION_PLAN.md`. |
+
+Wynik testow P2.1:
+
+```text
+Nie uruchomiono w tej sesji — brak lokalnego checkoutu repozytorium przez narzedzie GitHub. Zmiany zostaly zapisane bezposrednio przez GitHub Contents API.
+```
+
 ## Etap P1.2 — ograniczenie legacy i pierwsze wydzielenia
 
 Wykonano bez zmiany publicznych URL-i, bez migracji bazy i bez usuwania `legacy_app.py`:
@@ -201,11 +229,11 @@ Uruchomiona komenda:
 
 | Priorytet | Zadanie |
 |---|---|
-| P1 | Utworzenie pelnego `services/status_catalog.py` i przepiecie statusow z `statuses.py`, `process_service.py`, `workflow_service.py`, admina i frontendu. |
-| P1 | Usuniecie zaleznosci nowych modulow od `legacy_app.py`. |
+| P1 | Usuniecie pozostalych zaleznosci nowych modulow od `legacy_app.py`. |
 | P1 | Podzial `routes/admin.py` na mniejsze blueprinty i serwisy. |
-| P1 | Centralizacja maili w jednym mechanizmie dispatch. |
+| P1 | Centralizacja maili w jednym mechanizmie dispatch razem z logowaniem `EmailLog`. |
 | P1 | Podzial `services/document_service.py` na mniejsze serwisy dokumentowe. |
-| P2 | Wydzielenie inline CSS/JS z `templates/documents_to_sign.html`. |
-| P2 | Przygotowanie `MIGRATION_PLAN.md` dla `FormSubmission` i pol legacy. |
+| P2 | Przepiecie `routes/admin.py` na `services/admin_form_service.py`. |
+| P2 | Usuniecie inline CSS/JS z `templates/documents_to_sign.html` po zaladowaniu nowych assetow przez bloki `extra_css` i `extra_js`. |
+| P2 | Wykonanie migracji `FormSubmission` wedlug `MIGRATION_PLAN.md`. |
 | P3 | Porzadki repozytorium: `.coverage`, `.pytest_cache/`, `tmp/logos/`, `output/` po potwierdzeniu, ze nie sa fixture. |

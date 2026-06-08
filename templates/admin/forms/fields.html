@@ -23,6 +23,7 @@
                     <th>Typ</th>
                     <th>Opcje</th>
                     <th>Wymagane</th>
+                    <th>Etap</th>
                     <th>Sekcja</th>
                     <th>Akcje</th>
                 </tr>
@@ -44,11 +45,18 @@
                     <td>
                         <label class="admin-check compact"><input type="checkbox" name="field_{{ field.id }}_required" {% if field.required %}checked{% endif %}><span>Tak</span></label>
                     </td>
+                    <td>
+                        <select name="field_{{ field.id }}_stage">
+                            {% for value, label in field_stages %}
+                                <option value="{{ value }}" {% if field.stage == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
                     <td><input name="field_{{ field.id }}_section" value="{{ field.section }}"></td>
                     <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usun pole</button></td>
                 </tr>
             {% else %}
-                <tr><td colspan="8">Brak aktywnych pol.</td></tr>
+                <tr><td colspan="9">Brak aktywnych pol.</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -68,6 +76,14 @@
             </label>
             <label><span>Kolejnosc</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
             <label><span>Sekcja</span><input name="new_section"></label>
+            <label>
+                <span>Etap</span>
+                <select name="new_stage">
+                    {% for value, label in field_stages %}
+                        <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
             <label class="admin-check"><input type="checkbox" name="new_required"><span>Wymagane</span></label>
             <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox mozna uzyc value|label."></textarea></label>
         </div>

@@ -96,6 +96,9 @@ def create_services(app, storage_override=None) -> ServiceContainer:
 def install_legacy_helpers(flask_app, container: ServiceContainer) -> None:
     """Keep legacy helper functions usable while routes move to services."""
 
+    # See LEGACY_DEPENDENCIES.md. Runtime routes no longer use legacy training
+    # selection helpers, but tests and remaining document-generation helpers
+    # still require these injected legacy globals during the migration window.
     import legacy_app
 
     legacy_app.app = flask_app

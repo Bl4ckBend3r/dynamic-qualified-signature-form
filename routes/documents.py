@@ -3,18 +3,22 @@ from __future__ import annotations
 import logging
 import mimetypes
 import tempfile
+import json
 from datetime import date
 from io import BytesIO
 from pathlib import Path
 
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
-
-import legacy_app
-from form_loader import extract_submission_data, validate_submission
+from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, form_definition_for_stage, has_additional_fields_after_acceptance, extract_submission_data, validate_submission
+from services.process_service import ProcessStatus
 from services.document_service import DocumentType, parse_json_list, serialize_json_list
 from services.file_metadata import record_submission_file
 from services.process_service import build_process_state
+from services.status_catalog import build_status_view
+from services.training_agreement_service import extract_training_selection, get_training_selection_field
+from services.upload_validation import UploadValidationError, validate_pdf_upload, validate_upload_filename
+from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
 
 logger = logging.getLogger(__name__)
@@ -139,6 +143,24 @@ def build_declaration_form_definition(declaration_config: dict) -> dict:
     }
 
 
+def build_additional_fields_definition(form_config: dict) -> dict:
+    definition = form_definition_for_stage(form_config, FIELD_STAGE_AFTER_ACCEPTANCE)
+    return {
+        **definition,
+        "title": "Dodatkowe informacje po akceptacji wniosku",
+        "description": "Wniosek został zaakceptowany. Uzupełnij dodatkowe informacje, aby pobrać deklarację.",
+        "submit_label": "Zapisz dodatkowe informacje",
+    }
+
+
+def additional_fields_completed(row: dict) -> bool:
+    return str(row.get("additional_fields_completed") or "").strip().lower() == "tak"
+
+
+def requires_additional_fields(form_config: dict, row: dict) -> bool:
+    return has_additional_fields_after_acceptance(form_config) and not additional_fields_completed(row)
+
+
 def form_config_with_training_adapter(form_config: dict) -> tuple[dict, dict]:
     document_service = get_services().document_service
     training_document = document_service.get_document_by_id(form_config, DocumentType.TRAINING_AGREEMENT)
@@ -226,6 +248,9 @@ def declaration_form(slug: str, submission_id: str):
     form_config = get_form_config(slug)
     if not form_config:
         abort(404)
+    if requires_additional_fields(form_config, submission["row"]):
+        flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
+        return redirect(documents_to_sign_url(submission_id))
 
     declaration_config = get_document(form_config, DocumentType.DECLARATION)
     if not declaration_config.get("enabled"):
@@ -240,10 +265,10 @@ def declaration_form(slug: str, submission_id: str):
         declaration_data = extract_submission_data(declaration_definition, request.form)
         values.update(declaration_data)
         errors = validate_submission(declaration_definition, declaration_data)
-        training_field = legacy_app.get_training_selection_field(form_config)
+        training_field = get_training_selection_field(form_config)
 
         if training_field:
-            selected_trainings, training_error = legacy_app.extract_training_selection(training_field, request.form)
+            selected_trainings, training_error = extract_training_selection(training_field, request.form)
             declaration_data["selected_trainings"] = serialize_json_list(selected_trainings)
             values["selected_trainings"] = declaration_data["selected_trainings"]
             if training_error:
@@ -277,6 +302,60 @@ def declaration_form(slug: str, submission_id: str):
         errors=errors,
         values=values,
     )
+
+
+@bp.post("/additional-fields/<slug>/<submission_id>")
+def save_additional_fields(slug: str, submission_id: str):
+    services = get_services()
+    submission = get_submission_context(submission_id)
+    if not submission or submission["form_slug"] != slug:
+        flash("Nie znaleziono wniosku.", "error")
+        return redirect(documents_to_sign_url(submission_id))
+    if not submission["can_sign_documents"]:
+        flash("Wniosek nie został jeszcze zaakceptowany przez urzędnika.", "error")
+        return redirect(documents_to_sign_url(submission_id))
+    form_config = get_form_config(slug)
+    if not form_config:
+        abort(404)
+    if not has_additional_fields_after_acceptance(form_config):
+        flash("Ten formularz nie wymaga dodatkowych informacji.", "info")
+        return redirect(documents_to_sign_url(submission_id))
+
+    additional_definition = build_additional_fields_definition(form_config)
+    additional_data = extract_submission_data(additional_definition, request.form)
+    errors = validate_submission(additional_definition, additional_data)
+    if errors:
+        flash("Dodatkowe informacje zawierają błędy. Popraw wskazane pola.", "error")
+        return render_template(
+            "documents_to_sign.html",
+            submission_id=submission_id,
+            acceptance_value="Tak",
+            errors={},
+            result=build_documents_to_sign_result(
+                submission_id,
+                submission,
+                additional_errors=errors,
+                additional_values={**submission["row"], **additional_data},
+            ),
+        ), 400
+
+    data_json = dict(submission["row"].get("data_json") or {})
+    if isinstance(data_json, str):
+        try:
+            data_json = json.loads(data_json)
+        except json.JSONDecodeError:
+            data_json = {}
+    data_json.update(additional_data)
+    updates = {
+        **additional_data,
+        "data_json": data_json,
+        "additional_fields_completed": "Tak",
+        "process_status": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
+        "workflow_step": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
+    }
+    services.submission_repository.update(submission_id, updates)
+    flash("Dodatkowe informacje zostały zapisane. Możesz pobrać deklarację.", "success")
+    return redirect(documents_to_sign_url(submission_id))
 
 
 @bp.post("/agreements/<slug>/<submission_id>/generate")
@@ -366,12 +445,13 @@ def upload_signed_pdf(slug: str, submission_id: str):
         if not uploaded_file or not uploaded_file.filename:
             flash("Nie wybrano pliku PDF.", "error")
             return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
-        if not uploaded_file.filename.lower().endswith(".pdf"):
-            flash("Dozwolony jest wyłącznie plik PDF.", "error")
-            return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
-
         signed_pdf_filename = get_services().submission_service.build_signed_pdf_filename(slug, submission_id)
         uploaded_bytes = uploaded_file.read()
+        try:
+            validate_pdf_upload(uploaded_file.filename, uploaded_bytes, uploaded_file.mimetype)
+        except UploadValidationError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=current_app.config["TEMP_DIR"]) as tmp_signed:
             tmp_signed_path = Path(tmp_signed.name)
             tmp_signed.write(uploaded_bytes)
@@ -463,9 +543,50 @@ def show_result(slug: str, submission_id: str):
     return render_template("result.html", result=result)
 
 
-def build_documents_to_sign_result(submission_id: str, submission: dict) -> dict:
+def build_documents_to_sign_result(
+    submission_id: str,
+    submission: dict,
+    additional_errors: dict | None = None,
+    additional_values: dict | None = None,
+) -> dict:
     services = get_services()
     form_config = get_form_config(submission["form_slug"]) or {}
+    row = submission["row"]
+    if requires_additional_fields(form_config, row):
+        raw_status = row.get("process_status") or ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
+        status_view = build_status_view(raw_status)
+        additional_definition = build_additional_fields_definition(form_config)
+        return {
+            "submission_id": submission_id,
+            "form_slug": submission["form_slug"],
+            "form_title": submission["form_title"],
+            "message": "Wniosek został zaakceptowany. Uzupełnij dodatkowe informacje, aby pobrać deklarację.",
+            "process_status": raw_status,
+            "current_status": status_view["current_status"],
+            "process_status_label": workflow_status_label(raw_status, form_config),
+            "is_final": status_view["is_final"],
+            "is_rejected": status_view["is_rejected"],
+            "requires_user_action": status_view["requires_user_action"],
+            "requires_officer_action": status_view["requires_officer_action"],
+            "can_upload": False,
+            "can_download": False,
+            "visible_steps": ["additional_fields"],
+            "visible_actions": ["save_additional_fields"],
+            "needs_additional_fields": True,
+            "additional_form_definition": additional_definition,
+            "additional_action_url": url_for("documents.save_additional_fields", slug=submission["form_slug"], submission_id=submission_id),
+            "additional_errors": additional_errors or {},
+            "additional_values": additional_values or row,
+            "declaration_filename": "",
+            "declaration_url": None,
+            "declaration_upload_url": None,
+            "declaration_signature_valid": False,
+            "agreement_generated": False,
+            "training_agreements": [],
+            "workflow": {"current_step": row.get("workflow_step") or "", "available_actions": [], "documents": []},
+            "available_actions": [],
+        }
+
     declaration = services.document_service.generate_document(
         submission,
         form_config,
@@ -475,6 +596,7 @@ def build_documents_to_sign_result(submission_id: str, submission: dict) -> dict
     refreshed_submission = get_submission_context(submission_id) or submission
     row = refreshed_submission["row"]
     process_state = build_process_state(row)
+    status_view = build_status_view(process_state.status.value)
     current_step = services.workflow_service.get_current_step(row, form_config)
     available_actions = services.workflow_service.get_available_actions(row, form_config)
     action_targets = {action.get("target_step") for action in available_actions}
@@ -495,6 +617,23 @@ def build_documents_to_sign_result(submission_id: str, submission: dict) -> dict
             else "Dla tego formularza deklaracja nie jest wymagana."
         ),
         "process_status": process_state.status.value,
+        "current_status": status_view["current_status"],
+        "process_status_label": workflow_status_label(process_state.status.value, form_config),
+        "is_final": status_view["is_final"],
+        "is_rejected": status_view["is_rejected"],
+        "requires_user_action": status_view["requires_user_action"],
+        "requires_officer_action": status_view["requires_officer_action"],
+        "can_upload": bool(process_state.can_sign_documents and not status_view["is_final"] and not status_view["is_rejected"]),
+        "can_download": bool(process_state.can_sign_documents and not status_view["is_rejected"]),
+        "visible_steps": [
+            step
+            for step, visible in {
+                "declaration": declaration.get("enabled"),
+                "agreement": process_state.can_generate_agreement or bool(training_agreements),
+            }.items()
+            if visible
+        ],
+        "visible_actions": [action.get("id") for action in available_actions if action.get("id")],
         "workflow": {
             "current_step": current_step,
             "available_actions": available_actions,
@@ -649,12 +788,17 @@ def documents_to_sign():
 def download_pdf(slug: str, filename: str):
     services = get_services()
     try:
+        validate_upload_filename(filename, allowed_suffixes={".pdf"})
         submission = services.submission_repository.find_by_pdf(slug, filename)
         if not submission:
             abort(404)
+        form_config = get_form_config(slug) or {}
+        if filename == str(submission.get("declaration_filename") or "") and requires_additional_fields(form_config, submission):
+            flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
+            abort(403)
         if not services.document_service.verify_download_token(submission, request.args.get("token")):
             abort(403)
-        pdf_bytes = storage().get_pdf_bytes(slug, filename)
+        pdf_bytes = services.document_service.read_document_bytes_for_download(submission, filename, signed=False)
         services.audit_log_service.log_event(
             "DOCUMENT_DOWNLOADED",
             submission.get("submission_id", ""),
@@ -678,12 +822,13 @@ def download_pdf(slug: str, filename: str):
 def download_signed_pdf(slug: str, filename: str):
     services = get_services()
     try:
+        validate_upload_filename(filename, allowed_suffixes={".pdf"})
         submission = services.submission_repository.find_by_pdf(slug, filename)
         if not submission:
             abort(404)
         if not services.document_service.verify_download_token(submission, request.args.get("token")):
             abort(403)
-        pdf_bytes = storage().get_pdf_bytes(slug, filename)
+        pdf_bytes = services.document_service.read_document_bytes_for_download(submission, filename, signed=True)
         services.audit_log_service.log_event(
             "DOCUMENT_DOWNLOADED",
             submission.get("submission_id", ""),

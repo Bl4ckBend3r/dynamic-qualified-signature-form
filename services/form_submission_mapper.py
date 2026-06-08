@@ -128,6 +128,7 @@ FORM_FIELD_MAP: dict[str, str] = {
     "correction_required": "correction_required",
     "correction_message": "correction_message",
     "correction_fields": "correction_fields",
+    "additional_fields_completed": "additional_fields_completed",
     "correction_requested_at": "correction_requested_at",
     "correction_completed_at": "correction_completed_at",
     "data_json": "data_json",
@@ -230,6 +231,7 @@ STATUS_DEFAULTS: dict[str, Any] = {
     "agreement_success_email_sent": "",
     "agreement_success_email_sent_for": "",
     "requirements_rejection_email_sent": "",
+    "additional_fields_completed": "",
 }
 
 

@@ -10,6 +10,8 @@ class ProcessStatus(StrEnum):
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
     OFFICER_ACCEPTED = "OFFICER_ACCEPTED"
     OFFICER_REJECTED = "OFFICER_REJECTED"
+    ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS = "accepted_waiting_for_additional_fields"
+    ADDITIONAL_FIELDS_COMPLETED = "additional_fields_completed"
     DECLARATION_NOT_REQUIRED = "DECLARATION_NOT_REQUIRED"
     DECLARATION_READY = "DECLARATION_READY"
     DECLARATION_WAITING_FOR_SIGNATURE = "DECLARATION_WAITING_FOR_SIGNATURE"
@@ -102,10 +104,10 @@ def get_officer_decision(row: Mapping[str, Any]) -> OfficerDecision:
     )
     value = normalize_yes_no(raw_value)
 
-    if value == "TAK":
+    if value == "TAK" or normalize_text(raw_value).lower() == "accepted":
         return OfficerDecision.ACCEPTED
 
-    if value == "NIE":
+    if value == "NIE" or normalize_text(raw_value).lower() == "rejected":
         return OfficerDecision.REJECTED
 
     return OfficerDecision.MISSING
@@ -219,7 +221,7 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
     block_reason = get_agreement_block_reason(row)
 
     can_generate_declaration = (
-        status == ProcessStatus.OFFICER_ACCEPTED
+        status in {ProcessStatus.OFFICER_ACCEPTED, ProcessStatus.ADDITIONAL_FIELDS_COMPLETED}
         and is_declaration_required(row)
     )
     can_sign_documents = decision == OfficerDecision.ACCEPTED

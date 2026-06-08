@@ -33,6 +33,9 @@ class SubmissionRepository:
     def record_file(self, submission_id: str, metadata: dict) -> bool:
         return False
 
+    def get_file_metadata(self, submission_id: str, filename: str, signed: bool | None = None) -> dict | None:
+        return None
+
 
 class CsvSubmissionRepository(SubmissionRepository):
     """Repository adapter for the current CSV/Nextcloud storage implementation."""
@@ -291,6 +294,31 @@ class PostgresSubmissionRepository(SubmissionRepository):
             wanted,
         )
         return True
+
+    def get_file_metadata(self, submission_id: str, filename: str, signed: bool | None = None) -> dict | None:
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        wanted_submission_id = str(submission_id or "").strip()
+        wanted_filename = Path(filename).name
+        if not wanted_submission_id or not wanted_filename:
+            return None
+
+        with self.session_factory() as session:
+            query = (
+                select(SubmissionFile)
+                .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                .where(SubmissionFile.filename == wanted_filename)
+            )
+            if signed is not None:
+                query = query.where(SubmissionFile.signed == bool(signed))
+            file_row = session.execute(query).scalar_one_or_none()
+            if not file_row:
+                return None
+            return {
+                column.name: getattr(file_row, column.name)
+                for column in file_row.__table__.columns
+            }
 
     def _model_values(self, mapped: dict, *, include_defaults: bool = True) -> dict:
         ignored = {"id"}

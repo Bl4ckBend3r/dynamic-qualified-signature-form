@@ -80,7 +80,7 @@
                 {% for field in fields[:6] %}
                     <td>{{ submission_value(submission, field.name) or "-" }}</td>
                 {% endfor %}
-                <td><span class="admin-badge">{{ submission.process_status }}</span></td>
+                <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
                 <td>
                     <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-inline-form">
                         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">

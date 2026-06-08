@@ -17,6 +17,7 @@ def _env_list(name: str) -> list[str]:
 
 class Config:
     APP_NAME = "Formularze Lubuskie"
+    ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
 
@@ -58,3 +59,10 @@ class Config:
     SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "30"))
 
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
+
+    @classmethod
+    def validate(cls) -> None:
+        production_like = str(getattr(cls, "ENV", "")).strip().lower() == "production"
+        secret_key = str(getattr(cls, "SECRET_KEY", "") or "").strip()
+        if production_like and secret_key in {"", "change-me-in-production"}:
+            raise RuntimeError("SECRET_KEY must be configured in production.")

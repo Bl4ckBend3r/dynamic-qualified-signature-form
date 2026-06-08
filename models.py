@@ -139,6 +139,7 @@ class FormSubmission(Base):
     correction_required: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     correction_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     correction_fields: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    additional_fields_completed: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     correction_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     correction_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -291,6 +292,7 @@ class FormField(Base):
     options: Mapped[dict | list] = mapped_column(JsonDict, default=list, nullable=False)
     default_value: Mapped[str] = mapped_column(Text, default="", nullable=False)
     section: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    stage: Mapped[str] = mapped_column(String(64), default="initial_submission", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

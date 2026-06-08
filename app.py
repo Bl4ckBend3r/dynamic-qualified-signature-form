@@ -28,6 +28,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_object or Config)
     _apply_runtime_env_overrides(app, enabled=config_object is None)
+    _validate_config(app)
     if os.getenv("TEMP_DIR"):
         app.config["TEMP_DIR"] = Path(os.getenv("TEMP_DIR", ""))
 
@@ -37,6 +38,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     app.extensions["services"] = container
     _register_legacy_extension_aliases(app, container)
     install_legacy_helpers(app, container)
+    register_template_filters(app)
 
     register_context_processors(app)
     register_blueprints(app)
@@ -59,6 +61,13 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
         app.config["AUTO_CREATE_DB_SCHEMA"] = os.getenv(
             "AUTO_CREATE_DB_SCHEMA", "false"
         ).strip().lower() in {"1", "true", "yes", "tak", "on"}
+
+
+def _validate_config(app: Flask) -> None:
+    production_like = str(app.config.get("ENV") or os.getenv("FLASK_ENV", "")).strip().lower() == "production"
+    secret_key = str(app.config.get("SECRET_KEY") or "").strip()
+    if production_like and secret_key in {"", "change-me-in-production"}:
+        raise RuntimeError("SECRET_KEY must be configured in production.")
 
 
 def _register_legacy_extension_aliases(app: Flask, container) -> None:
@@ -122,6 +131,12 @@ def register_cli_commands(app: Flask) -> None:
 
 def register_context_processors(app: Flask) -> None:
     app.context_processor(inject_globals)
+
+
+def register_template_filters(app: Flask) -> None:
+    from services.html_safety import sanitize_trusted_html
+
+    app.jinja_env.filters["trusted_html"] = sanitize_trusted_html
 
 
 def inject_globals():

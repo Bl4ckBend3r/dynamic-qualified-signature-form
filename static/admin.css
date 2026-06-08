@@ -168,6 +168,7 @@
 
 .admin-button,
 .admin-button-secondary,
+.admin-button-danger,
 .admin-link-button {
     min-height: 38px;
     border-radius: 8px;
@@ -194,6 +195,13 @@
     padding: 9px 14px;
 }
 
+.admin-button-danger {
+    border: 1px solid var(--danger);
+    background: var(--danger);
+    color: #fff;
+    padding: 9px 14px;
+}
+
 .admin-link-button {
     border: 0;
     background: transparent;
@@ -203,11 +211,20 @@
     font: inherit;
 }
 
+.admin-link-danger {
+    color: var(--danger);
+}
+
 .admin-button:hover,
 .admin-button-secondary:hover,
 .admin-link-button:hover,
 .admin-actions a:hover {
     color: var(--gold-dark);
+}
+
+.admin-button-danger:hover {
+    color: #fff;
+    background: #8f1d14;
 }
 
 .admin-empty-state {
@@ -398,6 +415,71 @@
 .admin-section h2 {
     margin: 0 0 12px;
     font-size: 1.2rem;
+}
+
+.admin-section-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.admin-section-heading p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.admin-workflow-editor {
+    display: grid;
+    gap: 16px;
+}
+
+.admin-trigger-help {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.admin-trigger-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    border-radius: 999px;
+    background: var(--surface-alt);
+    color: var(--navy);
+    padding: 6px 10px;
+    font-size: 0.82rem;
+    font-weight: 800;
+    cursor: help;
+}
+
+.admin-code-field textarea {
+    min-height: 260px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+.admin-html-template-fields {
+    display: grid;
+    gap: 16px;
+}
+
+.admin-validation-errors {
+    display: grid;
+    gap: 8px;
+    border-radius: 8px;
+    background: #fdecec;
+    color: var(--danger);
+    padding: 12px 14px;
+    font-weight: 700;
+}
+
+.admin-validation-errors p {
+    margin: 0;
 }
 
 .admin-form-section {
@@ -629,6 +711,47 @@
     color: var(--danger);
 }
 
+.admin-confirm-dialog {
+    border: 0;
+    border-radius: 8px;
+    padding: 0;
+    width: min(680px, calc(100% - 40px));
+    max-height: min(82vh, 560px);
+    overflow: visible;
+    box-shadow: 0 22px 70px rgba(29, 46, 91, 0.24);
+}
+
+.admin-confirm-dialog::backdrop {
+    background: rgba(29, 46, 91, 0.42);
+}
+
+.admin-confirm-dialog__box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    margin: 0;
+    padding: 56px 72px;
+}
+
+.admin-confirm-dialog__box h2,
+.admin-confirm-dialog__box p {
+    margin: 0;
+}
+
+.admin-confirm-dialog__box p {
+    color: var(--muted);
+    font-size: 1.02rem;
+    line-height: 1.65;
+    max-width: 52ch;
+}
+
+.admin-confirm-dialog .admin-form-actions {
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 18px;
+    padding-right: 0;
+}
+
 @media (max-width: 900px) {
     .admin-header-inner,
     .admin-page-title {
@@ -656,5 +779,9 @@
         align-items: stretch;
         grid-template-columns: 1fr;
         flex-direction: column;
+    }
+
+    .admin-confirm-dialog__box {
+        padding: 40px 32px;
     }
 }

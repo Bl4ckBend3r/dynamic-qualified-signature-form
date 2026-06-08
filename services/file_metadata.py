@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from services.document_naming_service import resolve_pdf_storage_path as build_pdf_storage_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,11 +59,10 @@ def resolve_pdf_storage_path(
         return storage.pdf_storage_path(slug, filename, document_type=document_type, signed=signed)
 
     output_dir = str(getattr(storage, "output_dir", "output")).strip("/") if storage else "output"
-    clean_filename = Path(filename).name
-    if document_type in {"declaration", "deklaracja"}:
-        signature_dir = "podpisane" if signed else "niepodpisane"
-        return f"{output_dir}/{slug}/pdf/deklaracja/{signature_dir}/{clean_filename}"
-    if document_type in {"agreement", "training_agreement", "umowa", "umowy"}:
-        signature_dir = "podpisane" if signed else "niepodpisane"
-        return f"{output_dir}/{slug}/pdf/umowy/{signature_dir}/{clean_filename}"
-    return f"{output_dir}/{slug}/pdf/{clean_filename}"
+    return build_pdf_storage_path(
+        output_dir=output_dir,
+        slug=slug,
+        filename=filename,
+        document_type=document_type,
+        signed=signed,
+    )

@@ -4,17 +4,34 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
+from form_loader import FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES
 
 logger = logging.getLogger(__name__)
+
+TRIGGER_DESCRIPTIONS = {
+    "application_submitted": "Uruchamiany po wysłaniu formularza przez użytkownika.",
+    "officer_accepted": "Uruchamiany po zaakceptowaniu wniosku przez urzędnika.",
+    "officer_rejected": "Uruchamiany po odrzuceniu wniosku przez urzędnika.",
+    "document_generated": "Uruchamiany po wygenerowaniu dokumentu.",
+    "document_uploaded": "Uruchamiany po wgraniu podpisanego dokumentu przez użytkownika.",
+    "contract_required": "Oznacza, że workflow wymaga obsługi umowy.",
+    "declaration_required": "Oznacza, że workflow wymaga obsługi deklaracji.",
+    "email_requested": "Uruchamiany, gdy workflow wymaga wysłania wiadomości e-mail.",
+    "additional_fields_completed": "Uruchamiany po uzupełnieniu przez użytkownika dodatkowych pól wymaganych po akceptacji wniosku.",
+}
 
 
 class FormConfigService:
     def normalize_form_config(self, raw_config: dict) -> dict:
         config = deepcopy(raw_config or {})
+        config["fields"] = self.normalize_fields_config(config.get("fields") or [])
         config["documents"] = self.normalize_documents_config(config)
         config["notifications"] = self.normalize_notifications_config(config)
         config["rules"] = self.normalize_rules_config(config)
-        return self.build_default_workflow_if_missing(config)
+        config = self.build_default_workflow_if_missing(config)
+        config["workflow"] = self.normalize_workflow_config(config.get("workflow") or {})
+        config["documents"] = self.ensure_required_document_configs(config["documents"], config["workflow"])
+        return config
 
     def list_forms(self, storage) -> list[dict]:
         forms = []
@@ -124,6 +141,21 @@ class FormConfigService:
             return []
         return [dict(rule) for rule in rules if isinstance(rule, Mapping)]
 
+    def normalize_fields_config(self, fields: list[dict]) -> list[dict]:
+        if not isinstance(fields, list):
+            return []
+        normalized_fields = []
+        for field in fields:
+            if not isinstance(field, Mapping):
+                continue
+            item = dict(field)
+            if item.get("id") and not item.get("name"):
+                item["name"] = item["id"]
+            if item.get("stage") not in SUPPORTED_FIELD_STAGES:
+                item["stage"] = FIELD_STAGE_INITIAL
+            normalized_fields.append(item)
+        return normalized_fields
+
     def build_default_workflow_if_missing(self, form_config: dict) -> dict:
         if isinstance(form_config.get("workflow"), Mapping):
             return form_config
@@ -221,6 +253,48 @@ class FormConfigService:
         )
         form_config["workflow"] = {"initial_step": "submission", "steps": steps}
         return form_config
+
+    def normalize_workflow_config(self, workflow: Mapping[str, Any]) -> dict:
+        normalized = dict(workflow or {})
+        normalized.setdefault("name", normalized.get("label") or "Workflow")
+        normalized["requires_declaration"] = bool(normalized.get("requires_declaration", False))
+        normalized["requires_contract"] = bool(normalized.get("requires_contract", False))
+        normalized.setdefault("declaration_template_html", "")
+        normalized.setdefault("contract_template_html", "")
+        steps = normalized.get("steps")
+        normalized["steps"] = [dict(step) for step in steps] if isinstance(steps, list) else []
+        return normalized
+
+    def ensure_required_document_configs(self, documents: list[dict], workflow: Mapping[str, Any]) -> list[dict]:
+        documents_by_id: dict[str, dict] = {}
+        order: list[str] = []
+        for index, document in enumerate(documents):
+            document_id = str(document.get("id") or "").strip()
+            key = document_id or f"__invalid_document_{index}"
+            documents_by_id[key] = dict(document)
+            order.append(key)
+
+        requirements = [
+            ("requires_declaration", "declaration", "Deklaracja", "declaration_template_html"),
+            ("requires_contract", "agreement", "Umowa", "contract_template_html"),
+        ]
+        for flag, document_id, label, html_key in requirements:
+            if document_id not in documents_by_id and workflow.get(flag):
+                documents_by_id[document_id] = {
+                    "id": document_id,
+                    "label": label,
+                    "kind": "generated_pdf",
+                    "enabled": True,
+                    "signature_required": True,
+                }
+                order.append(document_id)
+            if document_id in documents_by_id:
+                documents_by_id[document_id]["enabled"] = bool(documents_by_id[document_id].get("enabled", True))
+                template_html = str(workflow.get(html_key) or "").strip()
+                if template_html:
+                    documents_by_id[document_id]["template_html"] = template_html
+
+        return [self._normalize_document(documents_by_id[document_id]) for document_id in order]
 
     def _normalize_document(self, document: Mapping[str, Any]) -> dict:
         normalized = dict(document)

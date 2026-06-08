@@ -7,7 +7,7 @@ from flask import Blueprint, abort, current_app, flash, render_template, request
 from sqlalchemy import select
 
 from database import create_session_factory
-from form_loader import normalize_form_definition
+from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
 from models import Form, FormField, Logo
 from services.nextcloud_storage import NextcloudStorageError
 
@@ -55,7 +55,7 @@ def form_page(slug: str):
             "form_page.html",
             slug=slug,
             form_meta=form_meta,
-            form_definition=form_config,
+            form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
             values={},
         )
@@ -72,7 +72,7 @@ def form_page(slug: str):
         "form_page.html",
         slug=slug,
         form_meta=form_meta,
-        form_definition=form_config,
+        form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
         errors={},
         values={},
     )
@@ -96,14 +96,15 @@ def submit(slug: str):
 
     try:
         request_data = request.get_json(silent=True) if request.is_json else request.form
-        submission_result = services.submission_service.submit_form(slug, form_config, request_data or {})
+        initial_form_config = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
+        submission_result = services.submission_service.submit_form(slug, initial_form_config, request_data or {})
         if not submission_result["ok"]:
             flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
             return render_template(
                 "form_page.html",
                 slug=slug,
                 form_meta=form_meta,
-                form_definition=form_config,
+                form_definition=initial_form_config,
                 errors=submission_result["errors"],
                 values=submission_result["values"],
             ), 400
@@ -117,7 +118,7 @@ def submit(slug: str):
             "form_page.html",
             slug=slug,
             form_meta=form_meta,
-            form_definition=form_config,
+            form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
             values=request_data or request.form,
         ), 500
@@ -219,6 +220,7 @@ def form_fields_to_definition(fields: list[FormField], original_fields: dict[str
                 "required": bool(field.required),
                 "options": normalize_field_options(field.type, field.options),
                 "default": field.default_value,
+                "stage": field.stage or FIELD_STAGE_INITIAL,
             }
         )
         rendered_fields.append(field_config)

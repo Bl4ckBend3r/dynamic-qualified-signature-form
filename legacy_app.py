@@ -57,6 +57,11 @@ from services.process_service import (
     is_agreement_required,
     should_send_officer_decision_email,
 )
+from services.training_agreement_service import (
+    build_training_agreement_number as service_build_training_agreement_number,
+    extract_training_selection as service_extract_training_selection,
+    get_training_selection_field as service_get_training_selection_field,
+)
 
 load_dotenv()
 
@@ -321,14 +326,11 @@ def serialize_json_list(items: list[dict]) -> str:
 
 
 def get_training_selection_field(form_definition: dict) -> dict | None:
-    declaration_config = get_document_config(form_definition, DocumentType.DECLARATION)
-    for field in declaration_config.get("fields") or []:
-        if field.get("type") == "training_selection":
-            return field
-    return None
+    return service_get_training_selection_field(form_definition)
 
 
 def extract_training_selection(field: dict, request_form) -> tuple[list[dict], str | None]:
+    return service_extract_training_selection(field, request_form)
     selected_ids = {normalize_training_id(value) for value in request_form.getlist(field.get("name", ""))}
     catalog = field.get("catalog") or []
     trainings = []
@@ -388,13 +390,7 @@ def build_training_agreement_number(
     generated_date: str,
     config: dict,
 ) -> str:
-    numbering = config.get("numbering") or {}
-    pattern = numbering.get("number_pattern") or "{submission_id}/{agreement_sequence}/{generated_date}"
-    return pattern.format(
-        submission_id=submission_id,
-        agreement_sequence=sequence,
-        generated_date=generated_date,
-    )
+    return service_build_training_agreement_number(submission_id, sequence, generated_date, config)
 
 
 def build_training_agreement_filename(pattern: str, row: dict, training: dict, sequence: int) -> str:

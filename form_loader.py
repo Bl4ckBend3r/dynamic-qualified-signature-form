@@ -22,6 +22,10 @@ SUPPORTED_FIELD_TYPES = {
     "training_selection",
 }
 
+FIELD_STAGE_INITIAL = "initial_submission"
+FIELD_STAGE_AFTER_ACCEPTANCE = "after_officer_acceptance"
+SUPPORTED_FIELD_STAGES = {FIELD_STAGE_INITIAL, FIELD_STAGE_AFTER_ACCEPTANCE}
+
 ALLOWED_SIGNATURE_MODES = {
     "none",
     "qualified",
@@ -177,6 +181,8 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
     normalized = normalize_signature_config(normalized)
 
     for field in normalized["fields"]:
+        if field.get("id") and not field.get("name"):
+            field["name"] = field["id"]
         field.setdefault("label", "")
         field.setdefault("placeholder", "")
         field.setdefault("required", False)
@@ -187,8 +193,44 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
         field.setdefault("width", "full")
         field.setdefault("visible_if", None)
         field.setdefault("readonly", False)
+        if field.get("stage") not in SUPPORTED_FIELD_STAGES:
+            field["stage"] = FIELD_STAGE_INITIAL
 
     return normalized
+
+
+def fields_for_stage(form_definition: Dict[str, Any], stage: str) -> List[Dict[str, Any]]:
+    wanted_stage = stage if stage in SUPPORTED_FIELD_STAGES else FIELD_STAGE_INITIAL
+    fields = form_definition.get("fields", [])
+    result: List[Dict[str, Any]] = []
+    pending_sections: List[Dict[str, Any]] = []
+    for field in fields:
+        field_type = field.get("type")
+        if field_type in {"section", "static_text"}:
+            pending_sections.append(field)
+            continue
+        if field.get("stage", FIELD_STAGE_INITIAL) != wanted_stage:
+            continue
+        result.extend(pending_sections)
+        pending_sections = []
+        result.append(field)
+    return result
+
+
+def form_definition_for_stage(form_definition: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    normalized = normalize_form_definition(form_definition)
+    return {**normalized, "fields": fields_for_stage(normalized, stage)}
+
+
+def additional_fields_for_acceptance(form_definition: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return fields_for_stage(normalize_form_definition(form_definition), FIELD_STAGE_AFTER_ACCEPTANCE)
+
+
+def has_additional_fields_after_acceptance(form_definition: Dict[str, Any]) -> bool:
+    return any(
+        field.get("type") not in {"section", "static_text"}
+        for field in additional_fields_for_acceptance(form_definition)
+    )
 
 
 def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Dict[str, Any]:

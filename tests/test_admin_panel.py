@@ -134,6 +134,105 @@ def test_form_manager_sees_only_assigned_forms(admin_app, admin_client):
     assert "Hidden" not in html
 
 
+def test_delete_button_visible_only_for_super_admin(admin_app, admin_client):
+    create_user(admin_app)
+    create_form(admin_app, slug="one", name="One")
+    login(admin_client)
+
+    response = admin_client.get("/admin/forms")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Usuń" in html
+    assert "/admin/forms/1/delete" in html
+
+
+def test_delete_button_hidden_for_regular_admin(admin_app, admin_client):
+    admin_id = create_user(admin_app, email="regular@example.com", role="admin")
+    create_form(admin_app, slug="owned", name="Owned", user_id=admin_id)
+    login(admin_client, email="regular@example.com")
+
+    response = admin_client.get("/admin/forms")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Usuń" not in html
+
+
+def test_regular_admin_cannot_delete_form(admin_app, admin_client):
+    admin_id = create_user(admin_app, email="regular@example.com", role="admin")
+    form_id = create_form(admin_app, slug="owned", name="Owned", user_id=admin_id)
+    login(admin_client, email="regular@example.com")
+    token = admin_client.get("/admin/forms").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(f"/admin/forms/{form_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 403
+
+
+def test_workflow_status_tile_has_no_border():
+    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
+    status_block = template.split(".status-tile {", 1)[1].split("}", 1)[0]
+
+    assert "border: 0;" in status_block
+    assert "border: 1px solid var(--border)" not in status_block
+
+
+def test_super_admin_delete_removes_form_from_database(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="delete_me", name="Delete me", is_active=True, is_public=True)
+    login(admin_client)
+    token = admin_client.get("/admin/forms").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(f"/admin/forms/{form_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(Form, form_id) is None
+    list_html = admin_client.get("/admin/forms").get_data(as_text=True)
+    assert "Delete me" not in list_html
+    assert admin_client.get("/form/delete_me").status_code == 404
+
+
+def test_super_admin_delete_blocks_form_with_submissions(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="with_submission", name="With submission")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormSubmission(submission_id="abc", form_slug="with_submission", form_name="With submission"))
+        db.commit()
+    login(admin_client)
+    token = admin_client.get("/admin/forms").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(f"/admin/forms/{form_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 302
+    with session_factory() as db:
+        assert db.get(Form, form_id) is not None
+
+
+def test_logo_upload_rejects_invalid_image_content(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    token = admin_client.get("/admin/logos").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/logos",
+        data={
+            "csrf_token": token,
+            "name": "Bad logo",
+            "logo_file": (io.BytesIO(b"not an image"), "logo.png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.query(Logo).count() == 0
+
+
 def test_public_forms_use_database_visibility_and_label(admin_app, admin_client):
     create_form(admin_app, slug="public_form", name="Public Form", label_text="PROJEKT 6.08", sort_order=1)
     create_form(admin_app, slug="hidden_form", name="Hidden Form", is_public=False, sort_order=2)
@@ -195,6 +294,39 @@ def test_upload_form_detects_fields(admin_app, admin_client):
         assert [field.name for field in form.fields] == ["imiona", "status"]
 
 
+def test_upload_form_preserves_polish_characters_and_workflow(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    payload = {
+        "title": "Zażółć gęślą jaźń",
+        "fields": [{"type": "text", "name": "imiona", "label": "Imię i nazwisko"}],
+        "workflow": {
+            "name": "Ścieżka",
+            "initial_step": "submission",
+            "steps": [{"id": "submission", "type": "end", "triggers": ["application_submitted"]}],
+        },
+    }
+    token = admin_client.get("/admin/forms/upload").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/forms/upload",
+        data={
+            "csrf_token": token,
+            "slug": "polskie",
+            "form_file": (io.BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), "polskie.json"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.query(Form).filter_by(slug="polskie").one()
+        assert form.title == "Zażółć gęślą jaźń"
+        assert form.definition_json["fields"][0]["label"] == "Imię i nazwisko"
+        assert form.definition_json["workflow"]["name"] == "Ścieżka"
+
+
 def test_upload_html_form_redirects_to_fields(admin_app, admin_client):
     create_user(admin_app)
     login(admin_client)
@@ -218,6 +350,133 @@ def test_upload_html_form_redirects_to_fields(admin_app, admin_client):
     with session_factory() as db:
         form = db.query(Form).filter_by(slug="html_form").one()
         assert [field.name for field in form.fields] == ["email", "opis"]
+
+
+def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {
+        "title": "Workflow Form",
+        "fields": [{"type": "text", "name": "first_name", "label": "Imię"}],
+        "workflow": {
+            "name": "Import",
+            "initial_step": "submission",
+            "steps": [
+                {"id": "submission", "type": "form_submit", "next": "completed", "triggers": ["application_submitted"]},
+                {"id": "completed", "type": "end"},
+            ],
+        },
+    }
+    form_id = create_form(admin_app, slug="workflow_form", name="Workflow Form", definition_json=definition)
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Workflow Form",
+            "slug": "workflow_form",
+            "title": "Workflow Form",
+            "sort_order": "0",
+            "workflow_name": "Po imporcie",
+            "workflow_initial_step": "submission",
+            "requires_declaration": "on",
+            "declaration_template_html": "<p>Deklaracja {{ first_name }}</p>",
+            "workflow_json": json.dumps(definition["workflow"], ensure_ascii=False),
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.get(Form, form_id)
+        workflow = form.definition_json["workflow"]
+        assert workflow["name"] == "Po imporcie"
+        assert workflow["requires_declaration"] is True
+        assert workflow["declaration_template_html"] == "<p>Deklaracja {{ first_name }}</p>"
+        declaration = next(document for document in form.definition_json["documents"] if document["id"] == "declaration")
+        assert declaration["template_html"] == "<p>Deklaracja {{ first_name }}</p>"
+
+
+def test_workflow_edit_shows_tooltips_and_conditional_html_fields(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="workflow_form",
+        name="Workflow Form",
+        definition_json={
+            "title": "Workflow Form",
+            "fields": [],
+            "workflow": {
+                "name": "Workflow",
+                "initial_step": "submission",
+                "requires_contract": True,
+                "contract_template_html": "<p>Umowa</p>",
+                "steps": [{"id": "submission", "type": "end", "triggers": ["application_submitted"]}],
+            },
+        },
+    )
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/edit")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "application_submitted" in html
+    assert "Uruchamiany po wysłaniu formularza przez użytkownika." in html
+    assert "additional_fields_completed" in html
+    assert "Szablon umowy HTML" in html
+    assert "Szablon deklaracji HTML" in html
+    assert 'data-workflow-template="contract"' in html
+
+
+def test_admin_submission_list_renders_workflow_status_label(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="status_form",
+        name="Status Form",
+        user_id=user_id,
+        definition_json={
+            "title": "Status Form",
+            "fields": [],
+            "workflow": {
+                "initial_step": "submission",
+                "statuses": [{"id": "custom_status", "label": "Przyjazny status"}],
+                "steps": [{"id": "submission", "type": "end"}],
+            },
+        },
+    )
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormSubmission(submission_id="abc", form_slug="status_form", form_name="Status Form", process_status="custom_status"))
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/submissions")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Przyjazny status" in html
+
+
+def test_admin_submission_list_renders_unknown_status_fallback(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="status_form", name="Status Form", user_id=user_id)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormSubmission(submission_id="abc", form_slug="status_form", form_name="Status Form", process_status="MISSING_STATUS"))
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/submissions")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Nieznany status: MISSING_STATUS" in html
 
 
 def test_form_fields_can_be_edited(admin_app, admin_client):
@@ -674,13 +933,19 @@ def test_super_admin_can_upload_logo(admin_app, admin_client):
     login(admin_client)
     html = admin_client.get("/admin/logos").get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+        b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
 
     response = admin_client.post(
         "/admin/logos",
         data={
             "csrf_token": token,
             "name": "Logo",
-            "logo_file": (io.BytesIO(b"png"), "logo.png"),
+            "logo_file": (io.BytesIO(png_bytes), "logo.png"),
         },
         content_type="multipart/form-data",
     )
@@ -690,7 +955,7 @@ def test_super_admin_can_upload_logo(admin_app, admin_client):
         logo = db.query(Logo).one()
         assert logo.name == "Logo"
         assert logo.active is True
-        assert logo.size_bytes == 3
+        assert logo.size_bytes == len(png_bytes)
         assert logo.checksum_sha256
         logo_id = logo.id
 

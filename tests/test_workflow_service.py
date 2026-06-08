@@ -13,6 +13,15 @@ class FakeRepository:
         return True
 
 
+class FakeSubmission:
+    submission_id = "abc"
+    form_slug = "test"
+
+    def __init__(self):
+        self.process_status = "SUBMITTED"
+        self.workflow_step = "submission"
+
+
 def workflow_config():
     return {
         "workflow": {
@@ -44,6 +53,16 @@ def test_transition_updates_repository():
 
     assert service.transition_to("abc", "officer_review")
     assert repository.rows["abc"]["workflow_step"] == "officer_review"
+
+
+def test_transition_submission_validates_when_strict():
+    service = WorkflowService()
+    submission = FakeSubmission()
+
+    service.transition_submission(submission, "WAITING_FOR_REVIEW", target_step="officer_review", strict=True)
+
+    assert submission.process_status == "WAITING_FOR_REVIEW"
+    assert submission.workflow_step == "officer_review"
 
 
 def test_request_correction_sets_fields():

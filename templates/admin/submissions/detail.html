@@ -2,6 +2,7 @@
 {% block title %}Zgloszenie{% endblock %}
 {% block content %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
+<p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
 <form method="post" class="form-card">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <label>Status procesu</label>

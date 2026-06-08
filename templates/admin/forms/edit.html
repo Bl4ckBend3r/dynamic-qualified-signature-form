@@ -45,9 +45,66 @@
             </div>
         </div>
     {% endif %}
+    {% set workflow = form.definition_json.get("workflow", {}) if form.definition_json else {} %}
+    <div class="admin-section admin-workflow-editor">
+        <div class="admin-section-heading">
+            <div>
+                <h2>Workflow</h2>
+                <p>Dane zaimportowane z JSON-a można edytować tutaj i zapisać razem z konfiguracją formularza.</p>
+            </div>
+        </div>
+        {% if validation_errors %}
+            <div class="admin-validation-errors">
+                {% for error in validation_errors %}
+                    <p>{{ error }}</p>
+                {% endfor %}
+            </div>
+        {% endif %}
+        <div class="admin-form-grid">
+            <label><span>Nazwa workflow</span><input name="workflow_name" value="{{ workflow.get('name', '') }}"></label>
+            <label><span>Status początkowy</span><input name="workflow_initial_step" value="{{ workflow.get('initial_step', '') }}" placeholder="submission"></label>
+            <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
+            <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
+        </div>
+        <div class="admin-trigger-help">
+            {% for trigger, description in trigger_descriptions.items() %}
+                <span class="admin-trigger-chip" title="{{ description }}">{{ trigger }} <span aria-hidden="true">ⓘ</span></span>
+            {% endfor %}
+        </div>
+        <label class="admin-form-wide admin-code-field">
+            <span>Konfiguracja workflow JSON</span>
+            <textarea name="workflow_json" spellcheck="false">{{ workflow_json }}</textarea>
+        </label>
+        <div class="admin-html-template-fields">
+            <label class="admin-form-wide admin-code-field" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
+                <span>Szablon deklaracji HTML</span>
+                <textarea name="declaration_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ submission_date }}' }}">{{ workflow.get('declaration_template_html', '') }}</textarea>
+            </label>
+            <label class="admin-form-wide admin-code-field" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                <span>Szablon umowy HTML</span>
+                <textarea name="contract_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ generated_date }}' }}">{{ workflow.get('contract_template_html', '') }}</textarea>
+            </label>
+        </div>
+    </div>
     <div class="admin-form-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
         <button class="admin-button" type="submit">Zapisz</button>
     </div>
 </form>
+<script>
+function syncWorkflowTemplateVisibility() {
+    const declaration = document.querySelector('[data-workflow-toggle="declaration"]');
+    const contract = document.querySelector('[data-workflow-toggle="contract"]');
+    document.querySelectorAll('[data-workflow-template="declaration"]').forEach((field) => {
+        field.hidden = !declaration?.checked;
+    });
+    document.querySelectorAll('[data-workflow-template="contract"]').forEach((field) => {
+        field.hidden = !contract?.checked;
+    });
+}
+document.querySelectorAll("[data-workflow-toggle]").forEach((input) => {
+    input.addEventListener("change", syncWorkflowTemplateVisibility);
+});
+syncWorkflowTemplateVisibility();
+</script>
 {% endblock %}

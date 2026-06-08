@@ -16,9 +16,10 @@ from form_loader import (
 )
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
+from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
 from services.file_metadata import record_submission_file
 from services.form_submission_mapper import build_submission_from_form, validate_required_submission_fields
-from services.process_service import build_initial_process_fields, build_legacy_process_fields
+from services.process_service import build_initial_process_fields, build_legacy_process_fields, build_process_state
 
 logger = logging.getLogger(__name__)
 
@@ -195,8 +196,6 @@ class SubmissionService:
             meta = form_config_service.get_form_meta(storage, form_slug)
             if meta:
                 form_title = row.get("form_name") or meta.get("title") or form_slug
-        from services.process_service import build_process_state
-
         process_state = build_process_state(row)
         return {
             "submission_id": submission_id,
@@ -209,10 +208,10 @@ class SubmissionService:
         }
 
     def build_pdf_filename(self, slug: str, submission_id: str) -> str:
-        return f"{slug}-{submission_id}.pdf"
+        return build_submission_pdf_filename(slug, submission_id)
 
     def build_signed_pdf_filename(self, slug: str, submission_id: str) -> str:
-        return f"{slug}-{submission_id}-signed.pdf"
+        return build_signed_submission_pdf_filename(slug, submission_id)
 
     def _enabled_document_ids(self, form_config: dict) -> set[str]:
         documents = form_config.get("documents", [])

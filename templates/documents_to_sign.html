@@ -82,7 +82,7 @@
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
 
             {% if result.process_status %}
-                <p><strong>Status procesu:</strong> {{ result.process_status }}</p>
+                <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
             {% endif %}
 
             {% if result.agreement_blocked %}
@@ -92,7 +92,60 @@
                 {% endif %}
             {% endif %}
 
-            {% if show_declaration_stage %}
+            {% if result.needs_additional_fields %}
+                <div class="card" data-stage="additional-fields" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h3>Wniosek został zaakceptowany</h3>
+                        <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
+                    </div>
+                    <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        {% for field in result.additional_form_definition.fields %}
+                            {% if field.type == "section" %}
+                                <section class="form-section"><h3>{{ field.label|trusted_html }}</h3></section>
+                            {% elif field.type == "static_text" %}
+                                <div class="static-text">{{ field.label|trusted_html }}</div>
+                            {% else %}
+                                {% set value = result.additional_values.get(field.name, field.default) %}
+                                {% set has_error = result.additional_errors.get(field.name) %}
+                                <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
+                                    {% if field.type != "checkbox" %}
+                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</label>
+                                    {% endif %}
+                                    {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
+                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required{% endif %}>
+                                    {% elif field.type == "textarea" %}
+                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>{{ value }}</textarea>
+                                    {% elif field.type == "select" %}
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                                            <option value="">-- wybierz --</option>
+                                            {% for option in field.options %}
+                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    {% elif field.type == "radio" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% elif field.type == "checkbox" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                    {% if field.help_text %}<div class="help-text">{{ field.help_text|trusted_html }}</div>{% endif %}
+                                    {% if has_error %}<div class="error-text">{{ has_error }}</div>{% endif %}
+                                </div>
+                            {% endif %}
+                        {% endfor %}
+                        <div class="submit-row">
+                            <button type="submit" class="btn-primary">Zapisz dodatkowe informacje</button>
+                        </div>
+                    </form>
+                </div>
+            {% elif show_declaration_stage %}
                 <div
                     class="signing-document-card"
                     data-stage="declaration"
@@ -326,7 +379,7 @@
     gap: 14px;
     align-items: start;
     padding: 18px;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: var(--radius-sm);
     background: var(--surface-alt);
 }
@@ -355,7 +408,6 @@
 }
 
 .status-tile--success {
-    border-color: rgba(31, 122, 77, 0.35);
     background: #f2fbf6;
 }
 
@@ -364,12 +416,10 @@
 }
 
 .status-tile--warning {
-    border-color: rgba(183, 121, 31, 0.35);
     background: #fffaf0;
 }
 
 .status-tile--danger {
-    border-color: rgba(180, 35, 24, 0.35);
     background: #fff5f5;
 }
 
@@ -494,31 +544,9 @@ const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
-const REJECTED_STATUSES = new Set([
-    "OFFICER_REJECTED",
-    "PARTICIPANT_REJECTED",
-]);
-
-const DECLARATION_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_READY",
-    "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "AGREEMENT_SIGNED",
-    "AGREEMENT_SIGNATURE_INVALID",
-    "AGREEMENT_NOT_REQUIRED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
-const AGREEMENT_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_SIGNED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
 function isRejectedStatus(data) {
-    const processStatus = data.process_status || "";
     const message = (data.message || "").toLowerCase();
-    return REJECTED_STATUSES.has(processStatus) || message.includes("odrzucon");
+    return Boolean(data.is_rejected) || message.includes("odrzucon");
 }
 
 function hideElements(selector) {
@@ -593,8 +621,6 @@ function clearStatusTile() {
 }
 
 function renderSubmissionStatus(data) {
-    const processStatus = data.process_status || "";
-
     if (!data.exists) {
         renderStatusTile({
             variant: "warning",
@@ -615,7 +641,7 @@ function renderSubmissionStatus(data) {
         return;
     }
 
-    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
+    if (data.agreement_stage_completed || data.is_final) {
         renderStatusTile({
             variant: "success",
             icon: "✓",
@@ -729,8 +755,6 @@ function bindUploadDropzones() {
 }
 
 function applyProcessStageVisibility(data) {
-    const processStatus = data.process_status || "";
-
     if (isRejectedStatus(data)) {
         hideDeclarationStage();
         hideAgreementStage();
@@ -738,8 +762,8 @@ function applyProcessStageVisibility(data) {
         return;
     }
 
-    const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
-    const declarationIsCompleted = agreementIsCompleted || DECLARATION_COMPLETED_STATUSES.has(processStatus);
+    const agreementIsCompleted = Boolean(data.agreement_stage_completed || data.is_final);
+    const declarationIsCompleted = agreementIsCompleted || Boolean(data.declaration_stage_completed);
 
     if (declarationIsCompleted) {
         hideDeclarationStage();
@@ -798,7 +822,8 @@ async function checkAcceptanceStatus() {
             data.exists
             && data.can_sign_documents
             && !isRejectedStatus(data)
-            && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")
+            && !data.agreement_stage_completed
+            && !data.is_final
         ) {
             documentsSection.style.display = "block";
             generateButton.disabled = false;

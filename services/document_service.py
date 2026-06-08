@@ -12,8 +12,10 @@ from pdf_generator import generate_pdf, generate_pdf_from_html
 from form_loader import build_consents_view, build_submission_view
 from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
+from services import document_naming_service as naming
 from services.file_metadata import record_submission_file
 from services.process_service import ProcessStatus, is_agreement_required
+from services.upload_validation import UploadValidationError, validate_pdf_upload
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
@@ -126,7 +128,7 @@ class DocumentService:
         document_bytes = generate_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
-            template_html=self.resolve_template_html(document.get("template", "")),
+            template_html=document.get("template_html") or self.resolve_template_html(document.get("template", "")),
             context=context,
         )
         self.storage.save_pdf(
@@ -284,12 +286,13 @@ class DocumentService:
     ) -> dict:
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Nie wybrano podpisanego pliku PDF.")
-        if not uploaded_file.filename.lower().endswith(".pdf"):
-            raise ValueError("Dozwolony jest wyłącznie plik PDF.")
-
         row = self._row(submission)
         slug = self._slug(submission)
         uploaded_bytes = uploaded_file.read()
+        try:
+            validate_pdf_upload(uploaded_file.filename, uploaded_bytes, getattr(uploaded_file, "mimetype", None))
+        except UploadValidationError as exc:
+            raise ValueError(str(exc)) from exc
         source_filename, signed_filename, update_target = self._signed_document_target(row, document_id, instance_id)
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=current_app.config["TEMP_DIR"]) as tmp_signed:
@@ -370,6 +373,23 @@ class DocumentService:
             return False
         return self.access_token_service.verify_token({"access_token": expected}, token)
 
+    def read_document_bytes_for_download(self, submission: dict, filename: str, *, signed: bool) -> bytes:
+        clean_filename = Path(filename).name
+        metadata = self._file_metadata(submission, clean_filename, signed=signed)
+        if metadata and metadata.get("storage_path"):
+            storage_path = str(metadata["storage_path"])
+            if hasattr(self.storage, "read_bytes"):
+                return self.storage.read_bytes(storage_path)
+            if hasattr(self.storage, "get_file_bytes"):
+                return self.storage.get_file_bytes(storage_path)
+
+        current_app.logger.warning(
+            "Legacy PDF lookup by filename used for submission=%s filename=%s.",
+            self._submission_id(submission),
+            clean_filename,
+        )
+        return self.storage.get_pdf_bytes(self._slug(submission), clean_filename)
+
     def build_documents_view(self, submission: dict, form_config: dict, available_actions: list[dict] | None = None) -> dict:
         row = self._row(submission)
         documents = []
@@ -392,16 +412,25 @@ class DocumentService:
             "documents": documents,
         }
 
+    def _file_metadata(self, submission: dict, filename: str, *, signed: bool) -> dict | None:
+        if not self.submission_repository or not hasattr(self.submission_repository, "get_file_metadata"):
+            return None
+        return self.submission_repository.get_file_metadata(
+            self._submission_id(submission),
+            filename,
+            signed=signed,
+        )
+
     def build_filename(self, pattern: str, submission: dict) -> str:
-        fallback = f"{sanitize_filename_part(submission.get('submission_id'), 'dokument')}.pdf"
-        return build_filename_from_pattern(pattern, submission, fallback)
+        fallback = f"{naming.sanitize_filename_part(submission.get('submission_id'), 'dokument')}.pdf"
+        return naming.build_filename_from_pattern(pattern, submission, fallback)
 
     def build_filename_for_document(self, document: Mapping[str, Any], row: Mapping[str, Any], document_id: str) -> str:
         if document_id == DocumentType.DECLARATION:
-            return build_declaration_filename(row, document)
+            return naming.build_declaration_filename(row, document)
         if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
-            fallback = build_agreement_filename(row, document)
-            return build_filename_from_pattern(normalize_text(document.get("filename_pattern")), row, fallback)
+            fallback = naming.build_agreement_filename(row, document)
+            return naming.build_filename_from_pattern(normalize_text(document.get("filename_pattern")), row, fallback)
         return self.build_filename(normalize_text(document.get("filename_pattern")), dict(row))
 
     def get_document_by_id(self, form_config: dict, document_id: str) -> dict | None:
@@ -808,6 +837,7 @@ def build_document_pdf_context(
     document_type: str,
 ) -> dict:
     return {
+        **dict(row),
         "form_definition": form_definition,
         "submission_id": submission_id,
         "participant_name": build_participant_name(row),
@@ -818,6 +848,14 @@ def build_document_pdf_context(
         "pdf_image_alt": form_definition.get("title", ""),
         "document_type": document_type,
         "generated_at": datetime.now().strftime("%d.%m.%Y"),
+        "generated_date": datetime.now().strftime("%Y-%m-%d"),
+        "submission_date": row.get("created_at") or row.get("submission_date") or "",
+        "project_name": form_definition.get("title", ""),
+        "first_name": get_participant_first_name(row),
+        "last_name": get_participant_last_name(row),
+        "pesel": row.get("pesel", ""),
+        "email": row.get("email", ""),
+        "phone": row.get("phone") or row.get("telefon") or "",
     }
 
 

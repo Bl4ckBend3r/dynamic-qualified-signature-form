@@ -124,7 +124,7 @@ class InMemoryStorage:
             return True
         return path in self.direct_files or path in self.saved_pdfs
 
-    def save_pdf(self, slug, filename, pdf_bytes):
+    def save_pdf(self, slug, filename, pdf_bytes, **kwargs):
         self.saved_pdfs[f"output/{slug}/pdf/{filename}"] = pdf_bytes
 
     def get_pdf_bytes(self, slug, filename):

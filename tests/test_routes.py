@@ -18,6 +18,48 @@ def test_form_page_loads(client):
     assert 'name="pesel"' in html
 
 
+def test_initial_form_hides_after_acceptance_fields(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [
+            *app.testing_storage.form_definition["fields"],
+            {
+                "type": "text",
+                "name": "post_acceptance_note",
+                "label": "Dodatkowa informacja",
+                "required": True,
+                "stage": "after_officer_acceptance",
+            },
+        ],
+    }
+
+    response = client.get("/form/formularz_zgloszeniowy")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="post_acceptance_note"' not in html
+
+
+def test_form_page_sanitizes_configured_html(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [
+            {
+                "type": "static_text",
+                "label": '<script>alert("x")</script><strong>Bezpieczny opis</strong>',
+            },
+            *app.testing_storage.form_definition["fields"],
+        ],
+    }
+
+    response = client.get("/form/formularz_zgloszeniowy")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'alert("x")' not in html
+    assert "<strong>Bezpieczny opis</strong>" in html
+
+
 def test_unknown_form_returns_404(client):
     response = client.get("/form/brak-formularza")
 
@@ -151,6 +193,30 @@ def test_download_pdf_returns_403_without_valid_token(client, app, valid_form_da
     assert response.status_code == 403
 
 
+def test_download_pdf_rejects_token_from_other_submission(client, app):
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "first",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "access_token": "first-token",
+            "pdf_filename": "first.pdf",
+        },
+        {
+            "submission_id": "second",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "access_token": "second-token",
+            "pdf_filename": "second.pdf",
+        },
+    ]
+    app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/second.pdf"] = b"%PDF-1.4\n"
+
+    response = client.get("/downloads/pdfs/formularz_zgloszeniowy/second.pdf?token=first-token")
+
+    assert response.status_code == 403
+
+
 def test_download_signed_pdf_requires_valid_token(client, app):
     row = {
         "submission_id": "signed-1",
@@ -173,6 +239,27 @@ def test_download_signed_pdf_requires_valid_token(client, app):
 
     assert ok_response.status_code == 200
     assert bad_response.status_code == 403
+
+
+def test_upload_signed_pdf_rejects_file_without_pdf_header(client, app):
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "signed-1",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "access_token": "secret-token",
+            "pdf_filename": "formularz_zgloszeniowy-signed-1.pdf",
+        }
+    ]
+
+    response = client.post(
+        "/upload-signed/formularz_zgloszeniowy/signed-1",
+        data={"signed_pdf": (io.BytesIO(b"not a pdf"), "signed.pdf")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    assert "output/formularz_zgloszeniowy/pdf/formularz_zgloszeniowy-signed-1-signed.pdf" not in app.testing_storage.saved_pdfs
 
 
 def test_download_pdf_without_token_for_new_submission_is_forbidden(client, app):
@@ -288,6 +375,81 @@ def test_documents_to_sign_get_with_submission_id_shows_current_submission(clien
     assert response.status_code == 200
     assert "deklaracja.pdf" in html
     assert "abc" in html
+
+
+def test_documents_to_sign_requires_additional_fields_before_declaration(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [
+            *app.testing_storage.form_definition["fields"],
+            {
+                "type": "text",
+                "name": "post_acceptance_note",
+                "label": "Dodatkowa informacja",
+                "required": True,
+                "stage": "after_officer_acceptance",
+            },
+        ],
+        "documents": {"declaration": {"enabled": True}},
+    }
+    row = {
+        "submission_id": "abc",
+        "form_slug": "formularz_zgloszeniowy",
+        "form_name": "Formularz zgłoszeniowy",
+        "email": "jan.kowalski@example.com",
+        "access_token": "secret-token",
+        "officer_decision": "TAK",
+        "declaration_required": "Tak",
+        "process_status": "accepted_waiting_for_additional_fields",
+    }
+    app.testing_storage.csv_rows = [row]
+
+    response = client.get("/do-podpisania?submission_id=abc")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="post_acceptance_note"' in html
+    assert "Pobierz deklarację" not in html
+
+
+def test_additional_fields_unlock_declaration_download(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [
+            *app.testing_storage.form_definition["fields"],
+            {
+                "type": "text",
+                "name": "post_acceptance_note",
+                "label": "Dodatkowa informacja",
+                "required": True,
+                "stage": "after_officer_acceptance",
+            },
+        ],
+        "documents": {"declaration": {"enabled": True}},
+    }
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "abc",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "email": "jan.kowalski@example.com",
+            "access_token": "secret-token",
+            "officer_decision": "TAK",
+            "declaration_required": "Tak",
+            "process_status": "accepted_waiting_for_additional_fields",
+        }
+    ]
+
+    save_response = client.post(
+        "/additional-fields/formularz_zgloszeniowy/abc",
+        data={"post_acceptance_note": "Uzupełniono"},
+    )
+    assert save_response.status_code == 302
+    assert app.testing_storage.csv_rows[0]["process_status"] == "additional_fields_completed"
+    html = client.get("/do-podpisania?submission_id=abc").get_data(as_text=True)
+
+    assert app.testing_storage.csv_rows[0]["additional_fields_completed"] == "Tak"
+    assert "Pobierz deklarację" in html
 
 
 def test_generate_agreements_uses_today_and_redirects_to_current_submission(client, app, monkeypatch):
@@ -425,7 +587,7 @@ def test_acceptance_status_missing_submission(client):
     assert payload["can_sign_documents"] is False
 
 
-def test_acceptance_status_refresh_sends_decision_email_once(client, app):
+def test_acceptance_status_refresh_does_not_send_decision_email(client, app):
     sent = []
     row = {
         "submission_id": "abc",
@@ -454,6 +616,10 @@ def test_acceptance_status_refresh_sends_decision_email_once(client, app):
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    assert len(sent) == 1
-    assert app.testing_storage.csv_rows[0]["decision_email_sent"] == "Tak"
-    assert app.testing_storage.csv_rows[0]["decision_email_sent_for"] == "accepted"
+    payload = first_response.get_json()
+    assert payload["normalized_process_status"] == "REVIEW_ACCEPTED"
+    assert payload["process_status_label"] == "Wniosek zaakceptowany"
+    assert payload["is_rejected"] is False
+    assert sent == []
+    assert app.testing_storage.csv_rows[0]["decision_email_sent"] == ""
+    assert app.testing_storage.csv_rows[0]["decision_email_sent_for"] == ""

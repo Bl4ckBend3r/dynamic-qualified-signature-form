@@ -47,6 +47,22 @@
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
                             </form>
+                            {% if g.admin_user.role == "super_admin" %}
+                                <button class="admin-link-button admin-link-danger" type="button" data-delete-modal="delete-form-{{ form.id }}">Usuń</button>
+                                <dialog class="admin-confirm-dialog" id="delete-form-{{ form.id }}">
+                                    <form method="dialog" class="admin-confirm-dialog__box">
+                                        <h2>Usunąć formularz?</h2>
+                                        <p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane. Formularz nie będzie widoczny na liście aktywnych formularzy.</p>
+                                        <div class="admin-form-actions">
+                                            <button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button>
+                                            <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button>
+                                        </div>
+                                    </form>
+                                </dialog>
+                                <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden>
+                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -61,4 +77,22 @@
         <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj pierwszy formularz</a>
     </div>
 {% endif %}
+<script>
+document.querySelectorAll("[data-delete-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const dialog = document.getElementById(button.dataset.deleteModal);
+        if (dialog && typeof dialog.showModal === "function") {
+            dialog.showModal();
+        }
+    });
+});
+document.querySelectorAll("[data-submit-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const form = document.getElementById(button.dataset.submitDelete);
+        if (form) {
+            form.submit();
+        }
+    });
+});
+</script>
 {% endblock %}

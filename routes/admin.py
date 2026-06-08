@@ -8,7 +8,6 @@ import secrets
 import zipfile
 from datetime import datetime, timezone
 from functools import wraps
-from html import escape
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +32,7 @@ from sqlalchemy import func, select
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database import create_session_factory
-from form_loader import normalize_form_definition, validate_form_definition
+from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES, has_additional_fields_after_acceptance, normalize_form_definition, validate_form_definition
 from models import (
     EmailLog,
     Form,
@@ -50,15 +49,32 @@ from models import (
 from services.mail_template_service import (
     MAIL_LAYOUT,
     MailImportError,
-    build_mail_context as build_platform_mail_context,
     generate_text_from_html,
     build_instruction_html,
     import_mail_template_zip,
     parse_mail_content,
     render_platform_mail_html,
     render_platform_mail_text,
-    render_template_text,
 )
+from services.admin_mail_context_service import (
+    build_mail_context as service_build_mail_context,
+    mail_template_type_score as service_mail_template_type_score,
+    preview_mail_context as service_preview_mail_context,
+    render_mail_text as service_render_mail_text,
+)
+from services.form_config_service import FormConfigService, TRIGGER_DESCRIPTIONS
+from services.logo_service import (
+    can_select_active_logo as logo_can_select_active_logo,
+    can_select_logo as logo_can_select_logo,
+    list_active_logos as logo_list_active_logos,
+    list_selectable_logos as logo_list_selectable_logos,
+    safe_asset_filename as logo_safe_asset_filename,
+)
+from services.mail_dispatch_service import MailDispatchService
+from services.process_service import ProcessStatus
+from services.upload_validation import UploadValidationError, validate_logo_upload
+from services.workflow_service import workflow_status_label
+from validators.form_config_validator import FormConfigValidator
 
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -70,6 +86,10 @@ ROLES = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_FORM_MANAGER}
 TECHNICAL_SORT_FIELDS = {"created_at", "process_status", "officer_decision", "email", "nazwisko", "submission_id"}
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel"]
+FIELD_STAGES = [
+    (FIELD_STAGE_INITIAL, "Podstawowe"),
+    (FIELD_STAGE_AFTER_ACCEPTANCE, "Dodatkowe pole po akceptacji"),
+]
 OFFICER_DECISIONS = [
     ("", "Brak decyzji"),
     ("accepted", "Zaakceptowano"),
@@ -251,6 +271,7 @@ def submissions_all():
             submissions=submissions,
             form_by_slug=form_by_slug,
             filters=request.args,
+            status_label=admin_status_label,
         )
 
 
@@ -267,6 +288,29 @@ def forms_list():
             ).all()
         }
         return render_template("admin/forms/list.html", forms=forms, submission_counts=counts)
+
+
+@bp.post("/forms/<int:form_id>/delete")
+@login_required
+@role_required(ROLE_SUPER_ADMIN)
+def form_delete(form_id: int):
+    with db_session_factory()() as db:
+        form = db.get(Form, form_id) or abort(404)
+        submissions_count = db.execute(
+            select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)
+        ).scalar() or 0
+        if submissions_count:
+            flash("Nie można usunąć formularza, ponieważ istnieją powiązane zgłoszenia.", "error")
+            return redirect(url_for("admin.forms_list"))
+        try:
+            db.delete(form)
+            db.commit()
+            flash("Formularz został usunięty z bazy danych.", "success")
+        except Exception:
+            db.rollback()
+            current_app.logger.exception("Nie udało się usunąć formularza %s", form_id)
+            flash("Nie udało się usunąć formularza. Spróbuj ponownie albo skontaktuj się z administratorem technicznym.", "error")
+    return redirect(url_for("admin.forms_list"))
 
 
 @bp.route("/forms/upload", methods=["GET", "POST"])
@@ -286,9 +330,13 @@ def forms_upload():
     try:
         form_definition = parse_uploaded_form_definition(uploaded_file.read(), uploaded_file.filename)
         validate_form_definition(form_definition)
-        form_definition = normalize_form_definition(form_definition)
-    except Exception:
-        flash("Niepoprawny plik definicji formularza albo brak wykrytych pol.", "error")
+        form_definition = normalize_admin_form_definition(form_definition)
+        validation_errors = validate_admin_form_config(form_definition)
+        if validation_errors:
+            raise ValueError("; ".join(validation_errors))
+    except Exception as exc:
+        current_app.logger.warning("Niepoprawna definicja formularza: %s", exc)
+        flash("Niepoprawny plik definicji formularza albo brak wykrytych pól.", "error")
         return render_template("admin/forms/upload.html"), 400
 
     slug = request.form.get("slug", "").strip() or Path(uploaded_file.filename).stem
@@ -332,6 +380,40 @@ def form_edit(form_id: int):
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
         if request.method == "POST":
+            try:
+                updated_definition = build_form_definition_from_admin_form(form.definition_json or {}, request.form)
+            except Exception:
+                updated_definition = normalize_admin_form_definition(form.definition_json or {})
+                validation_errors = ["Workflow JSON ma niepoprawny format. Sprawdź nawiasy, cudzysłowy i przecinki."]
+                assigned_user_ids = {permission.user_id for permission in form.permissions}
+                fields = active_fields_for_form(db, form.id)
+                return render_template(
+                    "admin/forms/edit.html",
+                    form=form,
+                    fields=fields,
+                    users=users,
+                    assigned_user_ids=assigned_user_ids,
+                    logos=logos,
+                    workflow_json=request.form.get("workflow_json", ""),
+                    trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                    validation_errors=validation_errors,
+                ), 400
+            validation_errors = validate_admin_form_config(updated_definition)
+            if validation_errors:
+                flash("Nie można zapisać workflow: " + " ".join(validation_errors), "error")
+                assigned_user_ids = {permission.user_id for permission in form.permissions}
+                fields = active_fields_for_form(db, form.id)
+                return render_template(
+                    "admin/forms/edit.html",
+                    form=form,
+                    fields=fields,
+                    users=users,
+                    assigned_user_ids=assigned_user_ids,
+                    logos=logos,
+                    workflow_json=format_json(updated_definition.get("workflow") or {}),
+                    trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                    validation_errors=validation_errors,
+                ), 400
             form.name = request.form.get("name", "").strip() or form.name
             form.title = request.form.get("title", "").strip() or form.title
             new_slug = normalize_slug(request.form.get("slug", form.slug))
@@ -356,6 +438,7 @@ def form_edit(form_id: int):
             form.label_color = request.form.get("label_color", "").strip() or "#b38d45"
             form.label_background = request.form.get("label_background", "").strip() or "#f7f3ec"
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
+            form.definition_json = updated_definition
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
                 abort(403)
@@ -373,6 +456,7 @@ def form_edit(form_id: int):
             return redirect(url_for("admin.forms_list"))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
+        form.definition_json = normalize_admin_form_definition(form.definition_json or {})
         return render_template(
             "admin/forms/edit.html",
             form=form,
@@ -380,6 +464,9 @@ def form_edit(form_id: int):
             users=users,
             assigned_user_ids=assigned_user_ids,
             logos=logos,
+            workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
+            trigger_descriptions=TRIGGER_DESCRIPTIONS,
+            validation_errors=[],
         )
 
 
@@ -416,6 +503,7 @@ def form_fields(form_id: int):
                     existing.type = request.form.get("new_type", "text") if request.form.get("new_type") in FIELD_TYPES else "text"
                     existing.required = request.form.get("new_required") == "on"
                     existing.section = request.form.get("new_section", "").strip()
+                    existing.stage = normalize_field_stage(request.form.get("new_stage"))
                     existing.sort_order = parse_int(request.form.get("new_sort_order"), len(fields) + 1)
                     existing.options = parse_field_options(existing.type, request.form.get("new_options", ""))
                 else:
@@ -427,6 +515,7 @@ def form_fields(form_id: int):
                             type=request.form.get("new_type", "text") if request.form.get("new_type") in FIELD_TYPES else "text",
                             required=request.form.get("new_required") == "on",
                             section=request.form.get("new_section", "").strip(),
+                            stage=normalize_field_stage(request.form.get("new_stage")),
                             sort_order=parse_int(request.form.get("new_sort_order"), len(fields) + 1),
                             options=parse_field_options(request.form.get("new_type", "text"), request.form.get("new_options", "")),
                             active=True,
@@ -451,6 +540,7 @@ def form_fields(form_id: int):
                 field.type = request.form.get(prefix + "type", "").strip() if request.form.get(prefix + "type") in FIELD_TYPES else field.type
                 field.required = request.form.get(prefix + "required") == "on"
                 field.section = request.form.get(prefix + "section", "").strip()
+                field.stage = normalize_field_stage(request.form.get(prefix + "stage"))
                 field.sort_order = parse_int(request.form.get(prefix + "sort_order"), field.sort_order)
                 field.options = parse_field_options(field.type, request.form.get(prefix + "options", ""))
             db.commit()
@@ -461,6 +551,7 @@ def form_fields(form_id: int):
             form=form,
             fields=fields,
             field_types=FIELD_TYPES,
+            field_stages=FIELD_STAGES,
             field_options_text=field_options_text,
         )
 
@@ -485,6 +576,7 @@ def submissions_list(form_id: int):
             submission_value=submission_value,
             filter_fields=build_filter_fields(fields, submissions),
             officer_decisions=OFFICER_DECISIONS,
+            status_label=lambda status: admin_status_label(status, form),
         )
 
 
@@ -497,7 +589,12 @@ def submission_detail(form_id: int, submission_pk: int):
         if submission.form_slug != form.slug:
             abort(404)
         if request.method == "POST":
-            submission.process_status = request.form.get("process_status", "").strip() or submission.process_status
+            current_app.extensions["services"].workflow_service.transition_submission(
+                submission,
+                request.form.get("process_status", "").strip() or submission.process_status,
+                actor="officer",
+                reason="admin_manual_status_edit",
+            )
             submission.officer_decision = request.form.get("officer_decision", "").strip()
             submission.updated_at = datetime.now(timezone.utc)
             db.commit()
@@ -506,7 +603,13 @@ def submission_detail(form_id: int, submission_pk: int):
         files = db.execute(
             select(SubmissionFile).where(SubmissionFile.public_submission_id == submission.submission_id)
         ).scalars().all()
-        return render_template("admin/submissions/detail.html", form=form, submission=submission, files=files)
+        return render_template(
+            "admin/submissions/detail.html",
+            form=form,
+            submission=submission,
+            files=files,
+            status_label=lambda status: admin_status_label(status, form),
+        )
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")
@@ -521,11 +624,34 @@ def submission_decision_update(form_id: int, submission_pk: int):
         allowed_decisions = {value for value, _ in OFFICER_DECISIONS}
         if decision not in allowed_decisions:
             abort(400)
+        previous_decision = submission.officer_decision
+        public_submission_id = submission.submission_id
         submission.officer_decision = decision
         submission.officer_decision_reason = request.form.get("officer_decision_reason", "").strip()
+        if decision == "accepted":
+            target_status = (
+                ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
+                if form_has_additional_fields(form)
+                else ProcessStatus.OFFICER_ACCEPTED.value
+            )
+        elif decision == "rejected":
+            target_status = ProcessStatus.OFFICER_REJECTED.value
+        else:
+            target_status = submission.process_status
+        current_app.extensions["services"].workflow_service.transition_submission(
+            submission,
+            target_status,
+            actor="officer",
+            reason="officer_decision",
+        )
         submission.updated_at = datetime.now(timezone.utc)
         db.commit()
         flash("Decyzja urzednika zostala zapisana.", "success")
+    if decision in {"accepted", "rejected"} and decision != previous_decision:
+        try:
+            current_app.extensions["services"].notification_service.send_decision_email(public_submission_id, decision)
+        except Exception as exc:
+            current_app.logger.exception("Nie udalo sie wyslac maila decyzji dla %s: %s", public_submission_id, exc)
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
@@ -865,13 +991,11 @@ def logos_list():
             if not uploaded_file or not uploaded_file.filename:
                 flash("Wybierz plik logo.", "error")
                 return redirect(url_for("admin.logos_list"))
-            mime_type = uploaded_file.mimetype or mimetypes.guess_type(uploaded_file.filename)[0] or ""
-            if mime_type not in LOGO_MIME_TYPES:
-                flash("Dozwolone sa tylko pliki graficzne logo.", "error")
-                return redirect(url_for("admin.logos_list"))
             logo_bytes = uploaded_file.read()
-            if not logo_bytes:
-                flash("Plik logo jest pusty.", "error")
+            try:
+                mime_type = validate_logo_upload(uploaded_file.filename, logo_bytes, uploaded_file.mimetype)
+            except UploadValidationError as exc:
+                flash(str(exc), "error")
                 return redirect(url_for("admin.logos_list"))
             logo_dir = Path(current_app.config["TEMP_DIR"]) / "logos"
             logo_dir.mkdir(parents=True, exist_ok=True)
@@ -1013,9 +1137,7 @@ def normalize_slug(value: str) -> str:
 
 
 def safe_asset_filename(value: str) -> str:
-    filename = Path(value or "asset").name
-    filename = re.sub(r"[^a-zA-Z0-9_.-]+", "_", filename).strip("._")
-    return filename or f"asset_{secrets.token_hex(4)}"
+    return logo_safe_asset_filename(value)
 
 
 def read_uploaded_template_file(field_name: str, allowed_suffixes: set[str]) -> str | None:
@@ -1086,53 +1208,31 @@ def field_options_text(field: FormField) -> str:
 
 
 def list_selectable_logos(db, user: User, current_logo_id: int | None = None) -> list[Logo]:
-    query = select(Logo).order_by(Logo.name)
-    if user.role != ROLE_SUPER_ADMIN:
-        query = query.where(Logo.active.is_(True))
-    logos = db.execute(query).scalars().all()
-    if current_logo_id and current_logo_id not in {logo.id for logo in logos}:
-        current = db.get(Logo, current_logo_id)
-        if current and user.role == ROLE_SUPER_ADMIN:
-            logos.append(current)
-    return logos
+    return logo_list_selectable_logos(db, user, current_logo_id)
 
 
 def list_active_logos(db) -> list[Logo]:
-    return db.execute(select(Logo).where(Logo.active.is_(True)).order_by(Logo.name)).scalars().all()
+    return logo_list_active_logos(db)
 
 
 def can_select_logo(db, user: User, logo_id: int) -> bool:
-    logo = db.get(Logo, logo_id)
-    if not logo:
-        return False
-    return user.role == ROLE_SUPER_ADMIN or logo.active
+    return logo_can_select_logo(db, user, logo_id)
 
 
 def can_select_active_logo(db, logo_id: int) -> bool:
-    logo = db.get(Logo, logo_id)
-    return bool(logo and logo.active)
+    return logo_can_select_active_logo(db, logo_id)
 
 
 def build_footer_html(footer: MailFooter | None) -> str:
-    if not footer:
-        return ""
-    parts = []
-    if footer.logo and footer.logo.active:
-        logo_url = url_for(
+    return MailDispatchService().build_footer(
+        footer,
+        logo_url_builder=lambda logo: url_for(
             "public_forms.logo_asset",
-            logo_id=footer.logo.id,
-            filename=footer.logo.filename,
+            logo_id=logo.id,
+            filename=logo.filename,
             _external=True,
-        )
-        parts.append(
-            '<div style="margin-bottom:16px;">'
-            f'<img src="{escape(logo_url)}" alt="{escape(footer.logo.name)}" '
-            'style="display:block;max-width:180px;max-height:80px;width:auto;height:auto;">'
-            "</div>"
-        )
-    if footer.html_body:
-        parts.append(footer.html_body)
-    return "\n".join(parts)
+        ),
+    )
 
 
 def parse_uploaded_form_definition(content: bytes, filename: str) -> dict:
@@ -1144,6 +1244,43 @@ def parse_uploaded_form_definition(content: bytes, filename: str) -> dict:
     if suffix == ".docx":
         return build_definition_from_docx(content, filename)
     raise ValueError("unsupported format")
+
+
+def normalize_admin_form_definition(form_definition: dict) -> dict:
+    normalized = normalize_form_definition(form_definition)
+    return FormConfigService().normalize_form_config(normalized)
+
+
+def validate_admin_form_config(form_definition: dict) -> list[str]:
+    validator = FormConfigValidator(skip_template_check=True)
+    return validator.validate(form_definition)
+
+
+def format_json(value: Any) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, indent=2)
+
+
+def build_form_definition_from_admin_form(current_definition: dict, form_data) -> dict:
+    definition = normalize_admin_form_definition(current_definition or {})
+    workflow = parse_workflow_json(form_data.get("workflow_json", ""), definition.get("workflow") or {})
+    workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
+    workflow["initial_step"] = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
+    workflow["requires_declaration"] = form_data.get("requires_declaration") == "on"
+    workflow["requires_contract"] = form_data.get("requires_contract") == "on"
+    workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
+    workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
+    definition["workflow"] = workflow
+    return normalize_admin_form_definition(definition)
+
+
+def parse_workflow_json(raw_value: str, fallback: dict) -> dict:
+    raw_value = str(raw_value or "").strip()
+    if not raw_value:
+        return dict(fallback or {})
+    parsed = json.loads(raw_value)
+    if not isinstance(parsed, dict):
+        raise ValueError("workflow must be an object")
+    return parsed
 
 
 def build_definition_from_html(html: str, filename: str) -> dict:
@@ -1214,6 +1351,7 @@ def sync_form_fields(db, form: Form, form_definition: dict) -> None:
         form_field.options = field.get("options") or []
         form_field.default_value = str(field.get("default", ""))
         form_field.section = current_section
+        form_field.stage = normalize_field_stage(field.get("stage"))
         form_field.sort_order = order
         form_field.active = True
         db.add(form_field)
@@ -1228,6 +1366,20 @@ def detect_form_fields(form_definition: dict) -> list[dict]:
             if isinstance(document, dict):
                 fields.extend(document.get("fields") or [])
     return fields
+
+
+def normalize_field_stage(value: Any) -> str:
+    stage = str(value or "").strip()
+    return stage if stage in SUPPORTED_FIELD_STAGES else FIELD_STAGE_INITIAL
+
+
+def form_has_additional_fields(form: Form) -> bool:
+    return has_additional_fields_after_acceptance(normalize_admin_form_definition(form.definition_json or {}))
+
+
+def admin_status_label(status_id: str, form: Form | None = None) -> str:
+    form_config = normalize_admin_form_definition(form.definition_json or {}) if form else {}
+    return workflow_status_label(status_id, form_config)
 
 
 def accessible_form_ids(db, user: User) -> list[int]:
@@ -1390,44 +1542,37 @@ def sort_submissions(submissions: list[FormSubmission], sort_field: str, directi
 
 
 def build_mail_context(form: Form, submission: FormSubmission | None, files: list[SubmissionFile]) -> dict:
-    context = build_platform_mail_context(form, submission, files)
-    if submission:
-        context["podpisz_url"] = url_for("documents.documents_to_sign", submission_id=submission.submission_id, _external=True)
-        if submission.pdf_filename and current_app.extensions.get("services"):
-            try:
-                document_url = current_app.extensions["services"].document_service.build_download_url(
-                    {"form_slug": submission.form_slug, "submission_id": submission.submission_id, "access_token": submission.access_token},
-                    submission.pdf_filename,
-                )
-                context["document_url"] = document_url
-                context["pobierz_url"] = document_url
-            except Exception:
-                context["document_url"] = ""
-                context["pobierz_url"] = ""
-    return context
+    return service_build_mail_context(
+        form,
+        submission,
+        files,
+        documents_to_sign_url_builder=lambda item: url_for(
+            "documents.documents_to_sign",
+            submission_id=item.submission_id,
+            _external=True,
+        ),
+        document_url_builder=lambda item, filename: current_app.extensions["services"].document_service.build_download_url(
+            {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},
+            filename,
+        ),
+    )
 
 
 def render_mail_text(raw_text: str, context: dict) -> str:
-    return render_template_text(raw_text or "", context)
+    return service_render_mail_text(raw_text, context)
 
 
 def preview_mail_context(form: Form, submission: FormSubmission | None = None) -> dict:
     context = build_mail_context(form, submission, [])
-    context.setdefault("imiona", "Jan")
-    context.setdefault("nazwisko", "Kowalski")
-    context.setdefault("email", "jan.kowalski@example.com")
-    context.setdefault("submission_id", "6ef64b28-530b-4f8e-9325-26ae83e7c11e")
-    context.setdefault("form_name", form.name)
-    context.setdefault("form_slug", form.slug)
-    context.setdefault("process_status", "FORM_SUBMITTED")
-    context.setdefault("status_label", "Wniosek zaakceptowany")
-    context.setdefault("officer_decision", "accepted")
-    context.setdefault("declaration_filename", "deklaracja.pdf")
-    context.setdefault("agreement_filename", "umowa.pdf")
-    context.setdefault("podpisz_url", url_for("documents.documents_to_sign", submission_id=context["submission_id"], _external=True))
-    context.setdefault("pobierz_url", "")
-    context.setdefault("document_url", "")
-    return context
+    return service_preview_mail_context(
+        form,
+        submission,
+        {
+            **context,
+            "podpisz_url": context.get("podpisz_url")
+            or url_for("documents.documents_to_sign", submission_id=context.get("submission_id", ""), _external=True),
+        },
+    )
 
 
 def send_admin_mail(db, form: Form, submission: FormSubmission, templates: list[MailTemplate], footers: list[MailFooter]) -> EmailLog:
@@ -1522,29 +1667,7 @@ def select_mail_template(templates: list[MailTemplate], submission: FormSubmissi
 
 
 def mail_template_type_score(template: MailTemplate, submission: FormSubmission) -> int:
-    template_type = (template.template_type or "").strip()
-    if template_type == "accepted" and submission.officer_decision == "accepted":
-        return 3
-    if template_type == "rejected" and submission.officer_decision == "rejected":
-        return 3
-    if template_type == "correction_required" and submission.process_status == "CORRECTION_REQUIRED":
-        return 3
-    if template_type == "confirmation" and submission.process_status == "FORM_SUBMITTED":
-        return 3
-    if template_type == "declaration_signed" and str(submission.declaration_signed).lower() == "tak":
-        return 3
-    if template_type == "agreement_ready" and submission.process_status == "AGREEMENT_READY":
-        return 3
-    if template_type == "agreement_signed_by_user" and str(submission.agreement_signed).lower() == "tak":
-        return 3
-    office_signed = (
-        getattr(submission, "office_agreement_signed", "")
-        or getattr(submission, "office_agreement_signed_email_sent", "")
-        or getattr(submission, "office_agreement_signed_email_sent_for", "")
-    )
-    if template_type == "agreement_signed_by_office" and str(office_signed).lower() == "tak":
-        return 3
-    return 0
+    return service_mail_template_type_score(template, submission)
 
 
 def send_mail_for_submission(

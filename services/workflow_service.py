@@ -11,6 +11,28 @@ from statuses import (
     WAITING_FOR_SIGNATURE,
     normalize_status,
 )
+from services.status_catalog import can_transition, get_status_label
+
+
+def workflow_status_label(status_id: str, form_config: dict | None = None) -> str:
+    status_id = str(status_id or "").strip()
+    if not status_id:
+        return "Nieznany status: brak"
+    workflow = (form_config or {}).get("workflow") or {}
+    labels = {}
+    raw_statuses = workflow.get("statuses") or []
+    if isinstance(raw_statuses, dict):
+        raw_statuses = [{"id": key, **(value if isinstance(value, dict) else {"label": value})} for key, value in raw_statuses.items()]
+    if isinstance(raw_statuses, list):
+        for status in raw_statuses:
+            if isinstance(status, dict) and status.get("id"):
+                labels[str(status["id"])] = str(status.get("label") or status.get("name") or status["id"])
+    for step in workflow.get("steps") or []:
+        if isinstance(step, dict) and step.get("id"):
+            labels.setdefault(str(step["id"]), str(step.get("label") or step.get("name") or step["id"]))
+    if status_id in labels:
+        return labels[status_id]
+    return get_status_label(status_id)
 
 
 class WorkflowService:
@@ -54,6 +76,35 @@ class WorkflowService:
                 metadata=metadata or {},
             )
         return updated
+
+    def transition_submission(
+        self,
+        submission,
+        target_status: str,
+        *,
+        actor: str = "system",
+        reason: str = "",
+        target_step: str | None = None,
+        strict: bool = False,
+    ):
+        old_status = getattr(submission, "process_status", None)
+        transition_allowed = can_transition(old_status, target_status)
+        if strict and not transition_allowed:
+            raise ValueError(f"Niedozwolone przejście statusu: {old_status} -> {target_status}")
+        submission.process_status = target_status
+        if target_step is not None:
+            submission.workflow_step = target_step
+        if self.audit_log_service:
+            self.audit_log_service.log_event(
+                "WORKFLOW_STATUS_CHANGED",
+                getattr(submission, "submission_id", ""),
+                getattr(submission, "form_slug", ""),
+                old_value=old_status,
+                new_value=target_status,
+                actor=actor,
+                metadata={"reason": reason, "validated": transition_allowed},
+            )
+        return submission
 
     def can_execute_step(self, submission: dict, form_config: dict, step_id: str) -> bool:
         current = self.get_current_step(submission, form_config)

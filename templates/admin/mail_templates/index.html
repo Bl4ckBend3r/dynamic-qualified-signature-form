@@ -1,0 +1,32 @@
+{% extends "admin/base.html" %}
+{% block title %}Szablony maili{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Komunikacja</p>
+        <h1>Szablony maili</h1>
+    </div>
+</div>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead><tr><th>Formularz</th><th>Slug</th><th>Status</th><th>Akcje</th></tr></thead>
+        <tbody>
+        {% for form in forms %}
+            <tr>
+                <td><strong>{{ form.name }}</strong></td>
+                <td><code>{{ form.slug }}</code></td>
+                <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
+                <td>
+                    <div class="admin-actions">
+                        <a href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
+                        <a href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
+                    </div>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4">Brak formularzy.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

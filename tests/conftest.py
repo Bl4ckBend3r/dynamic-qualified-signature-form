@@ -120,15 +120,19 @@ class InMemoryStorage:
         return self.form_definition
 
     def exists(self, path):
+        if path.endswith(f"/{self.csv_filename}") and self.csv_rows:
+            return True
         return path in self.direct_files or path in self.saved_pdfs
 
-    def save_pdf(self, slug, filename, pdf_bytes):
+    def save_pdf(self, slug, filename, pdf_bytes, **kwargs):
         self.saved_pdfs[f"output/{slug}/pdf/{filename}"] = pdf_bytes
 
     def get_pdf_bytes(self, slug, filename):
         return self.saved_pdfs[f"output/{slug}/pdf/{filename}"]
 
     def get_file_bytes(self, path):
+        if path.endswith(f"/{self.csv_filename}"):
+            return self.read_text_or_empty(path).encode("utf-8")
         if path in self.direct_files:
             return self.direct_files[path]
         return self.saved_pdfs[path]
@@ -173,18 +177,19 @@ def app(monkeypatch, tmp_path, form_definition):
     monkeypatch.setenv("NEXTCLOUD_FORMS_DIR", "Formularze")
     monkeypatch.setenv("NEXTCLOUD_OUTPUT_DIR", "output")
     monkeypatch.setenv("TEMP_DIR", str(tmp_path / "tmp"))
+    monkeypatch.setenv("DATABASE_URL", "")
 
     import app as app_module
+    import legacy_app
 
     storage = InMemoryStorage(form_definition)
-    monkeypatch.setattr(app_module, "storage", storage)
 
     def fake_generate_pdf(app, template_name, context, output_path):
         Path(output_path).write_bytes(b"%PDF-1.4\n% test pdf\n")
 
-    monkeypatch.setattr(app_module, "generate_pdf", fake_generate_pdf)
+    monkeypatch.setattr(legacy_app, "generate_pdf", fake_generate_pdf)
 
-    flask_app = app_module.app
+    flask_app = app_module.create_app(storage_override=storage)
     flask_app.config.update(
         TESTING=True,
         WTF_CSRF_ENABLED=False,

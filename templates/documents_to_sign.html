@@ -25,7 +25,7 @@
         </ol>
     </div>
 
-    <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
+    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
         <div class="form-field sign-id-field">
             <label for="submission_id">ID wniosku</label>
             <input
@@ -68,11 +68,12 @@
         {% set agreement_completed = result.agreement_signature_valid|default(false) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
+        {% set training_agreements = result.training_agreements|default([]) %}
 
         {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
         {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
         {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = agreement_generated and result.agreement_upload_url and not agreement_completed %}
+        {% set show_agreement_upload = ((agreement_generated and result.agreement_upload_url) or training_agreements) and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
 
         <div class="result-box" id="signing-result-box">
@@ -81,7 +82,7 @@
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
 
             {% if result.process_status %}
-                <p><strong>Status procesu:</strong> {{ result.process_status }}</p>
+                <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
             {% endif %}
 
             {% if result.agreement_blocked %}
@@ -91,7 +92,60 @@
                 {% endif %}
             {% endif %}
 
-            {% if show_declaration_stage %}
+            {% if result.needs_additional_fields %}
+                <div class="card" data-stage="additional-fields" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h3>Wniosek został zaakceptowany</h3>
+                        <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
+                    </div>
+                    <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        {% for field in result.additional_form_definition.fields %}
+                            {% if field.type == "section" %}
+                                <section class="form-section"><h3>{{ field.label|trusted_html }}</h3></section>
+                            {% elif field.type == "static_text" %}
+                                <div class="static-text">{{ field.label|trusted_html }}</div>
+                            {% else %}
+                                {% set value = result.additional_values.get(field.name, field.default) %}
+                                {% set has_error = result.additional_errors.get(field.name) %}
+                                <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
+                                    {% if field.type != "checkbox" %}
+                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</label>
+                                    {% endif %}
+                                    {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
+                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required{% endif %}>
+                                    {% elif field.type == "textarea" %}
+                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>{{ value }}</textarea>
+                                    {% elif field.type == "select" %}
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                                            <option value="">-- wybierz --</option>
+                                            {% for option in field.options %}
+                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    {% elif field.type == "radio" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% elif field.type == "checkbox" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                    {% if field.help_text %}<div class="help-text">{{ field.help_text|trusted_html }}</div>{% endif %}
+                                    {% if has_error %}<div class="error-text">{{ has_error }}</div>{% endif %}
+                                </div>
+                            {% endif %}
+                        {% endfor %}
+                        <div class="submit-row">
+                            <button type="submit" class="btn-primary">Zapisz dodatkowe informacje</button>
+                        </div>
+                    </form>
+                </div>
+            {% elif show_declaration_stage %}
                 <div
                     class="signing-document-card"
                     data-stage="declaration"
@@ -180,24 +234,68 @@
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
                         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
-                            <div class="form-row width-full">
-                                <label for="agreement_generated_at">Data wygenerowania umowy</label>
-                                <input
-                                    type="date"
-                                    id="agreement_generated_at"
-                                    name="agreement_generated_at"
-                                    value="{{ result.agreement_generated_at_iso }}"
-                                    required
-                                >
-                            </div>
-
                             <div class="submit-row">
                                 <button type="submit" class="btn-primary">Wygeneruj umowę</button>
                             </div>
                         </form>
                     {% endif %}
 
-                    {% if show_agreement_upload %}
+                    {% if training_agreements %}
+                        <div data-stage="agreement-upload">
+                            {% for agreement in training_agreements %}
+                                <div class="signing-document-card" style="margin-top: 16px;">
+                                    <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
+                                    <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
+                                    <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+
+                                    {% if agreement.generated_at %}
+                                        <p><strong>Data wygenerowania umowy:</strong> {{ agreement.generated_at }}</p>
+                                    {% endif %}
+
+                                    {% if agreement.url %}
+                                        <div class="download-links" style="margin-top: 16px;">
+                                            <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
+                                        </div>
+                                    {% endif %}
+
+                                    {% if agreement.signature_valid %}
+                                        <p style="margin-top: 16px;"><strong>Status podpisu:</strong> poprawny</p>
+                                    {% else %}
+                                        {% if agreement.signature_error %}
+                                            <p style="margin-top: 16px;"><strong>Status podpisu:</strong> niepoprawny</p>
+                                            <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
+                                        {% endif %}
+
+                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                                            <div class="form-row width-full">
+                                                <label class="upload-dropzone" data-upload-dropzone>
+                                                    <input
+                                                        type="file"
+                                                        id="signed_agreement_pdf_{{ loop.index }}"
+                                                        name="signed_agreement_pdf"
+                                                        accept="application/pdf"
+                                                        required
+                                                        class="upload-dropzone__input"
+                                                        data-upload-input
+                                                    >
+                                                    <span class="upload-dropzone__inner">
+                                                        <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                                        <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
+                                                        <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
+                                                        <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
+                                                    </span>
+                                                </label>
+                                            </div>
+
+                                            <div class="submit-row">
+                                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
+                                            </div>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% elif show_agreement_upload %}
                         <div data-stage="agreement-upload">
                             {% if result.agreement_filename %}
                                 <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
@@ -281,7 +379,7 @@
     gap: 14px;
     align-items: start;
     padding: 18px;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: var(--radius-sm);
     background: var(--surface-alt);
 }
@@ -310,7 +408,6 @@
 }
 
 .status-tile--success {
-    border-color: rgba(31, 122, 77, 0.35);
     background: #f2fbf6;
 }
 
@@ -319,12 +416,10 @@
 }
 
 .status-tile--warning {
-    border-color: rgba(183, 121, 31, 0.35);
     background: #fffaf0;
 }
 
 .status-tile--danger {
-    border-color: rgba(180, 35, 24, 0.35);
     background: #fff5f5;
 }
 
@@ -449,31 +544,9 @@ const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
-const REJECTED_STATUSES = new Set([
-    "OFFICER_REJECTED",
-    "PARTICIPANT_REJECTED",
-]);
-
-const DECLARATION_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_READY",
-    "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "AGREEMENT_SIGNED",
-    "AGREEMENT_SIGNATURE_INVALID",
-    "AGREEMENT_NOT_REQUIRED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
-const AGREEMENT_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_SIGNED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
 function isRejectedStatus(data) {
-    const processStatus = data.process_status || "";
     const message = (data.message || "").toLowerCase();
-    return REJECTED_STATUSES.has(processStatus) || message.includes("odrzucon");
+    return Boolean(data.is_rejected) || message.includes("odrzucon");
 }
 
 function hideElements(selector) {
@@ -548,8 +621,6 @@ function clearStatusTile() {
 }
 
 function renderSubmissionStatus(data) {
-    const processStatus = data.process_status || "";
-
     if (!data.exists) {
         renderStatusTile({
             variant: "warning",
@@ -570,7 +641,7 @@ function renderSubmissionStatus(data) {
         return;
     }
 
-    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
+    if (data.agreement_stage_completed || data.is_final) {
         renderStatusTile({
             variant: "success",
             icon: "✓",
@@ -684,8 +755,6 @@ function bindUploadDropzones() {
 }
 
 function applyProcessStageVisibility(data) {
-    const processStatus = data.process_status || "";
-
     if (isRejectedStatus(data)) {
         hideDeclarationStage();
         hideAgreementStage();
@@ -693,8 +762,8 @@ function applyProcessStageVisibility(data) {
         return;
     }
 
-    const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
-    const declarationIsCompleted = agreementIsCompleted || DECLARATION_COMPLETED_STATUSES.has(processStatus);
+    const agreementIsCompleted = Boolean(data.agreement_stage_completed || data.is_final);
+    const declarationIsCompleted = agreementIsCompleted || Boolean(data.declaration_stage_completed);
 
     if (declarationIsCompleted) {
         hideDeclarationStage();
@@ -753,7 +822,8 @@ async function checkAcceptanceStatus() {
             data.exists
             && data.can_sign_documents
             && !isRejectedStatus(data)
-            && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")
+            && !data.agreement_stage_completed
+            && !data.is_final
         ) {
             documentsSection.style.display = "block";
             generateButton.disabled = false;

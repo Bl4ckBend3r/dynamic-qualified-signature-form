@@ -63,7 +63,7 @@
 
         <a
             class="btn-primary"
-            href="{{ url_for('documents_to_sign', submission_id=result.submission_id) }}"
+            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id) }}"
         >
             Przejdź do dokumentów do podpisania
         </a>
@@ -169,7 +169,7 @@
     {% endif %}
 
     <div class="back-link">
-        <a href="{{ url_for('index') }}">Powrót do formularza</a>
+        <a href="{{ url_for('public_forms.index') }}">Powrót do formularza</a>
     </div>
 </div>
 {% endblock %}

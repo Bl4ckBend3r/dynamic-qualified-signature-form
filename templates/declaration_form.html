@@ -4,7 +4,7 @@
 
 {% block content %}
     <div class="back-link">
-        <a href="{{ url_for('documents_to_sign') }}">← Powrót do dokumentów do podpisania</a>
+        <a href="{{ url_for('documents.documents_to_sign') }}">← Powrót do dokumentów do podpisania</a>
     </div>
 
     <div class="card">
@@ -123,6 +123,35 @@
                                     </label>
                                 {% endfor %}
                             </div>
+                        {% elif field.type == "training_selection" %}
+                            {% set selected_trainings = values.get(field.name, "") %}
+                            <div class="option-list training-selection" data-training-selection data-max-total="{{ field.max_total_amount or '' }}">
+                                {% for item in field.catalog %}
+                                    {% set training_id = item.id or item.name %}
+                                    <label class="checkbox-item">
+                                        <input
+                                            type="checkbox"
+                                            id="{{ field.name }}_{{ loop.index }}"
+                                            name="{{ field.name }}"
+                                            value="{{ training_id }}"
+                                            data-price="{{ item.price or 0 }}"
+                                            {% if training_id in selected_trainings %}checked{% endif %}
+                                        >
+                                        <span>
+                                            {{ item.name }}
+                                            {% if item.price is defined %}
+                                                <strong>({{ item.price }} {{ field.currency or "PLN" }})</strong>
+                                            {% endif %}
+                                        </span>
+                                    </label>
+                                {% endfor %}
+                                {% if field.max_total_amount %}
+                                    <div class="help-text">
+                                        Limit: {{ field.max_total_amount }} {{ field.currency or "PLN" }}.
+                                        Wybrano: <span data-training-total>0</span> {{ field.currency or "PLN" }}.
+                                    </div>
+                                {% endif %}
+                            </div>
                         {% endif %}
 
                         {% if field.help_text %}
@@ -186,6 +215,25 @@
         document.querySelectorAll("input, select, textarea").forEach(el => {
             el.addEventListener("change", updateVisibility);
             el.addEventListener("input", updateVisibility);
+        });
+
+        document.querySelectorAll("[data-training-selection]").forEach(selection => {
+            const totalNode = selection.querySelector("[data-training-total]");
+            const maxTotal = Number(selection.dataset.maxTotal || "0");
+
+            function updateTrainingTotal() {
+                let total = 0;
+                selection.querySelectorAll("input[type='checkbox']:checked").forEach(input => {
+                    total += Number(input.dataset.price || "0");
+                });
+                if (totalNode) totalNode.textContent = total.toFixed(2);
+                selection.classList.toggle("has-error", Boolean(maxTotal && total > maxTotal));
+            }
+
+            selection.querySelectorAll("input[type='checkbox']").forEach(input => {
+                input.addEventListener("change", updateTrainingTotal);
+            });
+            updateTrainingTotal();
         });
 
         updateVisibility();

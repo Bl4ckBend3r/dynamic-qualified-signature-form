@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Zgloszenia{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Wszystkie formularze</p>
+        <h1>Zgloszenia</h1>
+    </div>
+</div>
+<form method="get" class="admin-card admin-filters">
+    <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
+    <select name="status">
+        <option value="">Wszystkie statusy</option>
+        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
+            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+    <select name="sort">
+        {% for option in ["created_at", "process_status", "nazwisko", "email", "submission_id"] %}
+            <option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+    <select name="direction">
+        <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
+        <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
+    </select>
+    <button class="admin-button-secondary" type="submit">Filtruj</button>
+</form>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Formularz</th>
+                <th>Data</th>
+                <th>Nazwisko</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Akcje</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for submission in submissions %}
+            {% set form = form_by_slug.get(submission.form_slug) %}
+            <tr>
+                <td><code>{{ submission.submission_id }}</code></td>
+                <td>{{ form.name if form else submission.form_slug }}</td>
+                <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
+                <td>{{ submission.nazwisko or "-" }}</td>
+                <td>{{ submission.email or "-" }}</td>
+                <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
+                <td>
+                    {% if form %}
+                        <div class="admin-actions">
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
+                            <a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+                        </div>
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="7">Brak zgloszen.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

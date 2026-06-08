@@ -451,6 +451,17 @@ class NextcloudStorage:
             "application/pdf",
         )
 
+    def pdf_storage_path(
+        self,
+        slug: str,
+        filename: str,
+        document_type: str | None = None,
+        signed: bool | None = None,
+    ) -> str:
+        resolved_document_type = document_type or self._infer_pdf_document_type_from_filename(filename)
+        resolved_signed = self._infer_pdf_signed_from_filename(filename) if signed is None else signed
+        return f"{self._pdf_directory(slug, resolved_document_type, resolved_signed)}/{Path(filename).name}"
+
     def save_declaration_pdf(
         self,
         slug: str,

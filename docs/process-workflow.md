@@ -1,47 +1,106 @@
-# Docelowy przebieg procesu obsługi zgłoszenia
+# Aktualny przebieg procesu obsługi zgłoszenia
 
-## Cel dokumentu
+Ten dokument opisuje aktualny stan aplikacji po refaktoryzacji na blueprinty, serwisy, repozytoria i konfigurowalne workflow dokumentów.
 
-Dokument opisuje docelowy proces obsługi zgłoszenia uczestnika w aplikacji formularzy online.
+Proces nie jest już pisany wyłącznie pod jeden formularz. Definicja formularza z Nextcloud jest normalizowana przez `FormConfigService` i od tego momentu kod pracuje na:
 
-Proces ma być możliwy do wykorzystania w wielu projektach, dlatego logika nie powinna być wpisana na sztywno dla jednego formularza. Poszczególne reguły, dokumenty, statusy i wiadomości e-mail powinny być konfigurowalne z poziomu definicji projektu oraz danych obsługiwanych w eBiurze.
+```text
+form_config["documents"]
+form_config["workflow"]
+form_config["notifications"]
+form_config["rules"]
+```
 
----
-
-## Główne założenia
-
-1. Uczestnik wypełnia formularz online.
-2. System zapisuje dane formularza w eBiurze jako tabelę danych.
-3. System generuje PDF formularza zgłoszeniowego.
-4. Urzędnik weryfikuje dane i wpisuje decyzję w odpowiednim polu tabeli.
-5. Akceptacja urzędnika uruchamia etap deklaracji.
-6. Deklaracja jest generowana automatycznie na podstawie danych z formularza.
-7. Uczestnik uzupełnia pola `TAK/NIE` oraz wymagane zgody w deklaracji.
-8. Część odpowiedzi w deklaracji może blokować wygenerowanie umowy.
-9. Deklaracja musi zostać podpisana elektronicznie.
-10. System weryfikuje podpis deklaracji.
-11. Jeżeli warunki są spełnione, system generuje umowę.
-12. Jeżeli warunki nie są spełnione, system blokuje umowę i zapisuje powód blokady.
-13. Jeżeli umowa została wygenerowana, przechodzi analogiczny proces podpisu i weryfikacji.
-14. System wysyła wiadomości e-mail zgodnie ze statusem procesu.
+Stary format `process.documents` nadal działa jako kompatybilność wsteczna.
 
 ---
 
-## Etapy procesu
+## Główne elementy techniczne
 
-### 1. Wypełnienie formularza online
+### Aplikacja
 
-Uczestnik wypełnia formularz online.
+`app.py` jest normalną fabryką Flask:
 
-System wykonuje następujące operacje:
+```python
+create_app(config_object=None, storage_override=None)
+```
 
-- waliduje dane formularza,
-- zapisuje dane zgłoszenia,
-- generuje PDF formularza zgłoszeniowego,
-- zapisuje PDF w przestrzeni eBiura / Nextcloud,
-- zapisuje dane formularza w tabeli CSV dostępnej dla eBiura.
+Fabryka tworzy kontener serwisów, zapisuje go w:
 
-Minimalne dane techniczne zgłoszenia:
+```python
+app.extensions["services"]
+```
+
+i rejestruje blueprinty:
+
+```text
+routes/public_forms.py
+routes/documents.py
+routes/api.py
+```
+
+`legacy_app.py` nie jest główną aplikacją. Pozostaje tymczasowo jako źródło niektórych helperów migracyjnych.
+
+### Serwisy
+
+Aktualny kontener tworzy:
+
+```text
+storage
+storage_repository
+submission_repository
+submission_service
+workflow_service
+document_service
+notification_service
+audit_log_service
+access_token_service
+form_config_service
+rules_service
+```
+
+Trasy pobierają zależności przez:
+
+```python
+current_app.extensions["services"]
+```
+
+---
+
+## Przebieg biznesowy
+
+### 1. Wysłanie formularza
+
+Użytkownik wypełnia formularz publiczny.
+
+Endpoint:
+
+```text
+POST /submit/<slug>
+```
+
+Route przekazuje obsługę do `SubmissionService.submit_form()`.
+
+Serwis:
+
+- pobiera dane z formularza,
+- waliduje je,
+- tworzy `submission_id`,
+- generuje `access_token`,
+- zapisuje zgłoszenie przez `SubmissionRepository`,
+- generuje główny PDF formularza,
+- zapisuje PDF,
+- zapisuje audit log `FORM_SUBMITTED`,
+- zapisuje audit log `PDF_GENERATED`,
+- wysyła `FORM_SUBMITTED`, jeżeli jest skonfigurowane.
+
+Status startowy:
+
+```text
+FORM_SUBMITTED
+```
+
+Minimalne pola techniczne:
 
 ```text
 submission_id
@@ -49,103 +108,110 @@ form_slug
 form_name
 created_at
 pdf_filename
+access_token
 process_status
-```
-
-Po zakończeniu tego etapu zgłoszenie otrzymuje status:
-
-```text
-FORM_SUBMITTED
 ```
 
 ---
 
-### 2. Weryfikacja zgłoszenia przez urzędnika
+### 2. Decyzja urzędnika
 
-Urzędnik weryfikuje dane uczestnika w tabeli eBiura.
+Urzędnik aktualizuje dane w CSV/eBiuro.
 
-Decyzja urzędnika jest wpisywana w odpowiednim polu tabeli:
+Obsługiwane pola:
 
 ```text
 officer_decision
+acceptance_required
+officer_decision_reason
+officer_decision_email_requested
+officer_decision_email_sent
+decision_email_sent
+decision_email_sent_for
 ```
 
-Dozwolone wartości:
+`officer_decision` jest polem docelowym.
+
+`acceptance_required` jest polem kompatybilności wstecznej.
+
+Dozwolone decyzje:
 
 ```text
 TAK
 NIE
 ```
 
-Dodatkowe pola:
-
-```text
-officer_decision_reason
-officer_decision_email_requested
-officer_decision_email_sent
-```
-
-Znaczenie pól:
-
-- `officer_decision` — decyzja urzędnika,
-- `officer_decision_reason` — powód odrzucenia lub komentarz,
-- `officer_decision_email_requested` — informacja, czy system ma wysłać e-mail,
-- `officer_decision_email_sent` — informacja, czy e-mail został wysłany.
-
-Jeżeli decyzja urzędnika to `TAK`, proces przechodzi do generowania deklaracji.
-
-Jeżeli decyzja urzędnika to `NIE`, proces kończy się odrzuceniem zgłoszenia i może zostać wysłany e-mail do uczestnika.
-
-Statusy po decyzji urzędnika:
+Statusy:
 
 ```text
 OFFICER_ACCEPTED
 OFFICER_REJECTED
+WAITING_FOR_OFFICER_DECISION
 ```
+
+Endpoint statusu:
+
+```text
+GET /api/submissions/<submission_id>/acceptance-status
+```
+
+Ten endpoint jest idempotentny dla maili decyzji. Odświeżanie strony nie powinno wysyłać kolejnych wiadomości dla tej samej decyzji.
 
 ---
 
-### 3. Generowanie deklaracji uczestnictwa
+### 3. Strona dokumentów do podpisania
 
-Po akceptacji zgłoszenia przez urzędnika system generuje deklarację uczestnictwa.
-
-Deklaracja jest generowana automatycznie na podstawie danych z formularza.
-
-Dane uczestnika nie mogą być przepisywane ręcznie.
-
-System powinien używać mapowania pól formularza na pola dokumentu deklaracji.
-
-Przykładowe mapowanie:
-
-```json
-{
-  "first_name": "imiona",
-  "last_name": "nazwisko",
-  "pesel": "pesel",
-  "email": "email",
-  "phone": "telefon"
-}
-```
-
-Plik deklaracji powinien być nazwany według schematu:
+Endpoint:
 
 ```text
-Imie_Nazwisko-deklaracja.pdf
+GET /do-podpisania
+POST /do-podpisania
+GET /do-podpisania?submission_id=<id>
 ```
 
-Przykład:
+Jeżeli `submission_id` jest w query stringu, strona od razu pokazuje aktualny stan tego wniosku. Po operacjach na dokumentach redirect wraca na:
 
 ```text
-Jan_Kowalski-deklaracja.pdf
+/do-podpisania?submission_id=<id>
 ```
 
-Po wygenerowaniu deklaracji proces otrzymuje status:
+Dzięki temu użytkownik nie trafia po każdej operacji do pustego formularza z samym ID wniosku.
+
+Widok jest budowany przez warstwę pośrednią w `routes/documents.py`:
 
 ```text
-DECLARATION_READY
+build_documents_to_sign_result()
 ```
 
-Następnie:
+Docelowo template powinien pracować na liście dokumentów i akcji workflow, a nie na pojedynczych polach historycznych.
+
+---
+
+### 4. Uzupełnienie deklaracji
+
+Endpoint:
+
+```text
+GET/POST /declaration/<slug>/<submission_id>
+```
+
+Pola deklaracji pochodzą z konfiguracji dokumentu `declaration`.
+
+Obsługiwane jest:
+
+```text
+documents[].fields
+process.documents.declaration.fields
+```
+
+Po poprawnym wysłaniu formularza deklaracji:
+
+- dane deklaracji są zapisywane w zgłoszeniu,
+- `RulesService` stosuje reguły,
+- `DocumentService.generate_document(..., "declaration", force=True)` generuje deklarację PDF,
+- użytkownik wraca na `/do-podpisania?submission_id=<id>`.
+
+Status po wygenerowaniu deklaracji:
 
 ```text
 DECLARATION_WAITING_FOR_SIGNATURE
@@ -153,131 +219,210 @@ DECLARATION_WAITING_FOR_SIGNATURE
 
 ---
 
-### 4. Uzupełnienie deklaracji przez uczestnika
+### 5. Podpis deklaracji
 
-Uczestnik uzupełnia w deklaracji wymagane pola `TAK/NIE` oraz zgody.
+Użytkownik pobiera deklarację PDF, podpisuje ją zewnętrznie i wgrywa podpisany PDF.
 
-Część pól może być krytyczna dla dalszego procesu.
-
-Przykładowe pola krytyczne:
+Endpoint:
 
 ```text
-meets_project_requirements
-accepts_terms
-accepts_personal_data_processing
-accepts_monitoring_obligations
+POST /upload-declaration-signed/<slug>/<submission_id>
 ```
 
-Jeżeli uczestnik zaznaczy odpowiedź blokującą udział w projekcie, system nie powinien generować umowy.
-
-Powód blokady powinien zostać zapisany w tabeli eBiura.
-
----
-
-### 5. Podpisanie deklaracji
-
-Deklaracja musi zostać podpisana elektronicznie.
-
-Dopuszczalne typy podpisu:
+Dopuszczalne podpisy:
 
 ```text
 mSzafir
 Profil Zaufany
 ```
 
-Inne typy podpisu powinny być oznaczone jako niedopuszczalne.
+Po uploadzie system:
 
-Po wgraniu podpisanej deklaracji system zapisuje plik i uruchamia weryfikację podpisu.
+- zapisuje podpisany PDF, jeśli podpis jest poprawny,
+- zapisuje pola podpisu deklaracji,
+- zapisuje audit log `SIGNED_DOCUMENT_UPLOADED`,
+- zapisuje `SIGNATURE_VERIFIED` albo `SIGNATURE_INVALID`.
 
----
-
-### 6. Weryfikacja podpisu deklaracji
-
-System sprawdza:
-
-- czy dokument został podpisany,
-- czy podpis ma poprawną strukturę techniczną,
-- czy podpis należy do dopuszczalnego typu,
-- czy podpisany dokument nie został zmieniony po podpisaniu,
-- czy podpis dotyczy właściwego uczestnika,
-- czy dane osoby podpisującej są zgodne z danymi z formularza.
-
-Wynik weryfikacji powinien zostać zapisany w tabeli eBiura.
-
-Przykładowe pola:
+Pola:
 
 ```text
 declaration_signed
+declaration_signed_filename
 declaration_signature_type
 declaration_signature_valid
 declaration_signature_error
-declaration_signed_filename
 ```
 
 Statusy:
 
 ```text
-DECLARATION_SIGNED
+AGREEMENT_READY
 DECLARATION_SIGNATURE_INVALID
+PARTICIPANT_ACCEPTED
 ```
+
+`PARTICIPANT_ACCEPTED` może pojawić się po deklaracji tylko wtedy, gdy formularz nie wymaga umowy.
 
 ---
 
-### 7. Decyzja o wygenerowaniu umowy
+### 6. Reguły blokowania umowy
 
-Po poprawnym podpisaniu deklaracji system sprawdza reguły kwalifikowalności.
-
-Jeżeli warunki są spełnione, system generuje umowę.
-
-Jeżeli warunki nie są spełnione, system:
-
-- nie generuje umowy,
-- oznacza umowę jako zablokowaną,
-- zapisuje powód blokady,
-- umożliwia wyświetlenie powodu blokady urzędnikowi w eBiurze,
-- uruchamia możliwość wysłania wiadomości e-mail o niespełnieniu wymogów.
-
-Przykładowe pola:
+Reguły są konfigurowane w JSON w sekcji:
 
 ```text
-agreement_required
+rules
+```
+
+Przykład:
+
+```json
+{
+  "id": "block_agreement_if_not_eligible",
+  "when": {
+    "any": [
+      { "field": "deklaracja_18_lat", "equals": "Nie" },
+      { "field": "deklaracja_lubuskie", "equals": "Nie" }
+    ]
+  },
+  "then": [
+    { "action": "set_field", "field": "agreement_blocked", "value": "Tak" },
+    { "action": "set_field", "field": "agreement_block_reason", "value": "Warunki nie zostały spełnione na podstawie deklaracji uczestnika." },
+    { "action": "set_status", "value": "AGREEMENT_BLOCKED" }
+  ]
+}
+```
+
+Obsługiwane operatory:
+
+```text
+equals
+not_equals
+in
+not_in
+any
+all
+```
+
+Obsługiwane akcje:
+
+```text
+set_field
+set_status
+block_document
+unblock_document
+```
+
+Jeżeli reguły zarządzają blokadą umowy i po korekcie deklaracji warunki blokady nie są już spełnione, system czyści stare:
+
+```text
 agreement_blocked
 agreement_block_reason
-agreement_generated
-agreement_filename
-```
-
-Statusy:
-
-```text
-AGREEMENT_BLOCKED
-AGREEMENT_READY
-AGREEMENT_WAITING_FOR_SIGNATURE
 ```
 
 ---
 
-### 8. Podpisanie i weryfikacja umowy
+### 7. Generowanie umowy lub umów szkoleniowych
 
-Jeżeli umowa została wygenerowana, przechodzi analogiczny proces jak deklaracja.
+Endpoint:
 
-System powinien rozróżniać:
+```text
+POST /agreements/<slug>/<submission_id>/generate
+```
 
-- umowę wymaganą,
-- umowę niewymaganą,
-- umowę zablokowaną,
-- umowę wygenerowaną,
-- umowę podpisaną poprawnie,
-- umowę podpisaną niepoprawnie.
+Data wygenerowania umowy jest ustawiana automatycznie z dnia generowania:
 
-Przykładowe pola:
+```python
+date.today().isoformat()
+```
+
+Użytkownik nie wybiera tej daty na stronie.
+
+`DocumentService` obsługuje:
+
+```text
+generate_document()
+generate_documents_for_collection()
+```
+
+Umowa może być pojedyncza:
+
+```json
+{
+  "id": "agreement",
+  "kind": "generated_pdf",
+  "template": "Template/umowa.html"
+}
+```
+
+albo powtarzana po kolekcji, na przykład po wybranych szkoleniach:
+
+```json
+{
+  "id": "training_agreement",
+  "label": "Umowa szkoleniowa",
+  "kind": "generated_pdf",
+  "template": "Template/umowa-wiedza-kluczem.html",
+  "filename_pattern": "{first_name}_{last_name}-{training_id}-umowa.pdf",
+  "signature_required": true,
+  "repeat_over": "selected_trainings",
+  "repeat_item_alias": "training",
+  "numbering": {
+    "number_pattern": "{submission_id}/{agreement_sequence}/{generated_date}"
+  }
+}
+```
+
+Po wygenerowaniu:
+
+```text
+agreement_generated = Tak
+agreement_generated_at = YYYY-MM-DD
+process_status = AGREEMENT_WAITING_FOR_SIGNATURE
+```
+
+Dla wielu umów szczegóły są w polu JSON:
+
+```text
+training_agreements
+```
+
+---
+
+### 8. Podpis umowy przez uczestnika
+
+Aktualny user-facing upload umowy dotyczy podpisu uczestnika/osoby prywatnej.
+
+Endpoint:
+
+```text
+POST /agreements/<slug>/<submission_id>/<agreement_id>/upload
+```
+
+Użytkownik:
+
+1. Pobiera umowę PDF.
+2. Podpisuje ją zewnętrznie, na przykład Profilem Zaufanym albo mSzafirem.
+3. Wgrywa podpisany PDF na stronie.
+
+System:
+
+- weryfikuje podpis,
+- zapisuje podpisany PDF,
+- aktualizuje wpis w `training_agreements`, jeżeli umów jest wiele,
+- ustawia `agreement_signature_valid`,
+- po podpisaniu kompletu umów ustawia status `AGREEMENT_SIGNED`,
+- wysyła zdarzenie `AGREEMENT_SIGNED`.
+
+Pola:
 
 ```text
 agreement_signed
+agreement_signed_filename
 agreement_signature_type
 agreement_signature_valid
 agreement_signature_error
-agreement_signed_filename
+agreement_success_email_sent
+agreement_success_email_sent_for
 ```
 
 Statusy:
@@ -285,84 +430,171 @@ Statusy:
 ```text
 AGREEMENT_SIGNED
 AGREEMENT_SIGNATURE_INVALID
-```
-
-Po poprawnym podpisaniu i zweryfikowaniu umowy uczestnik może zostać uznany za zapisanego do programu.
-
-Status:
-
-```text
-PARTICIPANT_ACCEPTED
+AGREEMENT_WAITING_FOR_SIGNATURE
 ```
 
 ---
 
-### 9. Wysyłka wiadomości e-mail
+### 9. Podpis umowy przez urząd
 
-System powinien obsługiwać kilka typów wiadomości e-mail.
+Podpis urzędu jest kolejnym etapem biznesowym po podpisie uczestnika.
 
-#### 9.1. Akceptacja przez urzędnika
+Aktualny kod nie ma osobnej publicznej trasy dla uploadu kontrasygnaty urzędu.
 
-Wysyłana po decyzji `TAK` wpisanej przez urzędnika.
-
-Warunek:
+W kodzie pozostawiono pola przygotowujące pod ten etap:
 
 ```text
-officer_decision = TAK
-officer_decision_email_requested = TAK
-officer_decision_email_sent != TAK
+office_agreement_signed_email_sent
+office_agreement_signed_email_sent_for
 ```
 
-#### 9.2. Odrzucenie przez urzędnika
-
-Wysyłana po decyzji `NIE` wpisanej przez urzędnika.
-
-Warunek:
+`NotificationService` potrafi zbudować treść tekstową również dla zdarzenia:
 
 ```text
-officer_decision = NIE
-officer_decision_email_requested = TAK
-officer_decision_email_sent != TAK
+OFFICE_AGREEMENT_SIGNED
 ```
 
-#### 9.3. Poprawne wgranie umowy
+To zdarzenie jest zarezerwowane dla przyszłej integracji lub ręcznego procesu urzędowego.
 
-Wysyłana po poprawnym wgraniu i zweryfikowaniu podpisanej umowy.
+---
 
-Warunek:
+### 10. Pobieranie PDF i tokeny
+
+Każde nowe zgłoszenie dostaje:
 
 ```text
-agreement_signed = TAK
-agreement_signature_valid = TAK
-agreement_success_email_sent != TAK
+access_token
 ```
 
-#### 9.4. Odrzucenie z powodu niespełnienia wymogów
+Linki do PDF powinny być budowane przez:
 
-Wysyłana, gdy odpowiedzi uczestnika blokują wygenerowanie umowy.
+```python
+DocumentService.build_download_url(submission, filename, signed=False)
+```
 
-Warunek:
+Endpointy pobrania:
 
 ```text
-agreement_blocked = TAK
-requirements_rejection_email_sent != TAK
+GET /downloads/pdfs/<slug>/<filename>?token=<access_token>
+GET /downloads/signed/<slug>/<filename>?token=<access_token>
+```
+
+Prawidłowy token daje `200`.
+
+Błędny token daje `403`.
+
+Brak tokenu w linku daje `403`.
+
+Dla starych zgłoszeń bez tokenu `DocumentService.ensure_access_token()` może wygenerować token przy budowaniu linku i zapisać go przez repozytorium.
+
+---
+
+### 11. Powiadomienia e-mail
+
+Powiadomienia są event-based.
+
+Konfiguracja w JSON:
+
+```json
+"notifications": [
+  {
+    "event": "AGREEMENT_SIGNED",
+    "to": ["form_notifications"],
+    "template": "Template/Mail/agreement_signed.html",
+    "subject": "Umowa podpisana przez uczestnika"
+  }
+]
+```
+
+Obsługiwani odbiorcy:
+
+```text
+participant
+form_notifications
+field:nazwa_pola
+literalny adres e-mail
+```
+
+`form_notifications` używa:
+
+```text
+FORM_NOTIFICATION_EMAILS
+```
+
+Jeżeli JSON formularza nie zawiera `AGREEMENT_SIGNED`, trasa uploadu umowy dodaje fallback:
+
+```text
+event: AGREEMENT_SIGNED
+template: Template/Mail/agreement_signed.html
+to: form_notifications
+```
+
+Szablony maili mogą być lokalne albo z Nextcloud. Jeśli lokalny szablon nie istnieje, `NotificationService` próbuje odczytać go ze storage/Nextcloud. Jeśli szablonu nie ma, używa niepustej treści domyślnej.
+
+Wysyłka decyzji urzędnika jest idempotentna:
+
+```text
+decision_email_sent
+decision_email_sent_for
+officer_decision_email_sent
+```
+
+Wysyłka `AGREEMENT_SIGNED` jest idempotentna:
+
+```text
+agreement_success_email_sent
+agreement_success_email_sent_for
+```
+
+---
+
+### 12. Audit log
+
+Audit log obsługuje repozytorium storage:
+
+```text
+output/<form_slug>/audit/audit_log.jsonl
+```
+
+Istnieje też lokalny fallback:
+
+```text
+TEMP_DIR/audit_log.jsonl
+```
+
+Zdarzenia używane w procesie:
+
+```text
+FORM_SUBMITTED
+PDF_GENERATED
+DOCUMENT_GENERATED
+DOCUMENT_DOWNLOADED
+SIGNED_DOCUMENT_UPLOADED
+SIGNATURE_VERIFIED
+SIGNATURE_INVALID
+OFFICER_DECISION_CHANGED
+DECISION_EMAIL_SENT
+WORKFLOW_STATUS_CHANGED
+PROCESS_COMPLETED
 ```
 
 ---
 
 ## Statusy procesu
 
-Docelowa lista statusów:
+Aktualnie używane i obsługiwane statusy:
 
 ```text
 FORM_SUBMITTED
 WAITING_FOR_OFFICER_DECISION
 OFFICER_ACCEPTED
 OFFICER_REJECTED
+DECLARATION_NOT_REQUIRED
 DECLARATION_READY
 DECLARATION_WAITING_FOR_SIGNATURE
 DECLARATION_SIGNED
 DECLARATION_SIGNATURE_INVALID
+AGREEMENT_NOT_REQUIRED
 AGREEMENT_BLOCKED
 AGREEMENT_READY
 AGREEMENT_WAITING_FOR_SIGNATURE
@@ -373,9 +605,11 @@ PARTICIPANT_REJECTED
 PROCESS_COMPLETED
 ```
 
+Uwaga: `AGREEMENT_SIGNED` oznacza aktualnie poprawnie zweryfikowaną umowę podpisaną przez uczestnika. Nie oznacza jeszcze podpisu urzędu.
+
 ---
 
-## Minimalny zestaw pól w tabeli eBiura
+## Minimalny zestaw pól CSV/eBiuro
 
 ```text
 submission_id
@@ -387,13 +621,18 @@ first_name
 last_name
 pesel
 pdf_filename
+access_token
 process_status
 
 officer_decision
 officer_decision_reason
 officer_decision_email_requested
 officer_decision_email_sent
+decision_email_sent
+decision_email_sent_for
+acceptance_required
 
+declaration_required
 declaration_generated
 declaration_filename
 declaration_signed
@@ -406,55 +645,34 @@ agreement_required
 agreement_blocked
 agreement_block_reason
 agreement_generated
+agreement_generated_at
 agreement_filename
 agreement_signed
 agreement_signature_type
 agreement_signature_valid
 agreement_signature_error
 agreement_signed_filename
+training_agreements
 
 agreement_success_email_sent
+agreement_success_email_sent_for
+office_agreement_signed_email_sent
+office_agreement_signed_email_sent_for
 requirements_rejection_email_sent
 ```
 
 ---
 
-## Kompatybilność z aktualnym projektem
+## Testy
 
-Aktualny projekt używa pola:
+Pełny zestaw:
 
-```text
-acceptance_required
+```powershell
+python -m pytest -q
 ```
 
-Docelowo pole powinno zostać zastąpione przez:
+Aktualnie oczekiwany wynik:
 
 ```text
-officer_decision
+81 passed
 ```
-
-Na etapie migracji system powinien obsługiwać oba pola:
-
-- `officer_decision` jako nowe pole docelowe,
-- `acceptance_required` jako pole kompatybilności wstecznej.
-
-Jeżeli `officer_decision` jest puste, system może odczytać decyzję z `acceptance_required`.
-
----
-
-## Zakres kolejnego etapu
-
-Kolejny etap powinien dodać techniczną warstwę procesu:
-
-```text
-services/process_service.py
-```
-
-Moduł powinien odpowiadać za:
-
-- normalizację decyzji urzędnika,
-- ustalanie statusu procesu,
-- wykrywanie, czy można przejść do podpisywania deklaracji,
-- wykrywanie, czy umowa powinna być wygenerowana,
-- obsługę powodów blokady,
-- zachowanie kompatybilności z aktualnym polem `acceptance_required`.

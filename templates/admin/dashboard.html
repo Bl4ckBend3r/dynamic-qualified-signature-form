@@ -1,0 +1,17 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Panel administracyjny</p>
+        <h1>Dashboard</h1>
+    </div>
+</div>
+<div class="admin-stats-grid">
+    <div class="admin-card admin-stat"><span>Liczba formularzy</span><strong>{{ forms_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Liczba zgloszen</span><strong>{{ submissions_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Oczekujace zgloszenia</span><strong>{{ pending_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Liczba dokumentow</span><strong>{{ documents_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Bledy maili</span><strong>{{ email_errors_count or 0 }}</strong></div>
+</div>
+{% endblock %}

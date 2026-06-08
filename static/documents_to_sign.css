@@ -1,0 +1,170 @@
+.signing-document-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    padding: 18px;
+}
+
+.status-tiles {
+    display: grid;
+    gap: 14px;
+    margin-top: 24px;
+}
+
+.status-tile {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 14px;
+    align-items: start;
+    padding: 18px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+}
+
+.status-tile__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: #fff;
+    font-weight: 800;
+}
+
+.status-tile__title {
+    margin: 0 0 4px;
+    color: var(--navy);
+    font-weight: 800;
+}
+
+.status-tile__description {
+    margin: 0;
+    color: var(--muted);
+}
+
+.status-tile--success {
+    background: #f2fbf6;
+}
+
+.status-tile--success .status-tile__icon {
+    background: var(--success);
+}
+
+.status-tile--warning {
+    background: #fffaf0;
+}
+
+.status-tile--danger {
+    background: #fff5f5;
+}
+
+.status-tile--danger .status-tile__icon {
+    background: var(--danger);
+}
+
+.download-replaced-actions {
+    display: flex;
+    justify-content: flex-start;
+    margin: 16px 0 24px;
+}
+
+.upload-card .card-header {
+    gap: 6px;
+    margin-bottom: 30px;
+}
+
+.upload-card .card-header h3,
+.upload-card .card-header p {
+    margin: 0;
+}
+
+.upload-dropzone {
+    display: block;
+    width: 100%;
+    cursor: pointer;
+}
+
+.upload-dropzone__input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+    border: 0;
+    padding: 0;
+}
+
+.upload-dropzone__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 190px;
+    padding: 28px;
+    border: 2px dashed var(--gold);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    color: var(--navy);
+    text-align: center;
+    transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.upload-dropzone:hover .upload-dropzone__inner,
+.upload-dropzone.is-dragover .upload-dropzone__inner,
+.upload-dropzone.has-file .upload-dropzone__inner {
+    border-color: var(--gold-dark);
+    background: #fffaf0;
+    box-shadow: 0 10px 28px rgba(29, 46, 91, 0.08);
+}
+
+.upload-dropzone:hover .upload-dropzone__inner,
+.upload-dropzone.is-dragover .upload-dropzone__inner {
+    transform: translateY(-2px);
+}
+
+.upload-dropzone__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    margin-bottom: 14px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: #fff;
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+.upload-dropzone__title {
+    font-size: 1.2rem;
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.upload-dropzone__description {
+    margin-top: 8px;
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.upload-dropzone__filename {
+    margin-top: 14px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.92rem;
+    font-weight: 700;
+    word-break: break-word;
+}
+
+.upload-dropzone.has-file .upload-dropzone__filename {
+    color: var(--success);
+}

@@ -225,6 +225,64 @@ Uruchomiona komenda:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
+## Etap P2.2 — przepisanie admin form service
+
+Wykonano bez zmiany publicznych URL-i, bez zmiany nazw endpointow, bez migracji bazy i bez usuwania `legacy_app.py`:
+
+- `routes/admin.py` importuje helpery formularzy z `services/admin_form_service.py`,
+- usunieto lokalne duplikaty funkcji: `parse_uploaded_form_definition`, `normalize_admin_form_definition`, `validate_admin_form_config`, `build_form_definition_from_admin_form`, `parse_workflow_json`, `build_definition_from_html`, `build_definition_from_docx`, `html_attr`, `humanize_field_name`, `sync_form_fields`, `detect_form_fields`, `normalize_field_stage`, `form_has_additional_fields`,
+- walidacja definicji formularza i konfiguracji admina jest wykonywana przez `validate_admin_form_config()` w serwisie,
+- nie tworzono `admin_template_import_service.py`; importery HTML/DOCX pozostaja w `admin_form_service.py`,
+- usunieto z `routes/admin.py` importy potrzebne tylko przez stare lokalne helpery.
+
+Testy dodane lub zmienione w P2.2:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_admin_form_service.py` | DOCX parser, normalizacja i walidacja konfiguracji, niepoprawna definicja, `parse_workflow_json`, `form_has_additional_fields`. |
+| `tests/test_admin_panel.py` | Regresja uploadu formularzy, edycji workflow i list admina pozostala zielona. |
+
+Wynik testow P2.2:
+
+```text
+187 passed
+```
+
+Uruchomiona komenda:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
+## Etap P2.3 — pierwszy podzial admina
+
+Wykonano pierwszy bezpieczny krok bez zmiany publicznych URL-i, nazw endpointow, modelu bazy, migracji i bez usuwania `legacy_app.py`.
+
+- nie utworzono `routes/admin/logos.py`, bo obecny routing ma `routes/admin.py` jako plik, a aplikacja importuje `from routes.admin import bp as admin_bp`; zmiana na pakiet wymaga osobnego kroku importowego,
+- `routes/admin.py` pozostal adapterem dla endpointow `/admin/logos`, `/admin/logos/<id>/toggle`, `/admin/logos/<id>/edit` i `/admin/logos/<id>/asset`,
+- przeniesiono pozostala logike logo do `services/logo_service.py`: liste widocznych logo dla admina, tworzenie logo z uploadu, aktualizacje metadanych oraz rozstrzyganie sciezki assetu z kontrola roli,
+- endpointy logo dalej korzystaja z tych samych URL-i i nazw `admin.logos_list`, `admin.logo_toggle`, `admin.logo_edit`, `admin.logo_asset`,
+- poprawiono odczyt stanu aktywnosci po toggle tak, aby komunikat flash nie korzystal z encji po zamknieciu sesji.
+
+Testy dodane lub zmienione w P2.3:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_logo_service.py` | Tworzenie logo z uploadu, widocznosc logo dla superadmina i managera, sciezka assetu oraz aktualizacja metadanych. |
+| `tests/test_admin_panel.py` | Toggle logo, pobranie assetu pod starym URL-em oraz blokada operacji toggle dla zwyklego admina. |
+
+Wynik testow P2.3:
+
+```text
+191 passed
+```
+
+Uruchomiona komenda:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
 ## Pozostawione na kolejne etapy
 
 | Priorytet | Zadanie |

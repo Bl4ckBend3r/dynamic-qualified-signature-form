@@ -1,4 +1,6 @@
 import json
+import zipfile
+from io import BytesIO
 
 import pytest
 
@@ -8,12 +10,17 @@ from database import create_engine, create_session_factory
 from form_loader import FIELD_STAGE_INITIAL
 from models import Base, Form
 from services.admin_form_service import (
+    build_definition_from_docx,
     build_definition_from_html,
     build_form_definition_from_admin_form,
     detect_form_fields,
+    form_has_additional_fields,
+    normalize_admin_form_definition,
     normalize_field_stage,
+    parse_workflow_json,
     parse_uploaded_form_definition,
     sync_form_fields,
+    validate_admin_form_config,
 )
 
 
@@ -32,6 +39,46 @@ def test_parse_uploaded_json_definition():
     definition = parse_uploaded_form_definition(json.dumps({"title": "Test", "fields": []}).encode(), "test.json")
 
     assert definition["title"] == "Test"
+
+
+def test_build_definition_from_docx_detects_template_placeholders():
+    content = BytesIO()
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>{{ imiona }}</w:t></w:r></w:p></w:body></w:document>"
+    )
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+
+    definition = build_definition_from_docx(content.getvalue(), "formularz.docx")
+
+    assert definition["title"] == "formularz"
+    assert definition["fields"][0]["name"] == "imiona"
+
+
+def test_normalize_and_validate_admin_form_config():
+    definition = normalize_admin_form_definition(
+        {
+            "title": "Form",
+            "fields": [{"type": "text", "name": "imie", "label": "ImiÄ™"}],
+        }
+    )
+
+    assert definition["fields"][0]["stage"] == FIELD_STAGE_INITIAL
+    assert validate_admin_form_config(definition) == []
+
+
+def test_validate_admin_form_config_reports_invalid_definition():
+    errors = validate_admin_form_config({"title": "Broken", "fields": [{"type": "text"}]})
+
+    assert errors
+
+
+def test_parse_workflow_json_requires_object():
+    assert parse_workflow_json("", {"initial_step": "submission"}) == {"initial_step": "submission"}
+    with pytest.raises(ValueError):
+        parse_workflow_json("[]", {})
 
 
 def test_detect_form_fields_includes_document_fields():
@@ -94,3 +141,19 @@ def test_sync_form_fields_keeps_database_shape(tmp_path):
         assert form.fields[0].name == "imie"
         assert form.fields[0].section == "Sekcja"
         assert form.fields[0].active is True
+
+
+def test_form_has_additional_fields_detects_after_acceptance_stage():
+    form = Form(
+        slug="test",
+        name="Test",
+        title="Test",
+        definition_json={
+            "fields": [
+                {"type": "text", "name": "initial", "stage": "initial_submission"},
+                {"type": "text", "name": "after", "stage": "after_officer_acceptance"},
+            ]
+        },
+    )
+
+    assert form_has_additional_fields(form)

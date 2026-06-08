@@ -14,7 +14,24 @@
 
 | Element | Nowe miejsce | Uwagi |
 | --- | --- | --- |
-| Helpery formularzy: `parse_uploaded_form_definition`, `normalize_admin_form_definition`, `validate_admin_form_config`, `build_form_definition_from_admin_form`, `sync_form_fields`, `detect_form_fields`, `normalize_field_stage`, `form_has_additional_fields` | `services/admin_form_service.py` | Serwis i testy zostaly dodane. Pelne przepiecie importow w `routes/admin.py` zostaje jako kolejny maly commit, zeby nie laczyc go z wydzieleniem assetow. |
+| Helpery formularzy: `parse_uploaded_form_definition`, `normalize_admin_form_definition`, `validate_admin_form_config`, `build_form_definition_from_admin_form`, `sync_form_fields`, `detect_form_fields`, `normalize_field_stage`, `form_has_additional_fields` | `services/admin_form_service.py` | Serwis i testy zostaly dodane. |
+
+## Wykonane w P2.2
+
+| Element | Nowe miejsce | Uwagi |
+| --- | --- | --- |
+| Przepiecie `routes/admin.py` na helpery formularzy | `services/admin_form_service.py` | Lokalne duplikaty helperow zostaly usuniete z routingu; `routes/admin.py` importuje funkcje z serwisu. |
+| Importery HTML/DOCX i helpery niskiego poziomu | `services/admin_form_service.py` | `build_definition_from_html`, `build_definition_from_docx`, `html_attr`, `humanize_field_name`, `parse_workflow_json` pozostaja w serwisie formularzy. |
+
+## Wykonane w P2.3
+
+| Element | Nowe miejsce | Uwagi |
+| --- | --- | --- |
+| Logika listy i uploadu logo | `services/logo_service.py` | `routes/admin.py` zostal cienkim adapterem dla request, flash i redirect. |
+| Logika edycji metadanych logo | `services/logo_service.py` | Endpoint `/admin/logos/<id>/edit` zachowal nazwe `admin.logo_edit`. |
+| Logika dostepu do assetu logo | `services/logo_service.py` | Endpoint `/admin/logos/<id>/asset` zachowal nazwe `admin.logo_asset`; serwis decyduje, czy uzytkownik moze pobrac plik. |
+
+Nie utworzono jeszcze `routes/admin/logos.py`. Obecny projekt ma `routes/admin.py` jako plik, a `app.py` importuje `from routes.admin import bp as admin_bp`, wiec zmiana na pakiet `routes/admin/` powinna byc osobnym, malym krokiem z testami importow i aliasow endpointow.
 
 ## Docelowe obszary
 
@@ -31,10 +48,11 @@
 
 ## Kolejnosc
 
-1. Przepiac `routes/admin.py` na importy z `services/admin_form_service.py` i zostawic stare nazwy jako adaptery tylko tam, gdzie sa potrzebne.
-2. Rozszerzyc `MailDispatchService` o logowanie `EmailLog` dopiero po stabilizacji serwisu kontekstu.
-3. Dopiero potem rozbijac blueprint, bo obecny plik `routes/admin.py` blokuje utworzenie katalogu `routes/admin/` bez zmiany importow.
-4. Zostawic nazwy endpointow bez zmian albo dodac aliasy kompatybilnosci.
+1. Wykonac osobny krok importowy: zamienic `routes/admin.py` na pakiet `routes/admin/__init__.py` albo przygotowac kompatybilny modul agregujacy blueprint.
+2. Po zmianie struktury przeniesc endpointy logo do `routes/admin/logos.py`, zachowujac nazwy endpointow lub dodajac aliasy zgodnosci.
+3. Kolejny rekomendowany obszar po logo: `routes/admin/forms.py`, bo helpery formularzy sa juz w `services/admin_form_service.py`.
+4. Alternatywnie wydzielic `routes/admin/mail.py`, ale dopiero po rozszerzeniu `MailDispatchService` o logowanie `EmailLog`.
+5. Zostawic nazwy endpointow bez zmian albo dodac aliasy kompatybilnosci.
 
 ## Ryzyka
 
@@ -42,3 +60,4 @@
 - Funkcje zalezne od `request`, `session`, `flash` i `g` powinny zostac w blueprintcie do czasu pelnych testow regresji.
 - Mail admina miesza wybor szablonu, render, log i wysylke; przenosic go przez fasade `MailDispatchService`, a nie jednorazowo.
 - `admin_form_service.py` zawiera teraz logike czysta i funkcje dotykajace modeli przez jawne argumenty; przepiecie routingu powinno byc testowane osobno dla uploadu, edycji workflow i synchronizacji pol.
+- Logo zapisuje pliki w `TEMP_DIR/logos`; przy dalszym podziale endpointow nie zmieniac sciezek storage ani sposobu serwowania istniejacych plikow.

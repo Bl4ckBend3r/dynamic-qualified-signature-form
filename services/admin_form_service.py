@@ -13,6 +13,7 @@ from form_loader import (
     SUPPORTED_FIELD_STAGES,
     has_additional_fields_after_acceptance,
     normalize_form_definition,
+    validate_form_definition,
 )
 from models import Form, FormField
 from services.form_config_service import FormConfigService
@@ -36,6 +37,10 @@ def normalize_admin_form_definition(form_definition: dict) -> dict:
 
 
 def validate_admin_form_config(form_definition: dict) -> list[str]:
+    try:
+        validate_form_definition(form_definition)
+    except Exception as exc:
+        return [str(exc)]
     validator = FormConfigValidator(skip_template_check=True)
     return validator.validate(form_definition)
 

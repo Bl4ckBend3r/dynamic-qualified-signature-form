@@ -972,6 +972,71 @@ def test_super_admin_can_upload_logo(admin_app, admin_client):
         assert logo.active is False
 
 
+def test_super_admin_can_toggle_logo_and_fetch_asset(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "logo.png"
+    logo_path.parent.mkdir(parents=True, exist_ok=True)
+    logo_path.write_bytes(b"logo-bytes")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Logo",
+            filename="logo.png",
+            storage_path=str(logo_path),
+            mime_type="image/png",
+            size_bytes=10,
+            checksum_sha256="abc",
+            active=True,
+        )
+        db.add(logo)
+        db.commit()
+        logo_id = logo.id
+
+    html = admin_client.get("/admin/logos").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert "Logo" in html
+    assert admin_client.get(f"/admin/logos/{logo_id}/asset").status_code == 200
+
+    response = admin_client.post(f"/admin/logos/{logo_id}/toggle", data={"csrf_token": token})
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = db.get(Logo, logo_id)
+        assert logo.active is False
+    assert admin_client.get(f"/admin/logos/{logo_id}/asset").status_code == 200
+
+
+def test_regular_admin_cannot_toggle_logo(admin_app, admin_client):
+    create_user(admin_app, role="admin")
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "logo.png"
+    logo_path.parent.mkdir(parents=True, exist_ok=True)
+    logo_path.write_bytes(b"logo-bytes")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Logo",
+            filename="logo.png",
+            storage_path=str(logo_path),
+            mime_type="image/png",
+            size_bytes=10,
+            checksum_sha256="abc",
+            active=True,
+        )
+        db.add(logo)
+        db.commit()
+        logo_id = logo.id
+
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+
+    response = admin_client.post(f"/admin/logos/{logo_id}/toggle", data={"csrf_token": token})
+
+    assert response.status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = db.get(Logo, logo_id)
+        assert logo.active is True
+
+
 def test_form_manager_can_select_existing_logo_but_not_upload(admin_app, admin_client):
     manager_id = create_user(admin_app, email="manager@example.com", role="form_manager")
     form_id = create_form(admin_app, slug="owned", name="Owned", user_id=manager_id)

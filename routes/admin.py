@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import mimetypes
 import re
 import secrets
-import zipfile
 from datetime import datetime, timezone
 from functools import wraps
-from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from xml.etree import ElementTree
 
 from flask import (
     Blueprint,
@@ -32,7 +28,7 @@ from sqlalchemy import func, select
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database import create_session_factory
-from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES, has_additional_fields_after_acceptance, normalize_form_definition, validate_form_definition
+from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
 from models import (
     EmailLog,
     Form,
@@ -62,19 +58,37 @@ from services.admin_mail_context_service import (
     preview_mail_context as service_preview_mail_context,
     render_mail_text as service_render_mail_text,
 )
-from services.form_config_service import FormConfigService, TRIGGER_DESCRIPTIONS
+from services.admin_form_service import (
+    build_definition_from_docx,
+    build_definition_from_html,
+    build_form_definition_from_admin_form,
+    detect_form_fields,
+    form_has_additional_fields,
+    html_attr,
+    humanize_field_name,
+    normalize_admin_form_definition,
+    normalize_field_stage,
+    parse_uploaded_form_definition,
+    parse_workflow_json,
+    sync_form_fields,
+    validate_admin_form_config,
+)
+from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.logo_service import (
     can_select_active_logo as logo_can_select_active_logo,
     can_select_logo as logo_can_select_logo,
+    create_logo_from_upload as logo_create_logo_from_upload,
     list_active_logos as logo_list_active_logos,
+    list_logos_for_admin as logo_list_logos_for_admin,
     list_selectable_logos as logo_list_selectable_logos,
+    logo_asset_path_for_user as logo_asset_path_for_user,
     safe_asset_filename as logo_safe_asset_filename,
+    update_logo_metadata as logo_update_logo_metadata,
 )
 from services.mail_dispatch_service import MailDispatchService
 from services.process_service import ProcessStatus
-from services.upload_validation import UploadValidationError, validate_logo_upload
+from services.upload_validation import UploadValidationError
 from services.workflow_service import workflow_status_label
-from validators.form_config_validator import FormConfigValidator
 
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -329,7 +343,6 @@ def forms_upload():
         return render_template("admin/forms/upload.html"), 400
     try:
         form_definition = parse_uploaded_form_definition(uploaded_file.read(), uploaded_file.filename)
-        validate_form_definition(form_definition)
         form_definition = normalize_admin_form_definition(form_definition)
         validation_errors = validate_admin_form_config(form_definition)
         if validation_errors:
@@ -993,35 +1006,23 @@ def logos_list():
                 return redirect(url_for("admin.logos_list"))
             logo_bytes = uploaded_file.read()
             try:
-                mime_type = validate_logo_upload(uploaded_file.filename, logo_bytes, uploaded_file.mimetype)
+                logo_create_logo_from_upload(
+                    db,
+                    temp_dir=current_app.config["TEMP_DIR"],
+                    uploaded_filename=uploaded_file.filename,
+                    uploaded_bytes=logo_bytes,
+                    uploaded_mimetype=uploaded_file.mimetype,
+                    name=request.form.get("name", ""),
+                    uploaded_by_user_id=g.admin_user.id,
+                )
             except UploadValidationError as exc:
                 flash(str(exc), "error")
                 return redirect(url_for("admin.logos_list"))
-            logo_dir = Path(current_app.config["TEMP_DIR"]) / "logos"
-            logo_dir.mkdir(parents=True, exist_ok=True)
-            safe_filename = f"{secrets.token_hex(8)}_{safe_asset_filename(uploaded_file.filename)}"
-            storage_path = logo_dir / safe_filename
-            storage_path.write_bytes(logo_bytes)
-            db.add(
-                Logo(
-                    name=request.form.get("name", "").strip() or Path(uploaded_file.filename).stem,
-                    filename=Path(uploaded_file.filename).name,
-                    storage_path=str(storage_path),
-                    mime_type=mime_type,
-                    size_bytes=len(logo_bytes),
-                    checksum_sha256=hashlib.sha256(logo_bytes).hexdigest(),
-                    uploaded_by_user_id=g.admin_user.id,
-                    active=True,
-                )
-            )
             db.commit()
             flash("Logo zostalo dodane.", "success")
             return redirect(url_for("admin.logos_list"))
 
-        query = select(Logo).order_by(Logo.created_at.desc())
-        if g.admin_user.role != ROLE_SUPER_ADMIN:
-            query = query.where(Logo.active.is_(True))
-        logos = db.execute(query).scalars().all()
+        logos = logo_list_logos_for_admin(db, g.admin_user)
         return render_template("admin/logos/list.html", logos=logos)
 
 
@@ -1033,7 +1034,8 @@ def logo_toggle(logo_id: int):
         logo = db.get(Logo, logo_id) or abort(404)
         logo.active = not logo.active
         db.commit()
-    flash("Logo zostalo aktywowane." if logo.active else "Logo zostalo dezaktywowane.", "success")
+        is_active = logo.active
+    flash("Logo zostalo aktywowane." if is_active else "Logo zostalo dezaktywowane.", "success")
     return redirect(url_for("admin.logos_list"))
 
 
@@ -1046,8 +1048,11 @@ def logo_edit(logo_id: int):
         if not logo:
             abort(404)
         if request.method == "POST":
-            logo.name = request.form.get("name", "").strip() or logo.name
-            logo.active = request.form.get("active") == "on"
+            logo_update_logo_metadata(
+                logo,
+                name=request.form.get("name", ""),
+                active=request.form.get("active") == "on",
+            )
             db.commit()
             flash("Logo zostalo zapisane.", "success")
             return redirect(url_for("admin.logos_list"))
@@ -1059,10 +1064,8 @@ def logo_edit(logo_id: int):
 def logo_asset(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id)
-        if not logo or (g.admin_user.role != ROLE_SUPER_ADMIN and not logo.active):
-            abort(404)
-        logo_path = Path(logo.storage_path)
-        if not logo_path.exists():
+        logo_path = logo_asset_path_for_user(logo, g.admin_user)
+        if not logo_path:
             abort(404)
         return send_file(logo_path, mimetype=logo.mime_type or None)
 
@@ -1235,146 +1238,8 @@ def build_footer_html(footer: MailFooter | None) -> str:
     )
 
 
-def parse_uploaded_form_definition(content: bytes, filename: str) -> dict:
-    suffix = Path(filename).suffix.lower()
-    if suffix == ".json":
-        return json.loads(content.decode("utf-8-sig"))
-    if suffix == ".html":
-        return build_definition_from_html(content.decode("utf-8-sig", errors="ignore"), filename)
-    if suffix == ".docx":
-        return build_definition_from_docx(content, filename)
-    raise ValueError("unsupported format")
-
-
-def normalize_admin_form_definition(form_definition: dict) -> dict:
-    normalized = normalize_form_definition(form_definition)
-    return FormConfigService().normalize_form_config(normalized)
-
-
-def validate_admin_form_config(form_definition: dict) -> list[str]:
-    validator = FormConfigValidator(skip_template_check=True)
-    return validator.validate(form_definition)
-
-
 def format_json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, indent=2)
-
-
-def build_form_definition_from_admin_form(current_definition: dict, form_data) -> dict:
-    definition = normalize_admin_form_definition(current_definition or {})
-    workflow = parse_workflow_json(form_data.get("workflow_json", ""), definition.get("workflow") or {})
-    workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
-    workflow["initial_step"] = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
-    workflow["requires_declaration"] = form_data.get("requires_declaration") == "on"
-    workflow["requires_contract"] = form_data.get("requires_contract") == "on"
-    workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
-    workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
-    definition["workflow"] = workflow
-    return normalize_admin_form_definition(definition)
-
-
-def parse_workflow_json(raw_value: str, fallback: dict) -> dict:
-    raw_value = str(raw_value or "").strip()
-    if not raw_value:
-        return dict(fallback or {})
-    parsed = json.loads(raw_value)
-    if not isinstance(parsed, dict):
-        raise ValueError("workflow must be an object")
-    return parsed
-
-
-def build_definition_from_html(html: str, filename: str) -> dict:
-    fields: list[dict] = []
-    input_pattern = re.compile(r"<(input|select|textarea)\b([^>]*)>", re.IGNORECASE | re.DOTALL)
-    for tag, attrs in input_pattern.findall(html):
-        name = html_attr(attrs, "name")
-        if not name or name.startswith("_") or name == "csrf_token":
-            continue
-        field_type = tag.lower()
-        if tag.lower() == "input":
-            field_type = html_attr(attrs, "type") or "text"
-        fields.append(
-            {
-                "type": field_type,
-                "name": name,
-                "label": humanize_field_name(name),
-                "required": "required" in attrs.lower(),
-            }
-        )
-    if not fields:
-        raise ValueError("no fields")
-    return {"title": Path(filename).stem, "fields": fields}
-
-
-def build_definition_from_docx(content: bytes, filename: str) -> dict:
-    with zipfile.ZipFile(BytesIO(content)) as archive:
-        xml = archive.read("word/document.xml")
-    root = ElementTree.fromstring(xml)
-    texts = [item.text or "" for item in root.iter() if item.tag.endswith("}t") and item.text]
-    raw = "\n".join(texts)
-    candidates = re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw)
-    fields = [
-        {"type": "text", "name": name, "label": humanize_field_name(name), "required": False}
-        for name in dict.fromkeys(candidates)
-    ]
-    if not fields:
-        raise ValueError("no fields")
-    return {"title": Path(filename).stem, "fields": fields}
-
-
-def html_attr(attrs: str, name: str) -> str:
-    match = re.search(rf'\b{name}\s*=\s*["\']([^"\']+)["\']', attrs, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
-
-def humanize_field_name(name: str) -> str:
-    return name.replace("_", " ").strip().capitalize()
-
-
-def sync_form_fields(db, form: Form, form_definition: dict) -> None:
-    existing_fields = {field.name: field for field in form.fields}
-    for field in existing_fields.values():
-        field.active = False
-    current_section = ""
-    order = 0
-    for field in detect_form_fields(form_definition):
-        if field.get("type") == "section":
-            current_section = field.get("label", "")
-            continue
-        name = field.get("name")
-        if not name:
-            continue
-        form_field = existing_fields.get(name) or FormField(form_id=form.id, name=name)
-        form_field.label = field.get("label", name)
-        form_field.type = field.get("type", "text")
-        form_field.required = bool(field.get("required"))
-        form_field.options = field.get("options") or []
-        form_field.default_value = str(field.get("default", ""))
-        form_field.section = current_section
-        form_field.stage = normalize_field_stage(field.get("stage"))
-        form_field.sort_order = order
-        form_field.active = True
-        db.add(form_field)
-        order += 1
-
-
-def detect_form_fields(form_definition: dict) -> list[dict]:
-    fields = list(form_definition.get("fields") or [])
-    documents = ((form_definition.get("process") or {}).get("documents") or form_definition.get("documents") or {})
-    if isinstance(documents, dict):
-        for document in documents.values():
-            if isinstance(document, dict):
-                fields.extend(document.get("fields") or [])
-    return fields
-
-
-def normalize_field_stage(value: Any) -> str:
-    stage = str(value or "").strip()
-    return stage if stage in SUPPORTED_FIELD_STAGES else FIELD_STAGE_INITIAL
-
-
-def form_has_additional_fields(form: Form) -> bool:
-    return has_additional_fields_after_acceptance(normalize_admin_form_definition(form.definition_json or {}))
 
 
 def admin_status_label(status_id: str, form: Form | None = None) -> str:

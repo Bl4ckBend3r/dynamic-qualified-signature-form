@@ -259,7 +259,7 @@ Uruchomiona komenda:
 Wykonano pierwszy bezpieczny krok bez zmiany publicznych URL-i, nazw endpointow, modelu bazy, migracji i bez usuwania `legacy_app.py`.
 
 - nie utworzono `routes/admin/logos.py`, bo obecny routing ma `routes/admin.py` jako plik, a aplikacja importuje `from routes.admin import bp as admin_bp`; zmiana na pakiet wymaga osobnego kroku importowego,
-- `routes/admin.py` pozostal adapterem dla endpointow `/admin/logos`, `/admin/logos/<id>/toggle`, `/admin/logos/<id>/edit` i `/admin/logos/<id>/asset`,
+- modul admina pozostal adapterem dla endpointow `/admin/logos`, `/admin/logos/<id>/toggle`, `/admin/logos/<id>/edit` i `/admin/logos/<id>/asset`,
 - przeniesiono pozostala logike logo do `services/logo_service.py`: liste widocznych logo dla admina, tworzenie logo z uploadu, aktualizacje metadanych oraz rozstrzyganie sciezki assetu z kontrola roli,
 - endpointy logo dalej korzystaja z tych samych URL-i i nazw `admin.logos_list`, `admin.logo_toggle`, `admin.logo_edit`, `admin.logo_asset`,
 - poprawiono odczyt stanu aktywnosci po toggle tak, aby komunikat flash nie korzystal z encji po zamknieciu sesji.
@@ -283,15 +283,107 @@ Uruchomiona komenda:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
+## Etap P2.4 — przygotowanie pakietu admina
+
+Wykonano maly krok importowy bez zmiany publicznych URL-i, nazw endpointow, modelu bazy, migracji i bez usuwania `legacy_app.py`.
+
+- przeniesiono `routes/admin.py` do `routes/admin/__init__.py`,
+- zachowano import `from routes.admin import bp as admin_bp` uzywany w `app.py`,
+- nie przenoszono jeszcze endpointow do `routes/admin/logos.py`, `routes/admin/forms.py` ani innych modulow potomnych,
+- obecny blueprint admina nadal dziala jako pojedynczy modul, ale struktura plikow pozwala juz bezpiecznie dodawac kolejne moduly w pakiecie `routes/admin/`,
+- dodano test regresji potwierdzajacy, ze `routes.admin` importuje blueprint z pakietu.
+
+Test dodany w P2.4:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_admin_package_structure.py` | Import `routes.admin`, nazwa blueprintu i brak starego pliku `routes/admin.py`. |
+
+Wynik testow P2.4:
+
+```text
+192 passed
+```
+
+Uruchomiona komenda:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
+## Etap P2.5 — wydzielenie endpointow logo
+
+Wykonano bez zmiany publicznych URL-i, nazw endpointow, modelu bazy, sposobu zapisu plikow logo, migracji i bez usuwania `legacy_app.py`.
+
+- utworzono `routes/admin/logos.py`,
+- przeniesiono endpointy: `logos_list`, `logo_toggle`, `logo_edit`, `logo_asset`,
+- URL-e pozostaly bez zmian: `/admin/logos`, `/admin/logos/<id>/toggle`, `/admin/logos/<id>/edit`, `/admin/logos/<id>/asset`,
+- nazwy endpointow pozostaly bez zmian: `admin.logos_list`, `admin.logo_toggle`, `admin.logo_edit`, `admin.logo_asset`,
+- `routes/admin/__init__.py` nadal eksportuje wspolny blueprint `bp`,
+- `routes/admin/__init__.py` importuje `routes.admin.logos` na koncu pliku, aby zarejestrowac trasy na tym samym blueprintcie,
+- logika biznesowa logo pozostala w `services/logo_service.py`, a routing obsluguje request, flash, redirect, render i wywolania serwisu.
+
+Testy dodane lub zmienione w P2.5:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_admin_package_structure.py` | Import `routes.admin.logos`, rejestracja endpointow logo na blueprintcie i zgodnosc `url_for()` dla starych nazw endpointow. |
+| `tests/test_admin_panel.py` | Regresja listy logo, uploadu, edycji, toggle, assetu i blokady operacji superadminowych pozostala zielona. |
+
+Wynik testow P2.5:
+
+```text
+193 passed
+```
+
+Uruchomiona komenda:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
+## Etap P2.6 — wydzielenie endpointow formularzy
+
+Wykonano bez zmiany publicznych URL-i, nazw endpointow, modelu bazy, migracji i bez usuwania `legacy_app.py`. Modul maili, zgloszen i uzytkownikow nie byl przenoszony w tej iteracji.
+
+- utworzono `routes/admin/forms.py`,
+- przeniesiono endpointy: `forms_list`, `form_delete`, `forms_upload`, `form_edit`, `form_toggle`, `form_fields`,
+- URL-e pozostaly bez zmian: `/admin/forms`, `/admin/forms/upload`, `/admin/forms/<id>/edit`, `/admin/forms/<id>/delete`, `/admin/forms/<id>/toggle`, `/admin/forms/<id>/fields`,
+- nazwy endpointow pozostaly bez zmian: `admin.forms_list`, `admin.forms_upload`, `admin.form_edit`, `admin.form_delete`, `admin.form_toggle`, `admin.form_fields`,
+- `routes/admin/__init__.py` nadal eksportuje wspolny blueprint `bp`,
+- `routes/admin/__init__.py` importuje `routes.admin.forms` na koncu pliku, obok `routes.admin.logos`,
+- z `routes/admin/__init__.py` usunieto endpointy formularzy oraz importy uzywane tylko przez nie: budowe definicji z formularza admina, upload/validacje/synchronizacje definicji, `TRIGGER_DESCRIPTIONS` oraz stale typow i etapow pol,
+- wspolne helpery dostepu, pola aktywne, `normalize_slug`, `parse_field_options`, `field_options_text` i adaptery logo pozostaly w pakiecie admina, bo sa nadal uzywane przez formularze oraz inne obszary panelu.
+
+Testy dodane lub zmienione w P2.6:
+
+| Test | Zakres |
+|---|---|
+| `tests/test_admin_package_structure.py` | Import `routes.admin.forms`, rejestracja endpointow formularzy na blueprintcie i zgodnosc `url_for()` dla starych nazw endpointow. |
+| `tests/test_admin_panel.py` | Regresja listy formularzy, uploadu, edycji workflow, pol, toggle i usuwania formularzy pozostala zielona. |
+| `tests/test_admin_form_service.py` | Serwis formularzy nadal pokrywa parsery, walidacje, normalizacje i synchronizacje. |
+
+Wynik testow P2.6:
+
+```text
+194 passed
+```
+
+Uruchomiona komenda:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
 ## Pozostawione na kolejne etapy
 
 | Priorytet | Zadanie |
 |---|---|
 | P1 | Usuniecie pozostalych zaleznosci nowych modulow od `legacy_app.py`. |
-| P1 | Podzial `routes/admin.py` na mniejsze blueprinty i serwisy. |
+| P1 | Podzial `routes/admin/__init__.py` na mniejsze blueprinty i serwisy. |
 | P1 | Centralizacja maili w jednym mechanizmie dispatch razem z logowaniem `EmailLog`. |
 | P1 | Podzial `services/document_service.py` na mniejsze serwisy dokumentowe. |
-| P2 | Przepiecie `routes/admin.py` na `services/admin_form_service.py`. |
+| P2 | Przepiecie modulu admina na `services/admin_form_service.py`. |
 | P2 | Usuniecie inline CSS/JS z `templates/documents_to_sign.html` po zaladowaniu nowych assetow przez bloki `extra_css` i `extra_js`. |
 | P2 | Wykonanie migracji `FormSubmission` wedlug `MIGRATION_PLAN.md`. |
 | P3 | Porzadki repozytorium: `.coverage`, `.pytest_cache/`, `tmp/logos/`, `output/` po potwierdzeniu, ze nie sa fixture. |

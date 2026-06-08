@@ -1,11 +1,11 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("sqlalchemy")
 
 from database import create_engine, create_session_factory
+from form_loader import FIELD_STAGE_INITIAL
 from models import Base, Form
 from services.admin_form_service import (
     build_definition_from_html,
@@ -47,7 +47,7 @@ def test_detect_form_fields_includes_document_fields():
 
 def test_normalize_field_stage_falls_back_to_initial():
     assert normalize_field_stage("after_officer_acceptance") == "after_officer_acceptance"
-    assert normalize_field_stage("unknown") == "initial"
+    assert normalize_field_stage("unknown") == FIELD_STAGE_INITIAL
 
 
 def test_build_form_definition_from_admin_form_updates_workflow():

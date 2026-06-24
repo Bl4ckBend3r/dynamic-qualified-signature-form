@@ -3,12 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
-
-import sitecustomize  # noqa: F401,E402
-import nextcloud_assets_patch  # noqa: F401,E402
-import documents_status_patch  # noqa: F401,E402
-import form_notifications_patch  # noqa: F401,E402
+load_dotenv(override=False)
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -22,6 +17,7 @@ def _env_list(name: str) -> list[str]:
 
 class Config:
     APP_NAME = "Formularze Lubuskie"
+    ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
 
@@ -45,6 +41,12 @@ class Config:
 
     FORM_DEFINITION_PATH = FORMS_DIR / os.getenv("FORM_JSON_FILE", "sample_form.json")
     CSV_FILENAME = os.getenv("CSV_FILENAME", "dane.csv")
+    DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+    AUTO_CREATE_DB_SCHEMA = _env_bool("AUTO_CREATE_DB_SCHEMA", "false")
+    STRICT_DOCUMENT_METADATA_READ = _env_bool("STRICT_DOCUMENT_METADATA_READ", "false")
+    STRICT_WORKFLOW_HISTORY_READ = _env_bool("STRICT_WORKFLOW_HISTORY_READ", "false")
+    STRICT_DECISION_AUDIT_READ = _env_bool("STRICT_DECISION_AUDIT_READ", "false")
+    REQUIRE_STRICT_READINESS_CHECK = _env_bool("REQUIRE_STRICT_READINESS_CHECK", "false")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()
@@ -61,3 +63,10 @@ class Config:
     SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "30"))
 
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
+
+    @classmethod
+    def validate(cls) -> None:
+        production_like = str(getattr(cls, "ENV", "")).strip().lower() == "production"
+        secret_key = str(getattr(cls, "SECRET_KEY", "") or "").strip()
+        if production_like and secret_key in {"", "change-me-in-production"}:
+            raise RuntimeError("SECRET_KEY must be configured in production.")

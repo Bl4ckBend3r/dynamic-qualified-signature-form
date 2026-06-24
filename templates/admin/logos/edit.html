@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+{% block title %}Edycja logo{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Biblioteka logo</p>
+        <h1>Edycja logo</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.logos_list') }}">Anuluj</a>
+    </div>
+</div>
+
+<form method="post" class="admin-form-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Dane logo</h2>
+        </div>
+        <div class="admin-form-grid">
+            <div class="admin-field">
+                <label class="admin-field-label" for="logo-name">Nazwa</label>
+                <input id="logo-name" name="name" value="{{ logo.name }}" required>
+                <p class="admin-field-help">Nazwa jest używana na listach wyboru logo.</p>
+            </div>
+            <label class="admin-switch">
+                <input type="checkbox" name="active" {% if logo.active %}checked{% endif %}>
+                <span>
+                    <strong>Aktywne</strong>
+                    <small>Aktywne logo może być wybierane przez adminów i form_managerów.</small>
+                </span>
+            </label>
+        </div>
+    </section>
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Podgląd</h2>
+        </div>
+        <div class="admin-logo-preview">
+            <img src="{{ url_for('admin.logo_asset', logo_id=logo.id) }}" alt="{{ logo.name }}">
+            <span>{{ logo.filename }}</span>
+        </div>
+    </section>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.logos_list') }}">Anuluj</a>
+        <button class="admin-button" type="submit">Zapisz</button>
+    </div>
+</form>
+{% endblock %}

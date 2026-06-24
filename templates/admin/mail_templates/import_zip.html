@@ -1,0 +1,43 @@
+{% extends "admin/base.html" %}
+{% block title %}Techniczny import ZIP{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Techniczny import ZIP</h1>
+    </div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Powrot</a>
+</div>
+<form method="post" enctype="multipart/form-data" class="admin-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-form-grid">
+        <label><span>Paczka ZIP</span><input type="file" name="zip_file" accept=".zip,application/zip" required></label>
+        <label><span>Nazwa szablonu</span><input name="name" placeholder="np. Wniosek zaakceptowany"></label>
+        <label>
+            <span>Typ szablonu</span>
+            <select name="template_type">
+                {% for option in template_types %}
+                    <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label><span>Tytul wiadomosci</span><input name="content_title" placeholder="np. Wniosek zaakceptowany"></label>
+        <label class="admin-form-wide"><span>Temat</span><input name="subject" placeholder="np. Wniosek {{ submission_id }}"></label>
+        <label><span>Trigger event</span><input name="trigger_event" value="manual_bulk"></label>
+        <label><span>Trigger status</span><input name="trigger_status" placeholder="FORM_SUBMITTED"></label>
+        <label>
+            <span>Trigger decyzja</span>
+            <select name="trigger_decision">
+                {% for value, label in officer_decisions %}
+                    <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="admin-check"><input type="checkbox" name="is_default_for_status"><span>Domyslny dla statusu</span></label>
+    </div>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Anuluj</a>
+        <button class="admin-button" type="submit">Zapisz</button>
+    </div>
+</form>
+{% endblock %}

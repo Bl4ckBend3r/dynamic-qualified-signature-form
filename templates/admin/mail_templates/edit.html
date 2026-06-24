@@ -1,0 +1,75 @@
+{% extends "admin/base.html" %}
+{% block title %}Szablon maila{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Szablon maila</h1>
+    </div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Powrot</a>
+</div>
+<form method="post" enctype="multipart/form-data" class="admin-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-form-grid">
+        <label><span>Nazwa szablonu</span><input name="name" value="{{ template.name }}" required></label>
+        <label>
+            <span>Typ maila</span>
+            <select name="mail_type">
+                <option value="html_text" {% if template.mail_type == "html_text" %}selected{% endif %}>HTML + TXT</option>
+            </select>
+        </label>
+        <label>
+            <span>Typ szablonu</span>
+            <select name="template_type">
+                {% for option in template_types %}
+                    <option value="{{ option }}" {% if template.template_type == option or (not template.template_type and option == "custom") %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="admin-form-wide"><span>Temat</span><input name="subject" value="{{ template.subject }}"></label>
+        <label><span>Trigger event</span><input name="trigger_event" value="{{ template.trigger_event }}" placeholder="manual_bulk"></label>
+        <label><span>Trigger status</span><input name="trigger_status" value="{{ template.trigger_status }}" placeholder="FORM_SUBMITTED"></label>
+        <label>
+            <span>Trigger decyzja</span>
+            <select name="trigger_decision">
+                {% for value, label in officer_decisions %}
+                    <option value="{{ value }}" {% if template.trigger_decision == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="admin-check"><input type="checkbox" name="is_default_for_status" {% if template.is_default_for_status %}checked{% endif %}><span>Domyslny dla statusu</span></label>
+        <label class="admin-check"><input type="checkbox" name="is_active" {% if template.is_active %}checked{% endif %}><span>Aktywny</span></label>
+        <label class="admin-form-wide"><span>Tytul wiadomosci</span><input name="content_title" value="{{ template.content_title }}"></label>
+        <label><span>Wgraj plik HTML</span><input type="file" name="html_file" accept=".html,text/html"></label>
+        <label><span>Wgraj plik TXT</span><input type="file" name="txt_file" accept=".txt,text/plain"></label>
+        <label class="admin-form-wide"><span>Wklej HTML</span><textarea name="body_html" rows="10">{{ template.content_html or template.html_body }}</textarea></label>
+        <label class="admin-form-wide"><span>Treść TXT</span><textarea name="body_text" rows="7">{{ template.content_text or template.text_body }}</textarea></label>
+        <label class="admin-form-wide"><span>Instrukcja HTML</span><textarea name="instruction_html" rows="8">{{ template.instruction_html }}</textarea></label>
+        <label class="admin-form-wide"><span>Instrukcja TXT</span><textarea name="instruction_text" rows="8">{{ template.instruction_text }}</textarea></label>
+        <label class="admin-form-wide"><span>Notatka koncowa</span><textarea name="footer_note" rows="4">{{ template.footer_note }}</textarea></label>
+        <input type="hidden" name="use_platform_layout" value="on">
+    </div>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Anuluj</a>
+        <button class="admin-button" type="submit">Zapisz</button>
+    </div>
+</form>
+{% if preview_html %}
+    <div class="admin-section">
+        <div class="admin-page-title">
+            <h2>Podgląd</h2>
+            {% if sample_submissions %}
+                <form method="get" class="admin-actions">
+                    <select name="preview_submission_id">
+                        {% for submission in sample_submissions %}
+                            <option value="{{ submission.id }}" {% if preview_submission_id == submission.id %}selected{% endif %}>{{ submission.submission_id }} / {{ submission.email or "-" }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="admin-button-secondary" type="submit">Pokaz</button>
+                </form>
+            {% endif %}
+        </div>
+        <div class="admin-card preview-box admin-mail-preview">{{ preview_html|safe }}</div>
+    </div>
+{% endif %}
+{% endblock %}

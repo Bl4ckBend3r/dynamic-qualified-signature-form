@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block extra_css %}{% endblock %}
 </head>
 <body>
     <div class="page-shell">
@@ -28,5 +29,6 @@
 
         {% include "partials/footer.html" %}
     </div>
+    {% block extra_js %}{% endblock %}
 </body>
 </html>

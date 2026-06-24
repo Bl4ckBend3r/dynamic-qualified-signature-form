@@ -2,6 +2,14 @@
 
 {% block title %}Do podpisania{% endblock %}
 
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='documents_to_sign.css') }}">
+{% endblock %}
+
+{% block extra_js %}
+    <script src="{{ url_for('static', filename='documents_to_sign.js') }}" defer></script>
+{% endblock %}
+
 {% block content %}
 {% set initial_submission_id = submission_id or request.args.get('submission_id', '') %}
 
@@ -14,9 +22,9 @@
         </p>
     </div>
 
-    <div class="static-text" style="margin-bottom: 24px;">
+    <div class="static-text documents-instructions">
         <strong>Instrukcja podpisania dokumentów:</strong>
-        <ol style="margin-bottom: 0;">
+        <ol class="documents-instructions__list">
             <li>Wypełnij wymagany dokument.</li>
             <li>Pobierz wygenerowany plik PDF.</li>
             <li>Podpisz PDF podpisem elektronicznym: mSzafir albo <a href="https://podpis.gov.pl/podpisz-dokument-elektronicznie/" target="_blank">Profilem Zaufanym</a>.</li>
@@ -25,7 +33,7 @@
         </ol>
     </div>
 
-    <form method="post" action="{{ url_for('documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
+    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
         <div class="form-field sign-id-field">
             <label for="submission_id">ID wniosku</label>
             <input
@@ -45,7 +53,7 @@
             <div id="acceptance-status" class="field-help"></div>
         </div>
 
-        <div class="form-field" id="documents-section" style="display: none;">
+        <div class="form-field is-hidden" id="documents-section">
             <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
         </div>
 
@@ -58,7 +66,7 @@
 
     <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
 
-    <div id="process-completed-box" class="result-box" style="display: none; margin-top: 24px;">
+    <div id="process-completed-box" class="result-box result-box--completed is-hidden">
         <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
     </div>
 
@@ -68,11 +76,12 @@
         {% set agreement_completed = result.agreement_signature_valid|default(false) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
+        {% set training_agreements = result.training_agreements|default([]) %}
 
         {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
         {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
         {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = agreement_generated and result.agreement_upload_url and not agreement_completed %}
+        {% set show_agreement_upload = ((agreement_generated and result.agreement_upload_url) or training_agreements) and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
 
         <div class="result-box" id="signing-result-box">
@@ -81,7 +90,7 @@
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
 
             {% if result.process_status %}
-                <p><strong>Status procesu:</strong> {{ result.process_status }}</p>
+                <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
             {% endif %}
 
             {% if result.agreement_blocked %}
@@ -91,7 +100,60 @@
                 {% endif %}
             {% endif %}
 
-            {% if show_declaration_stage %}
+            {% if result.needs_additional_fields %}
+                <div class="card document-stage-card" data-stage="additional-fields">
+                    <div class="card-header">
+                        <h3>Wniosek został zaakceptowany</h3>
+                        <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
+                    </div>
+                    <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        {% for field in result.additional_form_definition.fields %}
+                            {% if field.type == "section" %}
+                                <section class="form-section"><h3>{{ field.label|trusted_html }}</h3></section>
+                            {% elif field.type == "static_text" %}
+                                <div class="static-text">{{ field.label|trusted_html }}</div>
+                            {% else %}
+                                {% set value = result.additional_values.get(field.name, field.default) %}
+                                {% set has_error = result.additional_errors.get(field.name) %}
+                                <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
+                                    {% if field.type != "checkbox" %}
+                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</label>
+                                    {% endif %}
+                                    {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
+                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required{% endif %}>
+                                    {% elif field.type == "textarea" %}
+                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>{{ value }}</textarea>
+                                    {% elif field.type == "select" %}
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                                            <option value="">-- wybierz --</option>
+                                            {% for option in field.options %}
+                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    {% elif field.type == "radio" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% elif field.type == "checkbox" %}
+                                        <div class="option-list">
+                                            {% for option in field.options %}
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                    {% if field.help_text %}<div class="help-text">{{ field.help_text|trusted_html }}</div>{% endif %}
+                                    {% if has_error %}<div class="error-text">{{ has_error }}</div>{% endif %}
+                                </div>
+                            {% endif %}
+                        {% endfor %}
+                        <div class="submit-row">
+                            <button type="submit" class="btn-primary">Zapisz dodatkowe informacje</button>
+                        </div>
+                    </form>
+                </div>
+            {% elif show_declaration_stage %}
                 <div
                     class="signing-document-card"
                     data-stage="declaration"
@@ -101,7 +163,7 @@
                         <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
                     {% endif %}
 
-                    <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
+                    <div class="download-links document-download-links">
                         {% if result.form_slug and result.submission_id %}
                             <a
                                 class="btn-primary"
@@ -137,7 +199,7 @@
             {% endif %}
 
             {% if show_declaration_upload %}
-                <div class="card upload-card" data-stage="declaration-upload" style="margin-top: 24px;">
+                <div class="card upload-card document-stage-card" data-stage="declaration-upload">
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
                         <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
@@ -172,7 +234,7 @@
             {% endif %}
 
             {% if show_agreement_stage %}
-                <div class="card upload-card" data-stage="agreement" style="margin-top: 24px;">
+                <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
                         <h3>Umowa do podpisania</h3>
                         <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
@@ -180,24 +242,68 @@
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
                         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
-                            <div class="form-row width-full">
-                                <label for="agreement_generated_at">Data wygenerowania umowy</label>
-                                <input
-                                    type="date"
-                                    id="agreement_generated_at"
-                                    name="agreement_generated_at"
-                                    value="{{ result.agreement_generated_at_iso }}"
-                                    required
-                                >
-                            </div>
-
                             <div class="submit-row">
                                 <button type="submit" class="btn-primary">Wygeneruj umowę</button>
                             </div>
                         </form>
                     {% endif %}
 
-                    {% if show_agreement_upload %}
+                    {% if training_agreements %}
+                        <div data-stage="agreement-upload">
+                            {% for agreement in training_agreements %}
+                                <div class="signing-document-card signing-document-card--spaced">
+                                    <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
+                                    <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
+                                    <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+
+                                    {% if agreement.generated_at %}
+                                        <p><strong>Data wygenerowania umowy:</strong> {{ agreement.generated_at }}</p>
+                                    {% endif %}
+
+                                    {% if agreement.url %}
+                                        <div class="download-links download-links--spaced">
+                                            <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
+                                        </div>
+                                    {% endif %}
+
+                                    {% if agreement.signature_valid %}
+                                        <p class="document-status-line"><strong>Status podpisu:</strong> poprawny</p>
+                                    {% else %}
+                                        {% if agreement.signature_error %}
+                                            <p class="document-status-line"><strong>Status podpisu:</strong> niepoprawny</p>
+                                            <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
+                                        {% endif %}
+
+                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
+                                            <div class="form-row width-full">
+                                                <label class="upload-dropzone" data-upload-dropzone>
+                                                    <input
+                                                        type="file"
+                                                        id="signed_agreement_pdf_{{ loop.index }}"
+                                                        name="signed_agreement_pdf"
+                                                        accept="application/pdf"
+                                                        required
+                                                        class="upload-dropzone__input"
+                                                        data-upload-input
+                                                    >
+                                                    <span class="upload-dropzone__inner">
+                                                        <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                                        <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
+                                                        <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
+                                                        <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
+                                                    </span>
+                                                </label>
+                                            </div>
+
+                                            <div class="submit-row">
+                                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
+                                            </div>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% elif show_agreement_upload %}
                         <div data-stage="agreement-upload">
                             {% if result.agreement_filename %}
                                 <p><strong>Umowa:</strong> {{ result.agreement_filename }}</p>
@@ -208,12 +314,12 @@
                             {% endif %}
 
                             {% if result.agreement_url %}
-                                <div class="download-links" style="margin-top: 16px;">
+                                <div class="download-links download-links--spaced">
                                     <a class="btn-primary" href="{{ result.agreement_url }}">Pobierz umowę PDF</a>
                                 </div>
                             {% endif %}
 
-                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                 <div class="form-row width-full">
                                     <label class="upload-dropzone" data-upload-dropzone>
                                         <input
@@ -242,553 +348,22 @@
                     {% endif %}
 
                     {% if result.agreement_signature_error %}
-                        <p style="margin-top: 16px;"><strong>Status podpisu umowy:</strong> Niepoprawny</p>
+                        <p class="document-status-line"><strong>Status podpisu umowy:</strong> Niepoprawny</p>
                         <p><strong>Błąd:</strong> {{ result.agreement_signature_error }}</p>
                     {% endif %}
                 </div>
             {% endif %}
 
-            <p id="completed-stage-message" style="display: none; margin-top: 16px;"></p>
+            <p id="completed-stage-message" class="document-status-line is-hidden"></p>
 
             {% if declaration_completed and not show_agreement_stage and not agreement_completed %}
-                <p style="margin-top: 16px;"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
+                <p class="document-status-line"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
             {% endif %}
 
             {% if agreement_completed %}
-                <p style="margin-top: 16px;"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
+                <p class="document-status-line"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
             {% endif %}
         </div>
     {% endif %}
 </div>
-
-<style>
-.signing-document-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-alt);
-    padding: 18px;
-}
-
-.status-tiles {
-    display: grid;
-    gap: 14px;
-    margin-top: 24px;
-}
-
-.status-tile {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 14px;
-    align-items: start;
-    padding: 18px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-alt);
-}
-
-.status-tile__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    border-radius: 999px;
-    background: var(--gold);
-    color: #fff;
-    font-weight: 800;
-}
-
-.status-tile__title {
-    margin: 0 0 4px;
-    color: var(--navy);
-    font-weight: 800;
-}
-
-.status-tile__description {
-    margin: 0;
-    color: var(--muted);
-}
-
-.status-tile--success {
-    border-color: rgba(31, 122, 77, 0.35);
-    background: #f2fbf6;
-}
-
-.status-tile--success .status-tile__icon {
-    background: var(--success);
-}
-
-.status-tile--warning {
-    border-color: rgba(183, 121, 31, 0.35);
-    background: #fffaf0;
-}
-
-.status-tile--danger {
-    border-color: rgba(180, 35, 24, 0.35);
-    background: #fff5f5;
-}
-
-.status-tile--danger .status-tile__icon {
-    background: var(--danger);
-}
-
-.download-replaced-actions {
-    display: flex;
-    justify-content: flex-start;
-    margin: 16px 0 24px;
-}
-
-.upload-card .card-header {
-    gap: 6px;
-    margin-bottom: 30px;
-}
-
-.upload-card .card-header h3,
-.upload-card .card-header p {
-    margin: 0;
-}
-
-.upload-dropzone {
-    display: block;
-    width: 100%;
-    cursor: pointer;
-}
-
-.upload-dropzone__input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    clip-path: inset(50%);
-    border: 0;
-    padding: 0;
-}
-
-.upload-dropzone__inner {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 190px;
-    padding: 28px;
-    border: 2px dashed var(--gold);
-    border-radius: var(--radius-sm);
-    background: var(--surface-alt);
-    color: var(--navy);
-    text-align: center;
-    transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-}
-
-.upload-dropzone:hover .upload-dropzone__inner,
-.upload-dropzone.is-dragover .upload-dropzone__inner,
-.upload-dropzone.has-file .upload-dropzone__inner {
-    border-color: var(--gold-dark);
-    background: #fffaf0;
-    box-shadow: 0 10px 28px rgba(29, 46, 91, 0.08);
-}
-
-.upload-dropzone:hover .upload-dropzone__inner,
-.upload-dropzone.is-dragover .upload-dropzone__inner {
-    transform: translateY(-2px);
-}
-
-.upload-dropzone__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 46px;
-    height: 46px;
-    margin-bottom: 14px;
-    border-radius: 999px;
-    background: var(--gold);
-    color: #fff;
-    font-size: 1.4rem;
-    font-weight: 800;
-}
-
-.upload-dropzone__title {
-    font-size: 1.2rem;
-    font-weight: 800;
-    line-height: 1.25;
-}
-
-.upload-dropzone__description {
-    margin-top: 8px;
-    color: var(--muted);
-    font-weight: 500;
-}
-
-.upload-dropzone__filename {
-    margin-top: 14px;
-    padding: 7px 12px;
-    border-radius: 999px;
-    background: #fff;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 0.92rem;
-    font-weight: 700;
-    word-break: break-word;
-}
-
-.upload-dropzone.has-file .upload-dropzone__filename {
-    color: var(--success);
-}
-</style>
-
-<script>
-const submissionInput = document.getElementById("submission_id");
-const statusBox = document.getElementById("acceptance-status");
-const statusTiles = document.getElementById("submission-status-tiles");
-const documentsSection = document.getElementById("documents-section");
-const generateButton = document.getElementById("generate-button");
-const acceptanceSelect = document.getElementById("akceptacja");
-const signDocumentsForm = document.getElementById("sign-documents-form");
-const processCompletedBox = document.getElementById("process-completed-box");
-
-let timeoutId = null;
-
-const REJECTED_STATUSES = new Set([
-    "OFFICER_REJECTED",
-    "PARTICIPANT_REJECTED",
-]);
-
-const DECLARATION_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_READY",
-    "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "AGREEMENT_SIGNED",
-    "AGREEMENT_SIGNATURE_INVALID",
-    "AGREEMENT_NOT_REQUIRED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
-const AGREEMENT_COMPLETED_STATUSES = new Set([
-    "AGREEMENT_SIGNED",
-    "PARTICIPANT_ACCEPTED",
-    "PROCESS_COMPLETED",
-]);
-
-function isRejectedStatus(data) {
-    const processStatus = data.process_status || "";
-    const message = (data.message || "").toLowerCase();
-    return REJECTED_STATUSES.has(processStatus) || message.includes("odrzucon");
-}
-
-function hideElements(selector) {
-    document.querySelectorAll(selector).forEach((element) => {
-        element.style.display = "none";
-    });
-}
-
-function disableGenerateButton() {
-    if (!generateButton) {
-        return;
-    }
-
-    generateButton.disabled = true;
-    generateButton.setAttribute("aria-disabled", "true");
-}
-
-function hideInitialSigningForm() {
-    if (signDocumentsForm) {
-        signDocumentsForm.style.display = "none";
-    }
-}
-
-function showProcessCompletedBox() {
-    if (processCompletedBox) {
-        processCompletedBox.style.display = "block";
-    }
-}
-
-function showCompletedMessage(message) {
-    const messageBox = document.getElementById("completed-stage-message");
-
-    if (!messageBox) {
-        return;
-    }
-
-    messageBox.innerHTML = message;
-    messageBox.style.display = "block";
-}
-
-function hideDeclarationStage() {
-    hideElements('[data-stage="declaration"]');
-    hideElements('[data-stage="declaration-upload"]');
-}
-
-function hideAgreementStage() {
-    hideElements('[data-stage="agreement"]');
-    hideElements('[data-stage="agreement-generate"]');
-    hideElements('[data-stage="agreement-upload"]');
-}
-
-function renderStatusTile({ variant = "neutral", icon = "i", title, description }) {
-    if (!statusTiles) {
-        return;
-    }
-
-    statusTiles.innerHTML = `
-        <div class="status-tile status-tile--${variant}">
-            <span class="status-tile__icon" aria-hidden="true">${icon}</span>
-            <div>
-                <p class="status-tile__title">${title}</p>
-                <p class="status-tile__description">${description}</p>
-            </div>
-        </div>
-    `;
-}
-
-function clearStatusTile() {
-    if (statusTiles) {
-        statusTiles.innerHTML = "";
-    }
-}
-
-function renderSubmissionStatus(data) {
-    const processStatus = data.process_status || "";
-
-    if (!data.exists) {
-        renderStatusTile({
-            variant: "warning",
-            icon: "?",
-            title: "Nie znaleziono wniosku",
-            description: data.message || "Sprawdź poprawność wpisanego ID wniosku.",
-        });
-        return;
-    }
-
-    if (isRejectedStatus(data)) {
-        renderStatusTile({
-            variant: "danger",
-            icon: "!",
-            title: "Wniosek odrzucony przez urzędnika",
-            description: data.message || "Dla tego wniosku nie można przejść do podpisywania dokumentów.",
-        });
-        return;
-    }
-
-    if (AGREEMENT_COMPLETED_STATUSES.has(processStatus)) {
-        renderStatusTile({
-            variant: "success",
-            icon: "✓",
-            title: "Proces podpisywania zakończony",
-            description: data.message || "Wszystkie wymagane dokumenty zostały poprawnie obsłużone.",
-        });
-        return;
-    }
-
-    if (!data.can_sign_documents) {
-        renderStatusTile({
-            variant: "warning",
-            icon: "…",
-            title: "Wniosek oczekuje na akceptację urzędnika",
-            description: data.message || "Dokumenty do podpisu będą dostępne dopiero po akceptacji wniosku.",
-        });
-        return;
-    }
-
-    renderStatusTile({
-        variant: "success",
-        icon: "✓",
-        title: "Wniosek zaakceptowany przez urzędnika",
-        description: data.message || "Możesz wygenerować dokumenty do podpisu.",
-    });
-}
-
-function replaceDownloadedCard(trigger) {
-    const card = trigger.closest("[data-download-replace-card]");
-
-    if (!card) {
-        return;
-    }
-
-    const editUrl = trigger.dataset.editUrl;
-    const title = trigger.dataset.editTitle || "Edytuj";
-
-    if (!editUrl) {
-        return;
-    }
-
-    window.setTimeout(() => {
-        card.outerHTML = `
-            <div class="download-replaced-actions" data-stage="declaration">
-                <a class="btn-primary" href="${editUrl}">${title}</a>
-            </div>
-        `;
-    }, 250);
-}
-
-function bindDownloadReplacementCards() {
-    document.querySelectorAll("[data-download-replace-trigger]").forEach((trigger) => {
-        trigger.addEventListener("click", () => replaceDownloadedCard(trigger));
-    });
-}
-
-function getPdfFiles(dataTransfer) {
-    return Array.from(dataTransfer.files || []).filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
-}
-
-function updateDropzoneFilename(dropzone, input) {
-    const filenameBox = dropzone.querySelector("[data-upload-filename]");
-    const filename = input.files && input.files.length ? input.files[0].name : "Nie wybrano pliku";
-
-    dropzone.classList.toggle("has-file", Boolean(input.files && input.files.length));
-
-    if (filenameBox) {
-        filenameBox.textContent = filename;
-    }
-}
-
-function bindUploadDropzones() {
-    document.querySelectorAll("[data-upload-dropzone]").forEach((dropzone) => {
-        const input = dropzone.querySelector("[data-upload-input]");
-
-        if (!input) {
-            return;
-        }
-
-        input.addEventListener("change", () => updateDropzoneFilename(dropzone, input));
-
-        ["dragenter", "dragover"].forEach((eventName) => {
-            dropzone.addEventListener(eventName, (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                dropzone.classList.add("is-dragover");
-            });
-        });
-
-        ["dragleave", "drop"].forEach((eventName) => {
-            dropzone.addEventListener(eventName, (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                dropzone.classList.remove("is-dragover");
-            });
-        });
-
-        dropzone.addEventListener("drop", (event) => {
-            const pdfFiles = getPdfFiles(event.dataTransfer);
-
-            if (!pdfFiles.length) {
-                return;
-            }
-
-            const transfer = new DataTransfer();
-            transfer.items.add(pdfFiles[0]);
-            input.files = transfer.files;
-            updateDropzoneFilename(dropzone, input);
-        });
-    });
-}
-
-function applyProcessStageVisibility(data) {
-    const processStatus = data.process_status || "";
-
-    if (isRejectedStatus(data)) {
-        hideDeclarationStage();
-        hideAgreementStage();
-        disableGenerateButton();
-        return;
-    }
-
-    const agreementIsCompleted = AGREEMENT_COMPLETED_STATUSES.has(processStatus);
-    const declarationIsCompleted = agreementIsCompleted || DECLARATION_COMPLETED_STATUSES.has(processStatus);
-
-    if (declarationIsCompleted) {
-        hideDeclarationStage();
-        showCompletedMessage("<strong>Deklaracja:</strong> etap zakończony poprawnie.");
-    }
-
-    if (agreementIsCompleted) {
-        hideDeclarationStage();
-        hideAgreementStage();
-        hideInitialSigningForm();
-        disableGenerateButton();
-        showCompletedMessage("<strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.");
-        showProcessCompletedBox();
-    }
-}
-
-function resetState() {
-    statusBox.textContent = "";
-    documentsSection.style.display = "none";
-    generateButton.disabled = true;
-    acceptanceSelect.value = "";
-    clearStatusTile();
-}
-
-async function checkAcceptanceStatus() {
-    const submissionId = submissionInput.value.trim();
-
-    resetState();
-
-    if (!submissionId) {
-        renderStatusTile({
-            variant: "warning",
-            icon: "i",
-            title: "Podaj ID wniosku",
-            description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
-        });
-        return;
-    }
-
-    renderStatusTile({
-        variant: "warning",
-        icon: "…",
-        title: "Sprawdzanie statusu wniosku",
-        description: "System weryfikuje, czy urzędnik zaakceptował wniosek.",
-    });
-
-    try {
-        const response = await fetch(`/api/submissions/${encodeURIComponent(submissionId)}/acceptance-status`);
-        const data = await response.json();
-
-        statusBox.textContent = data.message || "";
-        renderSubmissionStatus(data);
-        applyProcessStageVisibility(data);
-
-        if (
-            data.exists
-            && data.can_sign_documents
-            && !isRejectedStatus(data)
-            && !AGREEMENT_COMPLETED_STATUSES.has(data.process_status || "")
-        ) {
-            documentsSection.style.display = "block";
-            generateButton.disabled = false;
-            acceptanceSelect.value = "Tak";
-        }
-    } catch (error) {
-        statusBox.textContent = "Nie udało się sprawdzić statusu wniosku.";
-        renderStatusTile({
-            variant: "danger",
-            icon: "!",
-            title: "Błąd sprawdzania statusu",
-            description: "Spróbuj ponownie albo sprawdź połączenie z serwerem.",
-        });
-        documentsSection.style.display = "none";
-        generateButton.disabled = true;
-    }
-}
-
-submissionInput.addEventListener("input", () => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(checkAcceptanceStatus, 500);
-});
-
-bindDownloadReplacementCards();
-bindUploadDropzones();
-
-if (submissionInput.value.trim()) {
-    checkAcceptanceStatus();
-} else {
-    renderStatusTile({
-        variant: "warning",
-        icon: "i",
-        title: "Podaj ID wniosku",
-        description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
-    });
-}
-</script>
 {% endblock %}

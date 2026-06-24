@@ -19,7 +19,12 @@ SUPPORTED_FIELD_TYPES = {
     "pesel",
     "section",
     "static_text",
+    "training_selection",
 }
+
+FIELD_STAGE_INITIAL = "initial_submission"
+FIELD_STAGE_AFTER_ACCEPTANCE = "after_officer_acceptance"
+SUPPORTED_FIELD_STAGES = {FIELD_STAGE_INITIAL, FIELD_STAGE_AFTER_ACCEPTANCE}
 
 ALLOWED_SIGNATURE_MODES = {
     "none",
@@ -176,6 +181,8 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
     normalized = normalize_signature_config(normalized)
 
     for field in normalized["fields"]:
+        if field.get("id") and not field.get("name"):
+            field["name"] = field["id"]
         field.setdefault("label", "")
         field.setdefault("placeholder", "")
         field.setdefault("required", False)
@@ -186,8 +193,44 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
         field.setdefault("width", "full")
         field.setdefault("visible_if", None)
         field.setdefault("readonly", False)
+        if field.get("stage") not in SUPPORTED_FIELD_STAGES:
+            field["stage"] = FIELD_STAGE_INITIAL
 
     return normalized
+
+
+def fields_for_stage(form_definition: Dict[str, Any], stage: str) -> List[Dict[str, Any]]:
+    wanted_stage = stage if stage in SUPPORTED_FIELD_STAGES else FIELD_STAGE_INITIAL
+    fields = form_definition.get("fields", [])
+    result: List[Dict[str, Any]] = []
+    pending_sections: List[Dict[str, Any]] = []
+    for field in fields:
+        field_type = field.get("type")
+        if field_type in {"section", "static_text"}:
+            pending_sections.append(field)
+            continue
+        if field.get("stage", FIELD_STAGE_INITIAL) != wanted_stage:
+            continue
+        result.extend(pending_sections)
+        pending_sections = []
+        result.append(field)
+    return result
+
+
+def form_definition_for_stage(form_definition: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    normalized = normalize_form_definition(form_definition)
+    return {**normalized, "fields": fields_for_stage(normalized, stage)}
+
+
+def additional_fields_for_acceptance(form_definition: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return fields_for_stage(normalize_form_definition(form_definition), FIELD_STAGE_AFTER_ACCEPTANCE)
+
+
+def has_additional_fields_after_acceptance(form_definition: Dict[str, Any]) -> bool:
+    return any(
+        field.get("type") not in {"section", "static_text"}
+        for field in additional_fields_for_acceptance(form_definition)
+    )
 
 
 def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Dict[str, Any]:
@@ -201,15 +244,50 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
             continue
 
         if field_type == "checkbox":
-            data[field_name] = "Tak" if field_name in request_form else "Nie"
+            data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
+        elif field_type == "training_selection":
+            data[field_name] = ",".join(_getlist(request_form, field_name))
         else:
-            data[field_name] = request_form.get(field_name, "").strip()
+            data[field_name] = str(_get(request_form, field_name, "") or "").strip()
 
     signature = form_definition.get("signature", {})
     if signature.get("show_user_choice"):
-        data["signature_method"] = request_form.get("signature_method", "").strip()
+        data["signature_method"] = str(_get(request_form, "signature_method", "") or "").strip()
 
     return data
+
+
+def _get(request_data, key: str, default: Any = None) -> Any:
+    if hasattr(request_data, "get"):
+        return request_data.get(key, default)
+    return default
+
+
+def _getlist(request_data, key: str) -> list[str]:
+    if hasattr(request_data, "getlist"):
+        return [str(item).strip() for item in request_data.getlist(key) if str(item).strip()]
+    value = _get(request_data, key, [])
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value in (None, ""):
+        return []
+    return [str(value).strip()]
+
+
+def _is_checked(request_data, key: str) -> bool:
+    if hasattr(request_data, "getlist"):
+        values = request_data.getlist(key)
+        if not values:
+            return False
+        return any(str(value).strip().lower() not in {"", "0", "false", "nie", "no", "off"} for value in values)
+    if key not in request_data:
+        return False
+    value = _get(request_data, key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list):
+        return any(str(item).strip().lower() in {"1", "true", "tak", "yes", "on", "checked"} for item in value)
+    return str(value or "").strip().lower() in {"1", "true", "tak", "yes", "on", "checked"}
 
 
 def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:

@@ -1,0 +1,82 @@
+{% extends "admin/base.html" %}
+{% block title %}Szablony maili{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Szablony maili</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_html', form_id=form.id) }}">Importuj HTML</a>
+        <a class="admin-button" href="{{ url_for('admin.mail_template_edit', form_id=form.id) }}">Dodaj szablon</a>
+    </div>
+</div>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>Nazwa</th>
+                <th>Typ</th>
+                <th>Tytul</th>
+                <th>Temat</th>
+                <th>Trigger event</th>
+                <th>Status/decyzja</th>
+                <th>Aktywny</th>
+                <th>Akcje</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for template in templates %}
+            <tr>
+                <td>{{ template.name }}</td>
+                <td>{{ template.mail_type }}</td>
+                <td>{{ template.content_title or "-" }}</td>
+                <td>{{ template.subject }}</td>
+                <td>{{ template.trigger_event or "-" }}</td>
+                <td>{{ template.trigger_status or "-" }} / {{ template.trigger_decision or "-" }}{% if template.is_default_for_status %} <span class="admin-badge">domyslny</span>{% endif %}</td>
+                <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if template.is_active else "Nie" }}</span></td>
+                <td>
+                    <div class="admin-actions">
+                        <a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a>
+                        <button class="admin-link-button admin-link-danger" type="button" data-delete-modal="delete-mail-template-{{ template.id }}">Usuń</button>
+                        <dialog class="admin-confirm-dialog" id="delete-mail-template-{{ template.id }}">
+                            <form method="dialog" class="admin-confirm-dialog__box">
+                                <h2>Usunąć szablon maila?</h2>
+                                <p>Ta operacja usunie szablon oraz powiązane zasoby. Wysłane wcześniej maile i zgłoszenia pozostaną bez zmian.</p>
+                                <div class="admin-form-actions">
+                                    <button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button>
+                                    <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-mail-template-post-{{ template.id }}">Usuń</button>
+                                </div>
+                            </form>
+                        </dialog>
+                        <form id="delete-mail-template-post-{{ template.id }}" method="post" action="{{ url_for('admin.mail_template_delete', form_id=form.id, template_id=template.id) }}" hidden>
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        </form>
+                    </div>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="8">Brak szablonow.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<script>
+document.querySelectorAll("[data-delete-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const dialog = document.getElementById(button.dataset.deleteModal);
+        if (dialog && typeof dialog.showModal === "function") {
+            dialog.showModal();
+        }
+    });
+});
+document.querySelectorAll("[data-submit-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const form = document.getElementById(button.dataset.submitDelete);
+        if (form) {
+            form.submit();
+        }
+    });
+});
+</script>
+{% endblock %}

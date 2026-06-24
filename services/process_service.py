@@ -10,6 +10,8 @@ class ProcessStatus(StrEnum):
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
     OFFICER_ACCEPTED = "OFFICER_ACCEPTED"
     OFFICER_REJECTED = "OFFICER_REJECTED"
+    ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS = "accepted_waiting_for_additional_fields"
+    ADDITIONAL_FIELDS_COMPLETED = "additional_fields_completed"
     DECLARATION_NOT_REQUIRED = "DECLARATION_NOT_REQUIRED"
     DECLARATION_READY = "DECLARATION_READY"
     DECLARATION_WAITING_FOR_SIGNATURE = "DECLARATION_WAITING_FOR_SIGNATURE"
@@ -102,10 +104,10 @@ def get_officer_decision(row: Mapping[str, Any]) -> OfficerDecision:
     )
     value = normalize_yes_no(raw_value)
 
-    if value == "TAK":
+    if value == "TAK" or normalize_text(raw_value).lower() == "accepted":
         return OfficerDecision.ACCEPTED
 
-    if value == "NIE":
+    if value == "NIE" or normalize_text(raw_value).lower() == "rejected":
         return OfficerDecision.REJECTED
 
     return OfficerDecision.MISSING
@@ -161,7 +163,7 @@ def is_agreement_signature_valid(row: Mapping[str, Any]) -> bool:
 
 def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
     if is_agreement_signature_valid(row):
-        return ProcessStatus.PARTICIPANT_ACCEPTED
+        return ProcessStatus.AGREEMENT_SIGNED
 
     if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
         return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
@@ -219,7 +221,7 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
     block_reason = get_agreement_block_reason(row)
 
     can_generate_declaration = (
-        status == ProcessStatus.OFFICER_ACCEPTED
+        status in {ProcessStatus.OFFICER_ACCEPTED, ProcessStatus.ADDITIONAL_FIELDS_COMPLETED}
         and is_declaration_required(row)
     )
     can_sign_documents = decision == OfficerDecision.ACCEPTED
@@ -271,7 +273,10 @@ def build_initial_process_fields(
         "agreement_signature_valid": "",
         "agreement_signature_error": "",
         "agreement_signed_filename": "",
+        "office_agreement_signed_email_sent": "",
+        "office_agreement_signed_email_sent_for": "",
         "agreement_success_email_sent": "",
+        "agreement_success_email_sent_for": "",
         "requirements_rejection_email_sent": "",
     }
 

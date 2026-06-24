@@ -262,6 +262,10 @@ main,
     grid-column: span 3;
 }
 
+.training-selection-row {
+    grid-column: 1 / -1;
+}
+
 label {
     font-weight: 700;
     color: var(--text);
@@ -321,6 +325,22 @@ textarea:focus {
     width: auto;
     margin: 0;
     accent-color: var(--gold-dark);
+}
+
+.training-selection {
+    align-items: center;
+}
+
+.training-selection .checkbox-item {
+    flex: 0 0 auto;
+}
+
+.training-selection .checkbox-item span {
+    white-space: nowrap;
+}
+
+.training-selection .help-text {
+    align-self: center;
 }
 
 .help-text {
@@ -665,6 +685,45 @@ textarea:focus {
     border: 1px solid var(--border);
 }
 
+.project-label {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    border-radius: 999px;
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+    border: 1px solid var(--border);
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0;
+}
+
+.form-project-label {
+    margin-bottom: 6px;
+}
+
+.form-tile__logo {
+    display: block;
+    max-width: 128px;
+    max-height: 48px;
+    object-fit: contain;
+    margin-bottom: 14px;
+}
+
+.form-logo-row {
+    display: flex;
+    align-items: center;
+}
+
+.form-logo {
+    display: block;
+    max-width: 180px;
+    max-height: 72px;
+    object-fit: contain;
+}
+
 .form-tile__plus {
     position: absolute;
     top: 18px;
@@ -850,6 +909,10 @@ textarea:focus {
     .width-third,
     .width-quarter {
         grid-column: span 12;
+    }
+
+    .training-selection .checkbox-item span {
+        white-space: normal;
     }
 
     .result-grid {

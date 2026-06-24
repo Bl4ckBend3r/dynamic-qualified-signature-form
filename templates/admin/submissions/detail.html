@@ -1,0 +1,66 @@
+{% extends "admin/base.html" %}
+{% block title %}Zgloszenie{% endblock %}
+{% block content %}
+<h1>Zgloszenie {{ submission.submission_id }}</h1>
+<p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
+<form method="post" class="form-card">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <label>Status procesu</label>
+    <input name="process_status" value="{{ submission.process_status }}">
+    <label>Decyzja urzednika</label>
+    <select name="officer_decision">
+        <option value="" {% if not submission.officer_decision %}selected{% endif %}>Brak</option>
+        <option value="TAK" {% if submission.officer_decision == "TAK" %}selected{% endif %}>TAK</option>
+        <option value="NIE" {% if submission.officer_decision == "NIE" %}selected{% endif %}>NIE</option>
+    </select>
+    <button class="btn-primary" type="submit">Zapisz status</button>
+    <a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+</form>
+<h2>Dane</h2>
+<table class="data-table">
+    {% for key, value in (submission.data_json or {}).items() %}
+        <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+    {% endfor %}
+</table>
+<h2>Historia workflow</h2>
+<p><small>Zrodlo: {{ workflow_history.source }}</small></p>
+<table class="data-table">
+    <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powod</th><th>Data</th></tr></thead>
+    <tbody>{% for event in workflow_history.events %}
+        <tr>
+            <td>{{ event.new_status_label or event.new_status }}</td>
+            <td>{{ event.new_step }}</td>
+            <td>{{ event.actor_role }}</td>
+            <td>{{ event.reason }}</td>
+            <td>{{ event.created_at }}</td>
+        </tr>
+    {% else %}
+        <tr><td colspan="5">Brak historii workflow.</td></tr>
+    {% endfor %}</tbody>
+</table>
+<h2>Historia decyzji</h2>
+<p><small>Zrodlo: {{ decision_history.source }}</small></p>
+<table class="data-table">
+    <thead><tr><th>Decyzja</th><th>Uzasadnienie</th><th>Status docelowy</th><th>Mail</th><th>Data</th></tr></thead>
+    <tbody>{% for decision in decision_history.decisions %}
+        <tr>
+            <td>{{ decision.decision }}</td>
+            <td>{{ decision.justification }}</td>
+            <td>{{ decision.target_status }}</td>
+            <td>{{ "Tak" if decision.email_sent else "Nie" }}</td>
+            <td>{{ decision.decided_at }}</td>
+        </tr>
+    {% else %}
+        <tr><td colspan="5">Brak decyzji.</td></tr>
+    {% endfor %}</tbody>
+</table>
+<h2>Dokumenty Nextcloud</h2>
+<table class="data-table">
+    <thead><tr><th>Nazwa</th><th>Sciezka</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th></tr></thead>
+    <tbody>{% for file in files %}
+        <tr><td>{{ file.filename }}</td><td>{{ file.storage_path }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td></tr>
+    {% else %}
+        <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
+    {% endfor %}</tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,98 @@
+{% extends "admin/base.html" %}
+{% block title %}Formularze{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Konfiguracja</p>
+        <h1>Formularze</h1>
+    </div>
+    <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj formularz</a>
+</div>
+{% if forms %}
+    <div class="admin-card admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Nazwa</th>
+                    <th>Slug</th>
+                    <th>Kolejnosc</th>
+                    <th>Status</th>
+                    <th>Publiczny</th>
+                    <th>Etykieta</th>
+                    <th>Liczba zgloszen</th>
+                    <th>Data utworzenia</th>
+                    <th>Akcje</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for form in forms %}
+                <tr>
+                    <td><strong>{{ form.name }}</strong></td>
+                    <td><code>{{ form.slug }}</code></td>
+                    <td>{{ form.sort_order }}</td>
+                    <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
+                    <td><span class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if form.is_public else "Nie" }}</span></td>
+                    <td>{% if form.label_text %}<span class="admin-project-label">{{ form.label_text }}</span>{% else %}-{% endif %}</td>
+                    <td>{{ submission_counts.get(form.slug, 0) }}</td>
+                    <td>{{ form.created_at.strftime("%Y-%m-%d") if form.created_at else "-" }}</td>
+                    <td>
+                        <div class="admin-actions">
+                            <a href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgloszenia</a>
+                            <a href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
+                            <a href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
+                            <a href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
+                            <a href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
+                            <a href="{{ url_for('admin.form_edit', form_id=form.id) }}">Uprawnienia</a>
+                            <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
+                            </form>
+                            {% if g.admin_user.role == "super_admin" %}
+                                <button class="admin-link-button admin-link-danger" type="button" data-delete-modal="delete-form-{{ form.id }}">Usuń</button>
+                                <dialog class="admin-confirm-dialog" id="delete-form-{{ form.id }}">
+                                    <form method="dialog" class="admin-confirm-dialog__box">
+                                        <h2>Usunąć formularz?</h2>
+                                        <p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane. Formularz nie będzie widoczny na liście aktywnych formularzy.</p>
+                                        <div class="admin-form-actions">
+                                            <button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button>
+                                            <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button>
+                                        </div>
+                                    </form>
+                                </dialog>
+                                <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden>
+                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="admin-empty-state">
+        <h2>Nie dodano jeszcze zadnego formularza.</h2>
+        <p>Uzyj przycisku ponizej, aby wgrac formularz. System automatycznie wykryje pola i zapisze konfiguracje.</p>
+        <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj pierwszy formularz</a>
+    </div>
+{% endif %}
+<script>
+document.querySelectorAll("[data-delete-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const dialog = document.getElementById(button.dataset.deleteModal);
+        if (dialog && typeof dialog.showModal === "function") {
+            dialog.showModal();
+        }
+    });
+});
+document.querySelectorAll("[data-submit-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const form = document.getElementById(button.dataset.submitDelete);
+        if (form) {
+            form.submit();
+        }
+    });
+});
+</script>
+{% endblock %}

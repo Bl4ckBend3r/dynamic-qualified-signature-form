@@ -5,17 +5,28 @@
 {% block content %}
 
     <div class="back-link">
-        <a href="{{ url_for('index') }}">← Powrót do listy formularzy</a>
+        <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
     </div>
 
     <div class="card">
         <div class="card-header">
+            {% if form_definition.logo_url %}
+                <div class="form-logo-row">
+                    <img class="form-logo" src="{{ form_definition.logo_url }}" alt="">
+                </div>
+            {% endif %}
+            {% if form_definition.label_text %}
+                <div
+                    class="project-label form-project-label"
+                    style="color: {{ form_definition.label_color or '#b38d45' }}; background: {{ form_definition.label_background or '#f7f3ec' }};"
+                >{{ form_definition.label_text }}</div>
+            {% endif %}
             <h2>{{ form_definition.title }}</h2>
 
             {% if form_definition.header_image %}
                 <div class="form-header-image">
                     <img
-                        src="{{ url_for('nextcloud_asset', asset_path=form_definition.header_image) }}"
+                        src="{{ url_for('documents.nextcloud_asset', asset_path=form_definition.header_image) }}"
                         alt="Zdjęcie formularza"
                         loading="lazy"
                     >
@@ -27,15 +38,15 @@
             {% endif %}
         </div>
 
-        <form method="post" action="{{ url_for('submit', slug=slug) }}" novalidate class="dynamic-form">
+        <form method="post" action="{{ url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">
-                        <h3>{{ field.label|safe }}</h3>
+                        <h3>{{ field.label|trusted_html }}</h3>
                     </section>
 
                 {% elif field.type == "static_text" %}
-                    <div class="static-text">{{ field.label|safe }}</div>
+                    <div class="static-text">{{ field.label|trusted_html }}</div>
 
                 {% else %}
                     {% set value = values.get(field.name, field.default) %}
@@ -51,7 +62,7 @@
                     >
                         {% if field.type != "checkbox" %}
                             <label for="{{ field.name }}">
-                                {{ field.label|safe }}
+                                {{ field.label|trusted_html }}
                                 {% if field.required %}
                                     <span class="required">*</span>
                                 {% endif %}
@@ -93,7 +104,7 @@
 
                         {% elif field.type == "radio" %}
                             {% if field.description %}
-                                <div class="field-description">{{ field.description|safe }}</div>
+                                <div class="field-description">{{ field.description|trusted_html }}</div>
                             {% endif %}
 
                             <div class="option-list">
@@ -107,7 +118,7 @@
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
-                                        <span>{{ option|safe }}</span>
+                                        <span>{{ option|trusted_html }}</span>
                                     </label>
                                 {% endfor %}
                             </div>
@@ -126,7 +137,7 @@
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>
-                                            {{ option.label|safe }}
+                                            {{ option.label|trusted_html }}
                                             {% if field.required %}
                                                 <span class="required">*</span>
                                             {% endif %}
@@ -137,7 +148,7 @@
                         {% endif %}
 
                         {% if field.help_text %}
-                            <div class="help-text">{{ field.help_text|safe }}</div>
+                            <div class="help-text">{{ field.help_text|trusted_html }}</div>
                         {% endif %}
 
                         {% if has_error %}

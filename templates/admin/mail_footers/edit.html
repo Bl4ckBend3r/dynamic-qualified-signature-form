@@ -1,0 +1,171 @@
+{% extends "admin/base.html" %}
+{% block title %}Stopka maila{% endblock %}
+{% block content %}
+{% set selected_logo = footer.logo if footer.logo and footer.logo.active else none %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Stopki maili</p>
+        <h1>Stopka maila</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
+    </div>
+</div>
+
+<form method="post" class="admin-form-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Dane podstawowe</h2>
+        </div>
+        <div class="admin-form-grid">
+            <div class="admin-field">
+                <label class="admin-field-label" for="footer-name">Nazwa stopki</label>
+                <input id="footer-name" name="name" value="{{ footer.name }}" required>
+                <p class="admin-field-help">Nazwa widoczna tylko w panelu administracyjnym.</p>
+            </div>
+            <label class="admin-switch">
+                <input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}>
+                <span>
+                    <strong>Aktywna</strong>
+                    <small>Stopka może być używana w wiadomościach.</small>
+                </span>
+            </label>
+            <label class="admin-switch admin-form-wide">
+                <input type="checkbox" name="is_default" {% if footer.is_default %}checked{% endif %}>
+                <span>
+                    <strong>Domyślna</strong>
+                    <small>Ta stopka będzie wybierana automatycznie dla nowych szablonów maili tego formularza.</small>
+                </span>
+            </label>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Logo w stopce</h2>
+        </div>
+        <div class="admin-logo-picker">
+            <div class="admin-field">
+                <label class="admin-field-label" for="footer-logo">Logo z biblioteki</label>
+                <select id="footer-logo" name="logo_id" data-logo-select>
+                    <option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>
+                    {% for logo in logos %}
+                        <option
+                            value="{{ logo.id }}"
+                            data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}"
+                            data-logo-name="{{ logo.name }}"
+                            {% if footer.logo_id == logo.id %}selected{% endif %}
+                        >{{ logo.name }}</option>
+                    {% endfor %}
+                </select>
+                <p class="admin-field-help">Logo można dodać tylko z poziomu konta super_admin.</p>
+            </div>
+            <div class="admin-logo-preview" data-logo-preview>
+                {% if selected_logo %}
+                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
+                    <span>{{ selected_logo.name }}</span>
+                {% else %}
+                    <span>Nie wybrano logo.</span>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Treść HTML</h2>
+            <p>Treść zostanie doklejona na końcu wiadomości w domyślnym stylu platformy.</p>
+        </div>
+        <div class="admin-field">
+            <label class="admin-field-label" for="footer-html">Treść HTML</label>
+            <textarea id="footer-html" name="html_body" rows="16" data-footer-html>{{ footer.html_body }}</textarea>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header">
+            <h2>Podgląd</h2>
+            <p>Finalny mail zostanie opakowany w domyślny layout platformy.</p>
+        </div>
+        <div class="admin-preview-card">
+            <div class="admin-preview-logo" data-preview-logo>
+                {% if selected_logo %}
+                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
+                {% else %}
+                    <span>Nie wybrano logo dla tej stopki.</span>
+                {% endif %}
+            </div>
+            <div class="admin-preview-content" data-preview-html>
+                {% if footer.html_body %}
+                    {{ footer.html_body|safe }}
+                {% else %}
+                    <p>Brak treści HTML stopki.</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
+        <button class="admin-button" type="submit">Zapisz</button>
+    </div>
+</form>
+
+<script>
+(() => {
+    const select = document.querySelector("[data-logo-select]");
+    const pickerPreview = document.querySelector("[data-logo-preview]");
+    const previewLogo = document.querySelector("[data-preview-logo]");
+    const htmlInput = document.querySelector("[data-footer-html]");
+    const htmlPreview = document.querySelector("[data-preview-html]");
+
+    const setEmptyLogo = () => {
+        pickerPreview.replaceChildren();
+        const pickerText = document.createElement("span");
+        pickerText.textContent = "Nie wybrano logo.";
+        pickerPreview.append(pickerText);
+
+        previewLogo.replaceChildren();
+        const previewText = document.createElement("span");
+        previewText.textContent = "Nie wybrano logo dla tej stopki.";
+        previewLogo.append(previewText);
+    };
+
+    const renderLogo = () => {
+        if (!select || !pickerPreview || !previewLogo) {
+            return;
+        }
+        const selected = select.options[select.selectedIndex];
+        const url = selected?.dataset.previewUrl || "";
+        const name = selected?.dataset.logoName || "Brak logo";
+        if (url) {
+            const pickerImage = document.createElement("img");
+            pickerImage.src = url;
+            pickerImage.alt = name;
+            const pickerText = document.createElement("span");
+            pickerText.textContent = name;
+            pickerPreview.replaceChildren(pickerImage, pickerText);
+
+            const previewImage = document.createElement("img");
+            previewImage.src = url;
+            previewImage.alt = name;
+            previewLogo.replaceChildren(previewImage);
+        } else {
+            setEmptyLogo();
+        }
+    };
+
+    const renderHtml = () => {
+        if (!htmlInput || !htmlPreview) {
+            return;
+        }
+        htmlPreview.innerHTML = htmlInput.value.trim() || "<p>Brak treści HTML stopki.</p>";
+    };
+
+    select?.addEventListener("change", renderLogo);
+    htmlInput?.addEventListener("input", renderHtml);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,193 @@
+{% extends "admin/base.html" %}
+{% block title %}Edycja formularza{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Ustawienia formularza</p>
+        <h1>{{ form.name }}</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrot</a>
+    </div>
+</div>
+<form method="post" class="admin-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-form-grid">
+        <label><span>Nazwa</span><input name="name" value="{{ form.name }}" required></label>
+        <label><span>Slug</span><input name="slug" value="{{ form.slug }}" required></label>
+        <label><span>Tytul</span><input name="title" value="{{ form.title }}"></label>
+        <label><span>Kolejnosc sortowania</span><input type="number" name="sort_order" value="{{ form.sort_order }}"></label>
+        <label class="admin-form-wide"><span>Opis</span><textarea name="description">{{ form.description }}</textarea></label>
+        <label><span>Etykieta</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08"></label>
+        <label><span>Wariant etykiety</span><input name="label_variant" value="{{ form.label_variant }}"></label>
+        <label><span>Kolor tekstu etykiety</span><input name="label_color" value="{{ form.label_color }}"></label>
+        <label><span>Tlo etykiety</span><input name="label_background" value="{{ form.label_background }}"></label>
+        <label>
+            <span>Logo</span>
+            <select name="logo_id">
+                <option value="">Bez logo</option>
+                {% for logo in logos %}
+                    <option value="{{ logo.id }}" {% if form.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}{% if not logo.active %} (nieaktywne){% endif %}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
+        <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
+    </div>
+    {% if g.admin_user.role == "super_admin" %}
+        <div class="admin-section">
+            <h2>Uprawnienia</h2>
+            <div class="admin-check-grid">
+                {% for user in users %}
+                    <label class="admin-check"><input type="checkbox" name="user_ids" value="{{ user.id }}" {% if user.id in assigned_user_ids %}checked{% endif %}><span>{{ user.email }} ({{ user.role }})</span></label>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+    {% set workflow = form.definition_json.get("workflow", {}) if form.definition_json else {} %}
+    <div class="admin-section admin-workflow-editor">
+        <div class="admin-section-heading">
+            <div>
+                <h2>Workflow</h2>
+                <p>Dane zaimportowane z JSON-a można edytować tutaj i zapisać razem z konfiguracją formularza.</p>
+            </div>
+        </div>
+        {% if validation_errors %}
+            <div class="admin-validation-errors">
+                {% for error in validation_errors %}
+                    <p>{{ error }}</p>
+                {% endfor %}
+            </div>
+        {% endif %}
+        <div class="admin-form-grid">
+            <label><span>Nazwa workflow</span><input name="workflow_name" value="{{ workflow.get('name', '') }}"></label>
+            <label><span>Status początkowy</span><input name="workflow_initial_step" value="{{ workflow.get('initial_step', '') }}" placeholder="submission"></label>
+            <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
+            <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
+        </div>
+        <div class="admin-trigger-help">
+            {% for trigger, description in trigger_descriptions.items() %}
+                <span class="admin-trigger-chip" title="{{ description }}">{{ trigger }} <span aria-hidden="true">ⓘ</span></span>
+            {% endfor %}
+        </div>
+        <label class="admin-form-wide admin-code-field">
+            <span>Konfiguracja workflow JSON</span>
+            <textarea name="workflow_json" spellcheck="false">{{ workflow_json }}</textarea>
+        </label>
+        <div class="admin-html-template-fields">
+            <label class="admin-form-wide admin-code-field" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
+                <span>Szablon deklaracji HTML</span>
+                <textarea name="declaration_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ submission_date }}' }}">{{ workflow.get('declaration_template_html', '') }}</textarea>
+            </label>
+            <label class="admin-form-wide admin-code-field" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                <span>Szablon umowy HTML</span>
+                <textarea name="contract_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ generated_date }}' }}">{{ workflow.get('contract_template_html', '') }}</textarea>
+            </label>
+        </div>
+    </div>
+    {% set training_catalog = training_field.get('catalog', []) if training_field else [] %}
+    <div class="admin-section admin-training-editor">
+        <div class="admin-section-heading">
+            <div>
+                <h2>Szkolenia w deklaracji</h2>
+                <p>Te dane zasilaja wybor szkolen, kwoty oraz limit widoczny przy wypelnianiu deklaracji.</p>
+            </div>
+            <label class="admin-check compact">
+                <input type="checkbox" name="training_selection_enabled" {% if training_field and training_field.get('enabled') %}checked{% endif %}>
+                <span>Pokaz wybor szkolen</span>
+            </label>
+        </div>
+        <div class="admin-form-grid">
+            <label><span>Nazwa pola</span><input name="training_selection_name" value="{{ training_field.get('name', 'selected_trainings') if training_field else 'selected_trainings' }}"></label>
+            <label><span>Etykieta</span><input name="training_selection_label" value="{{ training_field.get('label', 'Wybierz szkolenia') if training_field else 'Wybierz szkolenia' }}"></label>
+            <label><span>Limit finansowania</span><input type="number" step="0.01" min="0" name="training_selection_max_total" value="{{ training_field.get('max_total_amount', '') if training_field else '' }}"></label>
+            <label><span>Waluta</span><input name="training_selection_currency" value="{{ training_field.get('currency', 'PLN') if training_field else 'PLN' }}"></label>
+            <label class="admin-check"><input type="checkbox" name="training_selection_required" {% if not training_field or training_field.get('required', true) %}checked{% endif %}><span>Wymagany wybor co najmniej jednego szkolenia</span></label>
+        </div>
+        <div class="admin-training-table-wrap">
+            <table class="admin-table admin-training-table" data-training-table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Nazwa szkolenia</th>
+                        <th>Kwota</th>
+                        <th>Akcje</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in training_catalog %}
+                        <tr>
+                            <td><input name="training_item_id" value="{{ item.get('id', '') }}" placeholder="np. excel"></td>
+                            <td><input name="training_item_name" value="{{ item.get('name', '') }}" placeholder="Nazwa szkolenia"></td>
+                            <td><input type="number" step="0.01" min="0" name="training_item_price" value="{{ item.get('price', '') }}"></td>
+                            <td><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usun</button></td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td><input name="training_item_id" value="" placeholder="np. excel"></td>
+                            <td><input name="training_item_name" value="" placeholder="Nazwa szkolenia"></td>
+                            <td><input type="number" step="0.01" min="0" name="training_item_price" value=""></td>
+                            <td><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usun</button></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <button class="admin-button-secondary" type="button" data-add-training>Dodaj szkolenie</button>
+    </div>
+    <div class="admin-form-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
+        <button class="admin-button" type="submit">Zapisz</button>
+    </div>
+</form>
+<script>
+function syncWorkflowTemplateVisibility() {
+    const declaration = document.querySelector('[data-workflow-toggle="declaration"]');
+    const contract = document.querySelector('[data-workflow-toggle="contract"]');
+    document.querySelectorAll('[data-workflow-template="declaration"]').forEach((field) => {
+        field.hidden = !declaration?.checked;
+    });
+    document.querySelectorAll('[data-workflow-template="contract"]').forEach((field) => {
+        field.hidden = !contract?.checked;
+    });
+}
+document.querySelectorAll("[data-workflow-toggle]").forEach((input) => {
+    input.addEventListener("change", syncWorkflowTemplateVisibility);
+});
+syncWorkflowTemplateVisibility();
+
+const trainingTable = document.querySelector("[data-training-table]");
+const addTrainingButton = document.querySelector("[data-add-training]");
+
+function bindTrainingRemoveButtons() {
+    document.querySelectorAll("[data-remove-training]").forEach((button) => {
+        button.onclick = function () {
+            const tbody = trainingTable?.querySelector("tbody");
+            const rows = tbody ? Array.from(tbody.querySelectorAll("tr")) : [];
+            if (rows.length <= 1) {
+                button.closest("tr")?.querySelectorAll("input").forEach((input) => {
+                    input.value = "";
+                });
+                return;
+            }
+            button.closest("tr")?.remove();
+        };
+    });
+}
+
+addTrainingButton?.addEventListener("click", function () {
+    const tbody = trainingTable?.querySelector("tbody");
+    const firstRow = tbody?.querySelector("tr");
+    if (!tbody || !firstRow) return;
+    const row = firstRow.cloneNode(true);
+    row.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+    });
+    tbody.appendChild(row);
+    bindTrainingRemoveButtons();
+});
+
+bindTrainingRemoveButtons();
+</script>
+{% endblock %}

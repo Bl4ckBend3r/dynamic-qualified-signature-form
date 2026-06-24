@@ -1,0 +1,156 @@
+{% extends "admin/base.html" %}
+{% block title %}Zgloszenia{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Zgloszenia formularza</h1>
+    </div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
+</div>
+<form method="get" class="admin-card admin-filters">
+    <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
+    <select name="status">
+        <option value="">Wszystkie statusy</option>
+        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
+            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+    <select name="field">
+        <option value="">Pole do filtrowania</option>
+        {% for field_name, field_label in filter_fields %}
+            <option value="{{ field_name }}" {% if filters.get('field') == field_name %}selected{% endif %}>{{ field_label }}</option>
+        {% endfor %}
+    </select>
+    <select name="operator">
+        {% for value, label in [("contains", "zawiera"), ("equals", "rowna sie"), ("not_contains", "nie zawiera"), ("not_equals", "rozne od"), ("empty", "puste"), ("not_empty", "niepuste"), ("date_range", "od-do dla dat")] %}
+            <option value="{{ value }}" {% if filters.get('operator', 'contains') == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+    <input name="value" value="{{ filters.get('value', '') }}" placeholder="Wartosc od">
+    <input name="value_to" value="{{ filters.get('value_to', '') }}" placeholder="Wartosc do">
+    <select name="sort">
+        {% for option in ["created_at", "process_status", "officer_decision", "nazwisko", "email", "submission_id"] %}
+            <option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+        {% for field in fields %}
+            <option value="{{ field.name }}" {% if filters.get('sort') == field.name %}selected{% endif %}>{{ field.name }}</option>
+        {% endfor %}
+    </select>
+    <select name="direction">
+        <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
+        <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
+    </select>
+    <button class="admin-button-secondary" type="submit">Filtruj</button>
+</form>
+<form id="bulk-mail-form" method="post" action="{{ url_for('admin.submissions_mail_selected', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+</form>
+<div class="admin-bulk-actions">
+    <label class="admin-check">
+        <input type="checkbox" id="select-all-submissions">
+        <span>Zaznacz wszystkie na stronie</span>
+    </label>
+    <div class="admin-actions">
+        <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyslij mail do zaznaczonych</button>
+        <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
+    </div>
+</div>
+<form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div class="admin-card admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Wybierz</th>
+                    <th>ID</th>
+                    <th>Data</th>
+                    <th>Nazwisko</th>
+                    <th>Email</th>
+                    {% for field in fields[:6] %}
+                        <th>{{ field.label or field.name }}</th>
+                    {% endfor %}
+                    <th>Status</th>
+                    <th>Decyzja urzednika</th>
+                    <th>Akcje</th>
+                </tr>
+            </thead>
+            <tbody>{% for submission in submissions %}
+                <tr>
+                    <td>
+                        <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
+                        <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" form="bulk-mail-form">
+                    </td>
+                    <td><code>{{ submission.submission_id }}</code></td>
+                    <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
+                    <td>{{ submission.nazwisko or "-" }}</td>
+                    <td>{{ submission.email or "-" }}</td>
+                    {% for field in fields[:6] %}
+                        <td>{{ submission_value(submission, field.name) or "-" }}</td>
+                    {% endfor %}
+                    <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
+                    <td>
+                        <div class="admin-decision-controls">
+                            <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
+                                {% for value, label in officer_decisions %}
+                                    <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <input
+                                name="officer_decision_reason_{{ submission.id }}"
+                                class="admin-decision-reason"
+                                value="{{ submission.officer_decision_reason }}"
+                                placeholder="Powod"
+                            >
+                        </div>
+                    </td>
+                    <td>
+                        <div class="admin-actions">
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
+                            <a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+                        </div>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="{{ 9 + fields[:6]|length }}">Brak zgloszen.</td></tr>
+            {% endfor %}</tbody>
+        </table>
+    </div>
+    <div class="admin-bulk-actions admin-bulk-actions-bottom">
+        <span></span>
+        <button class="admin-button" type="submit">Zapisz decyzje</button>
+    </div>
+</form>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const selectAll = document.getElementById("select-all-submissions");
+    const checks = document.querySelectorAll(".submission-check");
+    if (selectAll) {
+        selectAll.addEventListener("change", function () {
+            checks.forEach(item => { item.checked = selectAll.checked; });
+        });
+    }
+
+    function syncReason(select) {
+        const controls = select.closest(".admin-decision-controls");
+        if (!controls) return;
+        const reason = controls.querySelector(".admin-decision-reason");
+        if (!reason) return;
+        const needsReason = select.value === "rejected" || select.value === "correction";
+        reason.hidden = !needsReason;
+        reason.required = needsReason;
+        if (!needsReason) {
+            reason.value = "";
+        }
+    }
+
+    document.querySelectorAll(".admin-decision-select").forEach(select => {
+        syncReason(select);
+        select.addEventListener("change", function () {
+            syncReason(select);
+        });
+    });
+});
+</script>
+{% endblock %}

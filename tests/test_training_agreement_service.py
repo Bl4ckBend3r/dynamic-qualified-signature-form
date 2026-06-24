@@ -5,6 +5,7 @@ from services.training_agreement_service import (
     extract_training_selection,
     get_training_selection_field,
 )
+from services.documents.declaration_flow_service import DeclarationFlowService
 
 
 def training_form_definition():
@@ -62,6 +63,28 @@ def test_extract_training_selection_keeps_legacy_limit_error():
 
     assert selected == [{"id": "excel", "name": "Excel", "price": 1200.0}]
     assert error == "Łączna wartość szkoleń przekracza limit 1000 PLN."
+
+
+def test_declaration_form_places_training_selection_under_training_section():
+    definition = DeclarationFlowService.build_declaration_form_definition(
+        {
+            "fields": [
+                {"type": "section", "label": "Wybór szkoleń"},
+                {"type": "section", "label": "Oświadczenia uczestnika"},
+                {"type": "checkbox", "name": "osw_rodo"},
+                {"type": "training_selection", "name": "selected_trainings", "catalog": []},
+            ]
+        }
+    )
+
+    assert [field.get("name") or field.get("label") for field in definition["fields"]] == [
+        "Wybór szkoleń",
+        "selected_trainings",
+        "Oświadczenia uczestnika",
+        "osw_rodo",
+    ]
+
+
 def test_build_training_agreement_number_keeps_legacy_pattern():
     number = build_training_agreement_number(
         "abc",

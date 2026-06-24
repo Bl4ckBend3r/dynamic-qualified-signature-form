@@ -22,6 +22,38 @@
         <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
     {% endfor %}
 </table>
+<h2>Historia workflow</h2>
+<p><small>Zrodlo: {{ workflow_history.source }}</small></p>
+<table class="data-table">
+    <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powod</th><th>Data</th></tr></thead>
+    <tbody>{% for event in workflow_history.events %}
+        <tr>
+            <td>{{ event.new_status_label or event.new_status }}</td>
+            <td>{{ event.new_step }}</td>
+            <td>{{ event.actor_role }}</td>
+            <td>{{ event.reason }}</td>
+            <td>{{ event.created_at }}</td>
+        </tr>
+    {% else %}
+        <tr><td colspan="5">Brak historii workflow.</td></tr>
+    {% endfor %}</tbody>
+</table>
+<h2>Historia decyzji</h2>
+<p><small>Zrodlo: {{ decision_history.source }}</small></p>
+<table class="data-table">
+    <thead><tr><th>Decyzja</th><th>Uzasadnienie</th><th>Status docelowy</th><th>Mail</th><th>Data</th></tr></thead>
+    <tbody>{% for decision in decision_history.decisions %}
+        <tr>
+            <td>{{ decision.decision }}</td>
+            <td>{{ decision.justification }}</td>
+            <td>{{ decision.target_status }}</td>
+            <td>{{ "Tak" if decision.email_sent else "Nie" }}</td>
+            <td>{{ decision.decided_at }}</td>
+        </tr>
+    {% else %}
+        <tr><td colspan="5">Brak decyzji.</td></tr>
+    {% endfor %}</tbody>
+</table>
 <h2>Dokumenty Nextcloud</h2>
 <table class="data-table">
     <thead><tr><th>Nazwa</th><th>Sciezka</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th></tr></thead>

@@ -16,8 +16,29 @@ from form_loader import (
     validate_form_definition,
 )
 from models import Form, FormField
+from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
 from validators.form_config_validator import FormConfigValidator
+
+
+def get_declaration_training_field(form_definition: dict) -> dict:
+    definition = normalize_admin_form_definition(form_definition or {})
+    for document in definition.get("documents") or []:
+        if not isinstance(document, dict) or document.get("id") != "declaration":
+            continue
+        for field in document.get("fields") or []:
+            if isinstance(field, dict) and field.get("type") == "training_selection":
+                return {"enabled": True, **dict(field)}
+    return {
+        "enabled": False,
+        "type": "training_selection",
+        "name": "selected_trainings",
+        "label": "Wybierz szkolenia",
+        "required": True,
+        "max_total_amount": "",
+        "currency": "PLN",
+        "catalog": [],
+    }
 
 
 def parse_uploaded_form_definition(content: bytes, filename: str) -> dict:
@@ -55,7 +76,92 @@ def build_form_definition_from_admin_form(current_definition: dict, form_data) -
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     definition["workflow"] = workflow
+    definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)
+
+
+def apply_training_selection_from_admin_form(definition: dict, form_data) -> dict:
+    enabled = form_data.get("training_selection_enabled") == "on"
+    documents = [dict(document) for document in definition.get("documents") or [] if isinstance(document, dict)]
+    declaration = next((document for document in documents if document.get("id") == "declaration"), None)
+    if declaration is None and not enabled:
+        definition["documents"] = documents
+        return definition
+    if declaration is None:
+        declaration = {
+            "id": "declaration",
+            "label": "Deklaracja",
+            "kind": "generated_pdf",
+            "enabled": True,
+            "signature_required": True,
+            "fields": [],
+        }
+        documents.append(declaration)
+
+    current_fields = [dict(field) for field in declaration.get("fields") or [] if isinstance(field, dict)]
+    existing_training_index = next(
+        (index for index, field in enumerate(current_fields) if field.get("type") == "training_selection"),
+        None,
+    )
+    fields = [field for field in current_fields if field.get("type") != "training_selection"]
+
+    if enabled:
+        training_field = {
+            "type": "training_selection",
+            "name": form_data.get("training_selection_name", "selected_trainings").strip() or "selected_trainings",
+            "label": form_data.get("training_selection_label", "Wybierz szkolenia").strip() or "Wybierz szkolenia",
+            "required": form_data.get("training_selection_required") == "on",
+            "currency": form_data.get("training_selection_currency", "PLN").strip() or "PLN",
+            "catalog": parse_training_catalog(form_data),
+        }
+        max_total = parse_optional_float(form_data.get("training_selection_max_total"))
+        if max_total is not None:
+            training_field["max_total_amount"] = max_total
+        insert_at = training_section_insert_index(fields)
+        if insert_at is None:
+            insert_at = min(existing_training_index, len(fields)) if existing_training_index is not None else len(fields)
+        fields.insert(insert_at, training_field)
+
+    declaration["fields"] = fields
+    definition["documents"] = documents
+    return definition
+
+
+def parse_training_catalog(form_data) -> list[dict]:
+    catalog = []
+    item_ids = form_data.getlist("training_item_id")
+    names = form_data.getlist("training_item_name")
+    prices = form_data.getlist("training_item_price")
+    for index, name in enumerate(names):
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            continue
+        item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
+        price = parse_optional_float(prices[index] if index < len(prices) else "")
+        catalog.append(
+            {
+                "id": item_id or slugify_training_id(clean_name),
+                "name": clean_name,
+                "price": price or 0,
+            }
+        )
+    return catalog
+
+
+def parse_optional_float(value: Any) -> float | int | None:
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        parsed = float(text)
+    except ValueError:
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
+
+
+def slugify_training_id(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower()).strip("_")
+    return slug or "szkolenie"
 
 
 def parse_workflow_json(raw_value: str, fallback: dict) -> dict:

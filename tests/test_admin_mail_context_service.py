@@ -1,5 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("sqlalchemy")
+
 from models import FormSubmission
 from services.admin_mail_context_service import (
     build_mail_context,

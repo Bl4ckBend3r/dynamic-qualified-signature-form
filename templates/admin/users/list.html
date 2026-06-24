@@ -30,10 +30,15 @@
                     <div class="admin-actions">
                         <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edytuj</a>
                         <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Przypisz formularze</a>
+                        <a href="{{ url_for('admin.user_change_password', user_id=user.id) }}">Zmien haslo</a>
                         {% if user.id != g.admin_user.id %}
                             <form method="post" action="{{ url_for('admin.user_toggle_block', user_id=user.id) }}">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button" type="submit">{{ "Odblokuj" if user.is_blocked else "Zablokuj" }}</button>
+                            </form>
+                            <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" onsubmit="return confirm('Usunac uzytkownika {{ user.email }}?');">
+                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                <button class="admin-link-button admin-link-danger" type="submit">Usun</button>
                             </form>
                         {% endif %}
                     </div>

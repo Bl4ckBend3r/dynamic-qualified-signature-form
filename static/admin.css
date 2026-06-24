@@ -300,6 +300,17 @@
     min-width: 420px;
 }
 
+.admin-decision-controls {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr);
+    gap: 8px;
+    min-width: 180px;
+}
+
+.admin-decision-reason[hidden] {
+    display: none;
+}
+
 .admin-form {
     display: grid;
     gap: 18px;
@@ -654,6 +665,10 @@
     justify-content: space-between;
     gap: 12px;
     margin: 0 0 16px;
+}
+
+.admin-bulk-actions-bottom {
+    margin: 16px 0 0;
 }
 
 .admin-input-small {

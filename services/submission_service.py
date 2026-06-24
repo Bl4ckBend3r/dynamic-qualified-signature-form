@@ -17,9 +17,9 @@ from form_loader import (
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
-from services.file_metadata import record_submission_file
 from services.form_submission_mapper import build_submission_from_form, validate_required_submission_fields
 from services.process_service import build_initial_process_fields, build_legacy_process_fields, build_process_state
+from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class SubmissionService:
         notification_service=None,
         audit_log_service=None,
         access_token_service: AccessTokenService | None = None,
+        submission_document_service: SubmissionDocumentService | None = None,
         validator=validate_submission,
     ) -> None:
         self.submission_repository = submission_repository
@@ -43,6 +44,10 @@ class SubmissionService:
         self.notification_service = notification_service
         self.audit_log_service = audit_log_service
         self.access_token_service = access_token_service or AccessTokenService()
+        self.submission_document_service = submission_document_service or SubmissionDocumentService(
+            submission_repository=submission_repository,
+            storage=storage,
+        )
         self.validator = validator
 
     def submit_form(self, form_slug: str, form_config: dict, request_form) -> dict:
@@ -118,16 +123,14 @@ class SubmissionService:
 
         self.submission_repository.update(submission_id, {"pdf_filename": pdf_filename})
         submission["pdf_filename"] = pdf_filename
-        record_submission_file(
-            submission_repository=self.submission_repository,
+        self.submission_document_service.record_generated_document(
             submission_id=submission_id,
             form_slug=form_slug,
             filename=pdf_filename,
-            storage=self.storage,
             file_bytes=pdf_bytes,
             document_id="form_submission",
-            document_type="",
-            signed=False,
+            document_type=SubmissionDocumentType.FORM_PDF,
+            storage=self.storage,
         )
         if self.audit_log_service:
             self.audit_log_service.log_event("PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename})

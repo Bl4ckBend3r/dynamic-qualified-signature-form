@@ -35,7 +35,25 @@
                 <td>{{ template.trigger_event or "-" }}</td>
                 <td>{{ template.trigger_status or "-" }} / {{ template.trigger_decision or "-" }}{% if template.is_default_for_status %} <span class="admin-badge">domyslny</span>{% endif %}</td>
                 <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if template.is_active else "Nie" }}</span></td>
-                <td><a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a></td>
+                <td>
+                    <div class="admin-actions">
+                        <a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a>
+                        <button class="admin-link-button admin-link-danger" type="button" data-delete-modal="delete-mail-template-{{ template.id }}">Usuń</button>
+                        <dialog class="admin-confirm-dialog" id="delete-mail-template-{{ template.id }}">
+                            <form method="dialog" class="admin-confirm-dialog__box">
+                                <h2>Usunąć szablon maila?</h2>
+                                <p>Ta operacja usunie szablon oraz powiązane zasoby. Wysłane wcześniej maile i zgłoszenia pozostaną bez zmian.</p>
+                                <div class="admin-form-actions">
+                                    <button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button>
+                                    <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-mail-template-post-{{ template.id }}">Usuń</button>
+                                </div>
+                            </form>
+                        </dialog>
+                        <form id="delete-mail-template-post-{{ template.id }}" method="post" action="{{ url_for('admin.mail_template_delete', form_id=form.id, template_id=template.id) }}" hidden>
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        </form>
+                    </div>
+                </td>
             </tr>
         {% else %}
             <tr><td colspan="8">Brak szablonow.</td></tr>
@@ -43,4 +61,22 @@
         </tbody>
     </table>
 </div>
+<script>
+document.querySelectorAll("[data-delete-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const dialog = document.getElementById(button.dataset.deleteModal);
+        if (dialog && typeof dialog.showModal === "function") {
+            dialog.showModal();
+        }
+    });
+});
+document.querySelectorAll("[data-submit-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const form = document.getElementById(button.dataset.submitDelete);
+        if (form) {
+            form.submit();
+        }
+    });
+});
+</script>
 {% endblock %}

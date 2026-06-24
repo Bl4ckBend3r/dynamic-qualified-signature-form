@@ -43,6 +43,10 @@ class Config:
     CSV_FILENAME = os.getenv("CSV_FILENAME", "dane.csv")
     DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
     AUTO_CREATE_DB_SCHEMA = _env_bool("AUTO_CREATE_DB_SCHEMA", "false")
+    STRICT_DOCUMENT_METADATA_READ = _env_bool("STRICT_DOCUMENT_METADATA_READ", "false")
+    STRICT_WORKFLOW_HISTORY_READ = _env_bool("STRICT_WORKFLOW_HISTORY_READ", "false")
+    STRICT_DECISION_AUDIT_READ = _env_bool("STRICT_DECISION_AUDIT_READ", "false")
+    REQUIRE_STRICT_READINESS_CHECK = _env_bool("REQUIRE_STRICT_READINESS_CHECK", "false")
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()

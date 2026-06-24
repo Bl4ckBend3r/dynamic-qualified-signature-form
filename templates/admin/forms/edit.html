@@ -86,6 +86,56 @@
             </label>
         </div>
     </div>
+    {% set training_catalog = training_field.get('catalog', []) if training_field else [] %}
+    <div class="admin-section admin-training-editor">
+        <div class="admin-section-heading">
+            <div>
+                <h2>Szkolenia w deklaracji</h2>
+                <p>Te dane zasilaja wybor szkolen, kwoty oraz limit widoczny przy wypelnianiu deklaracji.</p>
+            </div>
+            <label class="admin-check compact">
+                <input type="checkbox" name="training_selection_enabled" {% if training_field and training_field.get('enabled') %}checked{% endif %}>
+                <span>Pokaz wybor szkolen</span>
+            </label>
+        </div>
+        <div class="admin-form-grid">
+            <label><span>Nazwa pola</span><input name="training_selection_name" value="{{ training_field.get('name', 'selected_trainings') if training_field else 'selected_trainings' }}"></label>
+            <label><span>Etykieta</span><input name="training_selection_label" value="{{ training_field.get('label', 'Wybierz szkolenia') if training_field else 'Wybierz szkolenia' }}"></label>
+            <label><span>Limit finansowania</span><input type="number" step="0.01" min="0" name="training_selection_max_total" value="{{ training_field.get('max_total_amount', '') if training_field else '' }}"></label>
+            <label><span>Waluta</span><input name="training_selection_currency" value="{{ training_field.get('currency', 'PLN') if training_field else 'PLN' }}"></label>
+            <label class="admin-check"><input type="checkbox" name="training_selection_required" {% if not training_field or training_field.get('required', true) %}checked{% endif %}><span>Wymagany wybor co najmniej jednego szkolenia</span></label>
+        </div>
+        <div class="admin-training-table-wrap">
+            <table class="admin-table admin-training-table" data-training-table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Nazwa szkolenia</th>
+                        <th>Kwota</th>
+                        <th>Akcje</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in training_catalog %}
+                        <tr>
+                            <td><input name="training_item_id" value="{{ item.get('id', '') }}" placeholder="np. excel"></td>
+                            <td><input name="training_item_name" value="{{ item.get('name', '') }}" placeholder="Nazwa szkolenia"></td>
+                            <td><input type="number" step="0.01" min="0" name="training_item_price" value="{{ item.get('price', '') }}"></td>
+                            <td><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usun</button></td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td><input name="training_item_id" value="" placeholder="np. excel"></td>
+                            <td><input name="training_item_name" value="" placeholder="Nazwa szkolenia"></td>
+                            <td><input type="number" step="0.01" min="0" name="training_item_price" value=""></td>
+                            <td><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usun</button></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <button class="admin-button-secondary" type="button" data-add-training>Dodaj szkolenie</button>
+    </div>
     <div class="admin-form-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
         <button class="admin-button" type="submit">Zapisz</button>
@@ -106,5 +156,38 @@ document.querySelectorAll("[data-workflow-toggle]").forEach((input) => {
     input.addEventListener("change", syncWorkflowTemplateVisibility);
 });
 syncWorkflowTemplateVisibility();
+
+const trainingTable = document.querySelector("[data-training-table]");
+const addTrainingButton = document.querySelector("[data-add-training]");
+
+function bindTrainingRemoveButtons() {
+    document.querySelectorAll("[data-remove-training]").forEach((button) => {
+        button.onclick = function () {
+            const tbody = trainingTable?.querySelector("tbody");
+            const rows = tbody ? Array.from(tbody.querySelectorAll("tr")) : [];
+            if (rows.length <= 1) {
+                button.closest("tr")?.querySelectorAll("input").forEach((input) => {
+                    input.value = "";
+                });
+                return;
+            }
+            button.closest("tr")?.remove();
+        };
+    });
+}
+
+addTrainingButton?.addEventListener("click", function () {
+    const tbody = trainingTable?.querySelector("tbody");
+    const firstRow = tbody?.querySelector("tr");
+    if (!tbody || !firstRow) return;
+    const row = firstRow.cloneNode(true);
+    row.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+    });
+    tbody.appendChild(row);
+    bindTrainingRemoveButtons();
+});
+
+bindTrainingRemoveButtons();
 </script>
 {% endblock %}

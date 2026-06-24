@@ -8,33 +8,23 @@ from pathlib import Path
 from typing import Any, Mapping
 from flask import Flask, current_app, request, url_for
 
-from pdf_generator import generate_pdf, generate_pdf_from_html
 from form_loader import build_consents_view, build_submission_view
 from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
 from services import document_naming_service as naming
-from services.file_metadata import record_submission_file
-from services.process_service import ProcessStatus, is_agreement_required
+from services.documents.document_storage_service import DocumentStorageService
+from services.documents.document_view_service import DocumentViewService
+from services.documents.pdf_render_service import (
+    PdfRenderService,
+    generate_document_pdf_bytes as render_document_pdf_bytes,
+)
+from services.documents.signed_document_service import SignedDocumentService
+from services.process_service import ProcessStatus
+from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.upload_validation import UploadValidationError, validate_pdf_upload
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
-PDF_LOGO_FOOTER_PATTERN = re.compile(
-    r"<footer\b[^>]*class=[\"'][^\"']*pdf-logo-footer[^\"']*[\"'][^>]*>.*?</footer>",
-    re.IGNORECASE | re.DOTALL,
-)
-PDF_LOGO_HEADER_PATTERN = re.compile(
-    r"<header\b[^>]*class=[\"'][^\"']*pdf-logo-header[^\"']*[\"'][^>]*>.*?</header>",
-    re.IGNORECASE | re.DOTALL,
-)
-DOCUMENT_LOGO_HEADER_PATTERN = re.compile(
-    r"<header\b[^>]*class=[\"'][^\"']*document-logo-header[^\"']*[\"'][^>]*>.*?</header>",
-    re.IGNORECASE | re.DOTALL,
-)
-FORM_HEADER_IMAGE_PATTERN = re.compile(
-    r"<div\b[^>]*class=[\"'][^\"']*form-header-image[^\"']*[\"'][^>]*>.*?</div>",
-    re.IGNORECASE | re.DOTALL,
-)
 BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
 
@@ -59,11 +49,26 @@ class DocumentService:
         submission_repository=None,
         audit_log_service=None,
         access_token_service: AccessTokenService | None = None,
+        pdf_render_service: PdfRenderService | None = None,
+        document_storage_service: DocumentStorageService | None = None,
+        signed_document_service: SignedDocumentService | None = None,
+        document_view_service: DocumentViewService | None = None,
+        submission_document_service: SubmissionDocumentService | None = None,
+        strict_document_metadata_read: bool = False,
     ) -> None:
         self.storage = storage
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
         self.access_token_service = access_token_service or AccessTokenService()
+        self.pdf_render_service = pdf_render_service or PdfRenderService()
+        self.document_storage_service = document_storage_service or DocumentStorageService()
+        self.signed_document_service = signed_document_service or SignedDocumentService()
+        self.document_view_service = document_view_service or DocumentViewService()
+        self.submission_document_service = submission_document_service or SubmissionDocumentService(
+            submission_repository=submission_repository,
+            storage=storage,
+        )
+        self.strict_document_metadata_read = strict_document_metadata_read
 
     def get_documents_config(self, form_config: dict) -> list[dict]:
         from services.form_config_service import FormConfigService
@@ -125,30 +130,29 @@ class DocumentService:
         )
         self._add_collection_context(context, render_row)
         context.update(context_extra or {})
-        document_bytes = generate_document_pdf_bytes(
+        document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
             template_html=document.get("template_html") or self.resolve_template_html(document.get("template", "")),
             context=context,
         )
-        self.storage.save_pdf(
-            slug,
-            filename,
-            document_bytes,
+        self.document_storage_service.save_pdf(
+            storage=self.storage,
+            slug=slug,
+            filename=filename,
+            document_bytes=document_bytes,
             document_type=self._storage_document_type(document_id),
             signed=False,
         )
         current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
-        record_submission_file(
-            submission_repository=self.submission_repository,
+        self.submission_document_service.record_generated_document(
             submission_id=submission_id,
             form_slug=slug,
             filename=filename,
-            storage=self.storage,
             file_bytes=document_bytes,
             document_id=document_id,
-            document_type=self._storage_document_type(document_id) or "",
-            signed=False,
+            document_type=self._document_metadata_type(document_id, signed=False),
+            storage=self.storage,
         )
         updates = self._generated_updates(document_id, filename)
         self._update_submission(submission, updates)
@@ -219,30 +223,31 @@ class DocumentService:
             )
             self._add_collection_context(context, render_row)
             context.update(render_row)
-            document_bytes = generate_document_pdf_bytes(
+            document_bytes = self.pdf_render_service.render_document_pdf_bytes(
                 app=current_app._get_current_object(),
                 template_name="declaration_template.html",
                 template_html=template_html,
                 context=context,
             )
-            self.storage.save_pdf(
-                slug,
-                filename,
-                document_bytes,
+            self.document_storage_service.save_pdf(
+                storage=self.storage,
+                slug=slug,
+                filename=filename,
+                document_bytes=document_bytes,
                 document_type=self._storage_document_type(document_id),
                 signed=False,
             )
             current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
-            record_submission_file(
-                submission_repository=self.submission_repository,
+            self.submission_document_service.record_generated_document(
                 submission_id=submission_id,
                 form_slug=slug,
                 filename=filename,
-                storage=self.storage,
                 file_bytes=document_bytes,
                 document_id=document_id,
-                document_type=self._storage_document_type(document_id) or "",
-                signed=False,
+                document_type=self._document_metadata_type(document_id, signed=False),
+                agreement_number=agreement_number,
+                training_key=str(item_id),
+                storage=self.storage,
             )
             generated_documents.append(
                 {
@@ -289,6 +294,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         uploaded_bytes = uploaded_file.read()
+        self.signed_document_service.validate_pdf_bytes(uploaded_bytes)
         try:
             validate_pdf_upload(uploaded_file.filename, uploaded_bytes, getattr(uploaded_file, "mimetype", None))
         except UploadValidationError as exc:
@@ -307,24 +313,27 @@ class DocumentService:
         is_signed = bool(verification.get("is_signed"))
         is_valid = bool(verification.get("is_allowed_signature") or verification.get("is_szafir_signature"))
         if is_valid:
-            self.storage.save_pdf(
-                slug,
-                signed_filename,
-                uploaded_bytes,
+            self.document_storage_service.save_pdf(
+                storage=self.storage,
+                slug=slug,
+                filename=signed_filename,
+                document_bytes=uploaded_bytes,
                 document_type=self._storage_document_type(document_id),
                 signed=True,
             )
             current_app.logger.info("Upload podpisanego dokumentu do Nextcloud zakonczony sukcesem: %s", signed_filename)
-            record_submission_file(
-                submission_repository=self.submission_repository,
+            self.submission_document_service.record_signed_document(
                 submission_id=self._submission_id(submission),
                 form_slug=slug,
                 filename=signed_filename,
-                storage=self.storage,
                 file_bytes=uploaded_bytes,
                 document_id=document_id,
-                document_type=self._storage_document_type(document_id) or "",
-                signed=True,
+                document_type=self._document_metadata_type(document_id, signed=True),
+                original_filename=str(uploaded_file.filename or ""),
+                signature_status="valid" if is_valid else "invalid",
+                signature_validation_result=verification,
+                training_key=str(instance_id or ""),
+                storage=self.storage,
             )
 
         updates = self._signed_updates(
@@ -376,50 +385,60 @@ class DocumentService:
     def read_document_bytes_for_download(self, submission: dict, filename: str, *, signed: bool) -> bytes:
         clean_filename = Path(filename).name
         metadata = self._file_metadata(submission, clean_filename, signed=signed)
-        if metadata and metadata.get("storage_path"):
-            storage_path = str(metadata["storage_path"])
-            if hasattr(self.storage, "read_bytes"):
-                return self.storage.read_bytes(storage_path)
-            if hasattr(self.storage, "get_file_bytes"):
-                return self.storage.get_file_bytes(storage_path)
-
-        current_app.logger.warning(
-            "Legacy PDF lookup by filename used for submission=%s filename=%s.",
-            self._submission_id(submission),
-            clean_filename,
+        return self.document_storage_service.read_document_bytes(
+            storage=self.storage,
+            slug=self._slug(submission),
+            filename=clean_filename,
+            metadata=metadata,
+            submission_id=self._submission_id(submission),
+            strict_metadata=self.strict_document_metadata_read,
         )
-        return self.storage.get_pdf_bytes(self._slug(submission), clean_filename)
 
     def build_documents_view(self, submission: dict, form_config: dict, available_actions: list[dict] | None = None) -> dict:
         row = self._row(submission)
-        documents = []
-        for document in self.get_documents_config(form_config):
-            filename = self._document_filename(row, document.get("id", ""))
-            documents.append(
-                {
-                    "id": document.get("id"),
-                    "label": document.get("label"),
-                    "filename": filename,
-                    "url": self.build_download_url(submission, filename) if filename else "",
-                    "signature_required": document.get("signature_required", True),
-                    "signature_valid": self._document_signature_valid(row, document.get("id", "")),
-                    "actions": [],
-                }
-            )
-        return {
-            "current_step": row.get("workflow_step") or "",
-            "available_actions": available_actions or [],
-            "documents": documents,
-        }
+        return self.document_view_service.build_documents_view(
+            row=row,
+            documents_config=self.get_documents_config(form_config),
+            download_url_builder=lambda filename, signed=False: self.build_download_url(submission, filename, signed=signed),
+            available_actions=available_actions,
+            document_files=self.submission_document_service.list_documents(self._submission_id(submission)),
+        )
 
     def _file_metadata(self, submission: dict, filename: str, *, signed: bool) -> dict | None:
+        submission_id = self._submission_id(submission)
+        inferred_type = self._infer_document_type_for_filename(self._row(submission), filename, signed=signed)
+        if inferred_type:
+            metadata = self.submission_document_service.get_document_file(
+                submission_id,
+                document_type=inferred_type,
+                filename=filename,
+            )
+            if metadata:
+                return metadata
         if not self.submission_repository or not hasattr(self.submission_repository, "get_file_metadata"):
             return None
-        return self.submission_repository.get_file_metadata(
-            self._submission_id(submission),
-            filename,
-            signed=signed,
-        )
+        return self.submission_repository.get_file_metadata(submission_id, filename, signed=signed)
+
+    def _infer_document_type_for_filename(self, row: Mapping[str, Any], filename: str, *, signed: bool) -> str:
+        clean_filename = Path(filename).name
+        if clean_filename == str(row.get("pdf_filename") or ""):
+            return self._document_metadata_type("form_submission", signed=False)
+        if clean_filename == str(row.get("signed_pdf_filename") or ""):
+            return self._document_metadata_type("form_submission", signed=True)
+        if clean_filename == str(row.get("declaration_filename") or ""):
+            return self._document_metadata_type(DocumentType.DECLARATION, signed=False)
+        if clean_filename == str(row.get("declaration_signed_filename") or ""):
+            return self._document_metadata_type(DocumentType.DECLARATION, signed=True)
+        if clean_filename == str(row.get("agreement_filename") or ""):
+            return self._document_metadata_type(DocumentType.AGREEMENT, signed=False)
+        if clean_filename == str(row.get("agreement_signed_filename") or ""):
+            return self._document_metadata_type(DocumentType.AGREEMENT, signed=True)
+        for agreement in parse_json_list(row.get("training_agreements")):
+            if clean_filename == str(agreement.get("filename") or ""):
+                return self._document_metadata_type(DocumentType.TRAINING_AGREEMENT, signed=False)
+            if clean_filename == str(agreement.get("signed_filename") or ""):
+                return self._document_metadata_type(DocumentType.TRAINING_AGREEMENT, signed=True)
+        return ""
 
     def build_filename(self, pattern: str, submission: dict) -> str:
         fallback = f"{naming.sanitize_filename_part(submission.get('submission_id'), 'dokument')}.pdf"
@@ -473,11 +492,12 @@ class DocumentService:
         sequence: int,
         generated_date: str,
     ) -> str:
-        numbering = document.get("numbering") or {}
-        pattern = numbering.get("number_pattern") or "{submission_id}/{agreement_sequence}/{generated_date}"
-        return pattern.format(
+        from services.documents.document_generation_service import build_document_number
+
+        return build_document_number(
+            document,
             submission_id=submission_id,
-            agreement_sequence=sequence,
+            sequence=sequence,
             generated_date=generated_date,
         )
 
@@ -514,6 +534,19 @@ class DocumentService:
         if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
             return "agreement"
         return None
+
+    def _document_metadata_type(self, document_id: str, *, signed: bool) -> str:
+        if document_id == DocumentType.DECLARATION:
+            return SubmissionDocumentType.SIGNED_DECLARATION if signed else SubmissionDocumentType.DECLARATION
+        if document_id == DocumentType.TRAINING_AGREEMENT:
+            return (
+                SubmissionDocumentType.SIGNED_TRAINING_AGREEMENT
+                if signed
+                else SubmissionDocumentType.TRAINING_AGREEMENT
+            )
+        if document_id == DocumentType.AGREEMENT:
+            return SubmissionDocumentType.SIGNED_AGREEMENT if signed else SubmissionDocumentType.AGREEMENT
+        return SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
 
     def _not_required_updates(self, document_id: str, form_config: Mapping[str, Any]) -> dict[str, str]:
         if document_id == DocumentType.DECLARATION:
@@ -555,24 +588,7 @@ class DocumentService:
         }
 
     def _signed_document_target(self, row: dict, document_id: str, instance_id: str | None) -> tuple[str, str, dict | None]:
-        if document_id == DocumentType.DECLARATION:
-            source_filename = str(row.get("declaration_filename") or "").strip()
-            if not source_filename:
-                raise ValueError("Najpierw wygeneruj deklarację do podpisu.")
-            return source_filename, build_signed_filename(source_filename), None
-
-        agreements = parse_json_list(row.get("training_agreements"))
-        if agreements and instance_id:
-            agreement = next((item for item in agreements if str(item.get("id") or "") == str(instance_id)), None)
-            if not agreement:
-                raise ValueError("Nie znaleziono umowy dla wybranego szkolenia.")
-            source_filename = agreement.get("filename") or f"{instance_id}-umowa.pdf"
-            return source_filename, build_signed_filename(source_filename), {"agreements": agreements, "agreement": agreement}
-
-        source_filename = str(row.get("agreement_filename") or "").strip()
-        if not source_filename:
-            raise ValueError("Najpierw wygeneruj umowę do podpisu.")
-        return source_filename, build_signed_filename(source_filename), None
+        return self.signed_document_service.build_target(row, document_id, instance_id)
 
     def _signed_updates(
         self,
@@ -584,76 +600,15 @@ class DocumentService:
         is_valid: bool,
         update_target: dict | None,
     ) -> dict[str, Any]:
-        signature_type = verification.get("signature_type") or "unknown"
-        signature_error = "" if is_valid else verification.get("reason", "Niepoprawny podpis dokumentu.")
-
-        if document_id == DocumentType.DECLARATION:
-            return {
-                "declaration_signed": "Tak" if is_signed else "Nie",
-                "declaration_signed_filename": signed_filename if is_valid else "",
-                "declaration_signature_type": signature_type,
-                "declaration_signature_valid": "Tak" if is_valid else "Nie",
-                "declaration_signature_error": signature_error,
-                "process_status": (
-                    ProcessStatus.AGREEMENT_READY.value
-                    if is_valid and is_agreement_required(row)
-                    else ProcessStatus.PARTICIPANT_ACCEPTED.value
-                    if is_valid
-                    else ProcessStatus.DECLARATION_SIGNATURE_INVALID.value
-                ),
-            }
-
-        if update_target:
-            agreement = update_target["agreement"]
-            agreements = update_target["agreements"]
-            agreement.update(
-                {
-                    "signed": is_signed,
-                    "signature_valid": is_valid,
-                    "signed_filename": signed_filename if is_valid else "",
-                    "signature_type": signature_type,
-                    "signature_error": signature_error,
-                }
-            )
-            all_valid = all(bool(item.get("signature_valid")) for item in agreements)
-            return {
-                "training_agreements": serialize_json_list(agreements),
-                "agreement_signed": "Tak" if all_valid else "",
-                "agreement_signature_valid": "Tak" if all_valid else "",
-                "agreement_signed_filename": signed_filename if all_valid else "",
-                "process_status": (
-                    ProcessStatus.AGREEMENT_SIGNED.value
-                    if all_valid
-                    else ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value
-                ),
-            }
-
-        return {
-            "agreement_signed": "Tak" if is_signed else "Nie",
-            "agreement_signed_filename": signed_filename if is_valid else "",
-            "agreement_signature_type": signature_type,
-            "agreement_signature_valid": "Tak" if is_valid else "Nie",
-            "agreement_signature_error": signature_error,
-            "process_status": (
-                ProcessStatus.AGREEMENT_SIGNED.value
-                if is_valid
-                else ProcessStatus.AGREEMENT_SIGNATURE_INVALID.value
-            ),
-        }
-
-    def _document_filename(self, row: Mapping[str, Any], document_id: str) -> str:
-        if document_id == DocumentType.DECLARATION:
-            return str(row.get("declaration_filename") or "").strip()
-        if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
-            return str(row.get("agreement_filename") or "").strip()
-        return str(row.get(f"{document_id}_filename") or "").strip()
-
-    def _document_signature_valid(self, row: Mapping[str, Any], document_id: str) -> bool:
-        if document_id == DocumentType.DECLARATION:
-            return str(row.get("declaration_signature_valid") or "").strip().lower() == "tak"
-        if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
-            return str(row.get("agreement_signature_valid") or "").strip().lower() == "tak"
-        return str(row.get(f"{document_id}_signature_valid") or "").strip().lower() == "tak"
+        return self.signed_document_service.build_updates(
+            row,
+            document_id,
+            signed_filename,
+            verification,
+            is_signed,
+            is_valid,
+            update_target,
+        )
 
     def _add_collection_context(self, context: dict, row: Mapping[str, Any]) -> None:
         selected_trainings = parse_json_list(row.get("selected_trainings"))
@@ -707,8 +662,7 @@ def serialize_json_list(items: list[dict]) -> str:
 
 
 def build_signed_filename(filename: str) -> str:
-    source = Path(filename)
-    return f"{source.stem or 'dokument'}-signed{source.suffix or '.pdf'}"
+    return SignedDocumentService.build_signed_filename(filename)
 
 
 def get_first_existing_value(row: Mapping[str, Any], field_names: list[str]) -> str:
@@ -761,6 +715,13 @@ def get_project_documents_config(form_definition: Mapping[str, Any]) -> dict:
         process = {}
 
     documents = process.get("documents") or form_definition.get("documents") or {}
+
+    if isinstance(documents, list):
+        return {
+            str(document.get("id") or ""): dict(document)
+            for document in documents
+            if isinstance(document, Mapping) and document.get("id")
+        }
 
     if not isinstance(documents, Mapping):
         documents = {}
@@ -860,25 +821,15 @@ def build_document_pdf_context(
 
 
 def remove_inline_logo_markup(template_html: str) -> str:
-    """Remove logo blocks from the document body.
+    from services.documents.pdf_render_service import remove_inline_logo_markup as service_remove_inline_logo_markup
 
-    Repeated logos are now rendered only by Playwright's PDF footer_template.
-    Keeping HTML logo blocks causes an additional logo on the first page header.
-    """
-
-    cleaned = PDF_LOGO_FOOTER_PATTERN.sub("", template_html)
-    cleaned = PDF_LOGO_HEADER_PATTERN.sub("", cleaned)
-    cleaned = DOCUMENT_LOGO_HEADER_PATTERN.sub("", cleaned)
-    cleaned = FORM_HEADER_IMAGE_PATTERN.sub("", cleaned)
-
-    return cleaned
+    return service_remove_inline_logo_markup(template_html)
 
 
 def prepare_document_template_html(template_html: str, context: Mapping[str, Any]) -> str:
-    if normalize_text(context.get("pdf_image_url")):
-        return remove_inline_logo_markup(template_html)
+    from services.documents.pdf_render_service import prepare_document_template_html as service_prepare_document_template_html
 
-    return template_html
+    return service_prepare_document_template_html(template_html, context)
 
 
 def generate_document_pdf_bytes(
@@ -888,30 +839,9 @@ def generate_document_pdf_bytes(
     context: dict,
     template_html: str | None = None,
 ) -> bytes:
-    with tempfile.NamedTemporaryFile(
-        suffix=".pdf",
-        delete=False,
-        dir=app.config["TEMP_DIR"],
-    ) as tmp_pdf:
-        tmp_pdf_path = Path(tmp_pdf.name)
-
-    try:
-        if template_html:
-            template_html = prepare_document_template_html(template_html, context)
-            generate_pdf_from_html(
-                app=app,
-                template_html=template_html,
-                context=context,
-                output_path=tmp_pdf_path,
-            )
-        else:
-            generate_pdf(
-                app=app,
-                template_name=template_name,
-                context=context,
-                output_path=tmp_pdf_path,
-            )
-
-        return tmp_pdf_path.read_bytes()
-    finally:
-        tmp_pdf_path.unlink(missing_ok=True)
+    return render_document_pdf_bytes(
+        app=app,
+        template_name=template_name,
+        template_html=template_html,
+        context=context,
+    )

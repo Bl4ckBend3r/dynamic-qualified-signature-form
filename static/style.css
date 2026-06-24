@@ -262,6 +262,10 @@ main,
     grid-column: span 3;
 }
 
+.training-selection-row {
+    grid-column: 1 / -1;
+}
+
 label {
     font-weight: 700;
     color: var(--text);
@@ -321,6 +325,22 @@ textarea:focus {
     width: auto;
     margin: 0;
     accent-color: var(--gold-dark);
+}
+
+.training-selection {
+    align-items: center;
+}
+
+.training-selection .checkbox-item {
+    flex: 0 0 auto;
+}
+
+.training-selection .checkbox-item span {
+    white-space: nowrap;
+}
+
+.training-selection .help-text {
+    align-self: center;
 }
 
 .help-text {
@@ -889,6 +909,10 @@ textarea:focus {
     .width-third,
     .width-quarter {
         grid-column: span 12;
+    }
+
+    .training-selection .checkbox-item span {
+        white-space: normal;
     }
 
     .result-grid {

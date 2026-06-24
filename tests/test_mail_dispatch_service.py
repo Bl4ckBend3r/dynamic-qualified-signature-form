@@ -47,3 +47,81 @@ def test_dispatch_returns_false_for_missing_required_fields_or_sender_error():
 
     assert service.dispatch(request, sender=lambda **kwargs: None) is False
     assert service.dispatch(failing, sender=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))) is False
+
+
+def test_build_context_for_submission_uses_submission_columns():
+    service = MailDispatchService()
+    submission = SimpleNamespace(
+        __table__=SimpleNamespace(
+            columns=[
+                SimpleNamespace(name="submission_id"),
+                SimpleNamespace(name="email"),
+                SimpleNamespace(name="process_status"),
+            ]
+        ),
+        data_json={"imiona": "Jan"},
+        submission_id="abc",
+        email="jan@example.com",
+        process_status="FORM_SUBMITTED",
+        pdf_filename="",
+    )
+    form = SimpleNamespace(name="Form", slug="form")
+
+    context = service.build_context_for_submission(form, submission, [])
+
+    assert context["imiona"] == "Jan"
+    assert context["email"] == "jan@example.com"
+    assert context["form_name"] == "Form"
+
+
+def test_dispatch_raw_logs_success_and_failure(app):
+    class FakeDb:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            self.rows.append(row)
+
+    db = FakeDb()
+    sent = []
+    service = MailDispatchService(smtp_sender=lambda **kwargs: sent.append(kwargs))
+
+    with app.app_context():
+        result = service.dispatch_raw(
+            event_type="manual",
+            recipient="jan@example.com",
+            subject="Temat",
+            html_body="<p>Body</p>",
+            db=db,
+            form=SimpleNamespace(id=1),
+            submission=SimpleNamespace(id=2, submission_id="abc"),
+        )
+
+    assert result.status == "sent"
+    assert db.rows[0].status == "sent"
+    assert db.rows[0].public_submission_id == "abc"
+    assert sent[0]["to_emails"] == ["jan@example.com"]
+
+
+def test_dispatch_raw_missing_recipient_is_safe_and_logged():
+    class FakeDb:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            self.rows.append(row)
+
+    db = FakeDb()
+    result = MailDispatchService().dispatch_raw(
+        event_type="manual",
+        recipient="",
+        subject="Temat",
+        html_body="<p>Body</p>",
+        db=db,
+        form=SimpleNamespace(id=1),
+        submission=SimpleNamespace(id=2, submission_id="abc"),
+    )
+
+    assert result.status == "skipped"
+    assert db.rows[0].status == "skipped"
+    assert "Brak odbiorcy" in db.rows[0].error_message

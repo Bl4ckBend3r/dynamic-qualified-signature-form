@@ -201,6 +201,9 @@ def app(monkeypatch, tmp_path, form_definition):
     )
     Path(flask_app.config["TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
     flask_app.testing_storage = storage
+    legacy_app.app = flask_app
+    legacy_app.storage = storage
+    legacy_app.submission_repository = flask_app.extensions["services"].submission_repository
 
     yield flask_app
 

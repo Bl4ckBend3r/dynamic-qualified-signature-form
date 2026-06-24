@@ -31,7 +31,7 @@
                     {% set has_error = errors.get(field.name) %}
 
                     <div
-                        class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
+                        class="form-row width-{{ field.width or 'full' }} {% if field.type == 'training_selection' %}training-selection-row{% endif %} {% if has_error %}has-error{% endif %}"
                         {% if field.visible_if %}
                             data-visible-field="{{ field.visible_if.field }}"
                             data-visible-operator="{{ field.visible_if.operator or 'equals' }}"

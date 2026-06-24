@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import mimetypes
 import re
 import zipfile
@@ -10,7 +11,11 @@ from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
 
+from jinja2 import TemplateError
 from jinja2.sandbox import SandboxedEnvironment
+
+
+logger = logging.getLogger(__name__)
 
 
 MAIL_LAYOUT = {
@@ -352,7 +357,20 @@ def _jinja_env() -> SandboxedEnvironment:
 
 
 def render_template_text(raw_text: str, context: dict[str, Any]) -> str:
-    return _jinja_env().from_string(raw_text or "").render(**context)
+    raw_text = raw_text or ""
+    env = _jinja_env()
+    candidates = [raw_text]
+    unescaped_text = html.unescape(raw_text)
+    if unescaped_text != raw_text:
+        candidates.append(unescaped_text)
+    last_error: TemplateError | None = None
+    for candidate in candidates:
+        try:
+            return env.from_string(candidate).render(**context)
+        except TemplateError as exc:
+            last_error = exc
+    logger.warning("mail_template_render_failed error=%s", last_error, exc_info=last_error)
+    return candidates[-1]
 
 
 def build_status_label(value: str) -> str:
@@ -394,8 +412,16 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
         or getattr(template, "content_intro", "")
     )
     body_html = render_template_text(raw_body_html or "", context)
-    raw_instruction_text = getattr(template, "instruction_text", "")
-    instruction_html = render_template_text(getattr(template, "instruction_html", "") or build_instruction_html(raw_instruction_text), context)
+    raw_instruction_html = getattr(template, "instruction_html", "") or ""
+    raw_instruction_text = getattr(template, "instruction_text", "") or ""
+    instruction_html = render_template_text(raw_instruction_html or build_instruction_html(raw_instruction_text), context)
+    instruction_section = (
+        f"""<tr><td class="platform-instruction-title" style="padding:0 24px 16px;color:{MAIL_LAYOUT["primary_color"]};font-size:24px;font-weight:700;line-height:1.4;">Instrukcja</td></tr>
+<tr><td style="padding:0 24px 16px;">{instruction_html}</td></tr>"""
+        if instruction_html.strip()
+        else ""
+    )
+    instruction_media_css = "  .platform-instruction-title { font-size:20px !important; }\n" if instruction_section else ""
     footer_note = render_template_text(getattr(template, "footer_note", "") or default_footer_note(), context)
     footer_html = render_template_text(footer_html or "", context)
     info_rows = [
@@ -416,7 +442,7 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
 <style>
 @media(max-width:550px) {{
   .platform-title {{ font-size:29.4px !important; }}
-  .platform-instruction-title {{ font-size:20px !important; }}
+{instruction_media_css.rstrip()}
 }}
 </style>
 </head>
@@ -433,8 +459,7 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
 <tr><td style="padding:0 24px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["light_panel_background"]};border:1px solid {MAIL_LAYOUT["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{MAIL_LAYOUT["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>
 </td></tr>
-<tr><td class="platform-instruction-title" style="padding:0 24px 16px;color:{MAIL_LAYOUT["primary_color"]};font-size:24px;font-weight:700;line-height:1.4;">Instrukcja</td></tr>
-<tr><td style="padding:0 24px 16px;">{instruction_html}</td></tr>
+{instruction_section}
 <tr><td style="padding:0 24px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;color:#ffffff;font-size:16px;line-height:1.4;">{footer_note}</td></tr></table>
 </td></tr>

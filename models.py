@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -151,6 +151,11 @@ class FormSubmission(Base):
 
 class SubmissionFile(Base):
     __tablename__ = "submission_files"
+    __table_args__ = (
+        Index("ix_submission_files_document_type", "document_type"),
+        Index("ix_submission_files_status", "status"),
+        Index("ix_submission_files_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), nullable=False)
@@ -159,12 +164,56 @@ class SubmissionFile(Base):
     document_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     document_type: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(255), default="application/pdf", nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(64), default="uploaded", nullable=False)
+    signature_status: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    signature_validation_result: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    agreement_number: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    training_key: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    submission: Mapped[FormSubmission] = relationship(back_populates="files")
+
+
+class SubmissionWorkflowEvent(Base):
+    __tablename__ = "submission_workflow_events"
+    __table_args__ = (
+        Index("ix_submission_workflow_events_created_at", "created_at"),
+        Index("ix_submission_workflow_events_new_status", "new_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int | None] = mapped_column(ForeignKey("form_submissions.id", ondelete="SET NULL"), index=True, nullable=True)
+    public_submission_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    form_slug: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    new_status: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    previous_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    new_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(64), default="system", nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source: Mapped[str] = mapped_column(String(128), default="system", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -172,7 +221,39 @@ class SubmissionFile(Base):
         nullable=False,
     )
 
-    submission: Mapped[FormSubmission] = relationship(back_populates="files")
+
+class SubmissionDecision(Base):
+    __tablename__ = "submission_decisions"
+    __table_args__ = (
+        Index("ix_submission_decisions_decision", "decision"),
+        Index("ix_submission_decisions_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int | None] = mapped_column(ForeignKey("form_submissions.id", ondelete="SET NULL"), index=True, nullable=True)
+    public_submission_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    form_slug: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    decision: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    justification: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    officer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    officer_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    target_status: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    email_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_log_id: Mapped[int | None] = mapped_column(ForeignKey("email_logs.id", ondelete="SET NULL"), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class User(Base):

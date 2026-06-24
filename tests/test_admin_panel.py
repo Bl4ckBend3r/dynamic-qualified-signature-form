@@ -7,12 +7,28 @@ import pytest
 
 pytest.importorskip("sqlalchemy")
 
+from flask import url_for
+from sqlalchemy import text
 from werkzeug.security import generate_password_hash
 
 from conftest import InMemoryStorage
 from config import Config
 from database import create_session_factory
-from models import EmailLog, Form, FormField, FormPermission, FormSubmission, Logo, MailFooter, MailTemplate, MailTemplateAsset, SubmissionFile, User
+from models import (
+    EmailLog,
+    Form,
+    FormField,
+    FormPermission,
+    FormSubmission,
+    Logo,
+    MailFooter,
+    MailTemplate,
+    MailTemplateAsset,
+    SubmissionDecision,
+    SubmissionFile,
+    SubmissionWorkflowEvent,
+    User,
+)
 
 
 class AdminTestConfig(Config):
@@ -630,10 +646,224 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
     with session_factory() as db:
         submission = db.get(FormSubmission, submission_pk)
         assert submission.officer_decision == "accepted"
-        assert submission.officer_decision_reason == "OK"
+        assert submission.officer_decision_reason == ""
+        decision = db.query(SubmissionDecision).filter_by(public_submission_id="abc").one()
+        assert decision.decision == "accepted"
+        assert decision.justification == ""
+        assert decision.previous_status == "FORM_SUBMITTED"
+        assert decision.target_status in {"OFFICER_ACCEPTED", "accepted_waiting_for_additional_fields"}
+        assert decision.email_requested is True
+        workflow_event = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id="abc").one()
+        assert workflow_event.new_status in {"REVIEW_ACCEPTED", "ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS"}
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
     assert "Decyzja urzednika" in html
     assert "accepted" in html
+
+
+def test_officer_decision_mail_uses_mail_dispatch_service_once(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    calls = []
+    admin_app.extensions["services"].mail_dispatch_service.dispatch_decision_email = lambda submission_id, decision: calls.append((submission_id, decision))
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    first = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": token, "officer_decision": "accepted", "officer_decision_reason": "OK"},
+    )
+    second = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": token, "officer_decision": "accepted", "officer_decision_reason": "OK again"},
+    )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert calls == [("abc", "accepted")]
+    with session_factory() as db:
+        decisions = db.query(SubmissionDecision).filter_by(public_submission_id="abc").order_by(SubmissionDecision.id).all()
+        assert [decision.email_requested for decision in decisions] == [True, False]
+
+
+def test_officer_decision_update_survives_missing_decision_audit_table(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+        db.execute(text("DROP TABLE submission_decisions"))
+        db.commit()
+    calls = []
+    admin_app.extensions["services"].mail_dispatch_service.dispatch_decision_email = lambda submission_id, decision: calls.append((submission_id, decision))
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": token, "officer_decision": "rejected", "officer_decision_reason": "Braki"},
+    )
+
+    assert response.status_code == 302
+    assert calls == [("abc", "rejected")]
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.officer_decision == "rejected"
+        assert submission.officer_decision_reason == "Braki"
+        assert submission.process_status == "OFFICER_REJECTED"
+
+
+def test_bulk_officer_decision_update_saves_all_rows(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        first = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        second = FormSubmission(
+            submission_id="def",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="ewa@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add_all([first, second])
+        db.commit()
+        first_pk = first.id
+        second_pk = second.id
+    calls = []
+    admin_app.extensions["services"].mail_dispatch_service.dispatch_decision_email = lambda submission_id, decision: calls.append((submission_id, decision))
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/decisions",
+        data={
+            "csrf_token": token,
+            "submission_row_ids": [str(first_pk), str(second_pk)],
+            f"officer_decision_{first_pk}": "accepted",
+            f"officer_decision_reason_{first_pk}": "",
+            f"officer_decision_{second_pk}": "correction",
+            f"officer_decision_reason_{second_pk}": "Popraw PESEL",
+        },
+    )
+
+    assert response.status_code == 302
+    assert calls == [("abc", "accepted")]
+    with session_factory() as db:
+        first = db.get(FormSubmission, first_pk)
+        second = db.get(FormSubmission, second_pk)
+        assert first.officer_decision == "accepted"
+        assert first.officer_decision_reason == ""
+        assert second.officer_decision == "correction"
+        assert second.officer_decision_reason == "Popraw PESEL"
+        assert second.correction_required == "Tak"
+        assert second.correction_message == "Popraw PESEL"
+        assert second.process_status == "WAITING_FOR_CORRECTION"
+
+
+def test_bulk_officer_decision_update_requires_reason_for_rejection_or_correction(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/decisions",
+        data={
+            "csrf_token": token,
+            "submission_row_ids": [str(submission_pk)],
+            f"officer_decision_{submission_pk}": "rejected",
+            f"officer_decision_reason_{submission_pk}": "",
+        },
+        follow_redirects=True,
+    )
+
+    assert "Pominieto 1 decyzji" in response.get_data(as_text=True)
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.officer_decision == ""
+
+
+def test_submission_detail_survives_missing_submission_file_alignment_columns(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+        db.execute(text("ALTER TABLE submission_files DROP COLUMN original_filename"))
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "dokumentow" in html
+
+
+def test_dashboard_survives_missing_submission_file_alignment_columns(admin_app, admin_client):
+    create_user(admin_app)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.execute(text("ALTER TABLE submission_files DROP COLUMN original_filename"))
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get("/admin/dashboard")
+
+    assert response.status_code == 200
+    assert "Dashboard" in response.get_data(as_text=True)
 
 
 def test_send_mail_logs_email(admin_app, admin_client, monkeypatch):
@@ -673,6 +903,161 @@ def test_send_mail_logs_email(admin_app, admin_client, monkeypatch):
         log = db.query(EmailLog).one()
         assert log.status == "sent"
         assert log.to_email == "jan@example.com"
+
+
+def test_send_mail_view_populates_editor_from_selected_template(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            nazwisko="Kowalski",
+            imiona="Jan",
+        )
+        db.add(submission)
+        db.flush()
+        db.add(
+            MailTemplate(
+                form_id=form_id,
+                name="Wniosek zaakceptowany",
+                subject="Temat {{ imiona }}",
+                content_html="<p>HTML {{ submission_id }}</p>",
+                content_text="TXT {{ submission_id }}",
+                html_body="<p>HTML {{ submission_id }}</p>",
+                text_body="TXT {{ submission_id }}",
+            )
+        )
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").get_data(as_text=True)
+
+    payload_text = html.split("const templates = ", 1)[1].split(";\n", 1)[0]
+    payload = json.loads(payload_text)
+    assert payload[0]["subject"] == "Temat {{ imiona }}"
+    assert payload[0]["html_body"] == "<p>HTML {{ submission_id }}</p>"
+    assert payload[0]["text_body"] == "TXT {{ submission_id }}"
+    assert "fillFromTemplate()" in html
+    assert "Mail systemowy" not in html
+
+
+def test_send_mail_uses_first_template_when_manual_fields_are_empty(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            nazwisko="Kowalski",
+            imiona="Jan",
+            data_json={"imiona": "Jan"},
+        )
+        db.add(submission)
+        db.flush()
+        db.add(MailTemplate(form_id=form_id, name="Info", subject="Witaj {{ imiona }}", html_body="<p>{{ submission_id }}</p>"))
+        db.commit()
+        submission_pk = submission.id
+    sent = []
+    admin_app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    token = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
+        data={"csrf_token": token, "to_email": "jan@example.com"},
+    )
+
+    assert response.status_code == 302
+    assert sent[0]["subject"] == "Witaj Jan"
+    assert "abc" in sent[0]["html_body"]
+    with session_factory() as db:
+        log = db.query(EmailLog).one()
+        assert log.status == "sent"
+
+
+def test_send_mail_uses_system_fallback_only_without_templates(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            nazwisko="Kowalski",
+            imiona="Jan",
+            data_json={"imiona": "Jan"},
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    sent = []
+    admin_app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert "Mail systemowy" in html
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
+        data={"csrf_token": token, "to_email": "jan@example.com"},
+    )
+
+    assert response.status_code == 302
+    assert sent[0]["subject"] == "Informacja dotyczaca zgloszenia abc"
+    assert "Przesylamy informacje dotyczaca zgloszenia" in sent[0]["html_body"]
+    with session_factory() as db:
+        log = db.query(EmailLog).one()
+        assert log.status == "sent"
+        assert log.template_id is None
+
+
+def test_send_mail_failure_flash_includes_error_reason(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="sample_form", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="abc",
+            form_slug="sample_form",
+            form_name="Sample",
+            email="jan@example.com",
+            nazwisko="Kowalski",
+            imiona="Jan",
+            data_json={"imiona": "Jan"},
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+
+    def fail_smtp(**kwargs):
+        raise RuntimeError("SMTP auth failed")
+
+    admin_app.extensions["notification_service"].smtp_sender = fail_smtp
+    login(admin_client)
+    token = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
+        data={"csrf_token": token, "to_email": "jan@example.com", "subject": "Test", "html_body": "<p>Test</p>"},
+        follow_redirects=True,
+    )
+
+    html = response.get_data(as_text=True)
+    assert "Nie udalo sie wyslac maila: RuntimeError: SMTP auth failed" in html
+    with session_factory() as db:
+        log = db.query(EmailLog).one()
+        assert log.status == "failed"
+        assert log.error_message == "RuntimeError: SMTP auth failed"
 
 
 def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app, admin_client):
@@ -723,6 +1108,60 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
         log = db.query(EmailLog).one()
         assert log.status == "sent"
         assert log.public_submission_id == "abc"
+
+
+def test_admin_mail_module_keeps_endpoint_names(admin_app):
+    import routes.admin.mail as admin_mail
+    from routes.admin import bp
+
+    assert admin_mail is not None
+    assert bp.name == "admin"
+    with admin_app.test_request_context():
+        assert url_for("admin.submission_mail", form_id=1, submission_pk=2) == "/admin/forms/1/submissions/2/mail"
+        assert url_for("admin.submissions_mail_selected", form_id=1) == "/admin/forms/1/submissions/mail-selected"
+        assert url_for("admin.mail_templates_list", form_id=1) == "/admin/forms/1/mail-templates"
+        assert url_for("admin.mail_template_delete", form_id=1, template_id=2) == "/admin/forms/1/mail-templates/2/delete"
+        assert url_for("admin.mail_footers_list", form_id=1) == "/admin/forms/1/mail-footers"
+
+
+@pytest.mark.parametrize("role,email", [("super_admin", "admin@example.com"), ("admin", "admin-role@example.com"), ("form_manager", "manager@example.com")])
+def test_mail_template_delete_allowed_for_all_managing_roles(admin_app, admin_client, role, email):
+    user_id = create_user(admin_app, email=email, role=role)
+    form_id = create_form(admin_app, slug=f"form_{role}", name="Sample", user_id=None if role == "super_admin" else user_id)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        template = MailTemplate(form_id=form_id, name="Delete me", subject="Temat", html_body="<p>Test</p>")
+        db.add(template)
+        db.commit()
+        template_id = template.id
+    login(admin_client, email=email)
+    html = admin_client.get(f"/admin/forms/{form_id}/mail-templates").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(f"/admin/forms/{form_id}/mail-templates/{template_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 302
+    with session_factory() as db:
+        assert db.get(MailTemplate, template_id) is None
+
+
+def test_mail_template_delete_requires_manage_permission(admin_app, admin_client):
+    user_id = create_user(admin_app, email="viewer@example.com", role="admin")
+    form_id = create_form(admin_app, slug="view_only", name="Sample")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormPermission(user_id=user_id, form_id=form_id, can_manage=False))
+        template = MailTemplate(form_id=form_id, name="Keep me", subject="Temat", html_body="<p>Test</p>")
+        db.add(template)
+        db.commit()
+        template_id = template.id
+    login(admin_client, email="viewer@example.com")
+    token = admin_client.get("/admin/forms").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(f"/admin/forms/{form_id}/mail-templates/{template_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 403
+    with session_factory() as db:
+        assert db.get(MailTemplate, template_id) is not None
 
 
 def test_zip_mail_template_import_reads_content_text_and_assets(admin_app, admin_client):
@@ -909,6 +1348,30 @@ def test_platform_mail_renders_jinja_submission_and_agreement():
 
     assert "Umowa 1/2026" in html
     assert "Jan / Excel" in html
+    assert "platform-instruction-title" not in html
+    assert "Instrukcja" not in html
+
+
+def test_platform_mail_renders_html_escaped_jinja_quotes():
+    from types import SimpleNamespace
+    from services.mail_template_service import render_platform_mail_html
+
+    template = SimpleNamespace(
+        name="Umowa",
+        content_title="Umowa",
+        content_html="<p>{{ agreement.get(&quot;number&quot;) }}</p>",
+        content_text="",
+        html_body="",
+        text_body="",
+        instruction_html="",
+        instruction_text="",
+        footer_note="",
+    )
+
+    html = render_platform_mail_html(template, {"agreement": {"number": "1/2026"}, "form_name": "Sample", "submission_id": "abc"})
+
+    assert "1/2026" in html
+    assert "&quot;number&quot;" not in html
 
 
 def test_auto_template_selection_by_type_for_decisions(admin_app):
@@ -1209,6 +1672,8 @@ def test_submission_files_store_metadata_only(admin_app):
         db.commit()
         file_row = db.query(SubmissionFile).one()
         assert hasattr(file_row, "storage_path")
+        assert hasattr(file_row, "signature_validation_result")
+        assert hasattr(file_row, "generated_at")
         assert not hasattr(file_row, "content")
 
 
@@ -1225,3 +1690,165 @@ def test_super_admin_can_block_user(admin_app, admin_client):
     with session_factory() as db:
         user = db.get(User, user_id)
         assert user.is_blocked is True
+
+
+def test_super_admin_can_change_user_password(admin_app, admin_client):
+    from werkzeug.security import check_password_hash
+
+    create_user(admin_app)
+    user_id = create_user(admin_app, email="password@example.com", role="form_manager")
+    login(admin_client)
+    html = admin_client.get(f"/admin/users/{user_id}/password").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/users/{user_id}/password",
+        data={"csrf_token": token, "password": "new-secret", "password_confirm": "new-secret"},
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        user = db.get(User, user_id)
+        assert check_password_hash(user.password_hash, "new-secret")
+
+
+def test_super_admin_can_delete_user(admin_app, admin_client):
+    create_user(admin_app)
+    user_id = create_user(admin_app, email="delete@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="delete_user_form", name="Delete User Form", user_id=user_id)
+    login(admin_client)
+    token = admin_client.get("/admin/users").get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(f"/admin/users/{user_id}/delete", data={"csrf_token": token})
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(User, user_id) is None
+        assert db.query(FormPermission).filter_by(user_id=user_id).count() == 0
+        assert db.get(Form, form_id).created_by_id is None
+
+
+def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {
+        "title": "Training Form",
+        "fields": [],
+        "documents": [
+            {
+                "id": "declaration",
+                "label": "Deklaracja",
+                "kind": "generated_pdf",
+                "enabled": True,
+                "template_html": "<p>Deklaracja</p>",
+                "fields": [
+                    {"type": "section", "label": "Wybór szkoleń"},
+                    {"type": "section", "label": "Oświadczenia uczestnika"},
+                    {"type": "checkbox", "name": "osw_rodo"},
+                ],
+            }
+        ],
+        "workflow": {
+            "name": "Workflow",
+            "initial_step": "submission",
+            "steps": [{"id": "submission", "type": "end"}],
+        },
+    }
+    form_id = create_form(admin_app, slug="training_form", name="Training Form", definition_json=definition)
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Training Form",
+            "slug": "training_form",
+            "title": "Training Form",
+            "sort_order": "0",
+            "workflow_name": "Workflow",
+            "workflow_initial_step": "submission",
+            "workflow_json": json.dumps(definition["workflow"]),
+            "is_active": "on",
+            "is_public": "on",
+            "training_selection_enabled": "on",
+            "training_selection_name": "selected_trainings",
+            "training_selection_label": "Wybierz szkolenia",
+            "training_selection_max_total": "5000",
+            "training_selection_currency": "PLN",
+            "training_selection_required": "on",
+            "training_item_id": ["s1", "s2"],
+            "training_item_name": ["Szkolenie 1", "Szkolenie 2"],
+            "training_item_price": ["1200", "1800"],
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        declaration = next(document for document in form.definition_json["documents"] if document["id"] == "declaration")
+        training_field = next(field for field in declaration["fields"] if field["type"] == "training_selection")
+        assert [field.get("name") or field.get("label") for field in declaration["fields"]] == [
+            "Wybór szkoleń",
+            "selected_trainings",
+            "Oświadczenia uczestnika",
+            "osw_rodo",
+        ]
+        assert training_field["max_total_amount"] == 5000
+        assert training_field["currency"] == "PLN"
+        assert training_field["catalog"] == [
+            {"id": "s1", "name": "Szkolenie 1", "price": 1200},
+            {"id": "s2", "name": "Szkolenie 2", "price": 1800},
+        ]
+
+
+def test_declaration_download_disabled_before_declaration_form_is_completed(admin_app, admin_client):
+    create_form(
+        admin_app,
+        slug="declaration_flow",
+        name="Declaration Flow",
+        definition_json={
+            "title": "Declaration Flow",
+            "fields": [],
+            "documents": [
+                {
+                    "id": "declaration",
+                    "label": "Deklaracja",
+                    "kind": "generated_pdf",
+                    "enabled": True,
+                    "template_html": "<p>Deklaracja</p>",
+                    "fields": [{"type": "radio", "name": "deklaracja_18_lat", "label": "18 lat", "options": ["Tak", "Nie"]}],
+                }
+            ],
+        },
+    )
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="decl-1",
+                form_slug="declaration_flow",
+                form_name="Declaration Flow",
+                officer_decision="accepted",
+                acceptance_required="Tak",
+                declaration_required="Tak",
+                declaration_generated="",
+                declaration_filename="",
+                agreement_required="Nie",
+            )
+        )
+        db.commit()
+
+    response = admin_client.get("/do-podpisania?submission_id=decl-1")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "/declaration/declaration_flow/decl-1" in html
+    assert "/downloads/pdfs/declaration_flow" not in html
+    assert "Pobierz deklarac" in html
+    assert "disabled" in html
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="decl-1").one()
+        assert submission.declaration_generated != "Tak"

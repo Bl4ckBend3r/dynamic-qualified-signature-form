@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from services.form_submission_mapper import (
     FORM_SUBMISSION_COLUMNS,
@@ -35,6 +38,37 @@ class SubmissionRepository:
 
     def get_file_metadata(self, submission_id: str, filename: str, signed: bool | None = None) -> dict | None:
         return None
+
+    def list_submission_files(self, submission_id: str) -> list[dict]:
+        return []
+
+    def get_submission_file_for_document(
+        self,
+        submission_id: str,
+        *,
+        document_type: str,
+        filename: str = "",
+        training_key: str = "",
+    ) -> dict | None:
+        return None
+
+    def get_document_by_type(self, submission_id: str, document_type: str) -> dict | None:
+        return None
+
+    def list_workflow_events(self, submission_id: str) -> list[dict]:
+        return []
+
+    def get_latest_submission_decision(self, submission_id: str) -> dict | None:
+        return None
+
+    def list_submission_decisions(self, submission_id: str) -> list[dict]:
+        return []
+
+    def record_workflow_event(self, submission_id: str, event: dict) -> bool:
+        return False
+
+    def record_decision(self, submission_id: str, decision: dict) -> bool:
+        return False
 
 
 class CsvSubmissionRepository(SubmissionRepository):
@@ -284,6 +318,13 @@ class PostgresSubmissionRepository(SubmissionRepository):
             file_row.signed = bool(metadata.get("signed", False))
             file_row.checksum_sha256 = str(metadata.get("checksum_sha256") or "")
             file_row.status = str(metadata.get("status") or "uploaded")
+            file_row.original_filename = str(metadata.get("original_filename") or "")
+            file_row.signature_status = str(metadata.get("signature_status") or "")
+            file_row.signature_validation_result = metadata.get("signature_validation_result") or {}
+            file_row.agreement_number = str(metadata.get("agreement_number") or "")
+            file_row.training_key = str(metadata.get("training_key") or "")
+            file_row.generated_at = metadata.get("generated_at")
+            file_row.signed_at = metadata.get("signed_at")
             if not existing:
                 session.add(file_row)
             session.commit()
@@ -305,20 +346,195 @@ class PostgresSubmissionRepository(SubmissionRepository):
             return None
 
         with self.session_factory() as session:
-            query = (
-                select(SubmissionFile)
-                .where(SubmissionFile.public_submission_id == wanted_submission_id)
-                .where(SubmissionFile.filename == wanted_filename)
-            )
-            if signed is not None:
-                query = query.where(SubmissionFile.signed == bool(signed))
-            file_row = session.execute(query).scalar_one_or_none()
-            if not file_row:
+            try:
+                query = (
+                    select(SubmissionFile)
+                    .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(SubmissionFile.filename == wanted_filename)
+                )
+                if signed is not None:
+                    query = query.where(SubmissionFile.signed == bool(signed))
+                file_row = session.execute(query).scalar_one_or_none()
+                return self._row_to_dict(file_row) if file_row else None
+            except SQLAlchemyError as exc:
+                self._rollback_and_log_schema_mismatch(session, "documents", wanted_submission_id, exc)
                 return None
-            return {
-                column.name: getattr(file_row, column.name)
-                for column in file_row.__table__.columns
-            }
+
+    def list_submission_files(self, submission_id: str) -> list[dict]:
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        wanted_submission_id = str(submission_id or "").strip()
+        if not wanted_submission_id:
+            return []
+        with self.session_factory() as session:
+            try:
+                rows = session.execute(
+                    select(SubmissionFile)
+                    .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .order_by(SubmissionFile.created_at.asc(), SubmissionFile.id.asc())
+                ).scalars().all()
+                return [self._row_to_dict(row) for row in rows]
+            except SQLAlchemyError as exc:
+                self._rollback_and_log_schema_mismatch(session, "documents", wanted_submission_id, exc)
+                return []
+
+    def get_submission_file_for_document(
+        self,
+        submission_id: str,
+        *,
+        document_type: str,
+        filename: str = "",
+        training_key: str = "",
+    ) -> dict | None:
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        wanted_submission_id = str(submission_id or "").strip()
+        wanted_document_type = str(document_type or "").strip()
+        if not wanted_submission_id or not wanted_document_type:
+            return None
+        with self.session_factory() as session:
+            try:
+                query = (
+                    select(SubmissionFile)
+                    .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(SubmissionFile.document_type == wanted_document_type)
+                )
+                if filename:
+                    query = query.where(SubmissionFile.filename == Path(filename).name)
+                if training_key:
+                    query = query.where(SubmissionFile.training_key == str(training_key))
+                row = session.execute(query.order_by(SubmissionFile.created_at.desc())).scalars().first()
+                return self._row_to_dict(row) if row else None
+            except SQLAlchemyError as exc:
+                self._rollback_and_log_schema_mismatch(session, "documents", wanted_submission_id, exc)
+                return None
+
+    def get_document_by_type(self, submission_id: str, document_type: str) -> dict | None:
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        wanted_submission_id = str(submission_id or "").strip()
+        wanted_document_type = str(document_type or "").strip()
+        if not wanted_submission_id or not wanted_document_type:
+            return None
+
+        with self.session_factory() as session:
+            try:
+                file_row = session.execute(
+                    select(SubmissionFile)
+                    .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(SubmissionFile.document_type == wanted_document_type)
+                    .order_by(SubmissionFile.created_at.desc())
+                ).scalars().first()
+                return self._row_to_dict(file_row) if file_row else None
+            except SQLAlchemyError as exc:
+                self._rollback_and_log_schema_mismatch(session, "documents", wanted_submission_id, exc)
+                return None
+
+    def list_workflow_events(self, submission_id: str) -> list[dict]:
+        from sqlalchemy import select
+        from models import SubmissionWorkflowEvent
+
+        wanted_submission_id = str(submission_id or "").strip()
+        if not wanted_submission_id:
+            return []
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(SubmissionWorkflowEvent)
+                .where(SubmissionWorkflowEvent.public_submission_id == wanted_submission_id)
+                .order_by(SubmissionWorkflowEvent.created_at.asc(), SubmissionWorkflowEvent.id.asc())
+            ).scalars().all()
+            return [self._row_to_dict(row) for row in rows]
+
+    def get_latest_submission_decision(self, submission_id: str) -> dict | None:
+        decisions = self.list_submission_decisions(submission_id)
+        return decisions[-1] if decisions else None
+
+    def list_submission_decisions(self, submission_id: str) -> list[dict]:
+        from sqlalchemy import select
+        from models import SubmissionDecision
+
+        wanted_submission_id = str(submission_id or "").strip()
+        if not wanted_submission_id:
+            return []
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(SubmissionDecision)
+                .where(SubmissionDecision.public_submission_id == wanted_submission_id)
+                .order_by(SubmissionDecision.decided_at.asc(), SubmissionDecision.id.asc())
+            ).scalars().all()
+            return [self._row_to_dict(row) for row in rows]
+
+    def record_workflow_event(self, submission_id: str, event: dict) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionWorkflowEvent
+
+        wanted = str(submission_id or "").strip()
+        if not wanted:
+            return False
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == wanted)
+            ).scalar_one_or_none()
+            if not submission:
+                return False
+            session.add(
+                SubmissionWorkflowEvent(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    previous_status=str(event.get("previous_status") or ""),
+                    new_status=str(event.get("new_status") or ""),
+                    previous_step=str(event.get("previous_step") or ""),
+                    new_step=str(event.get("new_step") or ""),
+                    actor_id=event.get("actor_id"),
+                    actor_email=str(event.get("actor_email") or ""),
+                    actor_role=str(event.get("actor_role") or "system"),
+                    reason=str(event.get("reason") or ""),
+                    source=str(event.get("source") or "system"),
+                )
+            )
+            session.commit()
+        logger.info("Zapisano event workflow dla zgloszenia %s w PostgreSQL.", wanted)
+        return True
+
+    def record_decision(self, submission_id: str, decision: dict) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionDecision
+
+        wanted = str(submission_id or "").strip()
+        if not wanted:
+            return False
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == wanted)
+            ).scalar_one_or_none()
+            if not submission:
+                return False
+            session.add(
+                SubmissionDecision(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    decision=str(decision.get("decision") or ""),
+                    justification=str(decision.get("justification") or ""),
+                    officer_id=decision.get("officer_id"),
+                    officer_email=str(decision.get("officer_email") or ""),
+                    previous_status=str(decision.get("previous_status") or ""),
+                    target_status=str(decision.get("target_status") or ""),
+                    email_requested=bool(decision.get("email_requested", False)),
+                    email_sent=bool(decision.get("email_sent", False)),
+                    email_log_id=decision.get("email_log_id"),
+                    decided_at=decision.get("decided_at") or datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+        logger.info("Zapisano audyt decyzji dla zgloszenia %s w PostgreSQL.", wanted)
+        return True
 
     def _model_values(self, mapped: dict, *, include_defaults: bool = True) -> dict:
         ignored = {"id"}
@@ -351,3 +567,22 @@ class PostgresSubmissionRepository(SubmissionRepository):
         data["accept_rodo"] = data.get("osw_rodo", "")
         data["accept_odpowiedzialnosc"] = data.get("osw_prawdziwosc", "")
         return data
+
+    def _row_to_dict(self, model) -> dict:
+        return {
+            column.name: getattr(model, column.name)
+            for column in model.__table__.columns
+        }
+
+    def _rollback_and_log_schema_mismatch(self, session, area: str, submission_id: str, exc: Exception) -> None:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "schema_mismatch area=%s submission_id=%s reason=p4_schema_unavailable error=%s",
+            area,
+            submission_id,
+            exc.__class__.__name__,
+            exc_info=True,
+        )

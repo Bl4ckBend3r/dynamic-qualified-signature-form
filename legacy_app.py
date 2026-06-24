@@ -1,3 +1,9 @@
+# Legacy compatibility module.
+#
+# Runtime create_app() does not import this file and does not register any
+# endpoints defined here. Keep this module for historical direct execution,
+# compatibility wrappers, and regression tests only.
+
 import base64
 import csv
 import json
@@ -47,6 +53,8 @@ from services.document_service import (
     get_document_config,
     is_document_enabled,
 )
+from services import declaration_service as legacy_declaration_service
+from services.documents import document_generation_service as legacy_document_generation_service
 from services.process_service import (
     OfficerDecision,
     ProcessStatus,
@@ -78,11 +86,17 @@ Path(app.config["TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
 
 storage = create_nextcloud_storage_from_env()
 access_token_service = AccessTokenService()
+submission_repository = None
 
 logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
 logger.info("NEXTCLOUD_USERNAME=%s", app.config["NEXTCLOUD_USERNAME"])
 logger.info("NEXTCLOUD_FORMS_DIR=%s", app.config["NEXTCLOUD_FORMS_DIR"])
 logger.info("NEXTCLOUD_OUTPUT_DIR=%s", app.config["NEXTCLOUD_OUTPUT_DIR"])
+
+
+class LegacyPdfRenderAdapter:
+    def render_document_pdf_bytes(self, **kwargs) -> bytes:
+        return generate_document_pdf_bytes(**kwargs)
 
 
 def resolve_pdf_image_url(form_definition: dict) -> str | None:
@@ -331,32 +345,6 @@ def get_training_selection_field(form_definition: dict) -> dict | None:
 
 def extract_training_selection(field: dict, request_form) -> tuple[list[dict], str | None]:
     return service_extract_training_selection(field, request_form)
-    selected_ids = {normalize_training_id(value) for value in request_form.getlist(field.get("name", ""))}
-    catalog = field.get("catalog") or []
-    trainings = []
-
-    for item in catalog:
-        training_id = normalize_training_id(item.get("id") or item.get("name"))
-        if training_id not in selected_ids:
-            continue
-        price = float(item.get("price") or 0)
-        trainings.append(
-            {
-                "id": training_id,
-                "name": item.get("name") or training_id,
-                "price": price,
-            }
-        )
-
-    if field.get("required") and not trainings:
-        return [], "Wybierz co najmniej jedno szkolenie."
-
-    max_total = field.get("max_total_amount")
-    total = sum(float(item.get("price") or 0) for item in trainings)
-    if max_total is not None and total > float(max_total):
-        return trainings, f"Łączna wartość szkoleń przekracza limit {max_total} {field.get('currency', 'PLN')}."
-
-    return trainings, None
 
 
 def get_training_agreement_config(form_definition: dict) -> dict:
@@ -394,122 +382,22 @@ def build_training_agreement_number(
 
 
 def build_training_agreement_filename(pattern: str, row: dict, training: dict, sequence: int) -> str:
-    first_name = row.get("first_name") or row.get("imiona") or row.get("imie") or "Imie"
-    last_name = row.get("last_name") or row.get("nazwisko") or "Nazwisko"
-    values = {
-        "first_name": normalize_training_id(first_name),
-        "last_name": normalize_training_id(last_name),
-        "submission_id": normalize_training_id(row.get("submission_id", "")),
-        "training_id": normalize_training_id(training.get("id", "")),
-        "agreement_sequence": sequence,
-    }
-    try:
-        filename = pattern.format(**values)
-    except KeyError:
-        filename = f"{values['first_name']}_{values['last_name']}-{values['training_id']}-umowa.pdf"
-    filename = Path(filename).name
-    if not filename.lower().endswith(".pdf"):
-        filename = f"{filename}.pdf"
-    return filename
+    return legacy_document_generation_service.build_training_agreement_filename(pattern, row, training, sequence)
 
 
 def ensure_declaration_generated(submission: dict, force: bool = False) -> dict:
-    row = submission["row"]
-    slug = submission["form_slug"]
-    submission_id = submission["submission_id"]
-    existing_filename = row.get("declaration_filename", "").strip()
-
-    form_definition = get_form_definition(slug)
-    if not form_definition:
-        raise RuntimeError("Nie znaleziono definicji formularza dla deklaracji.")
-
-    declaration_config = get_document_config(form_definition, DocumentType.DECLARATION)
-    agreement_enabled = is_document_enabled(form_definition, DocumentType.AGREEMENT)
-
-    if not declaration_config.get("enabled"):
-        next_status = (
-            ProcessStatus.AGREEMENT_READY.value
-            if agreement_enabled
-            else ProcessStatus.PARTICIPANT_ACCEPTED.value
-        )
-        storage.update_csv_row_by_submission_id(
-            slug,
-            submission_id,
-            {
-                "declaration_required": "Nie",
-                "declaration_generated": "Nie",
-                "process_status": next_status,
-            },
-        )
-        return {
-            "enabled": False,
-            "filename": "",
-            "created": False,
-        }
-
-    if not force and row.get("declaration_generated", "").strip().lower() == "tak" and existing_filename:
-        try:
-            storage.get_pdf_bytes(slug, existing_filename)
-        except Exception:
-            logger.warning(
-                "Deklaracja %s dla wniosku %s jest w CSV, ale nie ma jej w storage. Regeneruję PDF.",
-                existing_filename,
-                submission_id,
-            )
-        else:
-            return {
-                "enabled": True,
-                "filename": existing_filename,
-                "created": False,
-            }
-
-    if row.get("declaration_generated", "").strip().lower() == "tak" and existing_filename:
-        declaration_filename = existing_filename
-    else:
-        declaration_filename = build_declaration_filename(row, declaration_config)
-
-    declaration_context = build_document_pdf_context(
-        form_definition=form_definition,
-        submission_id=submission_id,
-        row=row,
-        submission_view=build_submission_view(form_definition, row),
-        consents_view=build_consents_view(form_definition, row),
-        pdf_image_url=resolve_pdf_image_url(form_definition),
-        document_type=DocumentType.DECLARATION,
-    )
-    declaration_template_html = resolve_nextcloud_template_html(
-        declaration_config.get("template", "")
-    )
-    declaration_bytes = generate_document_pdf_bytes(
+    return legacy_declaration_service.ensure_declaration_generated(
+        submission,
         app=app,
-        template_name="declaration_template.html",
-        template_html=declaration_template_html,
-        context=declaration_context,
+        storage=storage,
+        get_form_definition=get_form_definition,
+        resolve_template_html=resolve_nextcloud_template_html,
+        resolve_pdf_image_url=resolve_pdf_image_url,
+        force=force,
+        submission_repository=submission_repository,
+        pdf_render_service=LegacyPdfRenderAdapter(),
+        log=logger,
     )
-
-    storage.save_pdf(slug, declaration_filename, declaration_bytes)
-    storage.update_csv_row_by_submission_id(
-        slug,
-        submission_id,
-        {
-            "declaration_required": "Tak",
-            "declaration_generated": "Tak",
-            "declaration_filename": declaration_filename,
-            "process_status": ProcessStatus.DECLARATION_WAITING_FOR_SIGNATURE.value,
-        },
-    )
-
-    logger.info(
-        "Wygenerowano deklarację %s dla wniosku %s",
-        declaration_filename,
-        submission_id,
-    )
-
-    return {
-        "enabled": True,
-        "filename": declaration_filename,
-        "created": True,
-    }
 
 
 def build_signature_update_fields(
@@ -633,134 +521,33 @@ def inject_globals():
 
 
 def build_declaration_form_definition(form_definition: dict, declaration_config: dict) -> dict:
-    return {
-        "title": declaration_config.get("form_title") or "Uzupełnienie deklaracji uczestnictwa",
-        "description": declaration_config.get("form_description") or "",
-        "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklarację PDF",
-        "fields": declaration_config.get("fields") or [],
-    }
+    return legacy_declaration_service.build_declaration_form_definition(declaration_config)
 
 
 def build_agreement_block_updates(declaration_data: dict) -> dict[str, str]:
-    blocking_fields = {
-        "deklaracja_18_lat",
-        "deklaracja_lubuskie",
-        "deklaracja_brak_dzialalnosci",
-        "deklaracja_brak_ksztalcenia",
-        "deklaracja_umiejetnosci_podstawowe",
-    }
-    blocked = any(
-        str(declaration_data.get(field_name) or "").strip().lower() == "nie"
-        for field_name in blocking_fields
-    )
-    if not blocked:
-        return {"agreement_blocked": "", "agreement_block_reason": ""}
-    return {
-        "agreement_blocked": "Tak",
-        "agreement_block_reason": "Warunki nie zostały spełnione na podstawie deklaracji uczestnika.",
-        "process_status": ProcessStatus.AGREEMENT_BLOCKED.value,
-    }
+    return legacy_document_generation_service.build_agreement_block_updates(declaration_data)
 
 
 def generate_training_agreements_for_submission(
     submission: dict,
     generated_date: str | None = None,
 ) -> list[dict]:
-    row = submission["row"]
-    slug = submission["form_slug"]
-    submission_id = submission["submission_id"]
-    form_definition = get_form_definition(slug)
-    if not form_definition:
-        raise RuntimeError("Nie znaleziono definicji formularza dla umowy.")
-
-    selected_trainings = parse_selected_trainings(row)
-    if not selected_trainings:
-        raise RuntimeError("Nie wybrano szkoleń do wygenerowania umów.")
-
-    agreement_config = get_training_agreement_config(form_definition)
-    if not agreement_config.get("enabled"):
-        return []
-
-    generated_date = generated_date or date.today().isoformat()
-    template_html = resolve_nextcloud_template_html(agreement_config.get("template", ""))
-    agreements = []
-
-    for index, training in enumerate(selected_trainings, start=1):
-        agreement_number = build_training_agreement_number(
-            submission_id,
-            index,
-            generated_date,
-            agreement_config,
-        )
-        filename = build_training_agreement_filename(
-            agreement_config.get("filename_pattern", ""),
-            row,
-            training,
-            index,
-        )
-        context = build_document_pdf_context(
-            form_definition=form_definition,
-            submission_id=submission_id,
-            row={
-                **row,
-                "training": training,
-                "training_id": training.get("id", ""),
-                "training_name": training.get("name", ""),
-                "training_price": training.get("price", ""),
-                "agreement_number": agreement_number,
-                "agreement_generated_at": generated_date,
-            },
-            submission_view=build_submission_view(form_definition, row),
-            consents_view=build_consents_view(form_definition, row),
-            pdf_image_url=resolve_pdf_image_url(form_definition),
-            document_type=DocumentType.AGREEMENT,
-        )
-        context.update(
-            {
-                "training": training,
-                "agreement_number": agreement_number,
-                "agreement_generated_at": generated_date,
-            }
-        )
-        agreement_bytes = generate_document_pdf_bytes(
-            app=app,
-            template_name="declaration_template.html",
-            template_html=template_html,
-            context=context,
-        )
-        storage.save_pdf(slug, filename, agreement_bytes)
-        agreements.append(
-            {
-                "id": training.get("id", f"training_{index}"),
-                "training_id": training.get("id", ""),
-                "training_name": training.get("name", ""),
-                "training_price": training.get("price", ""),
-                "sequence": index,
-                "number": agreement_number,
-                "generated_at": generated_date,
-                "filename": filename,
-                "signed": False,
-                "signature_valid": False,
-                "signed_filename": "",
-                "signature_type": "",
-                "signature_error": "",
-            }
-        )
-
-    storage.update_csv_row_by_submission_id(
-        slug,
-        submission_id,
-        {
-            "agreement_generated": "Tak",
-            "agreement_filename": agreements[0]["filename"] if agreements else "",
-            "agreement_generated_at": generated_date,
-            "training_agreements": serialize_json_list(agreements),
-            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
-        },
+    return legacy_document_generation_service.generate_training_agreements_for_submission(
+        submission,
+        app=app,
+        storage=storage,
+        get_form_definition=get_form_definition,
+        get_training_agreement_config=get_training_agreement_config,
+        parse_selected_trainings=parse_selected_trainings,
+        resolve_template_html=resolve_nextcloud_template_html,
+        resolve_pdf_image_url=resolve_pdf_image_url,
+        generated_date=generated_date,
+        submission_repository=submission_repository,
+        pdf_render_service=LegacyPdfRenderAdapter(),
     )
-    return agreements
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.get("/nextcloud-assets/<path:asset_path>", endpoint="nextcloud_asset")
 def nextcloud_asset(asset_path: str):
     resolved_path = normalize_nextcloud_asset_path(asset_path)
@@ -785,6 +572,7 @@ def nextcloud_asset(asset_path: str):
     )
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/public_forms.py instead.
 @app.route("/", methods=["GET"])
 def index():
     try:
@@ -797,6 +585,7 @@ def index():
         return f"Błąd Nextcloud: {exc}", 500
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/public_forms.py instead.
 @app.route("/form/<slug>", methods=["GET"])
 def form_page(slug: str):
     form_meta = get_form_meta(slug)
@@ -817,6 +606,7 @@ def form_page(slug: str):
     )
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/public_forms.py instead.
 @app.route("/submit/<slug>", methods=["POST"])
 def submit(slug: str):
     form_meta = get_form_meta(slug)
@@ -943,6 +733,7 @@ def submit(slug: str):
         ), 500
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/upload-declaration-signed/<slug>/<submission_id>", methods=["POST"])
 def upload_signed_declaration(slug: str, submission_id: str):
     submission = find_submission_acceptance_by_id(submission_id)
@@ -1011,6 +802,7 @@ def upload_signed_declaration(slug: str, submission_id: str):
     return redirect(url_for("documents_to_sign"))
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/declaration/<slug>/<submission_id>", methods=["GET", "POST"])
 def declaration_form(slug: str, submission_id: str):
     submission = find_submission_acceptance_by_id(submission_id)
@@ -1076,6 +868,7 @@ def declaration_form(slug: str, submission_id: str):
     )
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/agreements/<slug>/<submission_id>/generate", methods=["POST"])
 def generate_training_agreements(slug: str, submission_id: str):
     submission = find_submission_acceptance_by_id(submission_id)
@@ -1101,6 +894,7 @@ def generate_training_agreements(slug: str, submission_id: str):
     return redirect(url_for("documents_to_sign"))
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/agreements/<slug>/<submission_id>/<agreement_id>/upload", methods=["POST"])
 def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id: str):
     submission = find_submission_acceptance_by_id(submission_id)
@@ -1189,6 +983,7 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
     return redirect(url_for("documents_to_sign"))
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/upload-signed/<slug>/<submission_id>", methods=["POST"])
 def upload_signed_pdf(slug: str, submission_id: str):
     form_meta = get_form_meta(slug)
@@ -1245,6 +1040,7 @@ def upload_signed_pdf(slug: str, submission_id: str):
         return redirect(url_for("show_result", slug=slug, submission_id=submission_id))
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/public_forms.py instead.
 @app.route("/result/<slug>/<submission_id>", methods=["GET"])
 def show_result(slug: str, submission_id: str):
     form_meta = get_form_meta(slug)
@@ -1305,6 +1101,7 @@ def show_result(slug: str, submission_id: str):
     return render_template("result.html", result=result)
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/api.py instead.
 @app.get("/api/submissions/<submission_id>/acceptance-status")
 def api_acceptance_status(submission_id: str):
     submission_id = submission_id.strip()
@@ -1366,6 +1163,7 @@ def api_acceptance_status(submission_id: str):
     }, 200
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/do-podpisania", methods=["GET", "POST"])
 def documents_to_sign():
     if request.method == "GET":
@@ -1534,6 +1332,7 @@ def documents_to_sign():
     )
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/downloads/pdfs/<slug>/<path:filename>", methods=["GET"])
 def download_pdf(slug: str, filename: str):
     try:
@@ -1569,6 +1368,7 @@ def download_pdf(slug: str, filename: str):
     )
 
 
+# TODO(P3.x): legacy-only endpoint. Runtime create_app() registers routes/documents.py instead.
 @app.route("/downloads/signed/<slug>/<path:filename>", methods=["GET"])
 def download_signed_pdf(slug: str, filename: str):
     try:

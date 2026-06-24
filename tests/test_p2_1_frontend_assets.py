@@ -19,13 +19,39 @@ def test_documents_to_sign_static_assets_exist():
     assert ".upload-dropzone" in stylesheet.read_text(encoding="utf-8")
     assert "function checkAcceptanceStatus" in script.read_text(encoding="utf-8")
     assert "REJECTED_STATUSES" not in script.read_text(encoding="utf-8")
+    assert "FINAL_STATUSES" not in script.read_text(encoding="utf-8")
+    assert "message.includes" not in script.read_text(encoding="utf-8")
 
 
-def test_documents_to_sign_template_split_tracking():
+def test_documents_to_sign_template_loads_static_assets_only():
     template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
 
-    # The static assets are prepared in P2.1. The large template still keeps
-    # compatibility inline blocks until the follow-up template-only commit can
-    # safely remove them without changing the page flow.
-    assert "<style>" in template or "documents_to_sign.css" in template
-    assert "<script>" in template or "documents_to_sign.js" in template
+    assert "documents_to_sign.css" in template
+    assert "documents_to_sign.js" in template
+    assert "{% block extra_css %}" in template
+    assert "{% block extra_js %}" in template
+    assert "<style" not in template
+    assert "style=" not in template
+    assert "<script src=\"{{ url_for('static', filename='documents_to_sign.js') }}\" defer></script>" in template
+
+
+def test_documents_to_sign_frontend_uses_backend_status_flags():
+    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+
+    assert "Boolean(data.is_rejected)" in script
+    assert "data.agreement_stage_completed" in script
+    assert "data.declaration_stage_completed" in script
+    assert "data.is_final" in script
+    assert "rejectedStatuses" not in script
+    assert "finalStatuses" not in script
+
+
+def test_training_selection_keeps_full_width_layout():
+    template = Path("templates/declaration_form.html").read_text(encoding="utf-8")
+    stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+
+    assert "field.width or 'full'" in template
+    assert "training-selection-row" in template
+    assert ".training-selection-row" in stylesheet
+    assert "grid-column: 1 / -1;" in stylesheet
+    assert ".training-selection .checkbox-item span" in stylesheet

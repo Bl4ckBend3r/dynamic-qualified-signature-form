@@ -1,5 +1,7 @@
 import io
 
+from flask import url_for
+
 
 def test_index_lists_available_forms(client):
     response = client.get("/")
@@ -286,6 +288,25 @@ def test_documents_to_sign_get_loads(client):
 
     assert response.status_code == 200
     assert "podpisania" in html
+
+
+def test_document_endpoint_names_stay_registered(app):
+    from routes.documents import bp as documents_bp
+
+    assert documents_bp.name == "documents"
+    with app.test_request_context():
+        assert url_for("documents.documents_to_sign") == "/do-podpisania"
+        assert url_for("documents.declaration_form", slug="sample", submission_id="abc") == "/declaration/sample/abc"
+        assert url_for("documents.save_additional_fields", slug="sample", submission_id="abc") == "/additional-fields/sample/abc"
+        assert url_for("documents.generate_training_agreements", slug="sample", submission_id="abc") == "/agreements/sample/abc/generate"
+        assert url_for("documents.upload_signed_declaration", slug="sample", submission_id="abc") == "/upload-declaration-signed/sample/abc"
+        assert url_for("documents.upload_signed_pdf", slug="sample", submission_id="abc") == "/upload-signed/sample/abc"
+        assert (
+            url_for("documents.upload_signed_training_agreement", slug="sample", submission_id="abc", agreement_id="excel")
+            == "/agreements/sample/abc/excel/upload"
+        )
+        assert url_for("documents.download_pdf", slug="sample", filename="file.pdf") == "/downloads/pdfs/sample/file.pdf"
+        assert url_for("documents.download_signed_pdf", slug="sample", filename="file.pdf") == "/downloads/signed/sample/file.pdf"
 
 
 def test_documents_to_sign_shows_declaration_and_training_agreements(client, app):

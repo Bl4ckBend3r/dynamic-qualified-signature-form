@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,13 @@ def record_submission_file(
     signed: bool = False,
     status: str = "uploaded",
     mime_type: str = "application/pdf",
+    original_filename: str = "",
+    signature_status: str = "",
+    signature_validation_result: dict | None = None,
+    agreement_number: str = "",
+    training_key: str = "",
+    generated_at: datetime | None = None,
+    signed_at: datetime | None = None,
 ) -> bool:
     if not submission_repository or not hasattr(submission_repository, "record_file"):
         return False
@@ -37,6 +45,13 @@ def record_submission_file(
         "checksum_sha256": hashlib.sha256(file_bytes).hexdigest() if file_bytes is not None else "",
         "signed": signed,
         "status": status,
+        "original_filename": Path(original_filename).name if original_filename else "",
+        "signature_status": signature_status,
+        "signature_validation_result": signature_validation_result or {},
+        "agreement_number": agreement_number,
+        "training_key": training_key,
+        "generated_at": generated_at,
+        "signed_at": signed_at,
     }
     recorded = bool(submission_repository.record_file(submission_id, metadata))
     logger.info(

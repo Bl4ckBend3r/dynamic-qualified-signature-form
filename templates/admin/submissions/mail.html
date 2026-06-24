@@ -15,10 +15,13 @@
         <label>
             <span>Szablon</span>
             <select name="template_id">
-                <option value="">Bez szablonu</option>
-                {% for template in templates %}
-                    <option value="{{ template.id }}">{{ template.name }}</option>
-                {% endfor %}
+                {% if templates %}
+                    {% for template in templates %}
+                        <option value="{{ template.id }}" {% if loop.first %}selected{% endif %}>{{ template.name }}</option>
+                    {% endfor %}
+                {% else %}
+                    <option value="">Mail systemowy</option>
+                {% endif %}
             </select>
         </label>
         <label class="admin-form-wide"><span>Temat</span><input name="subject" value=""></label>
@@ -39,4 +42,27 @@
         <button class="admin-button" type="submit">Wyslij</button>
     </div>
 </form>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const templates = {{ template_payload|tojson }};
+    const byId = new Map(templates.map(item => [String(item.id), item]));
+    const select = document.querySelector('select[name="template_id"]');
+    const subject = document.querySelector('input[name="subject"]');
+    const htmlBody = document.querySelector('textarea[name="html_body"]');
+    const textBody = document.querySelector('textarea[name="text_body"]');
+
+    function fillFromTemplate() {
+        const template = byId.get(String(select.value));
+        if (!template) return;
+        subject.value = template.subject || "";
+        htmlBody.value = template.html_body || "";
+        textBody.value = template.text_body || "";
+    }
+
+    if (select && templates.length) {
+        fillFromTemplate();
+        select.addEventListener("change", fillFromTemplate);
+    }
+});
+</script>
 {% endblock %}

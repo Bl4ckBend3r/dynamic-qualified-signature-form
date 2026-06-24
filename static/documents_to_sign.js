@@ -10,14 +10,25 @@ const processCompletedBox = document.getElementById("process-completed-box");
 let timeoutId = null;
 
 function isRejectedStatus(data) {
-    const message = (data.message || "").toLowerCase();
-    return Boolean(data.is_rejected) || message.includes("odrzucon");
+    return Boolean(data.is_rejected);
 }
 
 function hideElements(selector) {
     document.querySelectorAll(selector).forEach((element) => {
-        element.style.display = "none";
+        element.classList.add("is-hidden");
     });
+}
+
+function showElement(element) {
+    if (element) {
+        element.classList.remove("is-hidden");
+    }
+}
+
+function hideElement(element) {
+    if (element) {
+        element.classList.add("is-hidden");
+    }
 }
 
 function disableGenerateButton() {
@@ -30,15 +41,11 @@ function disableGenerateButton() {
 }
 
 function hideInitialSigningForm() {
-    if (signDocumentsForm) {
-        signDocumentsForm.style.display = "none";
-    }
+    hideElement(signDocumentsForm);
 }
 
 function showProcessCompletedBox() {
-    if (processCompletedBox) {
-        processCompletedBox.style.display = "block";
-    }
+    showElement(processCompletedBox);
 }
 
 function showCompletedMessage(message) {
@@ -49,7 +56,7 @@ function showCompletedMessage(message) {
     }
 
     messageBox.innerHTML = message;
-    messageBox.style.display = "block";
+    showElement(messageBox);
 }
 
 function hideDeclarationStage() {
@@ -250,7 +257,7 @@ function resetState() {
         statusBox.textContent = "";
     }
     if (documentsSection) {
-        documentsSection.style.display = "none";
+        hideElement(documentsSection);
     }
     if (generateButton) {
         generateButton.disabled = true;
@@ -301,7 +308,7 @@ async function checkAcceptanceStatus() {
             && !data.is_final
         ) {
             if (documentsSection) {
-                documentsSection.style.display = "block";
+                showElement(documentsSection);
             }
             if (generateButton) {
                 generateButton.disabled = false;
@@ -321,7 +328,7 @@ async function checkAcceptanceStatus() {
             description: "Spróbuj ponownie albo sprawdź połączenie z serwerem.",
         });
         if (documentsSection) {
-            documentsSection.style.display = "none";
+            hideElement(documentsSection);
         }
         if (generateButton) {
             generateButton.disabled = true;

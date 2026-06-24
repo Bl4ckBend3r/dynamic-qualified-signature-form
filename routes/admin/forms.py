@@ -9,6 +9,7 @@ from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
 from models import Form, FormField, FormPermission, FormSubmission, User
 from services.admin_form_service import (
     build_form_definition_from_admin_form,
+    get_declaration_training_field,
     normalize_admin_form_definition,
     normalize_field_stage,
     parse_uploaded_form_definition,
@@ -164,6 +165,7 @@ def form_edit(form_id: int):
                     users=users,
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
+                    training_field=get_declaration_training_field(updated_definition),
                     workflow_json=request.form.get("workflow_json", ""),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     validation_errors=validation_errors,
@@ -180,6 +182,7 @@ def form_edit(form_id: int):
                     users=users,
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
+                    training_field=get_declaration_training_field(updated_definition),
                     workflow_json=format_json(updated_definition.get("workflow") or {}),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     validation_errors=validation_errors,
@@ -198,6 +201,7 @@ def form_edit(form_id: int):
                     users=users,
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
+                    training_field=get_declaration_training_field(form.definition_json or {}),
                 ), 400
             form.slug = new_slug
             form.description = request.form.get("description", "").strip()
@@ -234,6 +238,7 @@ def form_edit(form_id: int):
             users=users,
             assigned_user_ids=assigned_user_ids,
             logos=logos,
+            training_field=get_declaration_training_field(form.definition_json or {}),
             workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
             trigger_descriptions=TRIGGER_DESCRIPTIONS,
             validation_errors=[],

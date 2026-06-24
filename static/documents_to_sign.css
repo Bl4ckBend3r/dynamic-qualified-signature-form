@@ -168,3 +168,36 @@
 .upload-dropzone.has-file .upload-dropzone__filename {
     color: var(--success);
 }
+
+.is-hidden {
+    display: none;
+}
+
+.documents-instructions {
+    margin-bottom: 24px;
+}
+
+.documents-instructions__list {
+    margin-bottom: 0;
+}
+
+.result-box--completed,
+.document-stage-card {
+    margin-top: 24px;
+}
+
+.document-download-links {
+    margin-top: 16px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.download-links--spaced,
+.signing-document-card--spaced,
+.document-status-line {
+    margin-top: 16px;
+}
+
+.dynamic-form--spaced {
+    margin-top: 20px;
+}

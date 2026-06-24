@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block extra_js %}
-    <script src="{{ url_for('static', filename='documents_to_sign.js') }}"></script>
+    <script src="{{ url_for('static', filename='documents_to_sign.js') }}" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -22,9 +22,9 @@
         </p>
     </div>
 
-    <div class="static-text" style="margin-bottom: 24px;">
+    <div class="static-text documents-instructions">
         <strong>Instrukcja podpisania dokumentów:</strong>
-        <ol style="margin-bottom: 0;">
+        <ol class="documents-instructions__list">
             <li>Wypełnij wymagany dokument.</li>
             <li>Pobierz wygenerowany plik PDF.</li>
             <li>Podpisz PDF podpisem elektronicznym: mSzafir albo <a href="https://podpis.gov.pl/podpisz-dokument-elektronicznie/" target="_blank">Profilem Zaufanym</a>.</li>
@@ -53,7 +53,7 @@
             <div id="acceptance-status" class="field-help"></div>
         </div>
 
-        <div class="form-field" id="documents-section" style="display: none;">
+        <div class="form-field is-hidden" id="documents-section">
             <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
         </div>
 
@@ -66,7 +66,7 @@
 
     <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
 
-    <div id="process-completed-box" class="result-box" style="display: none; margin-top: 24px;">
+    <div id="process-completed-box" class="result-box result-box--completed is-hidden">
         <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
     </div>
 
@@ -101,7 +101,7 @@
             {% endif %}
 
             {% if result.needs_additional_fields %}
-                <div class="card" data-stage="additional-fields" style="margin-top: 24px;">
+                <div class="card document-stage-card" data-stage="additional-fields">
                     <div class="card-header">
                         <h3>Wniosek został zaakceptowany</h3>
                         <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
@@ -163,7 +163,7 @@
                         <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
                     {% endif %}
 
-                    <div class="download-links" style="margin-top: 16px; gap: 12px; flex-wrap: wrap;">
+                    <div class="download-links document-download-links">
                         {% if result.form_slug and result.submission_id %}
                             <a
                                 class="btn-primary"
@@ -199,7 +199,7 @@
             {% endif %}
 
             {% if show_declaration_upload %}
-                <div class="card upload-card" data-stage="declaration-upload" style="margin-top: 24px;">
+                <div class="card upload-card document-stage-card" data-stage="declaration-upload">
                     <div class="card-header">
                         <h3>Wgraj podpisaną deklarację</h3>
                         <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
@@ -234,7 +234,7 @@
             {% endif %}
 
             {% if show_agreement_stage %}
-                <div class="card upload-card" data-stage="agreement" style="margin-top: 24px;">
+                <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
                         <h3>Umowa do podpisania</h3>
                         <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
@@ -251,7 +251,7 @@
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
                             {% for agreement in training_agreements %}
-                                <div class="signing-document-card" style="margin-top: 16px;">
+                                <div class="signing-document-card signing-document-card--spaced">
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
                                     <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
                                     <p><strong>Plik:</strong> {{ agreement.filename }}</p>
@@ -261,20 +261,20 @@
                                     {% endif %}
 
                                     {% if agreement.url %}
-                                        <div class="download-links" style="margin-top: 16px;">
+                                        <div class="download-links download-links--spaced">
                                             <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
                                         </div>
                                     {% endif %}
 
                                     {% if agreement.signature_valid %}
-                                        <p style="margin-top: 16px;"><strong>Status podpisu:</strong> poprawny</p>
+                                        <p class="document-status-line"><strong>Status podpisu:</strong> poprawny</p>
                                     {% else %}
                                         {% if agreement.signature_error %}
-                                            <p style="margin-top: 16px;"><strong>Status podpisu:</strong> niepoprawny</p>
+                                            <p class="document-status-line"><strong>Status podpisu:</strong> niepoprawny</p>
                                             <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
                                         {% endif %}
 
-                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                             <div class="form-row width-full">
                                                 <label class="upload-dropzone" data-upload-dropzone>
                                                     <input
@@ -314,12 +314,12 @@
                             {% endif %}
 
                             {% if result.agreement_url %}
-                                <div class="download-links" style="margin-top: 16px;">
+                                <div class="download-links download-links--spaced">
                                     <a class="btn-primary" href="{{ result.agreement_url }}">Pobierz umowę PDF</a>
                                 </div>
                             {% endif %}
 
-                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form" style="margin-top: 20px;">
+                            <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                 <div class="form-row width-full">
                                     <label class="upload-dropzone" data-upload-dropzone>
                                         <input
@@ -348,20 +348,20 @@
                     {% endif %}
 
                     {% if result.agreement_signature_error %}
-                        <p style="margin-top: 16px;"><strong>Status podpisu umowy:</strong> Niepoprawny</p>
+                        <p class="document-status-line"><strong>Status podpisu umowy:</strong> Niepoprawny</p>
                         <p><strong>Błąd:</strong> {{ result.agreement_signature_error }}</p>
                     {% endif %}
                 </div>
             {% endif %}
 
-            <p id="completed-stage-message" style="display: none; margin-top: 16px;"></p>
+            <p id="completed-stage-message" class="document-status-line is-hidden"></p>
 
             {% if declaration_completed and not show_agreement_stage and not agreement_completed %}
-                <p style="margin-top: 16px;"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
+                <p class="document-status-line"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
             {% endif %}
 
             {% if agreement_completed %}
-                <p style="margin-top: 16px;"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
+                <p class="document-status-line"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
             {% endif %}
         </div>
     {% endif %}

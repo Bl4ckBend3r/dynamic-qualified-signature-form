@@ -13,7 +13,7 @@ from form_loader import validate_submission
 from routes.api import bp as api_bp
 from routes.documents import bp as documents_bp
 from routes.public_forms import bp as public_forms_bp
-from services.container import create_services, install_legacy_helpers
+from services.container import create_services
 
 load_dotenv()
 
@@ -29,6 +29,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     app.config.from_object(config_object or Config)
     _apply_runtime_env_overrides(app, enabled=config_object is None)
     _validate_config(app)
+    _validate_strict_mode_config(app)
     if os.getenv("TEMP_DIR"):
         app.config["TEMP_DIR"] = Path(os.getenv("TEMP_DIR", ""))
 
@@ -37,7 +38,6 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     container = create_services(app, storage_override=storage_override)
     app.extensions["services"] = container
     _register_legacy_extension_aliases(app, container)
-    install_legacy_helpers(app, container)
     register_template_filters(app)
 
     register_context_processors(app)
@@ -61,6 +61,14 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
         app.config["AUTO_CREATE_DB_SCHEMA"] = os.getenv(
             "AUTO_CREATE_DB_SCHEMA", "false"
         ).strip().lower() in {"1", "true", "yes", "tak", "on"}
+    for name in (
+        "STRICT_DOCUMENT_METADATA_READ",
+        "STRICT_WORKFLOW_HISTORY_READ",
+        "STRICT_DECISION_AUDIT_READ",
+        "REQUIRE_STRICT_READINESS_CHECK",
+    ):
+        if name in os.environ:
+            app.config[name] = os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "tak", "on"}
 
 
 def _validate_config(app: Flask) -> None:
@@ -70,6 +78,27 @@ def _validate_config(app: Flask) -> None:
         raise RuntimeError("SECRET_KEY must be configured in production.")
 
 
+def _validate_strict_mode_config(app: Flask) -> None:
+    flags = {
+        "STRICT_DOCUMENT_METADATA_READ": bool(app.config.get("STRICT_DOCUMENT_METADATA_READ")),
+        "STRICT_WORKFLOW_HISTORY_READ": bool(app.config.get("STRICT_WORKFLOW_HISTORY_READ")),
+        "STRICT_DECISION_AUDIT_READ": bool(app.config.get("STRICT_DECISION_AUDIT_READ")),
+    }
+    active_flags = [name for name, enabled in flags.items() if enabled]
+    if not active_flags:
+        return
+    logger.warning(
+        "strict_mode_enabled active_flags=%s require_readiness_check=%s",
+        ",".join(active_flags),
+        bool(app.config.get("REQUIRE_STRICT_READINESS_CHECK")),
+    )
+    if app.config.get("REQUIRE_STRICT_READINESS_CHECK"):
+        logger.warning(
+            "strict_readiness_blocker reason=external_readiness_required active_flags=%s",
+            ",".join(active_flags),
+        )
+
+
 def _register_legacy_extension_aliases(app: Flask, container) -> None:
     app.extensions["storage"] = container.storage
     app.extensions["storage_repository"] = container.storage_repository
@@ -77,6 +106,7 @@ def _register_legacy_extension_aliases(app: Flask, container) -> None:
     app.extensions["workflow_service"] = container.workflow_service
     app.extensions["document_service"] = container.document_service
     app.extensions["notification_service"] = container.notification_service
+    app.extensions["mail_dispatch_service"] = container.mail_dispatch_service
     app.extensions["submission_service"] = container.submission_service
     app.extensions["audit_log_service"] = container.audit_log_service
     app.extensions["access_token_service"] = container.access_token_service

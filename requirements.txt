@@ -12,9 +12,6 @@ Flask-SQLAlchemy
 alembic
 pytest
 pytest-cov
-<<<<<<< HEAD
 SQLAlchemy>=2.0,<3.0
 alembic>=1.13,<2.0
 psycopg[binary]>=3.1,<4.0
-=======
->>>>>>> ec3cb55 (Prepare production deployment dependencies)

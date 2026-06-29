@@ -46,6 +46,15 @@ def test_documents_to_sign_frontend_uses_backend_status_flags():
     assert "finalStatuses" not in script
 
 
+def test_documents_to_sign_frontend_receives_acceptance_status_url_template():
+    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
+    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+
+    assert "data-acceptance-status-url-template" in template
+    assert "url_for('api.api_acceptance_status'" in template
+    assert "buildAcceptanceStatusUrl" in script
+
+
 def test_training_selection_keeps_full_width_layout():
     template = Path("templates/declaration_form.html").read_text(encoding="utf-8")
     stylesheet = Path("static/style.css").read_text(encoding="utf-8")

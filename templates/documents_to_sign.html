@@ -41,6 +41,7 @@
                 id="submission_id"
                 name="submission_id"
                 value="{{ initial_submission_id }}"
+                data-acceptance-status-url-template="{{ url_for('api.api_acceptance_status', submission_id='__SUBMISSION_ID__') }}"
                 placeholder="Wpisz ID wniosku"
                 autocomplete="off"
                 required

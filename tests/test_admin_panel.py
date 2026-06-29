@@ -1315,6 +1315,43 @@ def test_simple_html_full_document_extracts_body_and_sanitizes():
     assert "{{ decision }}" in parsed.body_html
 
 
+def test_mail_import_inlines_safe_embedded_css_and_keeps_inline_styles():
+    from services.mail_template_service import parse_mail_content
+
+    parsed = parse_mail_content(
+        """
+        <!doctype html>
+        <html>
+        <head>
+            <style>
+                .lead { color: #1d2e5b; font-weight: 700; background-image: url("https://bad.test/x.png"); }
+                #cta { background-color: #c8a35d; padding: 12px; position: absolute; }
+                p { line-height: 1.5; }
+                .lead strong { color: red; }
+            </style>
+        </head>
+        <body>
+            <h2>Potwierdzenie</h2>
+            <p class="lead" style="font-size: 18px; position: fixed;">Witaj {{ imie }}</p>
+            <div id="cta">Dalej</div>
+        </body>
+        </html>
+        """
+    )
+
+    assert 'style="' in parsed.body_html
+    assert "color:#1d2e5b" in parsed.body_html
+    assert "font-weight:700" in parsed.body_html
+    assert "line-height:1.5" in parsed.body_html
+    assert "font-size:18px" in parsed.body_html
+    assert 'style="background-color:#c8a35d;padding:12px"' in parsed.body_html
+    assert "background-image" not in parsed.body_html
+    assert "position" not in parsed.body_html
+    assert "class=" not in parsed.body_html
+    assert "id=" not in parsed.body_html
+    assert "<style" not in parsed.body_html
+
+
 def test_simple_html_fragment_is_preserved_as_content():
     from services.mail_template_service import parse_mail_content
 

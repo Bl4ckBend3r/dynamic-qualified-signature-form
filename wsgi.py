@@ -1,7 +1,10 @@
-from app import app, logger, storage
+from app import create_app, logger
 
 
-@app.get("/health")
+application = create_app()
+
+
+@application.get("/health")
 def healthcheck():
     checks = {
         "app": "ok",
@@ -9,6 +12,7 @@ def healthcheck():
     }
 
     try:
+        storage = application.extensions["services"].storage
         storage.ensure_base_structure()
         checks["nextcloud"] = "ok"
     except Exception as exc:
@@ -17,6 +21,3 @@ def healthcheck():
         return checks, 503
 
     return checks, 200
-
-
-application = app

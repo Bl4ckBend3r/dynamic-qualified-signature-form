@@ -9,6 +9,17 @@ const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
+function buildAcceptanceStatusUrl(submissionId) {
+    const encodedSubmissionId = encodeURIComponent(submissionId);
+    const template = submissionInput ? submissionInput.dataset.acceptanceStatusUrlTemplate || "" : "";
+
+    if (template.includes("__SUBMISSION_ID__")) {
+        return template.replace("__SUBMISSION_ID__", encodedSubmissionId);
+    }
+
+    return `/api/submissions/${encodedSubmissionId}/acceptance-status`;
+}
+
 function isRejectedStatus(data) {
     return Boolean(data.is_rejected);
 }
@@ -291,7 +302,7 @@ async function checkAcceptanceStatus() {
     });
 
     try {
-        const response = await fetch(`/api/submissions/${encodeURIComponent(submissionId)}/acceptance-status`);
+        const response = await fetch(buildAcceptanceStatusUrl(submissionId));
         const data = await response.json();
 
         if (statusBox) {

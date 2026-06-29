@@ -68,6 +68,41 @@ ALLOWED_CONTENT_TAGS = {
 }
 ALLOWED_CONTENT_ATTRS = {"title", "colspan", "rowspan"}
 ALLOWED_LINK_ATTRS = {"href", "target", "title"}
+ALLOWED_STYLE_PROPERTIES = {
+    "background",
+    "background-color",
+    "border",
+    "border-bottom",
+    "border-collapse",
+    "border-left",
+    "border-radius",
+    "border-right",
+    "border-top",
+    "color",
+    "display",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "height",
+    "line-height",
+    "margin",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "max-height",
+    "max-width",
+    "padding",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "text-align",
+    "text-decoration",
+    "vertical-align",
+    "width",
+}
 STATUS_LABELS = {
     "FORM_SUBMITTED": "Wniosek zlozony",
     "WAITING_FOR_OFFICER_DECISION": "Oczekuje na decyzje",
@@ -169,13 +204,78 @@ class _ContentSanitizer(HTMLParser):
         rendered = []
         for raw_name, raw_value in attrs:
             name = (raw_name or "").lower()
-            if name.startswith("on") or name not in allowed:
+            if name.startswith("on"):
                 continue
             value = str(raw_value or "")
+            if name == "style":
+                style = sanitize_style_attribute(value)
+                if style:
+                    rendered.append(f' style="{html.escape(style, quote=True)}"')
+                continue
+            if name not in allowed:
+                continue
             if tag == "a" and name == "href" and value.strip().lower().startswith("javascript:"):
                 continue
             rendered.append(f' {name}="{html.escape(value, quote=True)}"')
         return "".join(rendered)
+
+
+class _InlineStyleApplier(HTMLParser):
+    def __init__(self, rules: list[tuple[str, str]]) -> None:
+        super().__init__(convert_charrefs=False)
+        self.rules = rules
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self.parts.append(self._start_tag(tag, attrs, closed=False))
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.parts.append(self._start_tag(tag, attrs, closed=True))
+
+    def handle_endtag(self, tag: str) -> None:
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        self.parts.append(f"<!--{data}-->")
+
+    def html(self) -> str:
+        return "".join(self.parts)
+
+    def _start_tag(self, tag: str, attrs, *, closed: bool) -> str:
+        attrs_list = [(name or "", "" if value is None else str(value)) for name, value in attrs]
+        style = self._merged_style(tag, attrs_list)
+        rendered_attrs = []
+        style_written = False
+        for name, value in attrs_list:
+            if name.lower() == "style":
+                if style:
+                    rendered_attrs.append(f' style="{html.escape(style, quote=True)}"')
+                style_written = True
+                continue
+            rendered_attrs.append(f' {name}="{html.escape(value, quote=True)}"')
+        if style and not style_written:
+            rendered_attrs.append(f' style="{html.escape(style, quote=True)}"')
+        suffix = " /" if closed else ""
+        return f"<{tag}{''.join(rendered_attrs)}{suffix}>"
+
+    def _merged_style(self, tag: str, attrs: list[tuple[str, str]]) -> str:
+        matched = []
+        for selector, style in self.rules:
+            if selector_matches(tag, attrs, selector):
+                matched.append(style)
+        existing = next((value for name, value in attrs if name.lower() == "style"), "")
+        if existing:
+            matched.append(existing)
+        return merge_style_attributes(matched)
 
 
 def html_to_text(raw_html: str) -> str:
@@ -195,12 +295,93 @@ def extract_body_html(raw_html: str) -> str:
 
 
 def sanitize_content_html(raw_html: str) -> str:
-    cleaned = extract_body_html(raw_html)
+    cleaned = extract_body_html(inline_embedded_styles(raw_html))
     cleaned = re.sub(r"(?is)<(style|script|iframe|object|embed|link|meta)\b.*?</\1>", "", cleaned)
     cleaned = re.sub(r"(?is)<(style|script|iframe|object|embed|link|meta)\b[^>]*>", "", cleaned)
     sanitizer = _ContentSanitizer()
     sanitizer.feed(cleaned)
     return sanitizer.html()
+
+
+def inline_embedded_styles(raw_html: str) -> str:
+    rules = extract_embedded_style_rules(raw_html)
+    if not rules:
+        return raw_html or ""
+    parser = _InlineStyleApplier(rules)
+    parser.feed(raw_html or "")
+    return parser.html()
+
+
+def extract_embedded_style_rules(raw_html: str) -> list[tuple[str, str]]:
+    rules: list[tuple[str, str]] = []
+    for style_block in re.findall(r"(?is)<style\b[^>]*>(.*?)</style>", raw_html or ""):
+        without_comments = re.sub(r"(?s)/\*.*?\*/", "", style_block)
+        without_media = re.sub(r"(?is)@[a-z-]+\b[^{]*\{.*?\}", "", without_comments)
+        for selectors, declarations in re.findall(r"(?s)([^{}]+)\{([^{}]+)\}", without_media):
+            style = sanitize_style_attribute(declarations)
+            if not style:
+                continue
+            for selector in selectors.split(","):
+                selector = selector.strip()
+                if is_supported_simple_selector(selector):
+                    rules.append((selector, style))
+    return rules
+
+
+def is_supported_simple_selector(selector: str) -> bool:
+    if not selector:
+        return False
+    if any(token in selector for token in (" ", ">", "+", "~", "[", ":", "*")):
+        return False
+    if selector.startswith((".", "#")):
+        return bool(re.match(r"^[.#][A-Za-z_][\w-]*$", selector))
+    return selector.lower() in ALLOWED_CONTENT_TAGS
+
+
+def selector_matches(tag: str, attrs: list[tuple[str, str]], selector: str) -> bool:
+    tag = tag.lower()
+    attrs_by_name = {name.lower(): value for name, value in attrs}
+    if selector.startswith("."):
+        classes = attrs_by_name.get("class", "").split()
+        return selector[1:] in classes
+    if selector.startswith("#"):
+        return attrs_by_name.get("id", "") == selector[1:]
+    return selector.lower() == tag
+
+
+def merge_style_attributes(styles: list[str]) -> str:
+    declarations: dict[str, str] = {}
+    for style in styles:
+        for declaration in sanitize_style_attribute(style).split(";"):
+            if not declaration or ":" not in declaration:
+                continue
+            name, value = declaration.split(":", 1)
+            declarations[name.strip().lower()] = value.strip()
+    return ";".join(f"{name}:{value}" for name, value in declarations.items())
+
+
+def sanitize_style_attribute(raw_style: str) -> str:
+    declarations = []
+    for declaration in str(raw_style or "").split(";"):
+        if ":" not in declaration:
+            continue
+        raw_name, raw_value = declaration.split(":", 1)
+        name = raw_name.strip().lower()
+        value = re.sub(r"\s+", " ", raw_value.strip())
+        if name not in ALLOWED_STYLE_PROPERTIES or not value:
+            continue
+        if not is_safe_style_value(value):
+            continue
+        declarations.append(f"{name}:{value}")
+    return ";".join(declarations)
+
+
+def is_safe_style_value(value: str) -> bool:
+    lowered = value.lower()
+    blocked = ("url(", "expression", "javascript:", "vbscript:", "@import", "behavior", "<", ">")
+    if any(token in lowered for token in blocked):
+        return False
+    return not any(ord(char) < 32 and char not in "\t\n\r" for char in value)
 
 
 def build_instruction_html(instruction_text: str) -> str:

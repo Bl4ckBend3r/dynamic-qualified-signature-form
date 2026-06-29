@@ -20,6 +20,18 @@ def test_blueprints_are_registered(app):
     assert {"public_forms", "documents", "api"}.issubset(set(app.blueprints))
 
 
+def test_public_api_endpoint_urls_are_registered(app):
+    with app.test_request_context():
+        assert (
+            app.url_for("api.api_acceptance_status", submission_id="abc")
+            == "/api/submissions/abc/acceptance-status"
+        )
+        assert (
+            app.url_for("api.api_workflow_status", submission_id="abc")
+            == "/api/submissions/abc/workflow-status"
+        )
+
+
 def test_create_app_rejects_default_secret_key_in_production(monkeypatch, form_definition):
     import app as app_module
     from conftest import InMemoryStorage

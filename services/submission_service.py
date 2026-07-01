@@ -9,6 +9,7 @@ from uuid import uuid4
 from flask import current_app, request, url_for
 
 from form_loader import (
+    apply_pesel_derived_values,
     build_consents_view,
     build_submission_view,
     extract_submission_data,
@@ -53,6 +54,7 @@ class SubmissionService:
     def submit_form(self, form_slug: str, form_config: dict, request_form) -> dict:
         submission_id = str(uuid4())
         submission_data = extract_submission_data(form_config, request_form)
+        submission_data = apply_pesel_derived_values(form_config, submission_data)
         mapped_submission, map_meta = build_submission_from_form(
             submission_data,
             form_config,

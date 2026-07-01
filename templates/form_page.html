@@ -54,6 +54,8 @@
 
                     <div
                         class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
+                        data-field-name="{{ field.name }}"
+                        data-field-type="{{ field.type }}"
                         {% if field.visible_if %}
                             data-visible-field="{{ field.visible_if.field }}"
                             data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
@@ -74,6 +76,8 @@
                                 type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
+                                data-field-name="{{ field.name }}"
+                                data-field-type="{{ field.type }}"
                                 value="{{ value }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
@@ -84,6 +88,8 @@
                             <textarea
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
+                                data-field-name="{{ field.name }}"
+                                data-field-type="{{ field.type }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
                                 {% if field.required %}required{% endif %}
@@ -93,6 +99,8 @@
                             <select
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
+                                data-field-name="{{ field.name }}"
+                                data-field-type="{{ field.type }}"
                                 {% if field.required %}required{% endif %}
                                 {% if field.readonly %}disabled{% endif %}
                             >
@@ -113,6 +121,8 @@
                                         <input
                                             type="radio"
                                             name="{{ field.name }}"
+                                            data-field-name="{{ field.name }}"
+                                            data-field-type="{{ field.type }}"
                                             value="{{ option }}"
                                             {% if value == option %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
@@ -131,6 +141,8 @@
                                             type="checkbox"
                                             id="{{ field.name }}_{{ loop.index }}"
                                             name="{{ field.name }}"
+                                            data-field-name="{{ field.name }}"
+                                            data-field-type="{{ field.type }}"
                                             value="{{ option.value }}"
                                             {% if value == option.value %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
@@ -209,6 +221,362 @@
             el.addEventListener("change", updateVisibility);
             el.addEventListener("input", updateVisibility);
         });
+
+        const peselAliases = ["pesel"];
+        const birthDateAliases = ["data_urodzenia", "birth_date", "date_of_birth"];
+        const genderAliases = ["plec", "płeć", "gender"];
+        const ageAliases = ["wiek", "age"];
+        const projectJoinDateAliases = [
+            "data_przystapienia",
+            "data_przystąpienia",
+            "project_join_date",
+            "joining_date",
+            "start_date",
+            "data_rozpoczecia",
+        ];
+        const autoFillState = new Map();
+        let autoFilling = false;
+
+        function normalizeName(value) {
+            return String(value || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "_")
+                .replace(/^_+|_+$/g, "");
+        }
+
+        function selectorForName(fieldName) {
+            const escaped = window.CSS && CSS.escape
+                ? CSS.escape(fieldName)
+                : String(fieldName).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+            return `[name="${escaped}"]`;
+        }
+
+        function matchesAlias(fieldName, aliases) {
+            const normalized = normalizeName(fieldName);
+            return aliases.map(normalizeName).includes(normalized);
+        }
+
+        function fieldNames() {
+            return Array.from(document.querySelectorAll("[name]"))
+                .map(el => el.name)
+                .filter((name, index, names) => name && names.indexOf(name) === index);
+        }
+
+        function findFieldName(aliases, preferredType) {
+            const names = fieldNames();
+            const byAlias = names.find(name => {
+                const field = document.querySelector(selectorForName(name));
+                return matchesAlias(name, aliases) && (!preferredType || field?.dataset.fieldType === preferredType);
+            });
+            if (byAlias) return byAlias;
+            if (preferredType) {
+                const byType = names.find(name => document.querySelector(selectorForName(name))?.dataset.fieldType === preferredType);
+                if (byType) return byType;
+            }
+            return names.find(name => matchesAlias(name, aliases));
+        }
+
+        function currentValue(fieldName) {
+            const checked = document.querySelector(`${selectorForName(fieldName)}:checked`);
+            if (checked) return checked.value;
+            const field = document.querySelector(selectorForName(fieldName));
+            return field ? field.value : "";
+        }
+
+        function canAutoFill(fieldName) {
+            return Boolean(fieldName);
+        }
+
+        function rememberAutoValue(fieldName, value) {
+            autoFillState.set(fieldName, { value: String(value), userEdited: false });
+        }
+
+        function mirrorId(fieldName) {
+            return `pesel-autofill-${normalizeName(fieldName)}`;
+        }
+
+        function ensureSubmitMirror(fieldName, value) {
+            let mirror = document.getElementById(mirrorId(fieldName));
+            if (!mirror) {
+                mirror = document.createElement("input");
+                mirror.type = "hidden";
+                mirror.id = mirrorId(fieldName);
+                mirror.name = fieldName;
+                mirror.dataset.peselAutofillMirror = "true";
+                document.querySelector(".dynamic-form")?.appendChild(mirror);
+            }
+            mirror.value = value;
+        }
+
+        function removeSubmitMirror(fieldName) {
+            document.getElementById(mirrorId(fieldName))?.remove();
+        }
+
+        function lockAutoField(fieldName, value) {
+            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
+                .filter(field => field.dataset.peselAutofillMirror !== "true");
+            if (!fields.length) return;
+            const requiresMirror = fields.some(field => (
+                field.tagName === "SELECT" ||
+                field.type === "radio" ||
+                field.type === "checkbox"
+            ));
+            fields.forEach(field => {
+                if (!field.dataset.peselAutoLocked) {
+                    field.dataset.peselWasReadonly = field.readOnly ? "true" : "false";
+                    field.dataset.peselWasDisabled = field.disabled ? "true" : "false";
+                }
+                field.dataset.peselAutoLocked = "true";
+                if (field.tagName === "SELECT" || field.type === "radio" || field.type === "checkbox") {
+                    field.disabled = true;
+                } else {
+                    field.readOnly = true;
+                }
+            });
+            if (requiresMirror) {
+                ensureSubmitMirror(fieldName, value);
+            } else {
+                removeSubmitMirror(fieldName);
+            }
+        }
+
+        function unlockAutoField(fieldName) {
+            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
+                .filter(field => field.dataset.peselAutofillMirror !== "true");
+            fields.forEach(field => {
+                if (field.dataset.peselAutoLocked !== "true") return;
+                field.readOnly = field.dataset.peselWasReadonly === "true";
+                field.disabled = field.dataset.peselWasDisabled === "true";
+                delete field.dataset.peselAutoLocked;
+                delete field.dataset.peselWasReadonly;
+                delete field.dataset.peselWasDisabled;
+            });
+            removeSubmitMirror(fieldName);
+        }
+
+        function emitFieldChange(fieldName) {
+            document.querySelectorAll(selectorForName(fieldName)).forEach(el => {
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+            });
+        }
+
+        function setSimpleField(fieldName, value) {
+            if (!fieldName || !canAutoFill(fieldName)) return;
+            const field = document.querySelector(selectorForName(fieldName));
+            if (!field) return;
+            autoFilling = true;
+            unlockAutoField(fieldName);
+            field.value = value;
+            rememberAutoValue(fieldName, value);
+            emitFieldChange(fieldName);
+            lockAutoField(fieldName, value);
+            autoFilling = false;
+        }
+
+        function normalizedGender(value) {
+            const normalized = normalizeName(value);
+            if (["kobieta", "k", "female", "woman"].includes(normalized)) return "kobieta";
+            if (["mezczyzna", "m", "male", "man"].includes(normalized)) return "mezczyzna";
+            return normalized;
+        }
+
+        function setGenderField(fieldName, gender) {
+            if (!fieldName || !canAutoFill(fieldName)) return;
+            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
+            if (!fields.length) return;
+            const expected = normalizedGender(gender);
+            let submittedValue = gender;
+            autoFilling = true;
+            unlockAutoField(fieldName);
+            if (fields[0].type === "radio" || fields[0].type === "checkbox") {
+                fields.forEach(field => {
+                    field.checked = normalizedGender(field.value) === expected;
+                    if (field.checked) submittedValue = field.value;
+                });
+                rememberAutoValue(fieldName, submittedValue);
+            } else if (fields[0].tagName === "SELECT") {
+                const option = Array.from(fields[0].options).find(item => normalizedGender(item.value) === expected);
+                if (option) {
+                    fields[0].value = option.value;
+                    submittedValue = option.value;
+                    rememberAutoValue(fieldName, submittedValue);
+                }
+            } else {
+                fields[0].value = gender;
+                rememberAutoValue(fieldName, submittedValue);
+            }
+            emitFieldChange(fieldName);
+            lockAutoField(fieldName, submittedValue);
+            autoFilling = false;
+        }
+
+        function clearAutoFields() {
+            autoFillState.forEach((state, fieldName) => {
+                const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
+                autoFilling = true;
+                unlockAutoField(fieldName);
+                fields.forEach(field => {
+                    if (field.dataset.peselAutofillMirror === "true") return;
+                    if (field.type === "radio" || field.type === "checkbox") {
+                        field.checked = false;
+                    } else {
+                        field.value = "";
+                    }
+                });
+                rememberAutoValue(fieldName, "");
+                emitFieldChange(fieldName);
+                autoFilling = false;
+            });
+        }
+
+        function validatePeselChecksum(pesel) {
+            if (!/^\d{11}$/.test(pesel)) return false;
+            const weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
+            const sum = weights.reduce((total, weight, index) => total + Number(pesel[index]) * weight, 0);
+            return ((10 - (sum % 10)) % 10) === Number(pesel[10]);
+        }
+
+        function parseDateValue(value) {
+            const text = String(value || "").trim();
+            let match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (match) {
+                return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
+            }
+            match = text.match(/^(\d{2})[.-](\d{2})[.-](\d{4})$/);
+            if (match) {
+                return validDate(Number(match[3]), Number(match[2]), Number(match[1]));
+            }
+            return null;
+        }
+
+        function validDate(year, month, day) {
+            const parsed = new Date(year, month - 1, day);
+            if (
+                parsed.getFullYear() !== year ||
+                parsed.getMonth() !== month - 1 ||
+                parsed.getDate() !== day
+            ) {
+                return null;
+            }
+            return parsed;
+        }
+
+        function ageReferenceDate() {
+            const joinDateName = findFieldName(projectJoinDateAliases);
+            if (!joinDateName) return new Date();
+            const parsed = parseDateValue(currentValue(joinDateName));
+            return parsed || new Date();
+        }
+
+        function parsePesel(pesel, referenceDate) {
+            if (!validatePeselChecksum(pesel)) return null;
+            const encodedMonth = Number(pesel.slice(2, 4));
+            const day = Number(pesel.slice(4, 6));
+            const year = Number(pesel.slice(0, 2));
+            const ranges = [
+                { start: 1, end: 12, century: 1900, offset: 0 },
+                { start: 21, end: 32, century: 2000, offset: 20 },
+                { start: 41, end: 52, century: 2100, offset: 40 },
+                { start: 61, end: 72, century: 2200, offset: 60 },
+                { start: 81, end: 92, century: 1800, offset: 80 },
+            ];
+            const range = ranges.find(item => encodedMonth >= item.start && encodedMonth <= item.end);
+            if (!range) return null;
+            const month = encodedMonth - range.offset;
+            const birthDate = new Date(range.century + year, month - 1, day);
+            if (
+                birthDate.getFullYear() !== range.century + year ||
+                birthDate.getMonth() !== month - 1 ||
+                birthDate.getDate() !== day
+            ) {
+                return null;
+            }
+            const today = referenceDate || new Date();
+            let age = today.getFullYear() - birthDate.getFullYear();
+            if (
+                today.getMonth() < birthDate.getMonth() ||
+                (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+            ) {
+                age -= 1;
+            }
+            const yyyy = String(birthDate.getFullYear()).padStart(4, "0");
+            const mm = String(birthDate.getMonth() + 1).padStart(2, "0");
+            const dd = String(birthDate.getDate()).padStart(2, "0");
+            return {
+                dateIso: `${yyyy}-${mm}-${dd}`,
+                dateText: `${dd}.${mm}.${yyyy}`,
+                gender: Number(pesel[9]) % 2 ? "Mężczyzna" : "Kobieta",
+                age: String(age),
+            };
+        }
+
+        function ensurePeselError(peselField) {
+            const row = peselField.closest(".form-row");
+            if (!row) return null;
+            let error = row.querySelector(".pesel-client-error");
+            if (!error) {
+                error = document.createElement("div");
+                error.className = "error-text pesel-client-error";
+                error.hidden = true;
+                row.appendChild(error);
+            }
+            return error;
+        }
+
+        function showPeselError(peselField, visible) {
+            const message = "Podany numer PESEL jest nieprawidłowy.";
+            const error = ensurePeselError(peselField);
+            if (error) {
+                error.textContent = visible ? message : "";
+                error.hidden = !visible;
+            }
+            peselField.setCustomValidity(visible ? message : "");
+        }
+
+        function updateFromPesel() {
+            const peselName = findFieldName(peselAliases, "pesel");
+            if (!peselName) return;
+            const peselField = document.querySelector(selectorForName(peselName));
+            const value = peselField.value.trim();
+            if (!value) {
+                showPeselError(peselField, true);
+                clearAutoFields();
+                return;
+            }
+            const peselData = parsePesel(value, ageReferenceDate());
+            if (!peselData) {
+                showPeselError(peselField, true);
+                clearAutoFields();
+                return;
+            }
+            showPeselError(peselField, false);
+
+            const birthDateName = findFieldName(birthDateAliases);
+            const genderName = findFieldName(genderAliases);
+            const ageName = findFieldName(ageAliases);
+            const birthDateField = birthDateName ? document.querySelector(selectorForName(birthDateName)) : null;
+            if (birthDateField) {
+                setSimpleField(
+                    birthDateName,
+                    birthDateField.type === "date" ? peselData.dateIso : peselData.dateText
+                );
+            }
+            setGenderField(genderName, peselData.gender);
+            setSimpleField(ageName, peselData.age);
+        }
+
+        const peselName = findFieldName(peselAliases, "pesel");
+        if (peselName) {
+            document.querySelectorAll(selectorForName(peselName)).forEach(el => {
+                el.addEventListener("input", updateFromPesel);
+                el.addEventListener("change", updateFromPesel);
+                el.addEventListener("blur", updateFromPesel);
+            });
+            updateFromPesel();
+        }
 
         updateVisibility();
     });

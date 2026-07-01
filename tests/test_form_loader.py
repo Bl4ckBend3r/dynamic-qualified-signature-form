@@ -1,10 +1,15 @@
+from datetime import date
+
 import pytest
 
 from form_loader import (
+    apply_pesel_derived_values,
     build_consents_view,
     build_submission_view,
+    calculate_age,
     extract_submission_data,
     normalize_form_definition,
+    parse_pesel,
     validate_form_definition,
     validate_pesel,
     validate_submission,
@@ -17,7 +22,7 @@ class RequestForm(dict):
 
 
 def make_valid_identifier():
-    digits = [9, 0, 0, 1, 0, 1, 1, 2, 3, 4]
+    digits = [9, 0, 0, 1, 0, 1, 1, 2, 3, 5]
     weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]
     control = (10 - (sum(d * w for d, w in zip(digits, weights)) % 10)) % 10
     return "".join(map(str, [*digits, control]))
@@ -29,16 +34,77 @@ def make_invalid_identifier():
     return value[:-1] + replacement
 
 
+def with_checksum(first_ten_digits):
+    weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]
+    control = (10 - (sum(int(digit) * weight for digit, weight in zip(first_ten_digits, weights)) % 10)) % 10
+    return f"{first_ten_digits}{control}"
+
+
+def make_pesel(birth_date, serial="123", gender_digit="4"):
+    month_offsets = {
+        1800: 80,
+        1900: 0,
+        2000: 20,
+        2100: 40,
+        2200: 60,
+    }
+    century = birth_date.year // 100 * 100
+    encoded_month = birth_date.month + month_offsets[century]
+    digits = f"{birth_date.year % 100:02d}{encoded_month:02d}{birth_date.day:02d}{serial}{gender_digit}"
+    weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]
+    control = (10 - (sum(int(digit) * weight for digit, weight in zip(digits, weights)) % 10)) % 10
+    return f"{digits}{control}"
+
+
 def test_validate_pesel_accepts_valid_number():
     assert validate_pesel(make_valid_identifier()) is True
+
+
+def test_parse_pesel_returns_birth_date_and_gender_for_woman():
+    pesel = make_pesel(date(1990, 1, 1), gender_digit="4")
+
+    data = parse_pesel(pesel, today=date(2026, 6, 30))
+
+    assert data["birth_date"] == date(1990, 1, 1)
+    assert data["gender"] == "Kobieta"
+
+
+def test_parse_pesel_returns_birth_date_and_gender_for_man():
+    pesel = make_pesel(date(1990, 1, 1), gender_digit="5")
+
+    data = parse_pesel(pesel, today=date(2026, 6, 30))
+
+    assert data["birth_date"] == date(1990, 1, 1)
+    assert data["gender"] == "Mężczyzna"
 
 
 def test_validate_pesel_rejects_invalid_checksum():
     assert validate_pesel(make_invalid_identifier()) is False
 
 
+def test_validate_pesel_rejects_invalid_length():
+    assert validate_pesel("1234567890") is False
+
+
+def test_validate_pesel_rejects_invalid_birth_date():
+    assert validate_pesel(with_checksum("9002311234")) is False
+
+
 def test_validate_pesel_rejects_non_numeric_value():
     assert validate_pesel("abcdefghijk") is False
+
+
+def test_parse_pesel_handles_birth_date_after_2000():
+    pesel = make_pesel(date(2002, 7, 8), gender_digit="4")
+
+    data = parse_pesel(pesel, today=date(2026, 6, 30))
+
+    assert data["birth_date"] == date(2002, 7, 8)
+
+
+def test_calculate_age_uses_birthday_in_current_year():
+    assert calculate_age(date(2000, 7, 1), date(2026, 6, 30)) == 25
+    assert calculate_age(date(2000, 6, 30), date(2026, 6, 30)) == 26
 
 
 def test_form_definition_requires_title():
@@ -76,6 +142,48 @@ def test_validate_submission_accepts_valid_data(form_definition, valid_form_data
     errors = validate_submission(form_definition, valid_form_data)
 
     assert errors == {}
+
+
+def test_apply_pesel_derived_values_overwrites_birth_date(form_definition, valid_form_data):
+    payload = {**valid_form_data, "pesel": make_pesel(date(2002, 7, 8), gender_digit="4"), "data_urodzenia": "1999-01-01"}
+
+    normalized = apply_pesel_derived_values(form_definition, payload, today=date(2026, 6, 30))
+
+    assert normalized["data_urodzenia"] == "2002-07-08"
+
+
+def test_apply_pesel_derived_values_overwrites_gender(form_definition, valid_form_data):
+    payload = {**valid_form_data, "pesel": make_pesel(date(1990, 1, 1), gender_digit="4"), "plec": "Mężczyzna"}
+
+    normalized = apply_pesel_derived_values(form_definition, payload, today=date(2026, 6, 30))
+
+    assert normalized["plec"] == "Kobieta"
+
+
+def test_apply_pesel_derived_values_overwrites_age(form_definition, valid_form_data):
+    payload = {**valid_form_data, "pesel": make_pesel(date(2000, 7, 1), gender_digit="5"), "wiek": "99"}
+
+    normalized = apply_pesel_derived_values(form_definition, payload, today=date(2026, 6, 30))
+
+    assert normalized["wiek"] == "25"
+
+
+def test_validate_submission_rejects_birth_date_inconsistent_with_pesel(form_definition, valid_form_data):
+    valid_form_data["pesel"] = make_pesel(date(1990, 1, 1), gender_digit="5")
+    valid_form_data["data_urodzenia"] = "1991-01-01"
+
+    errors = validate_submission(form_definition, valid_form_data)
+
+    assert errors["data_urodzenia"] == "Data urodzenia jest niezgodna z numerem PESEL."
+
+
+def test_validate_submission_rejects_gender_inconsistent_with_pesel(form_definition, valid_form_data):
+    valid_form_data["pesel"] = make_pesel(date(1990, 1, 1), gender_digit="5")
+    valid_form_data["plec"] = "Kobieta"
+
+    errors = validate_submission(form_definition, valid_form_data)
+
+    assert errors["plec"] == "Płeć jest niezgodna z numerem PESEL."
 
 
 def test_validate_submission_requires_required_fields(form_definition, valid_form_data):

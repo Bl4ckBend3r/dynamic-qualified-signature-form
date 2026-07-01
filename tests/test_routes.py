@@ -20,6 +20,16 @@ def test_form_page_loads(client):
     assert 'name="pesel"' in html
 
 
+def test_form_page_pesel_autofill_locks_dependent_fields(client):
+    response = client.get("/form/formularz_zgloszeniowy")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "lockAutoField" in html
+    assert 'mirror.type = "hidden"' in html
+    assert 'el.addEventListener("blur", updateFromPesel)' in html
+
+
 def test_initial_form_hides_after_acceptance_fields(client, app):
     app.testing_storage.form_definition = {
         **app.testing_storage.form_definition,
@@ -104,6 +114,27 @@ def test_submit_valid_form_generates_pdf_and_csv_row(client, app, valid_form_dat
     assert storage.csv_rows[0]["imie"] == valid_form_data["imie"]
     assert storage.csv_rows[0]["pdf_filename"].endswith(".pdf")
     assert storage.saved_pdfs
+
+
+def test_submit_overwrites_tampered_pesel_derived_values(client, app, valid_form_data):
+    tampered = {
+        **valid_form_data,
+        "pesel": "90010112356",
+        "data_urodzenia": "2001-02-03",
+        "plec": "Kobieta",
+        "wiek": "7",
+    }
+
+    response = client.post("/submit/formularz_zgloszeniowy", data=tampered)
+
+    assert response.status_code == 200
+    row = app.testing_storage.csv_rows[0]
+    assert row["data_urodzenia"] == "1990-01-01"
+    assert row["plec"] == "Mężczyzna"
+    assert row["wiek"] == "36"
+    assert row["data_json"]["data_urodzenia"] == "1990-01-01"
+    assert row["data_json"]["plec"] == "Mężczyzna"
+    assert row["data_json"]["wiek"] == "36"
 
 
 def test_submit_creates_submission_through_service(client, app, valid_form_data, monkeypatch):

@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from form_loader import (
     FIELD_STAGE_AFTER_ACCEPTANCE,
+    apply_pesel_derived_values,
     extract_submission_data,
     form_definition_for_stage,
     has_additional_fields_after_acceptance,
@@ -78,6 +79,7 @@ class DeclarationFlowService:
     ) -> DeclarationFlowResult:
         declaration_definition = self.build_declaration_form_definition(declaration_config)
         declaration_data = extract_submission_data(declaration_definition, form_data)
+        declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values = {**submission["row"], **declaration_data}
         errors = validate_submission(declaration_definition, declaration_data)
         training_field = get_training_selection_field(form_config)
@@ -132,6 +134,7 @@ class DeclarationFlowService:
     ) -> DeclarationFlowResult:
         additional_definition = self.build_additional_fields_definition(form_config)
         additional_data = extract_submission_data(additional_definition, form_data)
+        additional_data = apply_pesel_derived_values(additional_definition, additional_data)
         errors = validate_submission(additional_definition, additional_data)
         values = {**submission["row"], **additional_data}
         if errors:

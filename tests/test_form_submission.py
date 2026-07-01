@@ -2,7 +2,7 @@ FORM_URL = "/submit/formularz_zgloszeniowy"
 
 
 def _prepare(data):
-    data["pe" + "sel"] = "900101123" + "49"[-2:]
+    data["pe" + "sel"] = "90010112356"
     return data
 
 

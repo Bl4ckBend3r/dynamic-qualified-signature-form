@@ -1,7 +1,8 @@
 import json
 import re
+import unicodedata
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +45,20 @@ DEFAULT_SIGNATURE_CONFIG = {
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TEL_REGEX = re.compile(r"^[0-9+\s\-()]{7,20}$")
 PESEL_REGEX = re.compile(r"^\d{11}$")
+PESEL_ERROR_MESSAGE = "Podany numer PESEL jest nieprawidłowy."
+
+PESEL_ALIASES = {"pesel"}
+BIRTH_DATE_ALIASES = {"data_urodzenia", "birth_date", "date_of_birth"}
+GENDER_ALIASES = {"plec", "płeć", "gender"}
+AGE_ALIASES = {"wiek", "age"}
+PROJECT_JOIN_DATE_ALIASES = {
+    "data_przystapienia",
+    "data_przystąpienia",
+    "project_join_date",
+    "joining_date",
+    "start_date",
+    "data_rozpoczecia",
+}
 
 
 def build_consents_view(
@@ -349,7 +364,7 @@ def validate_submission(
             errors[field_name] = "Podaj poprawny numer telefonu."
 
         if field_type == "pesel" and not validate_pesel(value):
-            errors[field_name] = "Podaj poprawny numer PESEL."
+            errors[field_name] = PESEL_ERROR_MESSAGE
 
         if field_type == "number":
             try:
@@ -368,6 +383,7 @@ def validate_submission(
 
     signature_errors = validate_signature_submission(form_definition, submission_data)
     errors.update(signature_errors)
+    errors.update(validate_pesel_consistency(form_definition, submission_data, existing_errors=errors))
 
     return errors
 
@@ -413,14 +429,271 @@ def validate_signature_submission(
     return errors
 
 
+def parse_pesel(pesel: str, *, today: date | None = None) -> Dict[str, Any] | None:
+    birth_date = _birth_date_from_pesel(pesel)
+    if birth_date is None or not _validate_pesel_checksum(pesel):
+        return None
+
+    gender = "Mężczyzna" if int(pesel[9]) % 2 else "Kobieta"
+    reference_date = today or date.today()
+    return {
+        "birth_date": birth_date,
+        "gender": gender,
+        "age": calculate_age(birth_date, reference_date),
+    }
+
+
+def _birth_date_from_pesel(pesel: str) -> date | None:
+    if not PESEL_REGEX.match(pesel):
+        return None
+
+    year = int(pesel[0:2])
+    encoded_month = int(pesel[2:4])
+    day = int(pesel[4:6])
+    century_offsets = {
+        range(1, 13): 1900,
+        range(21, 33): 2000,
+        range(41, 53): 2100,
+        range(61, 73): 2200,
+        range(81, 93): 1800,
+    }
+
+    birth_century = None
+    month = None
+    for encoded_range, century in century_offsets.items():
+        if encoded_month in encoded_range:
+            birth_century = century
+            month = encoded_month - (century - 1900) // 100 * 20
+            if century == 1800:
+                month = encoded_month - 80
+            break
+
+    if birth_century is None or month is None:
+        return None
+
+    try:
+        return date(birth_century + year, month, day)
+    except ValueError:
+        return None
+
+
+def calculate_age(birth_date: date, today: date | None = None) -> int:
+    reference_date = today or date.today()
+    age = reference_date.year - birth_date.year
+    if (reference_date.month, reference_date.day) < (birth_date.month, birth_date.day):
+        age -= 1
+    return age
+
+
+def validate_pesel_consistency(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+    *,
+    existing_errors: Dict[str, str] | None = None,
+) -> Dict[str, str]:
+    errors: Dict[str, str] = {}
+    fields = [
+        field
+        for field in form_definition.get("fields", [])
+        if field.get("type") not in {"section", "static_text"} and field.get("name")
+    ]
+    pesel_field = _find_field(fields, PESEL_ALIASES, preferred_type="pesel")
+    if not pesel_field:
+        return errors
+
+    pesel_name = pesel_field["name"]
+    if existing_errors and pesel_name in existing_errors:
+        return errors
+
+    pesel_value = str(submission_data.get(pesel_name, "") or "").strip()
+    if not pesel_value:
+        return errors
+
+    pesel_data = parse_pesel(
+        pesel_value,
+        today=_resolve_age_reference_date(fields, submission_data),
+    )
+    if not pesel_data:
+        errors[pesel_name] = PESEL_ERROR_MESSAGE
+        return errors
+
+    birth_date_field = _find_field(fields, BIRTH_DATE_ALIASES)
+    if birth_date_field:
+        field_name = birth_date_field["name"]
+        value = str(submission_data.get(field_name, "") or "").strip()
+        if (
+            value
+            and not (existing_errors and field_name in existing_errors)
+            and not _birth_date_matches(value, pesel_data["birth_date"])
+        ):
+            errors[field_name] = "Data urodzenia jest niezgodna z numerem PESEL."
+
+    gender_field = _find_field(fields, GENDER_ALIASES)
+    if gender_field:
+        field_name = gender_field["name"]
+        value = str(submission_data.get(field_name, "") or "").strip()
+        if (
+            value
+            and not (existing_errors and field_name in existing_errors)
+            and not _gender_matches(value, pesel_data["gender"])
+        ):
+            errors[field_name] = "Płeć jest niezgodna z numerem PESEL."
+
+    age_field = _find_field(fields, AGE_ALIASES)
+    if age_field:
+        field_name = age_field["name"]
+        value = str(submission_data.get(field_name, "") or "").strip()
+        if (
+            value
+            and not (existing_errors and field_name in existing_errors)
+            and value != str(pesel_data["age"])
+        ):
+            errors[field_name] = "Wiek jest niezgodny z datą urodzenia wyliczoną z PESEL."
+
+    return errors
+
+
+def apply_pesel_derived_values(
+    form_definition: Dict[str, Any],
+    submission_data: Dict[str, Any],
+    *,
+    today: date | None = None,
+) -> Dict[str, Any]:
+    normalized_data = dict(submission_data)
+    fields = [
+        field
+        for field in form_definition.get("fields", [])
+        if field.get("type") not in {"section", "static_text"} and field.get("name")
+    ]
+    pesel_field = _find_field(fields, PESEL_ALIASES, preferred_type="pesel")
+    if not pesel_field:
+        return normalized_data
+
+    pesel_value = str(normalized_data.get(pesel_field["name"], "") or "").strip()
+    pesel_data = parse_pesel(pesel_value, today=_resolve_age_reference_date(fields, normalized_data, today=today))
+    if not pesel_data:
+        return normalized_data
+
+    birth_date_field = _find_field(fields, BIRTH_DATE_ALIASES)
+    if birth_date_field:
+        normalized_data[birth_date_field["name"]] = _format_birth_date_for_field(
+            birth_date_field,
+            pesel_data["birth_date"],
+        )
+
+    gender_field = _find_field(fields, GENDER_ALIASES)
+    if gender_field:
+        normalized_data[gender_field["name"]] = _format_gender_for_field(gender_field, pesel_data["gender"])
+
+    age_field = _find_field(fields, AGE_ALIASES)
+    if age_field:
+        normalized_data[age_field["name"]] = str(pesel_data["age"])
+
+    return normalized_data
+
+
 def validate_pesel(pesel: str) -> bool:
     if not PESEL_REGEX.match(pesel):
         return False
+    return _birth_date_from_pesel(pesel) is not None and _validate_pesel_checksum(pesel)
 
+
+def _validate_pesel_checksum(pesel: str) -> bool:
     weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]
     checksum = sum(int(pesel[i]) * weights[i] for i in range(10))
     control_digit = (10 - (checksum % 10)) % 10
     return control_digit == int(pesel[10])
+
+
+def _find_field(
+    fields: List[Dict[str, Any]],
+    aliases: set[str],
+    *,
+    preferred_type: str | None = None,
+) -> Dict[str, Any] | None:
+    normalized_aliases = {_normalize_field_name(alias) for alias in aliases}
+    for field in fields:
+        field_name = str(field.get("name") or "")
+        if _normalize_field_name(field_name) in normalized_aliases:
+            if preferred_type is None or field.get("type") == preferred_type:
+                return field
+    if preferred_type:
+        for field in fields:
+            if field.get("type") == preferred_type:
+                return field
+    return None
+
+
+def _normalize_field_name(value: str) -> str:
+    without_accents = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", value.casefold())
+        if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "_", without_accents).strip("_")
+
+
+def _birth_date_matches(value: str, expected: date) -> bool:
+    accepted_values = {
+        expected.strftime("%Y-%m-%d"),
+        expected.strftime("%d.%m.%Y"),
+    }
+    return value in accepted_values
+
+
+def _gender_matches(value: str, expected: str) -> bool:
+    normalized_value = _normalize_field_name(value)
+    normalized_expected = _normalize_field_name(expected)
+    aliases = {
+        "kobieta": {"kobieta", "k", "female", "woman"},
+        "mezczyzna": {"mezczyzna", "m", "male", "man"},
+    }
+    return normalized_value in aliases.get(normalized_expected, {normalized_expected})
+
+
+def _format_birth_date_for_field(field: Dict[str, Any], value: date) -> str:
+    if field.get("type") == "date":
+        return value.isoformat()
+    return value.strftime("%d.%m.%Y")
+
+
+def _format_gender_for_field(field: Dict[str, Any], value: str) -> str:
+    if field.get("type") in {"select", "radio", "checkbox"}:
+        for option in field.get("options", []):
+            option_value = _option_value(option)
+            if _gender_matches(option_value, value):
+                return option_value
+    return value
+
+
+def _option_value(option: Any) -> str:
+    if isinstance(option, dict):
+        return str(option.get("value") or option.get("label") or "").strip()
+    return str(option or "").strip()
+
+
+def _resolve_age_reference_date(
+    fields: List[Dict[str, Any]],
+    submission_data: Dict[str, Any],
+    *,
+    today: date | None = None,
+) -> date | None:
+    join_date_field = _find_field(fields, PROJECT_JOIN_DATE_ALIASES)
+    if not join_date_field:
+        return today
+    parsed = _parse_date_value(str(submission_data.get(join_date_field["name"], "") or "").strip())
+    return parsed or today
+
+
+def _parse_date_value(value: str) -> date | None:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def build_submission_view(

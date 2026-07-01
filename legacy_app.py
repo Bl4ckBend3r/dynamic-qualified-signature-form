@@ -31,10 +31,11 @@ from werkzeug.exceptions import HTTPException
 
 from config import Config
 from form_loader import (
-    validate_submission,
-    extract_submission_data,
-    build_submission_view,
+    apply_pesel_derived_values,
     build_consents_view,
+    build_submission_view,
+    extract_submission_data,
+    validate_submission,
 )
 from pdf_generator import generate_pdf
 from signature_verifier import verify_signed_pdf
@@ -619,6 +620,7 @@ def submit(slug: str):
 
     submission_id = str(uuid4())
     submission_data = extract_submission_data(form_definition, request.form)
+    submission_data = apply_pesel_derived_values(form_definition, submission_data)
     submission_data.update(
         build_initial_process_fields(
             declaration_required=is_document_enabled(form_definition, DocumentType.DECLARATION),
@@ -830,6 +832,7 @@ def declaration_form(slug: str, submission_id: str):
 
     if request.method == "POST":
         declaration_data = extract_submission_data(declaration_definition, request.form)
+        declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values.update(declaration_data)
         errors = validate_submission(declaration_definition, declaration_data)
         training_field = get_training_selection_field(form_definition)

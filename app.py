@@ -6,9 +6,10 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, current_app
+from flask import Flask, current_app, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import Config
+from config import Config, normalize_app_base_path
 from form_loader import validate_submission
 from routes.api import bp as api_bp
 from routes.documents import bp as documents_bp
@@ -28,6 +29,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_object or Config)
     _apply_runtime_env_overrides(app, enabled=config_object is None)
+    _configure_reverse_proxy(app)
     _validate_config(app)
     _validate_strict_mode_config(app)
     if os.getenv("TEMP_DIR"):
@@ -61,6 +63,16 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
         app.config["AUTO_CREATE_DB_SCHEMA"] = os.getenv(
             "AUTO_CREATE_DB_SCHEMA", "false"
         ).strip().lower() in {"1", "true", "yes", "tak", "on"}
+    if any(name in os.environ for name in ("APP_BASE_PATH", "APPLICATION_ROOT", "SCRIPT_NAME")):
+        app.config["APP_BASE_PATH"] = normalize_app_base_path(
+            os.getenv("APP_BASE_PATH")
+            or os.getenv("APPLICATION_ROOT")
+            or os.getenv("SCRIPT_NAME")
+            or ""
+        )
+        app.config["APPLICATION_ROOT"] = app.config["APP_BASE_PATH"] or "/"
+    if "PROXY_FIX" in os.environ:
+        app.config["PROXY_FIX"] = os.getenv("PROXY_FIX", "false").strip().lower() in {"1", "true", "yes", "tak", "on"}
     for name in (
         "STRICT_DOCUMENT_METADATA_READ",
         "STRICT_WORKFLOW_HISTORY_READ",
@@ -69,6 +81,12 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
     ):
         if name in os.environ:
             app.config[name] = os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "tak", "on"}
+
+
+def _configure_reverse_proxy(app: Flask) -> None:
+    if not app.config.get("PROXY_FIX"):
+        return
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 
 def _validate_config(app: Flask) -> None:
@@ -170,7 +188,14 @@ def register_template_filters(app: Flask) -> None:
 
 
 def inject_globals():
-    return {"app_name": current_app.config["APP_NAME"]}
+    configured_base_path = normalize_app_base_path(current_app.config.get("APP_BASE_PATH"))
+    request_base_path = normalize_app_base_path(request.script_root)
+    app_base_path = configured_base_path or request_base_path
+    return {
+        "app_name": current_app.config["APP_NAME"],
+        "app_base_path": app_base_path,
+        "APP_BASE_PATH": app_base_path,
+    }
 
 
 def get_services():

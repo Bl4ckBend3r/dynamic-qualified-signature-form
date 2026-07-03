@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import shutil
+import subprocess
 
 
 def test_base_template_has_per_template_asset_blocks():
@@ -53,6 +56,59 @@ def test_documents_to_sign_frontend_receives_acceptance_status_url_template():
     assert "data-acceptance-status-url-template" in template
     assert "url_for('api.api_acceptance_status'" in template
     assert "buildAcceptanceStatusUrl" in script
+
+
+def test_documents_to_sign_frontend_builds_api_urls_with_base_path():
+    node = shutil.which("node")
+    if not node:
+        return
+
+    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    runner = f"""
+const vm = require("vm");
+const elements = {{
+  "submission_id": {{ value: "", dataset: {{ acceptanceStatusUrlTemplate: "/api/submissions/__SUBMISSION_ID__/acceptance-status" }}, addEventListener() {{}} }},
+  "acceptance-status": null,
+  "submission-status-tiles": null,
+  "documents-section": null,
+  "generate-button": null,
+  "akceptacja": null,
+  "sign-documents-form": null,
+  "process-completed-box": null,
+}};
+global.window = {{
+  APP_BASE_PATH: "/aplikacja",
+  location: {{ pathname: "/aplikacja/do-podpisania" }},
+  setTimeout() {{}},
+}};
+global.document = {{
+  getElementById(id) {{ return elements[id] || null; }},
+  querySelectorAll() {{ return []; }},
+}};
+vm.runInThisContext({json.dumps(script)});
+console.log(JSON.stringify({{
+  localUrl: (window.APP_BASE_PATH = "", buildApiUrl("/api/submissions/abc/acceptance-status")),
+  prefixedUrl: (window.APP_BASE_PATH = "/aplikacja", buildApiUrl("/api/submissions/abc/acceptance-status")),
+  prefixedRelativeUrl: buildApiUrl("api/submissions/abc/acceptance-status"),
+  alreadyPrefixedUrl: buildApiUrl("/aplikacja/api/submissions/abc/acceptance-status"),
+  doubleSlashUrl: buildApiUrl("/api//submissions//abc//acceptance-status"),
+  acceptanceStatusUrl: buildAcceptanceStatusUrl("abc 123"),
+}}));
+"""
+    completed = subprocess.run(
+        [node, "-e", runner],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    urls = json.loads(completed.stdout)
+
+    assert urls["localUrl"] == "/api/submissions/abc/acceptance-status"
+    assert urls["prefixedUrl"] == "/aplikacja/api/submissions/abc/acceptance-status"
+    assert urls["prefixedRelativeUrl"] == "/aplikacja/api/submissions/abc/acceptance-status"
+    assert urls["alreadyPrefixedUrl"] == "/aplikacja/api/submissions/abc/acceptance-status"
+    assert urls["doubleSlashUrl"] == "/aplikacja/api/submissions/abc/acceptance-status"
+    assert urls["acceptanceStatusUrl"] == "/aplikacja/api/submissions/abc%20123/acceptance-status"
 
 
 def test_training_selection_keeps_full_width_layout():

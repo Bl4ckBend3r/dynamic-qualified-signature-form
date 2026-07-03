@@ -9,15 +9,76 @@ const processCompletedBox = document.getElementById("process-completed-box");
 
 let timeoutId = null;
 
+function normalizeBasePath(value) {
+    const path = String(value || "").trim();
+
+    if (!path || path === "/") {
+        return "";
+    }
+
+    return `/${path.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function detectBasePathFromLocation() {
+    const pathname = window.location ? window.location.pathname || "" : "";
+    const segments = pathname.split("/").filter(Boolean);
+    const knownRootRoutes = new Set([
+        "additional-fields",
+        "admin",
+        "agreements",
+        "api",
+        "declaration",
+        "do-podpisania",
+        "downloads",
+        "upload-declaration-signed",
+        "upload-signed",
+    ]);
+
+    if (!segments.length || knownRootRoutes.has(segments[0])) {
+        return "";
+    }
+
+    return normalizeBasePath(segments[0]);
+}
+
+function getBasePath() {
+    return normalizeBasePath(window.APP_BASE_PATH) || detectBasePathFromLocation();
+}
+
+function buildAppUrl(path) {
+    let url = String(path || "");
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) {
+        return url;
+    }
+
+    if (!url.startsWith("/")) {
+        url = `/${url}`;
+    }
+
+    url = url.replace(/\/{2,}/g, "/");
+
+    const basePath = getBasePath();
+    if (!basePath || url === basePath || url.startsWith(`${basePath}/`)) {
+        return url;
+    }
+
+    return `${basePath}${url}`;
+}
+
+function buildApiUrl(path) {
+    return buildAppUrl(String(path || "").replace(/^\/{2,}/, "/"));
+}
+
 function buildAcceptanceStatusUrl(submissionId) {
     const encodedSubmissionId = encodeURIComponent(submissionId);
     const template = submissionInput ? submissionInput.dataset.acceptanceStatusUrlTemplate || "" : "";
 
     if (template.includes("__SUBMISSION_ID__")) {
-        return template.replace("__SUBMISSION_ID__", encodedSubmissionId);
+        return buildApiUrl(template.replace("__SUBMISSION_ID__", encodedSubmissionId));
     }
 
-    return `/api/submissions/${encodedSubmissionId}/acceptance-status`;
+    return buildApiUrl(`/api/submissions/${encodedSubmissionId}/acceptance-status`);
 }
 
 function isRejectedStatus(data) {

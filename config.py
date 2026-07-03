@@ -15,11 +15,26 @@ def _env_list(name: str) -> list[str]:
     return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
 
 
+def normalize_app_base_path(value: str | None) -> str:
+    value = (value or "").strip()
+    if not value or value == "/":
+        return ""
+    return "/" + value.strip("/")
+
+
 class Config:
     APP_NAME = "Formularze Lubuskie"
     ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+    APP_BASE_PATH = normalize_app_base_path(
+        os.getenv("APP_BASE_PATH")
+        or os.getenv("APPLICATION_ROOT")
+        or os.getenv("SCRIPT_NAME")
+        or ""
+    )
+    APPLICATION_ROOT = APP_BASE_PATH or "/"
+    PROXY_FIX = _env_bool("PROXY_FIX", "false")
 
     BASE_DIR = Path(__file__).resolve().parent
     TEMPLATE_DIR = BASE_DIR / "templates"

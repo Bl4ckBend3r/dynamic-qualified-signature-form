@@ -168,7 +168,7 @@
                         {% if result.form_slug and result.submission_id %}
                             <a
                                 class="btn-primary"
-                                href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                                href="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id) }}"
                             >
                                 Wypełnij deklarację
                             </a>
@@ -179,7 +179,7 @@
                                 class="btn-primary"
                                 href="{{ result.declaration_url }}"
                                 data-download-replace-trigger
-                                data-edit-url="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                                data-edit-url="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id) }}"
                                 data-edit-title="Edytuj deklarację"
                             >
                                 Pobierz deklarację PDF

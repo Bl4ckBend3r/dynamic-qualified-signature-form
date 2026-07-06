@@ -128,8 +128,8 @@ class DocumentService:
             pdf_image_url=self.resolve_pdf_image_url(form_config),
             document_type=document_id,
         )
-        self._add_collection_context(context, render_row)
         context.update(context_extra or {})
+        self._add_collection_context(context, render_row)
         document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
@@ -182,7 +182,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
-        items = parse_json_list(row.get(collection_field))
+        items = normalize_selected_items(row.get(collection_field))
         if not items:
             raise RuntimeError("Nie wybrano elementów do wygenerowania dokumentów.")
 
@@ -221,8 +221,8 @@ class DocumentService:
                 pdf_image_url=self.resolve_pdf_image_url(form_config),
                 document_type=document_id,
             )
-            self._add_collection_context(context, render_row)
             context.update(render_row)
+            self._add_collection_context(context, render_row)
             document_bytes = self.pdf_render_service.render_document_pdf_bytes(
                 app=current_app._get_current_object(),
                 template_name="declaration_template.html",
@@ -611,11 +611,12 @@ class DocumentService:
         )
 
     def _add_collection_context(self, context: dict, row: Mapping[str, Any]) -> None:
-        selected_trainings = parse_json_list(row.get("selected_trainings"))
+        selected_trainings = normalize_selected_items(row.get("selected_trainings"))
         context["selected_trainings"] = selected_trainings
-        context["training_agreements"] = parse_json_list(row.get("training_agreements"))
+        context["selected_trainings_normalized"] = selected_trainings
+        context["training_agreements"] = normalize_selected_items(row.get("training_agreements"))
         context["selected_trainings_total"] = sum(
-            float(training.get("price") or 0)
+            parse_float(training.get("price"))
             for training in selected_trainings
         )
 
@@ -642,19 +643,69 @@ def sanitize_filename_part(value: Any, fallback: str = "dokument") -> str:
     return text or fallback
 
 
-def parse_json_list(value: str | list | None) -> list[dict]:
+def normalize_selected_items(value: Any) -> list[dict]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return [normalize_selected_item(raw)]
+        return normalize_selected_items(decoded)
+    if isinstance(value, Mapping):
+        return [normalize_selected_item(value)]
     if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
-    raw = str(value or "").strip()
-    if not raw:
-        return []
+        normalized = []
+        for item in value:
+            normalized_item = normalize_selected_item(item)
+            if normalized_item:
+                normalized.append(normalized_item)
+        return normalized
+    return [normalize_selected_item(str(value))]
+
+
+def normalize_selected_item(item: Any) -> dict:
+    if item is None:
+        return {}
+    if isinstance(item, Mapping):
+        normalized = dict(item)
+        fallback = first_non_empty(
+            normalized.get("name"),
+            normalized.get("label"),
+            normalized.get("value"),
+            normalized.get("id"),
+        )
+    else:
+        fallback = str(item or "").strip()
+        normalized = {}
+    if not fallback:
+        return {}
+    normalized.setdefault("name", fallback)
+    normalized.setdefault("label", fallback)
+    normalized.setdefault("value", fallback)
+    return normalized
+
+
+def first_non_empty(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def parse_float(value: Any) -> float:
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [item for item in parsed if isinstance(item, dict)]
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_json_list(value: str | list | None) -> list[dict]:
+    return normalize_selected_items(value)
 
 
 def serialize_json_list(items: list[dict]) -> str:

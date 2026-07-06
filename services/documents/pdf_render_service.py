@@ -83,6 +83,14 @@ class PdfRenderService:
                     )
                 return tmp_pdf_path.read_bytes()
             except Exception as exc:
+                logger = getattr(app, "logger", None)
+                if logger:
+                    logger.exception(
+                        "Blad renderowania PDF: submission_id=%s template_name=%s fields=%s",
+                        context.get("submission_id", ""),
+                        template_name,
+                        summarize_structured_context(context),
+                    )
                 raise PdfRenderError(f"Nie udalo sie wyrenderowac PDF: {exc}") from exc
         finally:
             tmp_pdf_path.unlink(missing_ok=True)
@@ -101,3 +109,22 @@ def generate_document_pdf_bytes(
         template_html=template_html,
         context=context,
     )
+
+
+def summarize_structured_context(context: Mapping[str, Any]) -> dict[str, str]:
+    summary = {}
+    for field_name in ("selected_trainings", "selected_trainings_normalized", "training_agreements"):
+        value = context.get(field_name)
+        summary[field_name] = describe_value_shape(value)
+    return summary
+
+
+def describe_value_shape(value: Any) -> str:
+    if value is None:
+        return "None"
+    if isinstance(value, list):
+        item_types = sorted({type(item).__name__ for item in value})
+        return f"list[{','.join(item_types) or 'empty'}]"
+    if isinstance(value, Mapping):
+        return "dict"
+    return type(value).__name__

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, current_app, request
+from flask import Flask, current_app, has_request_context, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config, normalize_app_base_path
@@ -189,7 +189,7 @@ def register_template_filters(app: Flask) -> None:
 
 def inject_globals():
     configured_base_path = normalize_app_base_path(current_app.config.get("APP_BASE_PATH"))
-    request_base_path = normalize_app_base_path(request.script_root)
+    request_base_path = normalize_app_base_path(request.script_root) if has_request_context() else ""
     app_base_path = configured_base_path or request_base_path
     return {
         "app_name": current_app.config["APP_NAME"],

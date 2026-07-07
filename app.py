@@ -196,7 +196,33 @@ def inject_globals():
         "app_base_path": app_base_path,
         "APP_BASE_PATH": app_base_path,
         "footer_service_documents": footer_service_documents(),
+        "footer_contact": footer_contact(),
     }
+
+
+def footer_contact() -> dict:
+    if not current_app.config.get("DATABASE_URL"):
+        return {}
+    try:
+        from database import create_session_factory
+        from models import ContactPage
+        from services.contact_page_service import default_contact_page, ensure_contact_defaults, normalized_phones
+        from sqlalchemy import select
+
+        with create_session_factory(current_app.config["DATABASE_URL"])() as db:
+            page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()
+            if not page:
+                page = default_contact_page()
+            else:
+                ensure_contact_defaults(page)
+            return {
+                "address": page.address or page.contact_details or "",
+                "email": page.email or "",
+                "phones": normalized_phones(page.phones),
+            }
+    except Exception:
+        current_app.logger.exception("Nie udało się pobrać danych kontaktowych do stopki.")
+        return {}
 
 
 def footer_service_documents() -> list[dict]:

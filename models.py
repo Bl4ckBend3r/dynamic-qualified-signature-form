@@ -413,8 +413,10 @@ class ContactPage(Base):
     title: Mapped[str] = mapped_column(String(255), default="Kontakt", nullable=False)
     content_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
     contact_details: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    address: Mapped[str] = mapped_column(Text, default="", nullable=False)
     email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     phone: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    phones: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
     updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

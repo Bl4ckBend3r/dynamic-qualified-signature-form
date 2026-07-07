@@ -19,6 +19,18 @@ def _table_names() -> set[str]:
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
+def _table_columns(table_name: str) -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return set()
+    return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    if column.name not in _table_columns(table_name):
+        op.add_column(table_name, column)
+
+
 def upgrade() -> None:
     tables = _table_names()
     if "form_regulations" not in tables:
@@ -43,11 +55,38 @@ def upgrade() -> None:
             sa.Column("title", sa.String(255), nullable=False, server_default="Kontakt"),
             sa.Column("content_html", sa.Text(), nullable=False, server_default=""),
             sa.Column("contact_details", sa.Text(), nullable=False, server_default=""),
-            sa.Column("email", sa.String(255), nullable=False, server_default=""),
+            sa.Column("address", sa.Text(), nullable=False, server_default="ul. Podgórna 7\n65-057 Zielona Góra"),
+            sa.Column("email", sa.String(255), nullable=False, server_default="wnioski@lubuskie.pl"),
             sa.Column("phone", sa.String(64), nullable=False, server_default=""),
+            sa.Column("phones", sa.JSON(), nullable=True),
             sa.Column("updated_by_user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         )
+        op.execute(
+            sa.text(
+                "INSERT INTO contact_pages (title, content_html, contact_details, address, email, phone, phones) "
+                "VALUES (:title, :content_html, :contact_details, :address, :email, :phone, :phones)"
+            ).bindparams(
+                sa.bindparam("title", "Kontakt"),
+                sa.bindparam("content_html", ""),
+                sa.bindparam("contact_details", ""),
+                sa.bindparam("address", "ul. Podgórna 7\n65-057 Zielona Góra"),
+                sa.bindparam("email", "wnioski@lubuskie.pl"),
+                sa.bindparam("phone", "+48 68 45 65 590"),
+                sa.bindparam(
+                    "phones",
+                    [
+                        {"label": "tel.", "number": "+48 68 45 65 590"},
+                        {"label": "tel.", "number": "+48 68 45 65 591"},
+                        {"label": "fax", "number": "+48 68 45 65 468"},
+                    ],
+                    type_=sa.JSON(),
+                ),
+            )
+        )
+    else:
+        _add_column_if_missing("contact_pages", sa.Column("address", sa.Text(), nullable=False, server_default=""))
+        _add_column_if_missing("contact_pages", sa.Column("phones", sa.JSON(), nullable=True))
 
     if "service_documents" not in tables:
         op.create_table(

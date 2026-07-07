@@ -9,6 +9,7 @@ from sqlalchemy import select
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
 from models import ContactPage, Form, FormField, FormRegulation, Logo, ServiceDocument
+from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
 from services.nextcloud_storage import NextcloudStorageError
 
@@ -132,6 +133,9 @@ def contact_page():
     if session_factory:
         with session_factory() as db:
             page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()
+            if page:
+                ensure_contact_defaults(page)
+                page.phones = normalized_phones(page.phones)
     return render_template("contact.html", page=page)
 
 

@@ -9,14 +9,23 @@
         {% if page.content_html %}
             <div class="static-text">{{ page.content_html|trusted_html }}</div>
         {% endif %}
-        {% if page.contact_details %}
-            <div class="static-text">{{ page.contact_details|trusted_html }}</div>
+        {% if page.address or page.email or page.phones %}
+            <section class="form-section">
+                <h3>Dane kontaktowe</h3>
+            </section>
         {% endif %}
-        {% if page.email or page.phone %}
+        {% if page.address %}
+            <p>{{ page.address|replace("\n", "<br>")|trusted_html }}</p>
+        {% endif %}
+        {% if page.phones %}
             <p>
-                {% if page.email %}E-mail: <a href="mailto:{{ page.email }}">{{ page.email }}</a><br>{% endif %}
-                {% if page.phone %}Telefon: {{ page.phone }}{% endif %}
+                {% for phone in page.phones %}
+                    {% if phone.label %}{{ phone.label }} {% endif %}{{ phone.number }}{% if not loop.last %}<br>{% endif %}
+                {% endfor %}
             </p>
+        {% endif %}
+        {% if page.email %}
+            <p>E-mail: <a href="mailto:{{ page.email }}">{{ page.email }}</a></p>
         {% endif %}
     {% else %}
         <p>Strona kontaktowa nie została jeszcze skonfigurowana.</p>

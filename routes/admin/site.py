@@ -6,6 +6,7 @@ from flask import abort, current_app, flash, g, redirect, render_template, reque
 from sqlalchemy import select
 
 from models import ContactPage, ServiceDocument
+from services.contact_page_service import default_contact_page, ensure_contact_defaults, phones_from_form
 from services.site_document_service import (
     SERVICE_DOCUMENT_TYPES,
     save_document_upload,
@@ -24,15 +25,17 @@ def contact_page_edit():
     with db_session_factory()() as db:
         page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()
         if not page:
-            page = ContactPage(title="Kontakt")
+            page = default_contact_page()
             db.add(page)
             db.flush()
+        ensure_contact_defaults(page)
         if request.method == "POST":
             page.title = request.form.get("title", "").strip() or "Kontakt"
             page.content_html = request.form.get("content_html", "").strip()
-            page.contact_details = request.form.get("contact_details", "").strip()
+            page.address = request.form.get("address", "").strip()
             page.email = request.form.get("email", "").strip()
-            page.phone = request.form.get("phone", "").strip()
+            page.phones = phones_from_form(request.form.getlist("phone_label"), request.form.getlist("phone_number"))
+            page.phone = page.phones[0]["number"] if page.phones else ""
             page.updated_by_user_id = g.admin_user.id
             db.commit()
             flash("Strona kontaktowa została zaktualizowana.", "success")

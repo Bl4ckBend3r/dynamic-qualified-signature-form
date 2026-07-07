@@ -2089,6 +2089,71 @@ def test_super_admin_can_edit_contact_page_and_regular_admin_cannot(admin_app, a
     assert "Nie masz uprawnień do edycji tej strony." in blocked.get_data(as_text=True)
 
 
+def test_contact_menu_footer_and_multiple_phones(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/site/contact").get_data(as_text=True)
+    assert "Dodaj telefon" in html
+    assert "Usuń telefon" in html
+    assert "Podgląd" in html
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/site/contact",
+        data={
+            "csrf_token": token,
+            "title": "Kontakt",
+            "content_html": "<h2>Treść kontaktowa</h2><script>alert(1)</script><p><strong>Biuro</strong></p>",
+            "address": "ul. Testowa 1\n65-001 Zielona Góra",
+            "email": "kontakt@example.com",
+            "phone_label": ["sekretariat", "infolinia", "fax"],
+            "phone_number": ["111", "222", "333"],
+        },
+    )
+
+    assert response.status_code == 302
+    contact_html = admin_client.get("/kontakt").get_data(as_text=True)
+    assert "Treść kontaktowa" in contact_html
+    assert "alert(1)" not in contact_html
+    assert "sekretariat 111" in contact_html
+    assert "infolinia 222" in contact_html
+    assert "fax 333" in contact_html
+    assert "ul. Testowa 1" in contact_html
+    assert 'href="/kontakt"' in contact_html
+    assert 'class="is-active"' in contact_html
+
+    footer_html = admin_client.get("/").get_data(as_text=True)
+    assert "Strona kontaktowa" not in footer_html
+    assert "sekretariat 111" in footer_html
+    assert "infolinia 222" in footer_html
+    assert "fax 333" in footer_html
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        page = db.query(ContactPage).one()
+        assert page.email == "kontakt@example.com"
+        assert [item["number"] for item in page.phones] == ["111", "222", "333"]
+
+    html = admin_client.get("/admin/site/contact").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        "/admin/site/contact",
+        data={
+            "csrf_token": token,
+            "title": "Kontakt",
+            "content_html": "<p>Po zmianie</p>",
+            "address": "",
+            "email": "",
+            "phone_label": ["sekretariat", ""],
+            "phone_number": ["111", ""],
+        },
+    )
+    assert response.status_code == 302
+    html_after_remove = admin_client.get("/kontakt").get_data(as_text=True)
+    assert "sekretariat 111" in html_after_remove
+    assert "infolinia 222" not in html_after_remove
+    assert "fax 333" not in html_after_remove
+    assert 'href="mailto:' not in html_after_remove
+
+
 def test_service_documents_show_links_in_footer(admin_app, admin_client):
     create_user(admin_app)
     login(admin_client)

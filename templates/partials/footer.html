@@ -36,28 +36,32 @@
         </div>
 
         <div class="site-footer__column site-footer__column--contact">
-            <p>
-                ul. Podgórna 7<br>
-                65-057 Zielona Góra
-            </p>
+            {% if footer_contact.address %}
+                <p>{{ footer_contact.address|replace("\n", "<br>")|trusted_html }}</p>
+            {% endif %}
 
-            <p>
-                tel. +48 68 45 65 590<br>
-                +48 68 45 65 591<br>
-                fax. +48 68 45 65 468
-            </p>
+            {% if footer_contact.phones %}
+                <p>
+                    {% for phone in footer_contact.phones %}
+                        {% if phone.label %}{{ phone.label }} {% endif %}{{ phone.number }}{% if not loop.last %}<br>{% endif %}
+                    {% endfor %}
+                </p>
+            {% endif %}
 
-            <p>
-                e-mail:
-                <a href="mailto:wnioski@lubuskie.pl">wnioski@lubuskie.pl</a>
-            </p>
+            {% if footer_contact.email %}
+                <p>
+                    e-mail:
+                    <a href="mailto:{{ footer_contact.email }}">{{ footer_contact.email }}</a>
+                </p>
+            {% endif %}
 
-            <p>
-                <a href="{{ url_for('public_forms.contact_page') }}">Strona kontaktowa</a>
-                {% for document in footer_service_documents %}
-                    <a href="{{ url_for('public_forms.service_document_page', document_type=document.type) }}">{{ document.title }}</a>
-                {% endfor %}
-            </p>
+            {% if footer_service_documents %}
+                <p>
+                    {% for document in footer_service_documents %}
+                        <a href="{{ url_for('public_forms.service_document_page', document_type=document.type) }}">{{ document.title }}</a>
+                    {% endfor %}
+                </p>
+            {% endif %}
         </div>
     </div>
     <div class="container site-footer__bottom">

@@ -13,24 +13,131 @@
         Tytuł strony
         <input name="title" value="{{ page.title }}" required>
     </label>
-    <label>
-        Treść
-        <textarea name="content_html" rows="10">{{ page.content_html }}</textarea>
-    </label>
-    <label>
-        Dane kontaktowe
-        <textarea name="contact_details" rows="6">{{ page.contact_details }}</textarea>
+
+    <div class="admin-form-wide">
+        <span>Treść</span>
+        <div class="admin-actions contact-editor-toolbar" data-contact-toolbar>
+            <button class="admin-button-secondary" type="button" data-wrap="<h2>|</h2>">Nagłówek</button>
+            <button class="admin-button-secondary" type="button" data-wrap="<p>|</p>">Akapit</button>
+            <button class="admin-button-secondary" type="button" data-wrap="<strong>|</strong>">Pogrubienie</button>
+            <button class="admin-button-secondary" type="button" data-wrap="<em>|</em>">Kursywa</button>
+            <button class="admin-button-secondary" type="button" data-wrap="<ul><li>|</li></ul>">Lista</button>
+            <button class="admin-button-secondary" type="button" data-link>Link</button>
+        </div>
+        <textarea id="contact-html-editor" name="content_html" rows="10">{{ page.content_html }}</textarea>
+        <h2>Podgląd</h2>
+        <div class="static-text" data-contact-preview></div>
+    </div>
+
+    <label class="admin-form-wide">
+        Dane kontaktowe - adres
+        <textarea name="address" rows="4">{{ page.address or page.contact_details }}</textarea>
     </label>
     <label>
         Adres e-mail
         <input type="email" name="email" value="{{ page.email }}">
     </label>
-    <label>
-        Telefon
-        <input name="phone" value="{{ page.phone }}">
-    </label>
+
+    <div class="admin-form-wide">
+        <h2>Dane kontaktowe</h2>
+        <div data-phone-list>
+            {% for phone in page.phones %}
+                <div class="admin-form-grid contact-phone-row">
+                    <label>
+                        Etykieta
+                        <input name="phone_label" value="{{ phone.label }}" placeholder="tel., sekretariat, fax">
+                    </label>
+                    <label>
+                        Numer telefonu
+                        <input name="phone_number" value="{{ phone.number }}">
+                    </label>
+                    <button class="admin-button-secondary" type="button" data-remove-phone>Usuń telefon</button>
+                </div>
+            {% else %}
+                <div class="admin-form-grid contact-phone-row">
+                    <label>
+                        Etykieta
+                        <input name="phone_label" value="" placeholder="tel., sekretariat, fax">
+                    </label>
+                    <label>
+                        Numer telefonu
+                        <input name="phone_number" value="">
+                    </label>
+                    <button class="admin-button-secondary" type="button" data-remove-phone>Usuń telefon</button>
+                </div>
+            {% endfor %}
+        </div>
+        <button class="admin-button-secondary" type="button" data-add-phone>Dodaj telefon</button>
+    </div>
+
     <div class="admin-actions">
         <button class="admin-button" type="submit">Zapisz zmiany</button>
     </div>
 </form>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const editor = document.getElementById("contact-html-editor");
+    const preview = document.querySelector("[data-contact-preview]");
+    const phoneList = document.querySelector("[data-phone-list]");
+
+    function updatePreview() {
+        if (preview && editor) {
+            preview.innerHTML = editor.value;
+        }
+    }
+
+    function wrapSelection(before, after) {
+        if (!editor) return;
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        const selected = editor.value.slice(start, end) || "Tekst";
+        editor.value = editor.value.slice(0, start) + before + selected + after + editor.value.slice(end);
+        editor.focus();
+        updatePreview();
+    }
+
+    document.querySelectorAll("[data-wrap]").forEach(button => {
+        button.addEventListener("click", function () {
+            const parts = button.dataset.wrap.split("|");
+            wrapSelection(parts[0] || "", parts[1] || "");
+        });
+    });
+    document.querySelector("[data-link]")?.addEventListener("click", function () {
+        const url = window.prompt("Adres linku", "https://");
+        if (!url) return;
+        wrapSelection(`<a href="${url}">`, "</a>");
+    });
+    editor?.addEventListener("input", updatePreview);
+    updatePreview();
+
+    function bindPhoneButtons() {
+        document.querySelectorAll("[data-remove-phone]").forEach(button => {
+            button.onclick = function () {
+                const rows = phoneList ? Array.from(phoneList.querySelectorAll(".contact-phone-row")) : [];
+                if (rows.length <= 1) {
+                    button.closest(".contact-phone-row")?.querySelectorAll("input").forEach(input => {
+                        input.value = "";
+                    });
+                    return;
+                }
+                button.closest(".contact-phone-row")?.remove();
+            };
+        });
+    }
+
+    document.querySelector("[data-add-phone]")?.addEventListener("click", function () {
+        const firstRow = phoneList?.querySelector(".contact-phone-row");
+        if (!phoneList || !firstRow) return;
+        const row = firstRow.cloneNode(true);
+        row.querySelectorAll("input").forEach(input => {
+            input.value = "";
+        });
+        phoneList.appendChild(row);
+        bindPhoneButtons();
+    });
+
+    bindPhoneButtons();
+});
+</script>
 {% endblock %}

@@ -1,0 +1,64 @@
+{% extends "admin/base.html" %}
+{% block title %}Dokumenty serwisu{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Super admin</p>
+        <h1>Dokumenty serwisu</h1>
+    </div>
+</div>
+
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>Typ dokumentu</th>
+                <th>Tytuł</th>
+                <th>Plik</th>
+                <th>Ostatnia aktualizacja</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for type_id, default_title in document_types.items() %}
+                {% set document = documents.get(type_id) %}
+                <tr>
+                    <td>{{ default_title }}</td>
+                    <td>{{ document.title if document else "-" }}</td>
+                    <td>
+                        {% if document and document.original_filename %}
+                            <a href="{{ url_for('admin.service_document_admin_file', document_id=document.id) }}">{{ document.original_filename }}</a>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>{{ document.updated_at.strftime("%Y-%m-%d %H:%M") if document and document.updated_at else "-" }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% for type_id, default_title in document_types.items() %}
+    {% set document = documents.get(type_id) %}
+    <form method="post" enctype="multipart/form-data" class="admin-card admin-form-grid">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <input type="hidden" name="document_type" value="{{ type_id }}">
+        <h2>{{ default_title }}</h2>
+        <label>
+            Tytuł
+            <input name="title" value="{{ document.title if document else default_title }}" required>
+        </label>
+        <label>
+            Plik PDF, DOC albo DOCX
+            <input type="file" name="document_file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+        </label>
+        <label>
+            Treść HTML
+            <textarea name="content_html" rows="8">{{ document.content_html if document else "" }}</textarea>
+        </label>
+        <div class="admin-actions">
+            <button class="admin-button" type="submit">Zapisz zmiany</button>
+        </div>
+    </form>
+{% endfor %}
+{% endblock %}

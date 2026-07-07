@@ -1,10 +1,10 @@
 {% extends "admin/base.html" %}
-{% block title %}Zgloszenia{% endblock %}
+{% block title %}Zgłoszenia{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">{{ form.name }}</p>
-        <h1>Zgloszenia formularza</h1>
+        <h1>Zgłoszenia formularza</h1>
     </div>
     <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
 </div>
@@ -46,13 +46,19 @@
 <form id="bulk-mail-form" method="post" action="{{ url_for('admin.submissions_mail_selected', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
 </form>
+<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div data-delete-selection></div>
+</form>
 <div class="admin-bulk-actions">
     <label class="admin-check">
         <input type="checkbox" id="select-all-submissions">
         <span>Zaznacz wszystkie na stronie</span>
     </label>
     <div class="admin-actions">
-        <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyslij mail do zaznaczonych</button>
+        <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyślij mail do zaznaczonych</button>
+        <button class="admin-button-secondary" type="submit" form="bulk-delete-form" data-delete-button hidden disabled>Usuń</button>
         <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
     </div>
 </div>
@@ -80,7 +86,7 @@
                 <tr>
                     <td>
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
-                        <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" form="bulk-mail-form">
+                        <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" data-submission-pk="{{ submission.id }}" form="bulk-mail-form">
                     </td>
                     <td><code>{{ submission.submission_id }}</code></td>
                     <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
@@ -126,9 +132,46 @@
 document.addEventListener("DOMContentLoaded", function () {
     const selectAll = document.getElementById("select-all-submissions");
     const checks = document.querySelectorAll(".submission-check");
+    const deleteForm = document.getElementById("bulk-delete-form");
+    const deleteButton = document.querySelector("[data-delete-button]");
+    const deleteSelection = document.querySelector("[data-delete-selection]");
+
+    function syncDeleteButton() {
+        const selected = Array.from(checks).filter(item => item.checked);
+        if (deleteButton) {
+            deleteButton.hidden = selected.length === 0;
+            deleteButton.disabled = selected.length === 0;
+        }
+        if (deleteSelection) {
+            deleteSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_pk_ids";
+                input.value = item.dataset.submissionPk || "";
+                deleteSelection.appendChild(input);
+            });
+        }
+    }
+
     if (selectAll) {
         selectAll.addEventListener("change", function () {
             checks.forEach(item => { item.checked = selectAll.checked; });
+            syncDeleteButton();
+        });
+    }
+    checks.forEach(item => item.addEventListener("change", syncDeleteButton));
+    syncDeleteButton();
+    if (deleteForm) {
+        deleteForm.addEventListener("submit", function (event) {
+            const selected = Array.from(checks).filter(item => item.checked);
+            if (!selected.length) {
+                event.preventDefault();
+                return;
+            }
+            if (!window.confirm("Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.")) {
+                event.preventDefault();
+            }
         });
     }
 

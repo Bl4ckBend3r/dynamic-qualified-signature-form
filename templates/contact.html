@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title if page else "Kontakt" }}{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>{{ page.title if page else "Kontakt" }}</h2>
+    </div>
+    {% if page %}
+        {% if page.content_html %}
+            <div class="static-text">{{ page.content_html|trusted_html }}</div>
+        {% endif %}
+        {% if page.contact_details %}
+            <div class="static-text">{{ page.contact_details|trusted_html }}</div>
+        {% endif %}
+        {% if page.email or page.phone %}
+            <p>
+                {% if page.email %}E-mail: <a href="mailto:{{ page.email }}">{{ page.email }}</a><br>{% endif %}
+                {% if page.phone %}Telefon: {{ page.phone }}{% endif %}
+            </p>
+        {% endif %}
+    {% else %}
+        <p>Strona kontaktowa nie została jeszcze skonfigurowana.</p>
+    {% endif %}
+</div>
+{% endblock %}

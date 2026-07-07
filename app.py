@@ -195,7 +195,30 @@ def inject_globals():
         "app_name": current_app.config["APP_NAME"],
         "app_base_path": app_base_path,
         "APP_BASE_PATH": app_base_path,
+        "footer_service_documents": footer_service_documents(),
     }
+
+
+def footer_service_documents() -> list[dict]:
+    if not current_app.config.get("DATABASE_URL"):
+        return []
+    try:
+        from database import create_session_factory
+        from models import ServiceDocument
+        from services.site_document_service import SERVICE_DOCUMENT_TYPES
+        from sqlalchemy import select
+
+        with create_session_factory(current_app.config["DATABASE_URL"])() as db:
+            documents = db.execute(select(ServiceDocument)).scalars().all()
+            by_type = {document.document_type: document for document in documents}
+            return [
+                {"type": type_id, "title": by_type[type_id].title or label}
+                for type_id, label in SERVICE_DOCUMENT_TYPES.items()
+                if type_id in by_type and (by_type[type_id].content_html or by_type[type_id].storage_path)
+            ]
+    except Exception:
+        current_app.logger.exception("Nie udało się pobrać dokumentów serwisu do stopki.")
+        return []
 
 
 def get_services():

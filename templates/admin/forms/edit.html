@@ -11,7 +11,7 @@
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrot</a>
     </div>
 </div>
-<form method="post" class="admin-card admin-form">
+<form method="post" enctype="multipart/form-data" class="admin-card admin-form">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <div class="admin-form-grid">
         <label><span>Nazwa</span><input name="name" value="{{ form.name }}" required></label>
@@ -34,6 +34,20 @@
         </label>
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
+    </div>
+    <div class="admin-section">
+        <h2>Regulamin</h2>
+        {% if form.regulation %}
+            <p>Aktualny plik: <a href="{{ url_for('public_forms.form_regulation_file', slug=form.slug) }}" target="_blank" rel="noopener noreferrer">{{ form.regulation.original_filename }}</a></p>
+        {% else %}
+            <div class="admin-validation-errors">
+                <p>Ten formularz nie ma wgranego regulaminu. W publicznym formularzu nie zostanie pokazany link przy checkboxie akceptacji.</p>
+            </div>
+        {% endif %}
+        <label class="admin-form-wide">
+            <span>Plik regulaminu (PDF, DOC albo DOCX)</span>
+            <input type="file" name="regulation_file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+        </label>
     </div>
     {% if g.admin_user.role == "super_admin" %}
         <div class="admin-section">
@@ -138,7 +152,7 @@
     </div>
     <div class="admin-form-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
-        <button class="admin-button" type="submit">Zapisz</button>
+        <button class="admin-button" type="submit">Zapisz zmiany</button>
     </div>
 </form>
 <script>

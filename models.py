@@ -351,6 +351,11 @@ class Form(Base):
     permissions: Mapped[list["FormPermission"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_templates: Mapped[list["MailTemplate"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_footers: Mapped[list["MailFooter"]] = relationship(back_populates="form", cascade="all, delete-orphan")
+    regulation: Mapped["FormRegulation | None"] = relationship(
+        back_populates="form",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
     @property
     def active(self) -> bool:
@@ -378,6 +383,72 @@ class FormField(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     form: Mapped[Form] = relationship(back_populates="fields")
+
+
+class FormRegulation(Base):
+    __tablename__ = "form_regulations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), unique=True, index=True, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    form: Mapped[Form] = relationship(back_populates="regulation")
+    uploaded_by: Mapped[User | None] = relationship()
+
+
+class ContactPage(Base):
+    __tablename__ = "contact_pages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), default="Kontakt", nullable=False)
+    content_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    contact_details: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    phone: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_by: Mapped[User | None] = relationship()
+
+
+class ServiceDocument(Base):
+    __tablename__ = "service_documents"
+    __table_args__ = (UniqueConstraint("document_type", name="uq_service_documents_document_type"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_by: Mapped[User | None] = relationship()
 
 
 class FormPermission(Base):
@@ -496,7 +567,7 @@ class MailFooter(Base):
     __tablename__ = "mail_footers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=False)
+    form_id: Mapped[int | None] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     html_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     logo_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)

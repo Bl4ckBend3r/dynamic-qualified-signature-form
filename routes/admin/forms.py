@@ -6,7 +6,7 @@ from flask import abort, current_app, flash, g, redirect, render_template, reque
 from sqlalchemy import func, select
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
-from models import Form, FormField, FormPermission, FormSubmission, User
+from models import Form, FormField, FormPermission, FormRegulation, FormSubmission, User
 from services.admin_form_service import (
     build_form_definition_from_admin_form,
     get_declaration_training_field,
@@ -17,6 +17,8 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.site_document_service import save_document_upload, update_form_regulation_from_upload
+from services.upload_validation import UploadValidationError
 
 from . import (
     ROLE_SUPER_ADMIN,
@@ -217,6 +219,34 @@ def form_edit(form_id: int):
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
                 abort(403)
             form.logo_id = selected_logo_id
+            uploaded_regulation = request.files.get("regulation_file")
+            if uploaded_regulation and uploaded_regulation.filename:
+                try:
+                    metadata = save_document_upload(
+                        temp_dir=current_app.config["TEMP_DIR"],
+                        uploaded_filename=uploaded_regulation.filename,
+                        uploaded_bytes=uploaded_regulation.read(),
+                        uploaded_mimetype=uploaded_regulation.mimetype,
+                    )
+                except UploadValidationError as exc:
+                    flash(str(exc), "error")
+                    assigned_user_ids = {permission.user_id for permission in form.permissions}
+                    fields = active_fields_for_form(db, form.id)
+                    return render_template(
+                        "admin/forms/edit.html",
+                        form=form,
+                        fields=fields,
+                        users=users,
+                        assigned_user_ids=assigned_user_ids,
+                        logos=logos,
+                        training_field=get_declaration_training_field(form.definition_json or {}),
+                        workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
+                        trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                        validation_errors=[],
+                    ), 400
+                regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
+                update_form_regulation_from_upload(regulation, metadata, uploaded_by_user_id=g.admin_user.id)
+                db.add(regulation)
             if g.admin_user.role == ROLE_SUPER_ADMIN:
                 selected_user_ids = {int(item) for item in request.form.getlist("user_ids") if item.isdigit()}
                 existing = {permission.user_id: permission for permission in form.permissions}

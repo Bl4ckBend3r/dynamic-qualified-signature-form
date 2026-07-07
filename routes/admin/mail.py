@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from models import FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
 from services.mail_template_service import (
@@ -44,7 +44,9 @@ def submission_mail(form_id: int, submission_pk: int):
             select(MailTemplate).where(MailTemplate.form_id == form.id, MailTemplate.is_active.is_(True)).order_by(MailTemplate.name)
         ).scalars().all()
         footers = db.execute(
-            select(MailFooter).where(MailFooter.form_id == form.id, MailFooter.is_active.is_(True)).order_by(MailFooter.name)
+            select(MailFooter)
+            .where(or_(MailFooter.form_id == form.id, MailFooter.form_id.is_(None)), MailFooter.is_active.is_(True))
+            .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
         if request.method == "POST":
             result = send_admin_mail(db, form, submission, templates, footers)
@@ -84,7 +86,9 @@ def submissions_mail_selected(form_id: int):
             select(MailTemplate).where(MailTemplate.form_id == form.id, MailTemplate.is_active.is_(True)).order_by(MailTemplate.name)
         ).scalars().all()
         footers = db.execute(
-            select(MailFooter).where(MailFooter.form_id == form.id, MailFooter.is_active.is_(True)).order_by(MailFooter.name)
+            select(MailFooter)
+            .where(or_(MailFooter.form_id == form.id, MailFooter.form_id.is_(None)), MailFooter.is_active.is_(True))
+            .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
         summary = {"sent": 0, "failed": 0, "skipped": 0}
         for submission in submissions:
@@ -372,7 +376,7 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
     template = next((item for item in templates if item.id == template_id), None)
     if templates and template is None:
         template = templates[0]
-    footer = next((item for item in footers if item.id == footer_id), None)
+    footer = next((item for item in footers if item.id == footer_id), None) if footer_id else select_default_footer(footers, form_id=form.id)
     fallback = template or system_mail_template(form, submission)
     subject_template = request.form.get("subject", "").strip() or getattr(fallback, "subject", "")
     body_template = request.form.get("body_html", request.form.get("html_body", "")).strip() or template_body_html(fallback)
@@ -404,7 +408,7 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
 
 def send_selected_submission_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter], *, trigger_event: str):
     template = select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
-    footer = next((item for item in footers if item.is_default), None)
+    footer = select_default_footer(footers, form_id=form.id)
     if not template:
         template = system_mail_template(form, submission)
     return send_mail_for_submission(
@@ -422,6 +426,19 @@ def send_selected_submission_mail(db, form, submission, templates: list[MailTemp
 
 def select_mail_template(templates: list[MailTemplate], submission: FormSubmission, trigger_event: str) -> MailTemplate | None:
     return current_app.extensions["services"].mail_dispatch_service.select_template(templates, submission, trigger_event)
+
+
+def select_default_footer(footers: list[MailFooter], *, form_id: int) -> MailFooter | None:
+    form_footer = next((item for item in footers if item.form_id == form_id and item.is_default), None)
+    if form_footer:
+        current_app.logger.info("mail_footer_selected scope=form footer_id=%s form_id=%s", form_footer.id, form_id)
+        return form_footer
+    global_footer = next((item for item in footers if item.form_id is None and item.is_default), None)
+    if global_footer:
+        current_app.logger.info("mail_footer_selected scope=global footer_id=%s form_id=%s", global_footer.id, form_id)
+        return global_footer
+    current_app.logger.info("mail_footer_selected scope=none form_id=%s", form_id)
+    return None
 
 
 def mail_template_payload(templates: list[MailTemplate]) -> list[dict]:

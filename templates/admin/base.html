@@ -19,11 +19,13 @@
                     <nav class="admin-nav" aria-label="Menu administracyjne">
                         <a class="{% if admin_is_active('admin.dashboard') %}is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
                         <a class="{% if request.endpoint and request.endpoint.startswith('admin.form') %}is-active{% endif %}" href="{{ url_for('admin.forms_list') }}">Formularze</a>
-                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.submission') %}is-active{% endif %}" href="{{ url_for('admin.submissions_all') }}">Zgloszenia</a>
+                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.submission') %}is-active{% endif %}" href="{{ url_for('admin.submissions_all') }}">Zgłoszenia</a>
                         <a class="{% if request.endpoint and request.endpoint.startswith('admin.mail_template') %}is-active{% endif %}" href="{{ url_for('admin.mail_templates_index') }}">Szablony maili</a>
                         {% if g.admin_user.role == "super_admin" %}
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.logo') %}is-active{% endif %}" href="{{ url_for('admin.logos_list') }}">Logo</a>
-                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Uzytkownicy</a>
+                            <a class="{% if request.endpoint == 'admin.contact_page_edit' %}is-active{% endif %}" href="{{ url_for('admin.contact_page_edit') }}">Strona kontaktowa</a>
+                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.service_document') %}is-active{% endif %}" href="{{ url_for('admin.service_documents_edit') }}">Dokumenty serwisu</a>
+                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
                         {% endif %}
                         <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
                     </nav>

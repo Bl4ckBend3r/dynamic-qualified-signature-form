@@ -6,7 +6,7 @@ from flask import abort, current_app, flash, g, redirect, render_template, reque
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from models import FormSubmission, SubmissionDecision
+from models import EmailLog, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
 from services.admin_form_service import form_has_additional_fields
 from services.admin_submission_service import (
     admin_status_label,
@@ -189,6 +189,51 @@ def submissions_decisions_update(form_id: int):
         except Exception as exc:
             current_app.logger.exception("Nie udalo sie wyslac maila decyzji dla %s: %s", public_submission_id, exc)
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+
+
+@bp.post("/forms/<int:form_id>/submissions/delete-selected")
+@login_required
+def submissions_delete_selected(form_id: int):
+    raw_ids = request.form.getlist("submission_pk_ids")
+    submission_ids = [int(item) for item in raw_ids if str(item).isdigit()]
+    if not submission_ids:
+        flash("Zaznacz co najmniej jedno zgłoszenie.", "error")
+        return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        submissions = db.execute(
+            select(FormSubmission).where(FormSubmission.id.in_(submission_ids), FormSubmission.form_slug == form.slug)
+        ).scalars().all()
+        if not submissions:
+            flash("Nie znaleziono zgłoszeń do usunięcia albo nie masz uprawnień.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+        try:
+            delete_submissions_transactionally(db, submissions)
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception("Nie udało się usunąć zaznaczonych zgłoszeń dla formularza %s.", form_id)
+            flash("Nie udało się usunąć zaznaczonych zgłoszeń. Spróbuj ponownie.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+    flash(f"Usunięto zgłoszenia: {len(submissions)}.", "success")
+    return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+
+
+def delete_submissions_transactionally(db, submissions: list[FormSubmission]) -> None:
+    ids = [submission.id for submission in submissions]
+    public_ids = [submission.submission_id for submission in submissions]
+    db.query(SubmissionFile).filter(SubmissionFile.submission_id.in_(ids)).delete(synchronize_session=False)
+    db.query(SubmissionDecision).filter(
+        (SubmissionDecision.submission_id.in_(ids)) | (SubmissionDecision.public_submission_id.in_(public_ids))
+    ).delete(synchronize_session=False)
+    db.query(SubmissionWorkflowEvent).filter(
+        (SubmissionWorkflowEvent.submission_id.in_(ids)) | (SubmissionWorkflowEvent.public_submission_id.in_(public_ids))
+    ).delete(synchronize_session=False)
+    db.query(EmailLog).filter(
+        (EmailLog.submission_id.in_(ids)) | (EmailLog.public_submission_id.in_(public_ids))
+    ).delete(synchronize_session=False)
+    for submission in submissions:
+        db.delete(submission)
 
 
 def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:

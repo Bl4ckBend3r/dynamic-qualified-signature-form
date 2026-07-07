@@ -1,0 +1,36 @@
+{% extends "admin/base.html" %}
+{% block title %}Strona kontaktowa{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Super admin</p>
+        <h1>Strona kontaktowa</h1>
+    </div>
+</div>
+<form method="post" class="admin-card admin-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <label>
+        Tytuł strony
+        <input name="title" value="{{ page.title }}" required>
+    </label>
+    <label>
+        Treść
+        <textarea name="content_html" rows="10">{{ page.content_html }}</textarea>
+    </label>
+    <label>
+        Dane kontaktowe
+        <textarea name="contact_details" rows="6">{{ page.contact_details }}</textarea>
+    </label>
+    <label>
+        Adres e-mail
+        <input type="email" name="email" value="{{ page.email }}">
+    </label>
+    <label>
+        Telefon
+        <input name="phone" value="{{ page.phone }}">
+    </label>
+    <div class="admin-actions">
+        <button class="admin-button" type="submit">Zapisz zmiany</button>
+    </div>
+</form>
+{% endblock %}

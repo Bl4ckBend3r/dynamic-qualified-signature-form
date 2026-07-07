@@ -15,15 +15,18 @@ from conftest import InMemoryStorage
 from config import Config
 from database import create_session_factory
 from models import (
+    ContactPage,
     EmailLog,
     Form,
     FormField,
     FormPermission,
+    FormRegulation,
     FormSubmission,
     Logo,
     MailFooter,
     MailTemplate,
     MailTemplateAsset,
+    ServiceDocument,
     SubmissionDecision,
     SubmissionFile,
     SubmissionWorkflowEvent,
@@ -1889,3 +1892,256 @@ def test_declaration_download_disabled_before_declaration_form_is_completed(admi
     with session_factory() as db:
         submission = db.query(FormSubmission).filter_by(submission_id="decl-1").one()
         assert submission.declaration_generated != "Tak"
+
+
+def test_submission_delete_button_is_hidden_until_selection(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="delete_ui", name="Delete UI", user_id=user_id)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormSubmission(submission_id="abc", form_slug="delete_ui", form_name="Delete UI"))
+        db.commit()
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+
+    assert "Zgłoszenia formularza" in html
+    assert "data-delete-button hidden disabled" in html
+    assert "Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć." in html
+
+
+def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="delete_rows", name="Delete Rows", user_id=user_id)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(submission_id="abc", form_slug="delete_rows", form_name="Delete Rows")
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionFile(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", filename="a.pdf", storage_path="x"))
+        db.add(SubmissionDecision(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", decision="accepted"))
+        db.add(SubmissionWorkflowEvent(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", new_status="FORM_SUBMITTED"))
+        db.add(EmailLog(submission_id=submission.id, public_submission_id="abc", status="sent"))
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
+    )
+
+    assert response.status_code == 302
+    with session_factory() as db:
+        assert db.query(FormSubmission).count() == 0
+        assert db.query(SubmissionFile).count() == 0
+        assert db.query(SubmissionDecision).count() == 0
+        assert db.query(SubmissionWorkflowEvent).count() == 0
+        assert db.query(EmailLog).count() == 0
+
+
+def test_regular_admin_cannot_delete_submission_without_form_permission(admin_app, admin_client):
+    create_user(admin_app, email="regular@example.com", role="admin")
+    form_id = create_form(admin_app, slug="blocked_delete", name="Blocked Delete")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = FormSubmission(submission_id="abc", form_slug="blocked_delete", form_name="Blocked Delete")
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client, email="regular@example.com")
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
+    )
+
+    assert response.status_code == 403
+
+
+def test_form_regulation_upload_and_public_link(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="regulated",
+        name="Regulated",
+        definition_json={
+            "title": "Regulated",
+            "fields": [
+                {
+                    "type": "checkbox",
+                    "name": "accept_regulamin",
+                    "label": "Regulamin",
+                    "required": True,
+                    "options": [{"value": "Tak", "label": "Akceptuję regulamin"}],
+                }
+            ],
+        },
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            FormField(
+                form_id=form_id,
+                name="accept_regulamin",
+                label="Regulamin",
+                type="checkbox",
+                required=True,
+                options=[{"value": "Tak", "label": "Akceptuję regulamin"}],
+                active=True,
+            )
+        )
+        db.commit()
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    assert "Ten formularz nie ma wgranego regulaminu" in html
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Regulated",
+            "slug": "regulated",
+            "title": "Regulated",
+            "sort_order": "0",
+            "workflow_json": "{}",
+            "is_active": "on",
+            "is_public": "on",
+            "regulation_file": (io.BytesIO(b"%PDF-1.4\nregulamin"), "regulamin.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    page = admin_client.get("/form/regulated").get_data(as_text=True)
+    assert '<a href="/form/regulated/regulamin" target="_blank" rel="noopener noreferrer">regulamin</a>' in page
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(FormRegulation).one().original_filename == "regulamin.pdf"
+
+
+def test_public_form_does_not_render_dead_regulation_link(admin_app, admin_client):
+    form_id = create_form(
+        admin_app,
+        slug="no_regulation",
+        name="No Regulation",
+        definition_json={
+            "title": "No Regulation",
+            "fields": [
+                {
+                    "type": "checkbox",
+                    "name": "accept_regulamin",
+                    "required": True,
+                    "options": [{"value": "Tak", "label": "Akceptuję regulamin"}],
+                }
+            ],
+        },
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            FormField(
+                form_id=form_id,
+                name="accept_regulamin",
+                label="Regulamin",
+                type="checkbox",
+                required=True,
+                options=[{"value": "Tak", "label": "Akceptuję regulamin"}],
+                active=True,
+            )
+        )
+        db.commit()
+
+    html = admin_client.get("/form/no_regulation").get_data(as_text=True)
+
+    assert "/form/no_regulation/regulamin" not in html
+    assert "Akceptuję regulamin" in html
+
+
+def test_super_admin_can_edit_contact_page_and_regular_admin_cannot(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/site/contact").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/site/contact",
+        data={
+            "csrf_token": token,
+            "title": "Kontakt",
+            "content_html": "<p>Treść kontaktowa</p>",
+            "contact_details": "Dane kontaktowe",
+            "email": "kontakt@example.com",
+            "phone": "123",
+        },
+    )
+
+    assert response.status_code == 302
+    assert "Treść kontaktowa" in admin_client.get("/kontakt").get_data(as_text=True)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(ContactPage).one().email == "kontakt@example.com"
+
+    create_user(admin_app, email="regular2@example.com", role="admin")
+    admin_client.get("/admin/logout")
+    login(admin_client, email="regular2@example.com")
+    blocked = admin_client.get("/admin/site/contact")
+    assert blocked.status_code == 403
+    assert "Nie masz uprawnień do edycji tej strony." in blocked.get_data(as_text=True)
+
+
+def test_service_documents_show_links_in_footer(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/site/documents").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/site/documents",
+        data={
+            "csrf_token": token,
+            "document_type": "privacy",
+            "title": "Polityka prywatności",
+            "content_html": "<p>Prywatność</p>",
+            "document_file": (io.BytesIO(b"%PDF-1.4\nprivacy"), "privacy.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    footer_html = admin_client.get("/").get_data(as_text=True)
+    assert "Polityka prywatności" in footer_html
+    assert "/dokumenty/privacy" in footer_html
+    assert "Regulamin serwisu" not in footer_html
+    doc_html = admin_client.get("/dokumenty/privacy").get_data(as_text=True)
+    assert "Prywatność" in doc_html
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(ServiceDocument).one().original_filename == "privacy.pdf"
+
+
+def test_footer_contains_creator_credit_but_mail_footer_does_not(admin_app, admin_client):
+    create_form(admin_app, slug="credit", name="Credit")
+
+    html = admin_client.get("/").get_data(as_text=True)
+
+    assert "Created by Witold Grzesiak" in html
+    assert "Created by Witold Grzesiak" not in admin_app.extensions["services"].mail_dispatch_service.build_footer(None)
+
+
+def test_mail_footer_uses_form_footer_then_global_fallback(admin_app, caplog):
+    from routes.admin.mail import select_default_footer
+
+    form_id = create_form(admin_app, slug="footer_form", name="Footer Form")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form_footer = MailFooter(form_id=form_id, name="Form", html_body="<p>Form</p>", is_active=True, is_default=True)
+        global_footer = MailFooter(form_id=None, name="Global", html_body="<p>Global</p>", is_active=True, is_default=True)
+        db.add_all([form_footer, global_footer])
+        db.commit()
+        caplog.clear()
+        with admin_app.app_context():
+            assert select_default_footer([global_footer, form_footer], form_id=form_id).name == "Form"
+            assert select_default_footer([global_footer], form_id=form_id).name == "Global"
+            assert select_default_footer([], form_id=form_id) is None
+
+    assert "scope=form" in caplog.text
+    assert "scope=global" in caplog.text
+    assert "scope=none" in caplog.text

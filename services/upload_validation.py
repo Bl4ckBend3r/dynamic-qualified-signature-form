@@ -5,6 +5,12 @@ from pathlib import PurePath
 
 
 PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
+DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 LOGO_SIGNATURES = {
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/jpeg": (b"\xff\xd8\xff",),
@@ -13,6 +19,7 @@ LOGO_SIGNATURES = {
 }
 SVG_MIME_TYPES = {"image/svg+xml"}
 MAX_PDF_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_LOGO_UPLOAD_BYTES = 5 * 1024 * 1024
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -42,6 +49,33 @@ def validate_pdf_upload(filename: str, content: bytes, mime_type: str | None = N
         raise UploadValidationError("Nieprawidlowy typ MIME pliku PDF.")
     if not content.startswith(b"%PDF"):
         raise UploadValidationError("Plik nie ma poprawnego naglowka PDF.")
+
+
+def validate_document_upload(filename: str, content: bytes, mime_type: str | None = None) -> str:
+    clean_name = validate_upload_filename(filename, allowed_suffixes={".pdf", ".doc", ".docx"})
+    if not content:
+        raise UploadValidationError("Plik dokumentu jest pusty.")
+    if len(content) > MAX_DOCUMENT_UPLOAD_BYTES:
+        raise UploadValidationError("Plik dokumentu jest zbyt duży.")
+    suffix = PurePath(clean_name).suffix.lower()
+    normalized_mime = str(mime_type or "").strip().lower()
+    expected_mime = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }[suffix]
+    if normalized_mime and normalized_mime not in DOCUMENT_MIME_TYPES:
+        raise UploadValidationError("Nieprawidłowy typ MIME dokumentu.")
+    if suffix == ".pdf" and not content.startswith(b"%PDF"):
+        raise UploadValidationError("Plik PDF nie ma poprawnego nagłówka.")
+    if suffix == ".docx" and not content.startswith(b"PK"):
+        raise UploadValidationError("Plik DOCX nie ma poprawnego nagłówka.")
+    if suffix == ".doc" and not content.startswith(b"\xd0\xcf\x11\xe0"):
+        raise UploadValidationError("Plik DOC nie ma poprawnego nagłówka.")
+    if normalized_mime and normalized_mime != expected_mime:
+        if not (suffix == ".pdf" and normalized_mime == "application/x-pdf"):
+            raise UploadValidationError("Rozszerzenie lub MIME nie zgadza się z zawartością pliku.")
+    return expected_mime
 
 
 def validate_logo_upload(filename: str, content: bytes, mime_type: str | None = None) -> str:

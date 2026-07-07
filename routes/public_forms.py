@@ -8,7 +8,8 @@ from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
-from models import Form, FormField, Logo
+from models import ContactPage, Form, FormField, FormRegulation, Logo, ServiceDocument
+from services.site_document_service import SERVICE_DOCUMENT_TYPES
 from services.nextcloud_storage import NextcloudStorageError
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,73 @@ def submit(slug: str):
         ), 500
 
 
+@bp.get("/kontakt")
+def contact_page():
+    session_factory = db_session_factory()
+    page = None
+    if session_factory:
+        with session_factory() as db:
+            page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()
+    return render_template("contact.html", page=page)
+
+
+@bp.get("/dokumenty/<document_type>")
+def service_document_page(document_type: str):
+    if document_type not in SERVICE_DOCUMENT_TYPES:
+        abort(404)
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    with session_factory() as db:
+        document = db.execute(select(ServiceDocument).where(ServiceDocument.document_type == document_type)).scalar_one_or_none()
+        if not document:
+            return render_template("service_document.html", document=None, title=SERVICE_DOCUMENT_TYPES[document_type]), 404
+        return render_template("service_document.html", document=document, title=document.title)
+
+
+@bp.get("/dokumenty/<document_type>/plik")
+def service_document_file(document_type: str):
+    if document_type not in SERVICE_DOCUMENT_TYPES:
+        abort(404)
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    with session_factory() as db:
+        document = db.execute(select(ServiceDocument).where(ServiceDocument.document_type == document_type)).scalar_one_or_none()
+        if not document or not document.storage_path:
+            abort(404)
+        path = Path(document.storage_path)
+        if not path.exists():
+            abort(404)
+        return send_file(path, mimetype=document.mime_type or None, download_name=document.original_filename)
+
+
+@bp.get("/form/<slug>/regulamin")
+def form_regulation_file(slug: str):
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    with session_factory() as db:
+        regulation = (
+            db.execute(
+                select(FormRegulation)
+                .join(Form)
+                .where(
+                    Form.slug == slug,
+                    Form.is_active.is_(True),
+                    Form.is_public.is_(True),
+                )
+            )
+            .scalar_one_or_none()
+        )
+        if not regulation:
+            abort(404)
+        path = Path(regulation.storage_path)
+        if not path.exists():
+            abort(404)
+        return send_file(path, mimetype=regulation.mime_type or None, download_name=regulation.original_filename)
+
+
 @bp.get("/assets/logos/<int:logo_id>/<path:filename>")
 def logo_asset(logo_id: int, filename: str):
     session_factory = db_session_factory()
@@ -184,6 +252,7 @@ def form_to_public_meta(form: Form) -> dict:
         "label_color": form.label_color,
         "label_background": form.label_background,
         "logo_url": logo_url(form.logo),
+        "regulation_url": url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else "",
     }
 
 
@@ -201,6 +270,7 @@ def form_to_definition(form: Form, fields: list[FormField]) -> dict:
     definition["label_text"] = form.label_text
     definition["label_color"] = form.label_color
     definition["label_background"] = form.label_background
+    definition["regulation_url"] = url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else ""
     return normalize_form_definition(definition)
 
 

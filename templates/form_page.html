@@ -149,7 +149,11 @@
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>
-                                            {{ option.label|trusted_html }}
+                                            {% if form_definition.regulation_url and "regulamin" in (field.name|string|lower) %}
+                                                Akceptuję <a href="{{ form_definition.regulation_url }}" target="_blank" rel="noopener noreferrer">regulamin</a>
+                                            {% else %}
+                                                {{ option.label|trusted_html }}
+                                            {% endif %}
                                             {% if field.required %}
                                                 <span class="required">*</span>
                                             {% endif %}

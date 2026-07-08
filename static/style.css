@@ -715,12 +715,29 @@ textarea:focus {
 .form-logo-row {
     display: flex;
     align-items: center;
+    text-align: left;
+}
+
+.form-logo-row--left {
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.form-logo-row--center {
+    justify-content: center;
+    text-align: center;
+}
+
+.form-logo-row--right {
+    justify-content: flex-end;
+    text-align: right;
 }
 
 .form-logo {
     display: block;
-    max-width: 180px;
-    max-height: 72px;
+    height: 84px;
+    width: auto;
+    max-width: 100%;
     object-fit: contain;
 }
 

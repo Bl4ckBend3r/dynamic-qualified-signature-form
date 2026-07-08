@@ -247,6 +247,7 @@ def get_public_db_form(slug: str) -> tuple[dict | None, dict | None]:
 
 
 def form_to_public_meta(form: Form) -> dict:
+    logo_alignment = normalize_logo_alignment(form.logo_alignment)
     return {
         "slug": form.slug,
         "title": form.title or form.name,
@@ -256,12 +257,14 @@ def form_to_public_meta(form: Form) -> dict:
         "label_color": form.label_color,
         "label_background": form.label_background,
         "logo_url": logo_url(form.logo),
+        "logo_alignment": logo_alignment,
         "regulation_url": url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else "",
     }
 
 
 def form_to_definition(form: Form, fields: list[FormField]) -> dict:
     definition = dict(form.definition_json or {})
+    logo_alignment = normalize_logo_alignment(form.logo_alignment)
     original_fields = {
         field.get("name"): dict(field)
         for field in definition.get("fields", [])
@@ -275,6 +278,7 @@ def form_to_definition(form: Form, fields: list[FormField]) -> dict:
     definition["label_color"] = form.label_color
     definition["label_background"] = form.label_background
     definition["regulation_url"] = url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else ""
+    definition["logo_alignment"] = logo_alignment
     return normalize_form_definition(definition)
 
 
@@ -330,3 +334,7 @@ def logo_url(logo: Logo | None) -> str:
     if not logo or not logo.active:
         return ""
     return url_for("public_forms.logo_asset", logo_id=logo.id, filename=Path(logo.filename).name)
+
+
+def normalize_logo_alignment(value: str | None) -> str:
+    return value if value in {"left", "center", "right"} else "left"

@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 from flask import url_for
 
@@ -50,6 +51,62 @@ def test_initial_form_hides_after_acceptance_fields(client, app):
 
     assert response.status_code == 200
     assert 'name="post_acceptance_note"' not in html
+
+
+def test_public_form_renders_admin_logo_under_title_without_static_header(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "logo_url": "/assets/logos/1/admin-logo.png",
+        "logo_alignment": "left",
+        "header_image": "Logo/static-big-logo.png",
+    }
+
+    response = client.get("/form/formularz_zgloszeniowy")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert html.index("<h2>Formularz") < html.index('src="/assets/logos/1/admin-logo.png"')
+    assert "form-logo-row form-logo-row--left" in html
+    assert "form-header-image" not in html
+    assert "Logo/static-big-logo.png" not in html
+
+
+def test_public_form_without_logo_does_not_render_logo_container(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "logo_url": "",
+    }
+
+    response = client.get("/form/formularz_zgloszeniowy")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "form-logo-row" not in html
+
+
+def test_public_form_logo_alignment_classes(client, app):
+    for alignment in ["left", "center", "right"]:
+        app.testing_storage.form_definition = {
+            **app.testing_storage.form_definition,
+            "logo_url": f"/assets/logos/1/{alignment}.png",
+            "logo_alignment": alignment,
+        }
+
+        html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+
+        assert f"form-logo-row form-logo-row--{alignment}" in html
+
+
+def test_public_form_logo_css_keeps_fixed_height_and_alignment_rules():
+    stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+    logo_block = stylesheet.split(".form-logo {", 1)[1].split("}", 1)[0]
+
+    assert "height: 84px;" in logo_block
+    assert "width: auto;" in logo_block
+    assert "object-fit: contain;" in logo_block
+    assert "justify-content: flex-start;" in stylesheet
+    assert "justify-content: center;" in stylesheet
+    assert "justify-content: flex-end;" in stylesheet
 
 
 def test_form_page_sanitizes_configured_html(client, app):

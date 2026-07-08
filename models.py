@@ -330,6 +330,7 @@ class Form(Base):
     label_background: Mapped[str] = mapped_column(String(64), default="#f7f3ec", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), nullable=True)
+    logo_alignment: Mapped[str] = mapped_column(String(16), default="left", nullable=False)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

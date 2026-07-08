@@ -10,11 +10,6 @@
 
     <div class="card">
         <div class="card-header">
-            {% if form_definition.logo_url %}
-                <div class="form-logo-row">
-                    <img class="form-logo" src="{{ form_definition.logo_url }}" alt="">
-                </div>
-            {% endif %}
             {% if form_definition.label_text %}
                 <div
                     class="project-label form-project-label"
@@ -23,13 +18,9 @@
             {% endif %}
             <h2>{{ form_definition.title }}</h2>
 
-            {% if form_definition.header_image %}
-                <div class="form-header-image">
-                    <img
-                        src="{{ url_for('documents.nextcloud_asset', asset_path=form_definition.header_image) }}"
-                        alt="Zdjęcie formularza"
-                        loading="lazy"
-                    >
+            {% if form_definition.logo_url %}
+                <div class="form-logo-row form-logo-row--{{ form_definition.logo_alignment or 'left' }}">
+                    <img class="form-logo" src="{{ form_definition.logo_url }}" alt="">
                 </div>
             {% endif %}
 

@@ -44,6 +44,7 @@ FIELD_STAGES = [
     (FIELD_STAGE_INITIAL, "Podstawowe"),
     (FIELD_STAGE_AFTER_ACCEPTANCE, "Dodatkowe pole po akceptacji"),
 ]
+LOGO_ALIGNMENTS = {"left", "center", "right"}
 
 
 @bp.get("/forms")
@@ -213,6 +214,8 @@ def form_edit(form_id: int):
             form.label_variant = request.form.get("label_variant", "").strip() or "project"
             form.label_color = request.form.get("label_color", "").strip() or "#b38d45"
             form.label_background = request.form.get("label_background", "").strip() or "#f7f3ec"
+            logo_alignment = request.form.get("logo_alignment", "left").strip()
+            form.logo_alignment = logo_alignment if logo_alignment in LOGO_ALIGNMENTS else "left"
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
             form.definition_json = updated_definition
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))

@@ -32,6 +32,14 @@
                 {% endfor %}
             </select>
         </label>
+        <label>
+            <span>Wyrownanie logo</span>
+            <select name="logo_alignment">
+                <option value="left" {% if form.logo_alignment == "left" or not form.logo_alignment %}selected{% endif %}>Do lewej</option>
+                <option value="center" {% if form.logo_alignment == "center" %}selected{% endif %}>Do srodka</option>
+                <option value="right" {% if form.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
+            </select>
+        </label>
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
     </div>

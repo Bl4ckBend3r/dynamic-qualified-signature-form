@@ -286,6 +286,73 @@ def test_public_form_page_uses_active_database_fields(admin_app, admin_client):
     assert 'name="archived"' not in html
 
 
+def test_public_database_form_renders_selected_logo_under_title_with_alignment(admin_app, tmp_path):
+    logo_path = tmp_path / "logo.png"
+    logo_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        logo = Logo(
+            name="Admin logo",
+            filename="admin-logo.png",
+            storage_path=str(logo_path),
+            mime_type="image/png",
+            active=True,
+        )
+        db.add(logo)
+        db.flush()
+        form = Form(
+            slug="logo_form",
+            name="Logo Form",
+            title="Logo Form",
+            description="Opis formularza",
+            definition_json={"title": "Logo Form", "fields": [], "header_image": "Logo/static-big-logo.png"},
+            is_active=True,
+            is_public=True,
+            logo_id=logo.id,
+            logo_alignment="center",
+        )
+        db.add(form)
+        db.commit()
+
+    response = admin_app.test_client().get("/form/logo_form")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert html.index("<h2>Logo Form</h2>") < html.index("/assets/logos/")
+    assert "form-logo-row form-logo-row--center" in html
+    assert "admin-logo.png" in html
+    assert "form-header-image" not in html
+    assert "Logo/static-big-logo.png" not in html
+
+
+def test_form_edit_saves_logo_alignment(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="alignment_form", name="Alignment Form")
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Alignment Form",
+            "slug": "alignment_form",
+            "title": "Alignment Form",
+            "sort_order": "0",
+            "workflow_json": "{}",
+            "logo_alignment": "right",
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(Form, form_id).logo_alignment == "right"
+
+
 def test_upload_form_detects_fields(admin_app, admin_client):
     create_user(admin_app)
     login(admin_client)

@@ -156,9 +156,9 @@ def form_edit(form_id: int):
         if request.method == "POST":
             try:
                 updated_definition = build_form_definition_from_admin_form(form.definition_json or {}, request.form)
-            except Exception:
+            except Exception as exc:
                 updated_definition = normalize_admin_form_definition(form.definition_json or {})
-                validation_errors = ["Workflow JSON ma niepoprawny format. Sprawdź nawiasy, cudzysłowy i przecinki."]
+                validation_errors = [str(exc) or "Niepoprawne dane formularza."]
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)
                 return render_template(

@@ -74,8 +74,9 @@ def test_collection_context_normalization_overrides_raw_context_extra_string():
     context.update({"selected_trainings": render_row["selected_trainings"]})
     DocumentService()._add_collection_context(context, render_row)
 
-    assert context["selected_trainings"] == [
-        {"id": "excel", "name": "Excel", "price": 1200, "label": "Excel", "value": "Excel"}
-    ]
+    assert context["selected_trainings"][0]["id"] == "excel"
+    assert context["selected_trainings"][0]["name"] == "Excel"
+    assert context["selected_trainings"][0]["price"] == "1200.00"
+    assert context["selected_trainings"][0]["price_formatted"].startswith("1 200,00")
     assert context["selected_trainings_normalized"] == context["selected_trainings"]
     assert context["selected_trainings_total"] == 1200

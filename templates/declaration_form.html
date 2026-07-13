@@ -128,6 +128,7 @@
                             <div class="option-list training-selection" data-training-selection data-max-total="{{ field.max_total_amount or '' }}">
                                 {% for item in field.catalog %}
                                     {% set training_id = item.id or item.name %}
+                                    <div class="training-option {% if item.is_available is defined and not item.is_available %}is-unavailable{% endif %}">
                                     <label class="checkbox-item">
                                         <input
                                             type="checkbox"
@@ -135,20 +136,53 @@
                                             name="{{ field.name }}"
                                             value="{{ training_id }}"
                                             data-price="{{ item.price or 0 }}"
+                                            {% if item.is_available is defined and not item.is_available %}disabled{% endif %}
                                             {% if training_id in selected_trainings %}checked{% endif %}
                                         >
                                         <span>
                                             {{ item.name }}
-                                            {% if item.price is defined %}
-                                                <strong>({{ item.price }} {{ field.currency or "PLN" }})</strong>
+                                            {% if item.price_formatted is defined %}
+                                                <strong>({{ item.price_formatted }})</strong>
+                                            {% endif %}
+                                            {% if item.available_seats_label is defined %}
+                                                <small class="training-availability {% if item.is_available is defined and not item.is_available %}training-no-seats{% endif %}">{{ item.available_seats_label }}</small>
                                             {% endif %}
                                         </span>
                                     </label>
+                                    {% if item.description %}
+                                        <p class="training-description">{{ item.description }}</p>
+                                    {% endif %}
+                                    {% if item.is_available is not defined or item.is_available %}
+                                        {% if item.low_seats_comment_visible %}
+                                        <div class="help-text training-low-seats-comment">{{ item.low_seats_comment_visible }}</div>
+                                        {% endif %}
+                                    {% endif %}
+                                    <button class="training-dates-toggle" type="button" data-training-dates-toggle="{{ field.name }}_{{ loop.index }}">
+                                        Sprawdź datę szkolenia
+                                    </button>
+                                    <div class="training-dates-panel" id="dates_{{ field.name }}_{{ loop.index }}" hidden>
+                                        {% if item.dates %}
+                                            <ul class="training-dates-list">
+                                                {% for date in item.dates %}
+                                                    <li>
+                                                        <strong>{{ date.label }}</strong>
+                                                        {% if date.location %}<span>Lokalizacja: {{ date.location }}</span>{% endif %}
+                                                        {% if date.description %}<span>Opis: {{ date.description }}</span>{% endif %}
+                                                    </li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% else %}
+                                            <p class="help-text">Brak zaplanowanych terminów szkolenia.</p>
+                                        {% endif %}
+                                    </div>
+                                    </div>
+                                {% else %}
+                                    <p class="training-empty">Brak dostępnych szkoleń.</p>
                                 {% endfor %}
                                 {% if field.max_total_amount %}
                                     <div class="help-text">
-                                        Limit: {{ field.max_total_amount }} {{ field.currency or "PLN" }}.
-                                        Wybrano: <span data-training-total>0</span> {{ field.currency or "PLN" }}.
+                                        Limit: {{ field.max_total_formatted }}.
+                                        Wybrano: <span data-training-total>0,00 zł</span>.
                                     </div>
                                 {% endif %}
                             </div>
@@ -226,7 +260,12 @@
                 selection.querySelectorAll("input[type='checkbox']:checked").forEach(input => {
                     total += Number(input.dataset.price || "0");
                 });
-                if (totalNode) totalNode.textContent = total.toFixed(2);
+                if (totalNode) {
+                    totalNode.textContent = `${new Intl.NumberFormat("pl-PL", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    }).format(total)} zł`;
+                }
                 selection.classList.toggle("has-error", Boolean(maxTotal && total > maxTotal));
             }
 
@@ -234,6 +273,14 @@
                 input.addEventListener("change", updateTrainingTotal);
             });
             updateTrainingTotal();
+        });
+
+        document.querySelectorAll("[data-training-dates-toggle]").forEach(button => {
+            button.addEventListener("click", function () {
+                const panel = document.getElementById(`dates_${button.dataset.trainingDatesToggle}`);
+                if (!panel) return;
+                panel.hidden = !panel.hidden;
+            });
         });
 
         updateVisibility();

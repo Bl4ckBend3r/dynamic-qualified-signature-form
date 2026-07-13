@@ -1886,9 +1886,22 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             "training_selection_max_total": "5000",
             "training_selection_currency": "PLN",
             "training_selection_required": "on",
+            "training_active_present": "1",
             "training_item_id": ["s1", "s2"],
-            "training_item_name": ["Szkolenie 1", "Szkolenie 2"],
-            "training_item_price": ["1200", "1800"],
+            "training_item_name": ["Excel zaawansowany", "Kadry i płace"],
+            "training_item_price": ["1345.50", "2199"],
+            "training_item_capacity": ["10", "5"],
+            "training_item_active": ["0", "1"],
+            "training_item_sort_order": ["1", "2"],
+            "training_item_description": ["Arkusze i raporty", "Prawo pracy w praktyce"],
+            "training_item_low_seats_comment": ["Tego komentarza nie pokazuj.", "Zostało niewiele miejsc."],
+            "training_date_training_index": ["0"],
+            "training_date_start_date": ["2026-09-01"],
+            "training_date_end_date": [""],
+            "training_date_start_time": ["09:00"],
+            "training_date_end_time": ["12:00"],
+            "training_date_location": ["Zielona Góra"],
+            "training_date_description": ["Warsztat stacjonarny"],
         },
     )
 
@@ -1903,12 +1916,76 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             "Oświadczenia uczestnika",
             "osw_rodo",
         ]
-        assert training_field["max_total_amount"] == 5000
+        assert training_field["max_total_amount"] == "5000.00"
         assert training_field["currency"] == "PLN"
         assert training_field["catalog"] == [
-            {"id": "s1", "name": "Szkolenie 1", "price": 1200},
-            {"id": "s2", "name": "Szkolenie 2", "price": 1800},
+            {
+                "id": "s1",
+                "name": "Excel zaawansowany",
+                "price": "1345.50",
+                "capacity": 10,
+                "description": "Arkusze i raporty",
+                "low_seats_comment": "Tego komentarza nie pokazuj.",
+                "dates": [
+                    {
+                        "start_date": "2026-09-01",
+                        "end_date": "",
+                        "start_time": "09:00",
+                        "end_time": "12:00",
+                        "location": "Zielona Góra",
+                        "description": "Warsztat stacjonarny",
+                    }
+                ],
+                "active": True,
+                "sort_order": 1,
+            },
+            {
+                "id": "s2",
+                "name": "Kadry i płace",
+                "price": "2199.00",
+                "capacity": 5,
+                "description": "Prawo pracy w praktyce",
+                "low_seats_comment": "Zostało niewiele miejsc.",
+                "dates": [],
+                "active": True,
+                "sort_order": 2,
+            },
         ]
+        db.add(
+            FormSubmission(
+                submission_id="training-declaration-1",
+                form_slug="training_form",
+                form_name="Training Form",
+                officer_decision="accepted",
+                acceptance_required="Tak",
+                declaration_required="Tak",
+            )
+        )
+        db.commit()
+
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    assert 'name="training_item_code"' not in edit_html
+    assert "RRRR-MM-DD|" not in edit_html
+    assert 'type="date" name="training_date_start_date" value="2026-09-01"' in edit_html
+    assert "Dodaj termin" in edit_html
+
+    declaration_response = admin_client.get("/declaration/training_form/training-declaration-1")
+    declaration_html = declaration_response.get_data(as_text=True)
+
+    assert declaration_response.status_code == 200
+    assert "Excel zaawansowany" in declaration_html
+    assert "Kadry i płace" in declaration_html
+    assert "1 345,50 zł" in declaration_html
+    assert "2 199,00 zł" in declaration_html
+    assert "Dostępne miejsca: 10" in declaration_html
+    assert "Dostępne miejsca: 5" in declaration_html
+    assert "Zostało niewiele miejsc." in declaration_html
+    assert "Tego komentarza nie pokazuj." not in declaration_html
+    assert "01.09.2026, 09:00–12:00" in declaration_html
+    assert "Lokalizacja: Zielona Góra" in declaration_html
+    assert "Szkolenie 1" not in declaration_html
+    assert "Szkolenie 2" not in declaration_html
+    assert "Szkolenie 3" not in declaration_html
 
 
 def test_declaration_download_disabled_before_declaration_form_is_completed(admin_app, admin_client):

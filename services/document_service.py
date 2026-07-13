@@ -21,6 +21,7 @@ from services.documents.pdf_render_service import (
 from services.documents.signed_document_service import SignedDocumentService
 from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
+from services.training_service import format_price_pln, parse_decimal_price, parse_training_snapshots
 from services.upload_validation import UploadValidationError, validate_pdf_upload
 
 
@@ -123,8 +124,8 @@ class DocumentService:
             form_definition=form_config,
             submission_id=submission_id,
             row=render_row,
-            submission_view=build_submission_view(form_config, row),
-            consents_view=build_consents_view(form_config, row),
+            submission_view=build_submission_view(form_config, render_row),
+            consents_view=build_consents_view(form_config, render_row),
             pdf_image_url=self.resolve_pdf_image_url(form_config),
             document_type=document_id,
         )
@@ -182,7 +183,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
-        items = normalize_selected_items(row.get(collection_field))
+        items = parse_training_snapshots(row.get(collection_field)) or normalize_selected_items(row.get(collection_field))
         if not items:
             raise RuntimeError("Nie wybrano elementów do wygenerowania dokumentów.")
 
@@ -206,6 +207,7 @@ class DocumentService:
                 "training_id": item_id,
                 "training_name": item.get("name", item.get("label", "")),
                 "training_price": item.get("price", ""),
+                "training_price_formatted": item.get("price_formatted") or format_price_pln(item.get("price"), item.get("currency")),
                 "agreement_sequence": sequence,
                 "agreement_number": agreement_number,
                 "generated_date": generated_date,
@@ -255,6 +257,7 @@ class DocumentService:
                     "training_id": str(item_id),
                     "training_name": item.get("name", item.get("label", "")),
                     "training_price": item.get("price", ""),
+                    "training_price_formatted": item.get("price_formatted") or format_price_pln(item.get("price"), item.get("currency")),
                     "sequence": sequence,
                     "number": agreement_number,
                     "generated_at": generated_date,
@@ -611,14 +614,15 @@ class DocumentService:
         )
 
     def _add_collection_context(self, context: dict, row: Mapping[str, Any]) -> None:
-        selected_trainings = normalize_selected_items(row.get("selected_trainings"))
+        selected_trainings = parse_training_snapshots(row.get("selected_trainings")) or normalize_selected_items(row.get("selected_trainings"))
         context["selected_trainings"] = selected_trainings
         context["selected_trainings_normalized"] = selected_trainings
         context["training_agreements"] = normalize_selected_items(row.get("training_agreements"))
         context["selected_trainings_total"] = sum(
-            parse_float(training.get("price"))
-            for training in selected_trainings
+            (parse_decimal_price(training.get("price")) or 0 for training in selected_trainings),
+            parse_decimal_price("0") or 0,
         )
+        context["selected_trainings_total_formatted"] = format_price_pln(context["selected_trainings_total"])
 
 
 def normalize_text(value: Any) -> str:
@@ -695,13 +699,6 @@ def first_non_empty(*values: Any) -> str:
         if text:
             return text
     return ""
-
-
-def parse_float(value: Any) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def parse_json_list(value: str | list | None) -> list[dict]:
@@ -848,6 +845,11 @@ def build_document_pdf_context(
     pdf_image_url: str | None,
     document_type: str,
 ) -> dict:
+    selected_trainings = parse_training_snapshots(row.get("selected_trainings"))
+    selected_trainings_total = sum(
+        (parse_decimal_price(training.get("price")) or 0 for training in selected_trainings),
+        parse_decimal_price("0") or 0,
+    )
     return {
         **dict(row),
         "form_definition": form_definition,
@@ -859,6 +861,9 @@ def build_document_pdf_context(
         "pdf_image_url": pdf_image_url,
         "pdf_image_alt": form_definition.get("title", ""),
         "document_type": document_type,
+        "selected_trainings": selected_trainings,
+        "selected_trainings_total": selected_trainings_total,
+        "selected_trainings_total_formatted": format_price_pln(selected_trainings_total),
         "generated_at": datetime.now().strftime("%d.%m.%Y"),
         "generated_date": datetime.now().strftime("%Y-%m-%d"),
         "submission_date": row.get("created_at") or row.get("submission_date") or "",

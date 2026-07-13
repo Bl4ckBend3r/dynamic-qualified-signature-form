@@ -3,6 +3,7 @@ import zipfile
 from io import BytesIO
 
 import pytest
+from werkzeug.datastructures import MultiDict
 
 pytest.importorskip("sqlalchemy")
 
@@ -17,7 +18,9 @@ from services.admin_form_service import (
     form_has_additional_fields,
     normalize_admin_form_definition,
     normalize_field_stage,
+    parse_training_dates_from_form,
     parse_workflow_json,
+    parse_training_dates_text,
     parse_uploaded_form_definition,
     sync_form_fields,
     validate_admin_form_config,
@@ -112,6 +115,53 @@ def test_build_form_definition_from_admin_form_updates_workflow():
     assert definition["workflow"]["initial_step"] == "submitted"
     assert definition["workflow"]["requires_declaration"] is True
     assert definition["workflow"]["declaration_template_html"] == "<p>Deklaracja</p>"
+
+
+def test_parse_training_dates_text_validates_and_sorts_dates():
+    dates = parse_training_dates_text(
+        "2026-09-10||10:00|12:00|Sala 2|Opis\n2026-08-01||||Sala 1|"
+    )
+
+    assert [date["start_date"] for date in dates] == ["2026-08-01", "2026-09-10"]
+    assert dates[1]["location"] == "Sala 2"
+
+
+def test_parse_training_dates_text_rejects_invalid_date_range():
+    with pytest.raises(ValueError, match="Data zakończenia"):
+        parse_training_dates_text("2026-09-10|2026-09-01||||")
+
+
+def test_parse_training_dates_from_readable_form_fields_groups_rows_by_training():
+    form_data = MultiDict(
+        [
+            ("training_date_training_index", "1"),
+            ("training_date_start_date", "2026-09-10"),
+            ("training_date_end_date", "2026-09-11"),
+            ("training_date_start_time", "09:00"),
+            ("training_date_end_time", "15:00"),
+            ("training_date_location", "Zielona Góra"),
+            ("training_date_description", "Warsztat"),
+            ("training_date_training_index", "0"),
+            ("training_date_start_date", "2026-08-01"),
+            ("training_date_end_date", ""),
+            ("training_date_start_time", ""),
+            ("training_date_end_time", ""),
+            ("training_date_location", "Online"),
+            ("training_date_description", ""),
+        ]
+    )
+
+    dates = parse_training_dates_from_form(form_data, 2)
+
+    assert dates[0][0]["start_date"] == "2026-08-01"
+    assert dates[1][0] == {
+        "start_date": "2026-09-10",
+        "end_date": "2026-09-11",
+        "start_time": "09:00",
+        "end_time": "15:00",
+        "location": "Zielona Góra",
+        "description": "Warsztat",
+    }
 
 
 def test_sync_form_fields_keeps_database_shape(tmp_path):

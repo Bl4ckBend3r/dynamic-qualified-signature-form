@@ -6,6 +6,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from services.training_service import format_admin_value, parse_training_snapshots
+
 
 SUPPORTED_FIELD_TYPES = {
     "text",
@@ -745,9 +747,17 @@ def build_submission_view(
 
 
 def format_value_for_pdf(field_type: str, value: str) -> str:
+    if field_type == "training_selection":
+        trainings = parse_training_snapshots(value)
+        if not trainings:
+            return "Brak danych"
+        return "\n".join(
+            f"{training.get('name', '')} - {training.get('price_formatted') or 'Brak danych o cenie'}"
+            for training in trainings
+        )
     if field_type == "checkbox":
         return "Tak" if value == "Tak" else "Nie"
-    return value if value != "" else "—"
+    return format_admin_value(value)
 
 
 def resolve_signature_method(

@@ -894,6 +894,72 @@ textarea:focus {
     display: block;
     object-fit: contain;
 }
+
+.training-option {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+}
+
+.training-option.is-unavailable {
+    color: #6d7280;
+}
+
+.training-availability {
+    display: block;
+    margin-top: 4px;
+    color: #4b5563;
+    font-weight: 700;
+}
+
+.training-no-seats {
+    color: #a33a3a;
+    font-weight: 800;
+}
+
+.training-low-seats-comment {
+    color: #7a5a12;
+}
+
+.training-description,
+.training-empty {
+    margin: 0;
+    color: #4b5563;
+    line-height: 1.5;
+}
+
+.training-empty {
+    padding: 10px 0;
+    font-weight: 700;
+}
+
+.training-dates-toggle {
+    width: fit-content;
+    border: 1px solid #c7ccd8;
+    border-radius: 6px;
+    background: #fff;
+    color: #27324a;
+    padding: 7px 10px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.training-dates-panel {
+    border-left: 3px solid #b38d45;
+    padding-left: 12px;
+}
+
+.training-dates-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 18px;
+}
+
+.training-dates-list li span {
+    display: block;
+    color: #4b5563;
+}
 /* RESPONSIVE */
 
 @media (max-width: 1200px) {

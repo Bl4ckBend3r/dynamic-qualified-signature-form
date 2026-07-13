@@ -16,6 +16,8 @@ from form_loader import (
 from services.document_service import DocumentType, serialize_json_list
 from services.process_service import ProcessStatus
 from services.training_agreement_service import extract_training_selection, get_training_selection_field
+from services.training_service import format_price_pln, normalize_trainings_config
+from services.training_availability_service import TrainingAvailabilityService
 
 
 @dataclass
@@ -31,12 +33,18 @@ class DeclarationFlowResult:
 
 class DeclarationFlowService:
     @staticmethod
-    def build_declaration_form_definition(declaration_config: Mapping[str, Any]) -> dict:
+    def build_declaration_form_definition(
+        declaration_config: Mapping[str, Any],
+        availability: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict:
         return {
             "title": declaration_config.get("form_title") or "Uzupelnienie deklaracji uczestnictwa",
             "description": declaration_config.get("form_description") or "",
             "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklaracje PDF",
-            "fields": fields_with_training_selection_in_training_section(declaration_config.get("fields") or []),
+            "fields": normalize_training_fields(
+                fields_with_training_selection_in_training_section(declaration_config.get("fields") or []),
+                availability=availability,
+            ),
         }
 
     @staticmethod
@@ -56,8 +64,21 @@ class DeclarationFlowService:
     def requires_additional_fields(self, form_config: dict, row: Mapping[str, Any]) -> bool:
         return has_additional_fields_after_acceptance(form_config) and not self.additional_fields_completed(row)
 
-    def prepare_declaration_form(self, *, submission: dict, form_config: dict, declaration_config: Mapping[str, Any]) -> DeclarationFlowResult:
-        declaration_definition = self.build_declaration_form_definition(declaration_config)
+    def prepare_declaration_form(
+        self,
+        *,
+        submission: dict,
+        form_config: dict,
+        declaration_config: Mapping[str, Any],
+        submission_repository=None,
+    ) -> DeclarationFlowResult:
+        training_field = get_training_selection_field(declaration_config)
+        availability = self._training_availability(
+            submission=submission,
+            training_field=training_field,
+            submission_repository=submission_repository,
+        )
+        declaration_definition = self.build_declaration_form_definition(declaration_config, availability=availability)
         return DeclarationFlowResult(
             success=True,
             values=dict(submission["row"]),
@@ -77,15 +98,20 @@ class DeclarationFlowService:
         document_service,
         refresh_submission: Callable[[str], dict | None],
     ) -> DeclarationFlowResult:
-        declaration_definition = self.build_declaration_form_definition(declaration_config)
+        training_field = get_training_selection_field(declaration_config)
+        availability = self._training_availability(
+            submission=submission,
+            training_field=training_field,
+            submission_repository=submission_repository,
+        )
+        declaration_definition = self.build_declaration_form_definition(declaration_config, availability=availability)
         declaration_data = extract_submission_data(declaration_definition, form_data)
         declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values = {**submission["row"], **declaration_data}
         errors = validate_submission(declaration_definition, declaration_data)
-        training_field = get_training_selection_field(form_config)
 
         if training_field:
-            selected_trainings, training_error = extract_training_selection(training_field, form_data)
+            selected_trainings, training_error = extract_training_selection(training_field, form_data, availability=availability)
             declaration_data["selected_trainings"] = serialize_json_list(selected_trainings)
             values["selected_trainings"] = declaration_data["selected_trainings"]
             if training_error:
@@ -121,6 +147,21 @@ class DeclarationFlowService:
             values=values,
             declaration_definition=declaration_definition,
             generated=generated,
+        )
+
+    def _training_availability(
+        self,
+        *,
+        submission: dict,
+        training_field: Mapping[str, Any] | None,
+        submission_repository=None,
+    ) -> dict[str, dict]:
+        if not training_field or not submission_repository:
+            return {}
+        return TrainingAvailabilityService(submission_repository).availability_for_field(
+            form_slug=str(submission.get("form_slug") or ""),
+            field=training_field,
+            current_submission_id=str(submission.get("submission_id") or ""),
         )
 
     def save_additional_fields(
@@ -203,3 +244,25 @@ def is_training_section_label(value: Any) -> bool:
     text = unicodedata.normalize("NFKD", str(value or "").strip().lower())
     ascii_text = "".join(char for char in text if not unicodedata.combining(char))
     return "wybor" in ascii_text and "szkolen" in ascii_text
+
+
+def normalize_training_fields(
+    fields: list[dict],
+    availability: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict]:
+    normalized = []
+    availability = availability or {}
+    for field in fields:
+        if field.get("type") == "training_selection":
+            field = dict(field)
+            field["catalog"] = [
+                {**item, **dict(availability.get(item["id"], {}))}
+                for item in normalize_trainings_config(field, active_only=True)
+            ]
+            if field.get("max_total_amount") not in (None, ""):
+                field["max_total_formatted"] = format_price_pln(
+                    field.get("max_total_amount"),
+                    field.get("currency"),
+                )
+        normalized.append(field)
+    return normalized

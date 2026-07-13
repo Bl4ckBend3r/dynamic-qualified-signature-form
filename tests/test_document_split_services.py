@@ -330,6 +330,21 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
         "form_slug": "sample",
         "row": {"selected_trainings": json.dumps([{"id": "old", "name": "Stare", "price": 3000}])},
     }
+    declaration_config = {
+        "id": "declaration",
+        "enabled": True,
+        "fields": [
+            {
+                "type": "training_selection",
+                "name": "selected_trainings",
+                "required": True,
+                "catalog": [
+                    {"id": "s1", "name": "Szkolenie 1", "price": 6200},
+                    {"id": "s2", "name": "Szkolenie 2", "price": 800},
+                ],
+            }
+        ],
+    }
     form_config = {
         "documents": [
             {
@@ -339,11 +354,7 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
                     {
                         "type": "training_selection",
                         "name": "selected_trainings",
-                        "required": True,
-                        "catalog": [
-                            {"id": "s1", "name": "Szkolenie 1", "price": 6200},
-                            {"id": "s2", "name": "Szkolenie 2", "price": 800},
-                        ],
+                        "catalog": [{"id": "stale", "name": "Nieaktualne szkolenie", "price": 1}],
                     }
                 ],
             }
@@ -354,7 +365,7 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
         submission_id="abc",
         submission=submission,
         form_config=form_config,
-        declaration_config=form_config["documents"][0],
+        declaration_config=declaration_config,
         form_data=SimpleNamespace(getlist=lambda name: ["s1", "s2"], keys=lambda: ["selected_trainings"], get=lambda name: ""),
         rules_service=SimpleNamespace(apply_rules=lambda row, config, data: {}),
         submission_repository=repository,
@@ -368,14 +379,14 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
 
     assert result.success is True
     context_extra = document_service.generated_documents[0][1]["context_extra"]
-    assert json.loads(context_extra["selected_trainings"]) == [
-        {"id": "s1", "name": "Szkolenie 1", "price": 6200.0},
-        {"id": "s2", "name": "Szkolenie 2", "price": 800.0},
+    selected = json.loads(context_extra["selected_trainings"])
+    assert [(item["id"], item["name"], item["price"]) for item in selected] == [
+        ("s1", "Szkolenie 1", "6200.00"),
+        ("s2", "Szkolenie 2", "800.00"),
     ]
-    assert json.loads(document_service.generated_documents[0][0][0]["row"]["selected_trainings"]) == [
-        {"id": "s1", "name": "Szkolenie 1", "price": 6200.0},
-        {"id": "s2", "name": "Szkolenie 2", "price": 800.0},
-    ]
+    assert selected[0]["price_formatted"].startswith("6 200,00")
+    row_selected = json.loads(document_service.generated_documents[0][0][0]["row"]["selected_trainings"])
+    assert [(item["id"], item["price"]) for item in row_selected] == [("s1", "6200.00"), ("s2", "800.00")]
 
 
 def test_agreement_flow_generates_collection_with_today_by_default():

@@ -5,6 +5,7 @@ from typing import Any
 
 from models import Form, FormField, FormSubmission
 from services.admin_form_service import normalize_admin_form_definition
+from services.training_service import format_admin_value, parse_training_snapshots
 from services.workflow_service import workflow_status_label
 
 
@@ -40,6 +41,178 @@ def build_filter_fields(fields: list[FormField], submissions: list[FormSubmissio
                 result.append((key, key))
                 seen.add(key)
     return result
+
+
+SECTION_FIELDS = [
+    ("Dane podstawowe", ["submission_id", "form_name", "created_at", "imiona", "nazwisko", "obywatelstwo", "wyksztalcenie"]),
+    ("Dane kontaktowe", ["email", "telefon"]),
+    ("Adres", ["wojewodztwo", "powiat", "gmina", "miejscowosc", "kod_pocztowy", "ulica", "nr_budynku", "nr_lokalu"]),
+    ("Dane z PESEL", ["pesel", "data_urodzenia", "miejsce_urodzenia", "plec", "wiek"]),
+    (
+        "Deklaracje i oswiadczenia",
+        [
+            "zamieszkuje_lubuskie",
+            "pracuje_lubuskie",
+            "osoba_niepelnosprawna",
+            "specjalne_potrzeby",
+            "specjalne_potrzeby_opis",
+            "mniejszosc_narodowa",
+            "osoba_bezdomna",
+            "niekorzystna_sytuacja",
+            "dzial_wsparcia",
+            "osw_regulamin",
+            "osw_kryteria",
+            "osw_finansowanie",
+            "osw_brak_gwarancji",
+            "osw_rodo",
+            "osw_ewaluacja",
+            "osw_zatrudnienie",
+            "osw_monitoring",
+            "osw_prawdziwosc",
+            "deklaracja_18_lat",
+            "deklaracja_lubuskie",
+            "deklaracja_wlasna_inicjatywa",
+            "deklaracja_brak_dzialalnosci",
+            "deklaracja_brak_ksztalcenia",
+            "deklaracja_obszar_wiejski",
+            "deklaracja_niepelnosprawnosc",
+            "deklaracja_umiejetnosci_podstawowe",
+            "deklaracja_grupa_niekorzystna",
+            "deklaracja_zgoda_wizerunek",
+            "deklaracja_prawdziwosc_danych",
+        ],
+    ),
+    (
+        "Status zgloszenia",
+        [
+            "process_status",
+            "workflow_step",
+            "acceptance_required",
+            "acceptance_email_sent",
+            "declaration_required",
+            "declaration_generated",
+            "declaration_signed",
+            "agreement_required",
+            "agreement_blocked",
+            "agreement_signed",
+            "correction_required",
+            "additional_fields_completed",
+        ],
+    ),
+    (
+        "Pliki i dokumenty",
+        [
+            "pdf_filename",
+            "signed_pdf_filename",
+            "declaration_filename",
+            "declaration_signed_filename",
+            "agreement_filename",
+            "agreement_signed_filename",
+            "signature_status",
+            "signature_method",
+        ],
+    ),
+    (
+        "Decyzje urzednika",
+        [
+            "officer_decision",
+            "officer_decision_reason",
+            "officer_decision_email_requested",
+            "officer_decision_email_sent",
+            "decision_email_sent",
+            "decision_email_sent_for",
+        ],
+    ),
+]
+
+
+TECHNICAL_FIELDS = {
+    "id",
+    "access_token",
+    "data_json",
+    "selected_trainings",
+    "training_agreements",
+    "signature_request_id",
+    "updated_at",
+}
+
+
+DEFAULT_LABELS = {
+    "submission_id": "ID zgloszenia",
+    "form_name": "Formularz",
+    "created_at": "Data utworzenia",
+    "process_status": "Status procesu",
+    "workflow_step": "Krok workflow",
+    "officer_decision": "Decyzja urzednika",
+    "officer_decision_reason": "Uzasadnienie decyzji",
+    "selected_trainings": "Wybrane szkolenia",
+}
+
+
+def build_submission_detail_sections(form: Form, submission: FormSubmission) -> dict:
+    form_config = normalize_admin_form_definition(form.definition_json or {})
+    labels = build_field_labels(form_config)
+    row = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
+    row.update(submission.data_json or {})
+    used_fields: set[str] = set()
+    sections = []
+    for title, field_names in SECTION_FIELDS:
+        items = []
+        for field_name in field_names:
+            value = row.get(field_name)
+            if is_empty_admin_value(value):
+                continue
+            items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": format_admin_value(value)})
+            used_fields.add(field_name)
+        if items:
+            sections.append({"title": title, "items": items})
+
+    dynamic_items = []
+    for key, value in (submission.data_json or {}).items():
+        if key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
+            continue
+        dynamic_items.append({"label": labels.get(key, key), "value": format_admin_value(value)})
+        used_fields.add(key)
+    if dynamic_items:
+        sections.append({"title": "Dodatkowe dane formularza", "items": dynamic_items})
+
+    technical_items = [
+        {"label": key, "value": format_admin_value(value)}
+        for key, value in row.items()
+        if key in TECHNICAL_FIELDS and not is_empty_admin_value(value)
+    ]
+    return {
+        "sections": sections,
+        "trainings": parse_training_snapshots(submission.selected_trainings),
+        "technical_items": technical_items,
+    }
+
+
+def build_field_labels(form_config: dict) -> dict[str, str]:
+    labels = dict(DEFAULT_LABELS)
+    for field in form_config.get("fields") or []:
+        if field.get("name"):
+            labels[field["name"]] = field.get("label") or field["name"]
+    documents = form_config.get("documents") or []
+    if isinstance(documents, dict):
+        documents = documents.values()
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        for field in document.get("fields") or []:
+            if isinstance(field, dict) and field.get("name"):
+                labels[field["name"]] = field.get("label") or field["name"]
+    return labels
+
+
+def is_empty_admin_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, dict)):
+        return not value
+    return False
 
 
 def filter_submissions(submissions: list[FormSubmission], args) -> list[FormSubmission]:

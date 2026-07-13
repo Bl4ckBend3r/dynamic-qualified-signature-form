@@ -16,16 +16,52 @@
     <button class="btn-primary" type="submit">Zapisz status</button>
     <a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
 </form>
-<h2>Dane</h2>
-<table class="data-table">
-    {% for key, value in (submission.data_json or {}).items() %}
-        <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
-    {% endfor %}
-</table>
+<h2>Dane zgłoszenia</h2>
+{% for section in detail_view.sections %}
+    <section class="admin-card">
+        <h3>{{ section.title }}</h3>
+        <table class="data-table">
+            <tbody>
+                {% for item in section["items"] %}
+                    <tr><th>{{ item.label }}</th><td>{{ item.value }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+{% endfor %}
+<section class="admin-card">
+    <h3>Wybrane szkolenia</h3>
+    <table class="data-table">
+        <thead><tr><th>Nazwa szkolenia</th><th>Cena szkolenia</th><th>Opis</th></tr></thead>
+        <tbody>
+            {% for training in detail_view.trainings %}
+                <tr>
+                    <td>{{ training.name }}</td>
+                    <td>{{ training.price_formatted }}</td>
+                    <td>{{ training.description or "Brak danych" }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="3">Brak danych o szkoleniach.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% if detail_view.technical_items %}
+    <details class="admin-card">
+        <summary>Dane techniczne</summary>
+        <table class="data-table">
+            <tbody>
+                {% for item in detail_view.technical_items %}
+                    <tr><th>{{ item.label }}</th><td>{{ item.value }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </details>
+{% endif %}
 <h2>Historia workflow</h2>
-<p><small>Zrodlo: {{ workflow_history.source }}</small></p>
+<p><small>Źródło: {{ workflow_history.source }}</small></p>
 <table class="data-table">
-    <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powod</th><th>Data</th></tr></thead>
+    <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powód</th><th>Data</th></tr></thead>
     <tbody>{% for event in workflow_history.events %}
         <tr>
             <td>{{ event.new_status_label or event.new_status }}</td>
@@ -39,7 +75,7 @@
     {% endfor %}</tbody>
 </table>
 <h2>Historia decyzji</h2>
-<p><small>Zrodlo: {{ decision_history.source }}</small></p>
+<p><small>Źródło: {{ decision_history.source }}</small></p>
 <table class="data-table">
     <thead><tr><th>Decyzja</th><th>Uzasadnienie</th><th>Status docelowy</th><th>Mail</th><th>Data</th></tr></thead>
     <tbody>{% for decision in decision_history.decisions %}

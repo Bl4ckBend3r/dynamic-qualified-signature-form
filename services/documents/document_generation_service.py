@@ -14,6 +14,7 @@ from services.documents.pdf_render_service import PdfRenderService
 from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.training_agreement_service import build_training_agreement_number
+from services.training_service import format_price_pln, parse_training_snapshots
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ def build_training_agreement_record(
         "training_id": training.get("id", ""),
         "training_name": training.get("name", ""),
         "training_price": training.get("price", ""),
+        "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
         "sequence": sequence,
         "number": agreement_number,
         "generated_at": generated_date,
@@ -132,7 +134,7 @@ def generate_training_agreements_for_submission(
     if not form_definition:
         raise RuntimeError("Nie znaleziono definicji formularza dla umowy.")
 
-    selected_trainings = parse_selected_trainings(row)
+    selected_trainings = parse_training_snapshots(row.get("selected_trainings")) or parse_selected_trainings(row)
     if not selected_trainings:
         raise RuntimeError("Nie wybrano szkolen do wygenerowania umow.")
 
@@ -169,6 +171,7 @@ def generate_training_agreements_for_submission(
             "training_id": training.get("id", ""),
             "training_name": training.get("name", ""),
             "training_price": training.get("price", ""),
+            "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
             "agreement_number": agreement_number,
             "agreement_generated_at": resolved_date,
         }
@@ -186,6 +189,7 @@ def generate_training_agreements_for_submission(
                 "training": training,
                 "agreement_number": agreement_number,
                 "agreement_generated_at": resolved_date,
+                "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
             }
         )
         agreement_bytes = renderer.render_document_pdf_bytes(

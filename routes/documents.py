@@ -185,6 +185,7 @@ def declaration_form(slug: str, submission_id: str):
         submission=submission,
         form_config=form_config,
         declaration_config=declaration_config,
+        submission_repository=services.submission_repository,
     )
 
     if request.method == "POST":

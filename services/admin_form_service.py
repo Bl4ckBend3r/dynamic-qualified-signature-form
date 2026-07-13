@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import zipfile
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.training_service import decimal_price_to_storage, normalize_trainings_config
 from validators.form_config_validator import FormConfigValidator
 
 
@@ -28,7 +30,9 @@ def get_declaration_training_field(form_definition: dict) -> dict:
             continue
         for field in document.get("fields") or []:
             if isinstance(field, dict) and field.get("type") == "training_selection":
-                return {"enabled": True, **dict(field)}
+                normalized_field = {"enabled": True, **dict(field)}
+                normalized_field["catalog"] = normalize_trainings_config(normalized_field, active_only=False)
+                return normalized_field
     return {
         "enabled": False,
         "type": "training_selection",
@@ -114,7 +118,7 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
             "currency": form_data.get("training_selection_currency", "PLN").strip() or "PLN",
             "catalog": parse_training_catalog(form_data),
         }
-        max_total = parse_optional_float(form_data.get("training_selection_max_total"))
+        max_total = decimal_price_to_storage(form_data.get("training_selection_max_total"))
         if max_total is not None:
             training_field["max_total_amount"] = max_total
         insert_at = training_section_insert_index(fields)
@@ -132,31 +136,176 @@ def parse_training_catalog(form_data) -> list[dict]:
     item_ids = form_data.getlist("training_item_id")
     names = form_data.getlist("training_item_name")
     prices = form_data.getlist("training_item_price")
+    capacities = form_data.getlist("training_item_capacity")
+    descriptions = form_data.getlist("training_item_description")
+    low_comments = form_data.getlist("training_item_low_seats_comment")
+    dates_by_training = parse_training_dates_from_form(form_data, len(names))
+    active_values = form_data.getlist("training_item_active")
+    active_indexes = {int(item) for item in active_values if str(item).isdigit()}
+    default_active = form_data.get("training_active_present") != "1" and not active_values
+    sort_orders = form_data.getlist("training_item_sort_order")
     for index, name in enumerate(names):
         clean_name = str(name or "").strip()
         if not clean_name:
             continue
         item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
-        price = parse_optional_float(prices[index] if index < len(prices) else "")
+        training_id = item_id or slugify_training_id(clean_name)
+        capacity = parse_required_capacity(capacities[index] if index < len(capacities) else "")
         catalog.append(
             {
-                "id": item_id or slugify_training_id(clean_name),
+                "id": training_id,
                 "name": clean_name,
-                "price": price or 0,
+                "price": decimal_price_to_storage(prices[index] if index < len(prices) else ""),
+                "capacity": capacity,
+                "description": str(descriptions[index] if index < len(descriptions) else "").strip(),
+                "low_seats_comment": str(low_comments[index] if index < len(low_comments) else "").strip(),
+                "dates": dates_by_training[index],
+                "active": default_active or index in active_indexes,
+                "sort_order": parse_optional_int_value(sort_orders[index] if index < len(sort_orders) else "", index + 1),
             }
         )
-    return catalog
+    return sorted(catalog, key=lambda item: (item["sort_order"], item["name"].lower()))
 
 
-def parse_optional_float(value: Any) -> float | int | None:
-    text = str(value or "").strip().replace(",", ".")
+def parse_optional_int_value(value: Any, fallback: int) -> int:
+    text = str(value or "").strip()
     if not text:
-        return None
+        return fallback
     try:
-        parsed = float(text)
-    except ValueError:
-        return None
-    return int(parsed) if parsed.is_integer() else parsed
+        parsed = int(text)
+    except ValueError as exc:
+        raise ValueError("Kolejność szkolenia musi być liczbą całkowitą.") from exc
+    if parsed < 0:
+        raise ValueError("Kolejność szkolenia nie może być mniejsza niż 0.")
+    return parsed
+
+
+def parse_training_dates_from_form(form_data, training_count: int) -> list[list[dict]]:
+    dates_by_training: list[list[dict]] = [[] for _ in range(training_count)]
+    training_indexes = form_data.getlist("training_date_training_index")
+    if training_indexes:
+        start_dates = form_data.getlist("training_date_start_date")
+        end_dates = form_data.getlist("training_date_end_date")
+        start_times = form_data.getlist("training_date_start_time")
+        end_times = form_data.getlist("training_date_end_time")
+        locations = form_data.getlist("training_date_location")
+        descriptions = form_data.getlist("training_date_description")
+        for row_index, training_index_value in enumerate(training_indexes):
+            try:
+                training_index = int(str(training_index_value).strip())
+            except ValueError as exc:
+                raise ValueError("Nie można przypisać terminu do szkolenia.") from exc
+            if training_index < 0 or training_index >= training_count:
+                raise ValueError("Nie można przypisać terminu do szkolenia.")
+
+            start_date = _form_list_value(start_dates, row_index)
+            end_date = _form_list_value(end_dates, row_index)
+            start_time = _form_list_value(start_times, row_index)
+            end_time = _form_list_value(end_times, row_index)
+            location = _form_list_value(locations, row_index)
+            description = _form_list_value(descriptions, row_index)
+            if not any((start_date, end_date, start_time, end_time, location, description)):
+                continue
+            validate_training_date_range(
+                start_date,
+                end_date,
+                start_time,
+                end_time,
+                row_index + 1,
+            )
+            dates_by_training[training_index].append(
+                {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "location": location,
+                    "description": description,
+                }
+            )
+        for dates in dates_by_training:
+            dates.sort(key=lambda item: (item["start_date"], item.get("start_time") or ""))
+        return dates_by_training
+
+    legacy_values = form_data.getlist("training_item_dates")
+    for index in range(training_count):
+        legacy_value = legacy_values[index] if index < len(legacy_values) else ""
+        dates_by_training[index] = parse_training_dates_text(legacy_value)
+    return dates_by_training
+
+
+def _form_list_value(values: list[Any], index: int) -> str:
+    return str(values[index] if index < len(values) else "").strip()
+
+
+def parse_required_capacity(value: Any) -> int:
+    text = str(value or "").strip()
+    if text == "":
+        raise ValueError("Liczba miejsc szkolenia jest wymagana.")
+    try:
+        capacity = int(text)
+    except ValueError as exc:
+        raise ValueError("Liczba miejsc szkolenia musi być liczbą całkowitą.") from exc
+    if capacity < 0:
+        raise ValueError("Liczba miejsc szkolenia nie może być mniejsza niż 0.")
+    return capacity
+
+
+def parse_training_dates_text(value: Any) -> list[dict]:
+    dates = []
+    for line_no, raw_line in enumerate(str(value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        start_date = parts[0] if len(parts) > 0 else ""
+        end_date = parts[1] if len(parts) > 1 else ""
+        start_time = parts[2] if len(parts) > 2 else ""
+        end_time = parts[3] if len(parts) > 3 else ""
+        location = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        validate_training_date_range(start_date, end_date, start_time, end_time, line_no)
+        dates.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "start_time": start_time,
+                "end_time": end_time,
+                "location": location,
+                "description": description,
+            }
+        )
+    return sorted(dates, key=lambda item: (item["start_date"], item.get("start_time") or ""))
+
+
+def validate_training_date_range(start_date: str, end_date: str, start_time: str, end_time: str, line_no: int) -> None:
+    if not start_date:
+        raise ValueError(f"Termin szkolenia w wierszu {line_no} musi mieć datę rozpoczęcia.")
+    try:
+        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Data rozpoczęcia terminu w wierszu {line_no} musi mieć format RRRR-MM-DD.") from exc
+    parsed_end = parsed_start
+    if end_date:
+        try:
+            parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(f"Data zakończenia terminu w wierszu {line_no} musi mieć format RRRR-MM-DD.") from exc
+    if parsed_end < parsed_start:
+        raise ValueError("Data zakończenia szkolenia nie może być wcześniejsza niż data rozpoczęcia.")
+    if start_time:
+        validate_time(start_time, "Godzina rozpoczęcia", line_no)
+    if end_time:
+        validate_time(end_time, "Godzina zakończenia", line_no)
+    if parsed_end == parsed_start and start_time and end_time and end_time < start_time:
+        raise ValueError("Godzina zakończenia szkolenia nie może być wcześniejsza niż godzina rozpoczęcia.")
+
+
+def validate_time(value: str, label: str, line_no: int) -> None:
+    try:
+        datetime.strptime(value, "%H:%M")
+    except ValueError as exc:
+        raise ValueError(f"{label} terminu w wierszu {line_no} musi mieć format GG:MM.") from exc
 
 
 def slugify_training_id(value: str) -> str:

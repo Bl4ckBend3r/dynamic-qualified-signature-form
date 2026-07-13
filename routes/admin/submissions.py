@@ -10,6 +10,7 @@ from models import EmailLog, FormSubmission, SubmissionDecision, SubmissionFile,
 from services.admin_form_service import form_has_additional_fields
 from services.admin_submission_service import (
     admin_status_label,
+    build_submission_detail_sections,
     build_filter_fields,
     filter_submissions,
     sort_submissions,
@@ -109,10 +110,12 @@ def submission_detail(form_id: int, submission_pk: int):
         files = services.submission_document_service.list_documents(submission.submission_id)
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
+        detail_view = build_submission_detail_sections(form, submission)
         return render_template(
             "admin/submissions/detail.html",
             form=form,
             submission=submission,
+            detail_view=detail_view,
             files=files,
             workflow_history=workflow_history,
             decision_history=decision_history,

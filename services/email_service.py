@@ -1,4 +1,5 @@
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -34,6 +35,7 @@ def _send_email(
     timeout: int = 30,
     sender_name: str = "",
     reply_to: str = "",
+    inline_images: list[dict] | None = None,
 ) -> None:
     smtp_host = _normalize_smtp_host(smtp_host)
     smtp_user = str(smtp_user or "").strip()
@@ -47,14 +49,54 @@ def _send_email(
     if not recipients:
         raise RuntimeError("Brak odbiorców wiadomości e-mail.")
 
-    message = EmailMessage()
-    message["From"] = formataddr((str(sender_name or "").strip(), mail_from)) if sender_name else mail_from
-    message["To"] = ", ".join(recipients)
-    message["Subject"] = subject
-    if str(reply_to or "").strip():
-        message["Reply-To"] = str(reply_to).strip()
-    message.set_content(text_body)
-    message.add_alternative(html_body, subtype="html")
+    valid_inline_images = []
+    for image in inline_images or []:
+        content = image.get("content")
+        content_id = str(image.get("cid") or "").strip().strip("<>")
+        mime_type = str(image.get("mime_type") or "").strip().lower()
+        if isinstance(content, bytes) and content and content_id and mime_type.startswith("image/"):
+            valid_inline_images.append({**image, "cid": content_id, "mime_type": mime_type})
+    valid_cids = {image["cid"] for image in valid_inline_images}
+    cid_image_pattern = re.compile(
+        r"<img\b[^>]*\bsrc=[\"']cid:([^\"']+)[\"'][^>]*>",
+        flags=re.IGNORECASE,
+    )
+    html_body = cid_image_pattern.sub(
+        lambda match: match.group(0) if match.group(1) in valid_cids else "",
+        html_body,
+    )
+
+    def build_message(rendered_html: str) -> EmailMessage:
+        built = EmailMessage()
+        built["From"] = formataddr((str(sender_name or "").strip(), mail_from)) if sender_name else mail_from
+        built["To"] = ", ".join(recipients)
+        built["Subject"] = subject
+        if str(reply_to or "").strip():
+            built["Reply-To"] = str(reply_to).strip()
+        built.set_content(text_body)
+        built.add_alternative(rendered_html, subtype="html")
+        return built
+
+    message = build_message(html_body)
+    try:
+        html_part = message.get_payload()[-1]
+        for image in valid_inline_images:
+            content = image.get("content")
+            content_id = image["cid"]
+            mime_type = image["mime_type"]
+            _, subtype = mime_type.split("/", 1)
+            html_part.add_related(
+                content,
+                maintype="image",
+                subtype=subtype,
+                cid=f"<{content_id}>",
+                filename=str(image.get("filename") or "logo"),
+                disposition="inline",
+            )
+    except (AttributeError, IndexError, TypeError, ValueError):
+        logger.warning("Nie udało się osadzić logo inline; wiadomość zostanie wysłana bez logo.")
+        html_without_cid_images = cid_image_pattern.sub("", html_body)
+        message = build_message(html_without_cid_images)
 
     smtp_class = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
     logger.info("SMTP connect host=%r port=%s ssl=%s tls=%s", smtp_host, smtp_port, use_ssl, use_tls)

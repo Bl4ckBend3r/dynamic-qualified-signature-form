@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -163,6 +164,7 @@ class MailDispatchService:
         template=None,
         footer=None,
         sent_by_id: int | None = None,
+        inline_images: list[dict[str, Any]] | None = None,
     ) -> MailDispatchResult:
         recipient = str(recipient or "").strip()
         subject = str(subject or "").strip()
@@ -240,6 +242,7 @@ class MailDispatchService:
                 subject=subject,
                 html_body=html_body,
                 text_body=text_body or html_body,
+                inline_images=inline_images or [],
             )
             log = self.log_email(
                 db,
@@ -324,6 +327,7 @@ class MailDispatchService:
             template=template,
             footer=footer,
             sent_by_id=sent_by_id,
+            inline_images=layout.get("_inline_images", []),
         )
 
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:
@@ -384,7 +388,8 @@ class MailDispatchService:
                 submission_date=submission.created_at,
             )
             subject = self.render_subject(template.subject, context)
-            html_body = render_platform_mail_html(template, context, layout=self._layout_for_db(db))
+            layout = self._layout_for_db(db)
+            html_body = render_platform_mail_html(template, context, layout=layout)
             text_body = render_platform_mail_text(template, context)
             result = self.dispatch_raw(
                 event_type="submission_received",
@@ -397,6 +402,7 @@ class MailDispatchService:
                 form=form,
                 submission=submission,
                 template=None,
+                inline_images=self._inline_images_from_layout(layout),
             )
             db.commit()
             return result
@@ -458,12 +464,33 @@ class MailDispatchService:
             return {}
         layout = self.mail_settings_service.get_layout(db)
         logo_id = layout.get("logo_id")
-        if logo_id:
+        if logo_id and layout.get("logo_position") != "none":
             from models import Logo
 
             logo = db.get(Logo, logo_id)
             if logo and logo.active:
-                layout["logo_url"] = url_for(
-                    "public_forms.logo_asset", logo_id=logo.id, filename=logo.filename, _external=True
-                )
+                try:
+                    logo_path = Path(str(logo.storage_path or ""))
+                    content = logo_path.read_bytes() if logo_path.is_file() else b""
+                    mime_type = str(logo.mime_type or "").strip().lower()
+                    if content and mime_type.startswith("image/"):
+                        content_id = f"platform-logo-{logo.id}"
+                        layout["logo_url"] = f"cid:{content_id}"
+                        layout["_inline_images"] = [{
+                            "cid": content_id,
+                            "content": content,
+                            "mime_type": mime_type,
+                            "filename": Path(str(logo.filename or "logo")).name,
+                        }]
+                    else:
+                        current_app.logger.warning(
+                            "mail_logo_skipped logo_id=%s reason=asset_unavailable_or_invalid", logo.id
+                        )
+                except (OSError, ValueError):
+                    current_app.logger.warning("mail_logo_skipped logo_id=%s reason=asset_unavailable", logo.id)
         return layout
+
+    @staticmethod
+    def _inline_images_from_layout(layout: dict[str, Any]) -> list[dict[str, Any]]:
+        images = layout.get("_inline_images")
+        return images if isinstance(images, list) else []

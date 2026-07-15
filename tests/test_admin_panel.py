@@ -2510,6 +2510,9 @@ def test_system_mail_settings_are_superadmin_only_and_password_is_hidden(admin_a
     create_user(admin_app)
     login(admin_client)
     html = admin_client.get("/admin/mail-settings").get_data(as_text=True)
+    assert "Położenie logo w mailu" in html
+    assert "Wyrównanie logo" in html
+    assert "Wysokość logo" in html
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
 
     response = admin_client.post(
@@ -2533,6 +2536,9 @@ def test_system_mail_settings_are_superadmin_only_and_password_is_hidden(admin_a
             "layout_primary_color": "#123456",
             "layout_accent_color": "#abcdef",
             "layout_footer_html": "<p>Stopka</p>",
+            "layout_logo_position": "before_content",
+            "layout_logo_alignment": "right",
+            "layout_logo_height_px": "92",
         },
     )
 
@@ -2545,6 +2551,9 @@ def test_system_mail_settings_are_superadmin_only_and_password_is_hidden(admin_a
         assert settings.smtp_password_encrypted != "system-secret"
         assert service.decrypt_password(settings.smtp_password_encrypted) == "system-secret"
         assert settings.layout_config["platform_name"] == "Moja platforma"
+        assert settings.layout_config["logo_position"] == "before_content"
+        assert settings.layout_config["logo_alignment"] == "right"
+        assert settings.layout_config["logo_height_px"] == 92
         assert template.is_active is True
         assert template.subject == "Otrzymano {{ submission_id }}"
         assert "<script" not in template.html_body
@@ -2606,7 +2615,18 @@ def test_superadmin_deletes_used_logo_with_safe_detach_and_regular_admin_is_bloc
 
 def test_submission_received_uses_global_template_layout_and_logs_missing_recipient(admin_app):
     form_id = create_form(admin_app, slug="receipt_form", name="Receipt form", mail_mode="system")
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "mail-logo.png"
+    logo_path.write_bytes(b"inline-logo")
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Mail logo",
+            filename="mail-logo.png",
+            storage_path=str(logo_path),
+            mime_type="image/png",
+            active=True,
+        )
+        db.add(logo)
+        db.flush()
         db.add(
             SystemMailSettings(
                 smtp_config={
@@ -2625,6 +2645,10 @@ def test_submission_received_uses_global_template_layout_and_logs_missing_recipi
                     "primary_color": "#123456",
                     "accent_color": "#abcdef",
                     "footer_html": "<p>Global footer</p>",
+                    "logo_id": logo.id,
+                    "logo_position": "footer",
+                    "logo_alignment": "center",
+                    "logo_height_px": 64,
                 },
             )
         )
@@ -2675,6 +2699,10 @@ def test_submission_received_uses_global_template_layout_and_logs_missing_recipi
     assert "Global brand" in sent[0]["html_body"]
     assert "Global footer" in sent[0]["html_body"]
     assert "#123456" in sent[0]["html_body"]
+    assert sent[0]["html_body"].count('src="cid:platform-logo-') == 1
+    assert 'data-logo-position="footer"' in sent[0]["html_body"]
+    assert sent[0]["inline_images"][0]["content"] == b"inline-logo"
+    assert sent[0]["inline_images"][0]["cid"].startswith("platform-logo-")
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         sent_log = db.query(EmailLog).filter_by(public_submission_id="receipt-1").one()
         missing_log = db.query(EmailLog).filter_by(public_submission_id="receipt-no-email").one()
@@ -2724,3 +2752,54 @@ def test_submission_received_without_smtp_is_logged_and_does_not_fail(admin_app)
         log = db.query(EmailLog).filter_by(public_submission_id="no-smtp").one()
         assert log.status == "skipped"
         assert log.error_message == "Brak konfiguracji SMTP."
+
+
+def test_submission_received_omits_unavailable_logo_without_failing(admin_app):
+    create_form(admin_app, slug="missing_logo_form", name="Missing logo form", mail_mode="system")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Missing logo",
+            filename="missing.png",
+            storage_path=str(Path(admin_app.config["TEMP_DIR"]) / "does-not-exist.png"),
+            mime_type="image/png",
+            active=True,
+        )
+        db.add(logo)
+        db.flush()
+        db.add(SystemMailSettings(
+            smtp_config={"host": "smtp.test", "mail_from": "sender@example.com"},
+            layout_config={
+                "logo_id": logo.id,
+                "logo_position": "footer",
+                "logo_alignment": "center",
+                "logo_height_px": 64,
+                "footer_html": "<p>Footer remains</p>",
+            },
+        ))
+        db.add(PlatformMailTemplate(
+            template_type="submission_received",
+            name="Receipt",
+            subject="Receipt {{ submission_id }}",
+            html_body="<p>Body remains</p>",
+            is_active=True,
+        ))
+        db.add(FormSubmission(
+            submission_id="missing-logo",
+            form_slug="missing_logo_form",
+            form_name="Missing logo form",
+            email="jan@example.com",
+        ))
+        db.commit()
+
+    sent = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.test_request_context("/"):
+        result = dispatch.dispatch_submission_received("missing-logo")
+
+    assert result.status == "sent"
+    assert len(sent) == 1
+    assert "<img" not in sent[0]["html_body"]
+    assert "Body remains" in sent[0]["html_body"]
+    assert "Footer remains" in sent[0]["html_body"]
+    assert sent[0]["inline_images"] == []

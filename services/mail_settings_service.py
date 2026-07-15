@@ -14,12 +14,17 @@ from services.mail_template_service import sanitize_content_html
 
 
 MAIL_MODES = {"system", "custom", "disabled"}
+LOGO_POSITIONS = {"none", "header", "footer", "before_content", "after_content"}
+LOGO_ALIGNMENTS = {"left", "center", "right"}
 DEFAULT_LAYOUT = {
     "platform_name": "Platforma formularzy",
     "primary_color": "#1d2e5b",
     "accent_color": "#c8a35d",
     "footer_html": "",
     "logo_id": None,
+    "logo_position": "footer",
+    "logo_alignment": "center",
+    "logo_height_px": 64,
 }
 
 
@@ -101,6 +106,13 @@ class MailSettingsService:
         layout = dict(DEFAULT_LAYOUT)
         if settings and isinstance(settings.layout_config, dict):
             layout.update(settings.layout_config)
+        if layout.get("logo_position") not in LOGO_POSITIONS:
+            layout["logo_position"] = DEFAULT_LAYOUT["logo_position"]
+        if layout.get("logo_alignment") not in LOGO_ALIGNMENTS:
+            layout["logo_alignment"] = DEFAULT_LAYOUT["logo_alignment"]
+        layout["logo_height_px"] = _bounded_int(
+            layout.get("logo_height_px"), DEFAULT_LAYOUT["logo_height_px"], 16, 200
+        )
         return layout
 
     def config_from_form(self, form_data, *, prefix: str) -> dict[str, Any]:
@@ -120,12 +132,19 @@ class MailSettingsService:
         primary = _safe_color(form_data.get("layout_primary_color"), DEFAULT_LAYOUT["primary_color"])
         accent = _safe_color(form_data.get("layout_accent_color"), DEFAULT_LAYOUT["accent_color"])
         logo_id = str(form_data.get("layout_logo_id") or "").strip()
+        logo_position = str(form_data.get("layout_logo_position") or DEFAULT_LAYOUT["logo_position"]).strip()
+        logo_alignment = str(form_data.get("layout_logo_alignment") or DEFAULT_LAYOUT["logo_alignment"]).strip()
         return {
             "platform_name": str(form_data.get("layout_platform_name") or DEFAULT_LAYOUT["platform_name"]).strip()[:255],
             "primary_color": primary,
             "accent_color": accent,
             "footer_html": sanitize_content_html(str(form_data.get("layout_footer_html") or "").strip())[:50_000],
             "logo_id": int(logo_id) if logo_id.isdigit() else None,
+            "logo_position": logo_position if logo_position in LOGO_POSITIONS else DEFAULT_LAYOUT["logo_position"],
+            "logo_alignment": logo_alignment if logo_alignment in LOGO_ALIGNMENTS else DEFAULT_LAYOUT["logo_alignment"],
+            "logo_height_px": _bounded_int(
+                form_data.get("layout_logo_height_px"), DEFAULT_LAYOUT["logo_height_px"], 16, 200
+            ),
         }
 
     def test_connection(self, config: Mapping[str, Any]) -> None:

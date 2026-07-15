@@ -37,6 +37,9 @@ MAIL_LAYOUT = {
     "panel_shadow_or_secondary": "#606b88",
     "secondary_blue": "#5c6989",
     "secondary_blue_dark": "#303e65",
+    "logo_position": "footer",
+    "logo_alignment": "center",
+    "logo_height_px": 64,
 }
 
 ALLOWED_ZIP_EXTENSIONS = {".html", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
@@ -622,12 +625,52 @@ def render_platform_mail_html(
     footer_html = render_template_text(footer_html or "", context)
     footer_html = "\n".join(part for part in [layout_footer, footer_html] if part)
     platform_name = html.escape(str(mail_layout.get("platform_name") or ""))
-    logo_url = html.escape(str(mail_layout.get("logo_url") or ""))
-    brand_html = (
-        '<tr><td style="padding:0 24px 16px;text-align:center;">'
-        + (f'<img src="{logo_url}" alt="{platform_name}" style="max-width:180px;max-height:80px;width:auto;height:auto;">' if logo_url else platform_name)
-        + "</td></tr>"
-        if platform_name or logo_url
+    logo_position = str(mail_layout.get("logo_position") or "footer")
+    if logo_position not in {"none", "header", "footer", "before_content", "after_content"}:
+        logo_position = "footer"
+    logo_alignment = str(mail_layout.get("logo_alignment") or "center")
+    if logo_alignment not in {"left", "center", "right"}:
+        logo_alignment = "center"
+    try:
+        logo_height = min(200, max(16, int(mail_layout.get("logo_height_px") or 64)))
+    except (TypeError, ValueError):
+        logo_height = 64
+    raw_logo_url = str(mail_layout.get("logo_url") or "").strip()
+    safe_logo_url = raw_logo_url if raw_logo_url.lower().startswith(("cid:", "https://", "http://")) else ""
+    logo_url = html.escape(safe_logo_url, quote=True)
+    logo_margin = {
+        "left": "0 auto 0 0",
+        "center": "0 auto",
+        "right": "0 0 0 auto",
+    }[logo_alignment]
+    logo_block = (
+        f'<div class="platform-logo platform-logo-{logo_position}" data-logo-position="{logo_position}" '
+        f'align="{logo_alignment}" style="text-align:{logo_alignment};">'
+        f'<img src="{logo_url}" alt="" height="{logo_height}" '
+        f'style="height:{logo_height}px;width:auto;max-width:100%;display:block;border:0;margin:{logo_margin};">'
+        "</div>"
+        if logo_position != "none" and logo_url
+        else ""
+    )
+
+    def logo_row(position: str) -> str:
+        if logo_position != position or not logo_block:
+            return ""
+        return f'<tr><td style="padding:0 24px 16px;">{logo_block}</td></tr>'
+
+    header_logo_section = logo_row("header")
+    before_content_logo_section = logo_row("before_content")
+    after_content_logo_section = logo_row("after_content")
+    platform_name_html = (
+        f'<div class="platform-name" style="margin:0 0 12px;color:{mail_layout["primary_color"]};font-weight:700;">{platform_name}</div>'
+        if platform_name
+        else ""
+    )
+    footer_parts = [logo_block if logo_position == "footer" else "", platform_name_html, footer_html]
+    footer_content = "\n".join(part for part in footer_parts if part)
+    footer_section = (
+        f'<tr><td class="platform-layout-footer" style="padding:0 24px 16px;">{footer_content}</td></tr>'
+        if footer_content
         else ""
     )
     info_rows = [
@@ -656,19 +699,21 @@ def render_platform_mail_html(
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["body_background"]};">
 <tr><td align="center" style="padding:24px 0;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" class="platform-mail-card" style="width:600px;max-width:100%;border-collapse:collapse;background:{mail_layout["card_background"]};">
-{brand_html}
+    {header_logo_section}
 <tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;color:{mail_layout["primary_color"]};font-size:42.7px;font-weight:700;line-height:1.4;">{html.escape(title)}</td></tr>
 <tr><td style="padding:0 24px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{info_html}</table>
 </td></tr></table>
-</td></tr>
-<tr><td style="padding:0 24px 16px;">
+    </td></tr>
+    {before_content_logo_section}
+    <tr><td style="padding:0 24px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["light_panel_background"]};border:1px solid {mail_layout["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{mail_layout["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>
-</td></tr>
-{instruction_section}
-{footer_note_section}
-{f'<tr><td style="padding:0 24px 16px;">{footer_html}</td></tr>' if footer_html else ''}
+    </td></tr>
+    {after_content_logo_section}
+    {instruction_section}
+    {footer_note_section}
+    {footer_section}
 </table>
 </td></tr>
 </table>

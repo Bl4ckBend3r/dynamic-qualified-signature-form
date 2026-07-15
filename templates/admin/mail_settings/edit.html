@@ -39,6 +39,19 @@
             <label><span>Kolor przewodni</span><input type="color" name="layout_primary_color" value="{{ layout.primary_color }}"></label>
             <label><span>Kolor akcentu</span><input type="color" name="layout_accent_color" value="{{ layout.accent_color }}"></label>
             <label><span>Logo</span><select name="layout_logo_id"><option value="">Bez logo</option>{% for logo in logos %}<option value="{{ logo.id }}" {% if layout.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select></label>
+            <label><span>Położenie logo w mailu</span><select name="layout_logo_position">
+                <option value="none" {% if layout.logo_position == "none" %}selected{% endif %}>Brak logo</option>
+                <option value="header" {% if layout.logo_position == "header" %}selected{% endif %}>Nagłówek</option>
+                <option value="footer" {% if layout.logo_position == "footer" %}selected{% endif %}>Stopka</option>
+                <option value="before_content" {% if layout.logo_position == "before_content" %}selected{% endif %}>Przed treścią</option>
+                <option value="after_content" {% if layout.logo_position == "after_content" %}selected{% endif %}>Po treści</option>
+            </select></label>
+            <label><span>Wyrównanie logo</span><select name="layout_logo_alignment">
+                <option value="left" {% if layout.logo_alignment == "left" %}selected{% endif %}>Do lewej</option>
+                <option value="center" {% if layout.logo_alignment == "center" %}selected{% endif %}>Do środka</option>
+                <option value="right" {% if layout.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
+            </select></label>
+            <label><span>Wysokość logo</span><input type="number" min="16" max="200" name="layout_logo_height_px" value="{{ layout.logo_height_px }}"> <small>px</small></label>
             <label class="admin-form-wide"><span>Stopka HTML</span><textarea name="layout_footer_html" rows="5">{{ layout.footer_html }}</textarea></label>
         </div>
     </div>

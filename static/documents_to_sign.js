@@ -6,8 +6,22 @@ const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
 const signDocumentsForm = document.getElementById("sign-documents-form");
 const processCompletedBox = document.getElementById("process-completed-box");
+const instructionWindow = document.getElementById("user-instruction-window");
+const instructionTitle = document.getElementById("user-instruction-title");
+const formInstructionSection = document.getElementById("form-instruction-section");
+const formInstructionContent = document.getElementById("form-instruction-content");
+const instructionStagesSection = document.getElementById("instruction-stages-section");
+const instructionSteps = document.getElementById("instruction-steps");
+const currentStageDescriptionSection = document.getElementById("current-stage-description-section");
+const currentStageDescription = document.getElementById("current-stage-description");
+const nextActionSection = document.getElementById("next-action-section");
+const nextActionContent = document.getElementById("next-action-content");
+const instructionMinimizeButton = document.getElementById("user-instruction-minimize");
+const instructionCloseButton = document.getElementById("user-instruction-close");
+const instructionRestoreButton = document.getElementById("user-instruction-restore");
 
 let timeoutId = null;
+let currentInstruction = null;
 
 function normalizeBasePath(value) {
     const path = String(value || "").trim();
@@ -101,6 +115,166 @@ function hideElement(element) {
     if (element) {
         element.classList.add("is-hidden");
     }
+}
+
+function instructionStorageKey(action, submissionId, status) {
+    return `instruction_${action}_${submissionId}_${status || "unknown"}`;
+}
+
+function readInstructionSession(action, submissionId, status) {
+    try {
+        return window.sessionStorage ? window.sessionStorage.getItem(instructionStorageKey(action, submissionId, status)) : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeInstructionSession(action, submissionId, status, value) {
+    try {
+        if (window.sessionStorage) {
+            window.sessionStorage.setItem(instructionStorageKey(action, submissionId, status), value);
+        }
+    } catch (error) {
+        // The window remains usable when browser storage is disabled.
+    }
+}
+
+function removeInstructionSession(action, submissionId, status) {
+    try {
+        if (window.sessionStorage) {
+            window.sessionStorage.removeItem(instructionStorageKey(action, submissionId, status));
+        }
+    } catch (error) {
+        // The window remains usable when browser storage is disabled.
+    }
+}
+
+function hideInstruction() {
+    hideElement(instructionWindow);
+    hideElement(instructionRestoreButton);
+}
+
+function minimizeInstruction() {
+    if (!currentInstruction) {
+        return;
+    }
+    writeInstructionSession("minimized", currentInstruction.submissionId, currentInstruction.status, currentInstruction.version);
+    hideElement(instructionWindow);
+    showElement(instructionRestoreButton);
+}
+
+function restoreInstruction() {
+    if (!currentInstruction) {
+        return;
+    }
+    removeInstructionSession("minimized", currentInstruction.submissionId, currentInstruction.status);
+    hideElement(instructionRestoreButton);
+    showElement(instructionWindow);
+}
+
+function closeInstruction() {
+    if (currentInstruction) {
+        writeInstructionSession("closed", currentInstruction.submissionId, currentInstruction.status, currentInstruction.version);
+        removeInstructionSession("minimized", currentInstruction.submissionId, currentInstruction.status);
+    }
+    hideInstruction();
+}
+
+function renderInstructionSteps(steps) {
+    if (!instructionSteps) {
+        return 0;
+    }
+    instructionSteps.replaceChildren();
+    (Array.isArray(steps) ? steps : []).forEach((step) => {
+        const item = document.createElement("li");
+        item.className = "instruction-step";
+        if (step.completed) {
+            item.classList.add("instruction-step--completed");
+        }
+        if (step.current) {
+            item.classList.add("instruction-step--current");
+            item.setAttribute("aria-current", "step");
+        }
+        const label = document.createElement(step.current ? "strong" : "span");
+        label.textContent = String(step.label || "");
+        item.appendChild(label);
+        if (step.completed) {
+            const completedLabel = document.createElement("span");
+            completedLabel.className = "instruction-step__state";
+            completedLabel.textContent = " — zakończono";
+            item.appendChild(completedLabel);
+        } else if (step.current) {
+            const currentLabel = document.createElement("span");
+            currentLabel.className = "instruction-step__state";
+            currentLabel.textContent = " — aktualny etap";
+            item.appendChild(currentLabel);
+        }
+        instructionSteps.appendChild(item);
+    });
+    return instructionSteps.children.length;
+}
+
+function showUserInstruction(data, submissionId) {
+    const nested = data.instruction && typeof data.instruction === "object" ? data.instruction : null;
+    const instruction = String(nested?.description ?? data.form_instruction ?? "").trim();
+    const nextAction = String(nested?.next_action ?? data.next_action ?? "").trim();
+    const stageDescription = String(nested?.current_stage_description ?? "").trim();
+    const stages = Array.isArray(nested?.stages) ? nested.stages : data.instruction_steps;
+    const hasInstruction = nested ? Boolean(nested.has_instruction) : Boolean(instruction || nextAction || (Array.isArray(stages) && stages.length));
+    if (!hasInstruction || !submissionId) {
+        currentInstruction = null;
+        hideInstruction();
+        return;
+    }
+
+    const status = String(data.process_status || data.normalized_process_status || "unknown");
+    const version = String(data.instruction_version || `${status}:${instruction}:${nextAction}`);
+    currentInstruction = { submissionId, status, version };
+    if (readInstructionSession("closed", submissionId, status) === version) {
+        hideInstruction();
+        return;
+    }
+
+    if (formInstructionContent) {
+        formInstructionContent.textContent = instruction;
+    }
+    if (instructionTitle) {
+        instructionTitle.textContent = String(nested?.title || "Instrukcja dalszego postępowania");
+    }
+    if (instruction) {
+        showElement(formInstructionSection);
+    } else {
+        hideElement(formInstructionSection);
+    }
+    const renderedStages = renderInstructionSteps(stages);
+    if (renderedStages) {
+        showElement(instructionStagesSection);
+    } else {
+        hideElement(instructionStagesSection);
+    }
+    if (currentStageDescription) {
+        currentStageDescription.textContent = stageDescription;
+    }
+    if (stageDescription) {
+        showElement(currentStageDescriptionSection);
+    } else {
+        hideElement(currentStageDescriptionSection);
+    }
+    if (nextActionContent) {
+        nextActionContent.textContent = nextAction;
+    }
+    if (nextAction) {
+        showElement(nextActionSection);
+    } else {
+        hideElement(nextActionSection);
+    }
+    if (readInstructionSession("minimized", submissionId, status) === version) {
+        hideElement(instructionWindow);
+        showElement(instructionRestoreButton);
+        return;
+    }
+    hideElement(instructionRestoreButton);
+    showElement(instructionWindow);
 }
 
 function disableGenerateButton() {
@@ -338,6 +512,8 @@ function resetState() {
         acceptanceSelect.value = "";
     }
     clearStatusTile();
+    currentInstruction = null;
+    hideInstruction();
 }
 
 async function checkAcceptanceStatus() {
@@ -371,6 +547,7 @@ async function checkAcceptanceStatus() {
         }
         renderSubmissionStatus(data);
         applyProcessStageVisibility(data);
+        showUserInstruction(data, submissionId);
 
         if (
             data.exists
@@ -413,6 +590,16 @@ if (submissionInput) {
         clearTimeout(timeoutId);
         timeoutId = setTimeout(checkAcceptanceStatus, 500);
     });
+}
+
+if (instructionMinimizeButton) {
+    instructionMinimizeButton.addEventListener("click", minimizeInstruction);
+}
+if (instructionCloseButton) {
+    instructionCloseButton.addEventListener("click", closeInstruction);
+}
+if (instructionRestoreButton) {
+    instructionRestoreButton.addEventListener("click", restoreInstruction);
 }
 
 bindDownloadReplacementCards();

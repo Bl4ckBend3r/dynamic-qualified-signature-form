@@ -67,6 +67,34 @@
 
     <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
 
+    <aside id="user-instruction-window" class="instruction-window is-hidden" aria-labelledby="user-instruction-title">
+        <div class="instruction-window__header">
+            <h3 id="user-instruction-title"></h3>
+            <div class="instruction-window__actions">
+                <button type="button" id="user-instruction-minimize" class="instruction-window__button" aria-label="Minimalizuj instrukcję">−</button>
+                <button type="button" id="user-instruction-close" class="instruction-window__button" aria-label="Zamknij instrukcję">×</button>
+            </div>
+        </div>
+        <div class="instruction-window__body">
+            <section id="form-instruction-section" class="instruction-window__section is-hidden">
+                <p id="form-instruction-content" class="instruction-window__general"></p>
+            </section>
+            <section id="instruction-stages-section" class="instruction-window__section is-hidden">
+                <h4>Etapy</h4>
+                <ol id="instruction-steps" class="instruction-steps"></ol>
+            </section>
+            <section id="current-stage-description-section" class="instruction-window__section is-hidden">
+                <h4>Opis aktualnego etapu</h4>
+                <p id="current-stage-description" class="instruction-window__general"></p>
+            </section>
+            <section id="next-action-section" class="instruction-window__section is-hidden">
+                <h4>Co dalej?</h4>
+                <p id="next-action-content" class="instruction-window__next-action"></p>
+            </section>
+        </div>
+    </aside>
+    <button type="button" id="user-instruction-restore" class="instruction-window__restore is-hidden">Instrukcja</button>
+
     <div id="process-completed-box" class="result-box result-box--completed is-hidden">
         <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
     </div>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
@@ -17,6 +18,7 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.process_instruction_service import instruction_status_options, normalize_instruction_config
 from services.site_document_service import save_document_upload, update_form_regulation_from_upload
 from services.upload_validation import UploadValidationError
 
@@ -118,6 +120,12 @@ def forms_upload():
     title = request.form.get("name", "").strip() or form_definition.get("title") or slug
     is_active = request.form.get("is_active", "on") == "on"
     is_public = request.form.get("is_public", "on") == "on"
+    user_instruction = str(form_definition.pop("user_instruction", "") or "").strip() or None
+    instruction_config = normalize_instruction_config(
+        form_definition.pop("user_instruction_config", None),
+        legacy_description=user_instruction,
+    )
+    user_instruction = instruction_config["description"] or None
     with db_session_factory()() as db:
         if db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none():
             flash("Formularz o takim slugu juz istnieje.", "error")
@@ -127,6 +135,8 @@ def forms_upload():
             name=title,
             title=form_definition.get("title", title),
             description=form_definition.get("description", ""),
+            user_instruction=user_instruction,
+            user_instruction_config=instruction_config,
             definition_json=form_definition,
             created_by_id=g.admin_user.id,
             is_active=is_active,
@@ -153,9 +163,16 @@ def form_edit(form_id: int):
         form = ensure_form_access(db, form_id, manage=True)
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
+        instruction_statuses = instruction_status_options()
         if request.method == "POST":
             try:
+                instruction_config = _instruction_config_from_admin_form(
+                    request.form,
+                    existing=form.user_instruction_config,
+                )
                 updated_definition = build_form_definition_from_admin_form(form.definition_json or {}, request.form)
+                updated_definition.pop("user_instruction", None)
+                updated_definition.pop("user_instruction_config", None)
             except Exception as exc:
                 updated_definition = normalize_admin_form_definition(form.definition_json or {})
                 validation_errors = [str(exc) or "Niepoprawne dane formularza."]
@@ -171,6 +188,7 @@ def form_edit(form_id: int):
                     training_field=get_declaration_training_field(updated_definition),
                     workflow_json=request.form.get("workflow_json", ""),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                    instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
                 ), 400
             validation_errors = validate_admin_form_config(updated_definition)
@@ -188,6 +206,7 @@ def form_edit(form_id: int):
                     training_field=get_declaration_training_field(updated_definition),
                     workflow_json=format_json(updated_definition.get("workflow") or {}),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                    instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
                 ), 400
             form.name = request.form.get("name", "").strip() or form.name
@@ -205,7 +224,10 @@ def form_edit(form_id: int):
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
                     training_field=get_declaration_training_field(form.definition_json or {}),
+                    instruction_statuses=instruction_statuses,
                 ), 400
+            form.user_instruction = instruction_config["description"] or None
+            form.user_instruction_config = instruction_config
             form.slug = new_slug
             form.description = request.form.get("description", "").strip()
             form.is_active = request.form.get("is_active") == "on"
@@ -245,6 +267,7 @@ def form_edit(form_id: int):
                         training_field=get_declaration_training_field(form.definition_json or {}),
                         workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
                         trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                        instruction_statuses=instruction_statuses,
                         validation_errors=[],
                     ), 400
                 regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
@@ -274,8 +297,27 @@ def form_edit(form_id: int):
             training_field=get_declaration_training_field(form.definition_json or {}),
             workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
             trigger_descriptions=TRIGGER_DESCRIPTIONS,
+            instruction_statuses=instruction_statuses,
             validation_errors=[],
         )
+
+
+def _instruction_config_from_admin_form(form_data, *, existing: dict | None = None) -> dict:
+    raw_json = form_data.get("user_instruction_config")
+    if raw_json is None:
+        stages = (existing or {}).get("stages", [])
+    else:
+        parsed = json.loads(raw_json or "{}")
+        if not isinstance(parsed, dict):
+            raise ValueError("Niepoprawna konfiguracja instrukcji.")
+        stages = parsed.get("stages", [])
+    return normalize_instruction_config(
+        {
+            "title": form_data.get("instruction_title", ""),
+            "description": form_data.get("user_instruction", ""),
+            "stages": stages,
+        }
+    )
 
 
 @bp.post("/forms/<int:form_id>/toggle")

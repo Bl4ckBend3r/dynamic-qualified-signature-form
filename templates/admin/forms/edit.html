@@ -43,6 +43,99 @@
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
     </div>
+    {% set instruction_config = form.user_instruction_config or {} %}
+    <div class="admin-section admin-instruction-editor" data-instruction-editor>
+        <h2>Instrukcja dalszego postępowania</h2>
+        <p>Zdefiniuj dowolną liczbę etapów. Aktualny etap jest wybierany na podstawie statusu zgłoszenia.</p>
+        <input type="hidden" name="user_instruction_config" data-instruction-config>
+        <div class="admin-form-grid">
+            <label class="admin-form-wide" for="instruction_title">
+                <span>Tytuł instrukcji</span>
+                <input id="instruction_title" name="instruction_title" value="{{ instruction_config.get('title', '') }}" placeholder="Instrukcja dalszego postępowania">
+            </label>
+            <label class="admin-form-wide" for="user_instruction">
+                <span>Ogólny opis instrukcji</span>
+                <textarea id="user_instruction" name="user_instruction" rows="5" placeholder="Wpisz ogólną instrukcję dla użytkownika.">{{ instruction_config.get('description') or form.user_instruction or "" }}</textarea>
+            </label>
+        </div>
+
+        <div class="admin-instruction-stages" data-instruction-stages>
+            {% for stage in instruction_config.get('stages', []) %}
+                <section class="admin-instruction-stage" data-instruction-stage>
+                    <div class="admin-instruction-stage__heading">
+                        <h3>Etap <span data-stage-number>{{ loop.index }}</span></h3>
+                        <div class="admin-instruction-stage__actions">
+                            <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przenieś etap wyżej">↑</button>
+                            <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przenieś etap niżej">↓</button>
+                            <button type="button" class="admin-link-button admin-link-danger" data-remove-stage>Usuń etap</button>
+                        </div>
+                    </div>
+                    <div class="admin-instruction-stage__fields">
+                        <label><span>Nazwa etapu</span><input data-stage-label value="{{ stage.get('label', '') }}" required></label>
+                        <label><span>Statusy przypisane do etapu</span>
+                            <select data-stage-status multiple size="6">
+                                {% for option in instruction_statuses %}
+                                    <option value="{{ option.value }}" {% if option.value in stage.get('status_codes', []) %}selected{% endif %}>{{ option.label }} ({{ option.value }})</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label class="admin-form-wide"><span>Opis etapu</span><textarea data-stage-description rows="3">{{ stage.get('description', '') }}</textarea></label>
+                        <label class="admin-form-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-stage-next-action rows="3">{{ stage.get('next_action', '') }}</textarea></label>
+                        <label class="admin-check"><input type="checkbox" data-stage-final {% if stage.get('final') %}checked{% endif %}><span>Czy etap kończy proces?</span></label>
+                        <label class="admin-check"><input type="checkbox" data-stage-rejected {% if stage.get('rejected') %}checked{% endif %}><span>Czy etap oznacza odrzucenie?</span></label>
+                    </div>
+                </section>
+            {% endfor %}
+        </div>
+        <p data-instruction-empty {% if instruction_config.get('stages') %}hidden{% endif %}>Nie zdefiniowano jeszcze etapów.</p>
+        <button class="admin-button-secondary" type="button" data-add-instruction-stage>Dodaj etap</button>
+
+        <div class="admin-instruction-preview" aria-label="Podgląd instrukcji">
+            <div class="admin-instruction-preview__toolbar">
+                <h3 data-instruction-preview-title></h3>
+                <label><span>Przykładowy status</span>
+                    <select data-instruction-preview-status>
+                        {% for option in instruction_statuses %}
+                            <option value="{{ option.value }}">{{ option.label }} ({{ option.value }})</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+            <p class="admin-instruction-preview__text" data-instruction-preview-text></p>
+            <ol class="admin-instruction-preview__steps" data-instruction-preview-stages></ol>
+            <div data-instruction-preview-current hidden>
+                <p><strong>Opis aktualnego etapu:</strong></p>
+                <p class="admin-instruction-preview__text" data-instruction-preview-description></p>
+                <p><strong>Co dalej?</strong></p>
+                <p class="admin-instruction-preview__text" data-instruction-preview-next-action></p>
+            </div>
+        </div>
+    </div>
+
+    <template data-instruction-stage-template>
+        <section class="admin-instruction-stage" data-instruction-stage>
+            <div class="admin-instruction-stage__heading">
+                <h3>Etap <span data-stage-number></span></h3>
+                <div class="admin-instruction-stage__actions">
+                    <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przenieś etap wyżej">↑</button>
+                    <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przenieś etap niżej">↓</button>
+                    <button type="button" class="admin-link-button admin-link-danger" data-remove-stage>Usuń etap</button>
+                </div>
+            </div>
+            <div class="admin-instruction-stage__fields">
+                <label><span>Nazwa etapu</span><input data-stage-label required></label>
+                <label><span>Statusy przypisane do etapu</span>
+                    <select data-stage-status multiple size="6">
+                        {% for option in instruction_statuses %}<option value="{{ option.value }}">{{ option.label }} ({{ option.value }})</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="admin-form-wide"><span>Opis etapu</span><textarea data-stage-description rows="3"></textarea></label>
+                <label class="admin-form-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-stage-next-action rows="3"></textarea></label>
+                <label class="admin-check"><input type="checkbox" data-stage-final><span>Czy etap kończy proces?</span></label>
+                <label class="admin-check"><input type="checkbox" data-stage-rejected><span>Czy etap oznacza odrzucenie?</span></label>
+            </div>
+        </section>
+    </template>
     <div class="admin-section">
         <h2>Regulamin</h2>
         {% if form.regulation %}
@@ -213,6 +306,97 @@
     </div>
 </form>
 <script>
+const instructionEditor = document.querySelector("[data-instruction-editor]");
+const instructionStages = instructionEditor?.querySelector("[data-instruction-stages]");
+const instructionStageTemplate = document.querySelector("[data-instruction-stage-template]");
+const instructionConfigInput = instructionEditor?.querySelector("[data-instruction-config]");
+
+function collectInstructionConfig() {
+    const stages = instructionStages ? Array.from(instructionStages.querySelectorAll("[data-instruction-stage]")) : [];
+    return {
+        title: document.getElementById("instruction_title")?.value.trim() || "",
+        description: document.getElementById("user_instruction")?.value.trim() || "",
+        stages: stages.map((stage, index) => ({
+            key: `stage-${index + 1}`,
+            label: stage.querySelector("[data-stage-label]")?.value.trim() || "",
+            status_codes: Array.from(stage.querySelector("[data-stage-status]")?.selectedOptions || []).map((option) => option.value),
+            description: stage.querySelector("[data-stage-description]")?.value.trim() || "",
+            next_action: stage.querySelector("[data-stage-next-action]")?.value.trim() || "",
+            final: Boolean(stage.querySelector("[data-stage-final]")?.checked),
+            rejected: Boolean(stage.querySelector("[data-stage-rejected]")?.checked),
+            sort_order: index + 1,
+        })).filter((stage) => stage.label),
+    };
+}
+
+function syncInstructionEditor() {
+    const config = collectInstructionConfig();
+    if (instructionConfigInput) instructionConfigInput.value = JSON.stringify({ stages: config.stages });
+    instructionStages?.querySelectorAll("[data-instruction-stage]").forEach((stage, index, all) => {
+        const number = stage.querySelector("[data-stage-number]");
+        if (number) number.textContent = String(index + 1);
+        const up = stage.querySelector("[data-stage-up]");
+        const down = stage.querySelector("[data-stage-down]");
+        if (up) up.disabled = index === 0;
+        if (down) down.disabled = index === all.length - 1;
+    });
+    const empty = instructionEditor?.querySelector("[data-instruction-empty]");
+    if (empty) empty.hidden = config.stages.length > 0;
+    renderInstructionPreview(config);
+}
+
+function renderInstructionPreview(config) {
+    const title = instructionEditor?.querySelector("[data-instruction-preview-title]");
+    const text = instructionEditor?.querySelector("[data-instruction-preview-text]");
+    const list = instructionEditor?.querySelector("[data-instruction-preview-stages]");
+    const sampleStatus = instructionEditor?.querySelector("[data-instruction-preview-status]")?.value || "";
+    if (title) title.textContent = config.title || "Instrukcja dalszego postępowania";
+    if (text) {
+        text.textContent = config.description;
+        text.hidden = !config.description;
+    }
+    list?.replaceChildren();
+    let current = null;
+    config.stages.forEach((stage) => {
+        const item = document.createElement("li");
+        item.textContent = stage.label;
+        if (stage.status_codes.includes(sampleStatus)) {
+            item.className = "is-current";
+            item.setAttribute("aria-current", "step");
+            const strong = document.createElement("strong");
+            strong.textContent = `${stage.label} — aktualny etap`;
+            item.replaceChildren(strong);
+            current = stage;
+        }
+        list?.appendChild(item);
+    });
+    const currentBox = instructionEditor?.querySelector("[data-instruction-preview-current]");
+    if (currentBox) currentBox.hidden = !current;
+    const description = instructionEditor?.querySelector("[data-instruction-preview-description]");
+    const nextAction = instructionEditor?.querySelector("[data-instruction-preview-next-action]");
+    if (description) description.textContent = current?.description || "Brak opisu etapu.";
+    if (nextAction) nextAction.textContent = current?.next_action || "Brak dodatkowych czynności.";
+}
+
+instructionEditor?.addEventListener("input", syncInstructionEditor);
+instructionEditor?.addEventListener("change", syncInstructionEditor);
+instructionEditor?.addEventListener("click", function (event) {
+    const add = event.target.closest("[data-add-instruction-stage]");
+    if (add && instructionStages && instructionStageTemplate) {
+        instructionStages.appendChild(instructionStageTemplate.content.cloneNode(true));
+    }
+    const remove = event.target.closest("[data-remove-stage]");
+    if (remove) remove.closest("[data-instruction-stage]")?.remove();
+    const up = event.target.closest("[data-stage-up]");
+    const upStage = up?.closest("[data-instruction-stage]");
+    if (upStage?.previousElementSibling) instructionStages?.insertBefore(upStage, upStage.previousElementSibling);
+    const down = event.target.closest("[data-stage-down]");
+    const downStage = down?.closest("[data-instruction-stage]");
+    if (downStage?.nextElementSibling) instructionStages?.insertBefore(downStage.nextElementSibling, downStage);
+    syncInstructionEditor();
+});
+syncInstructionEditor();
+
 function syncWorkflowTemplateVisibility() {
     const declaration = document.querySelector('[data-workflow-toggle="declaration"]');
     const contract = document.querySelector('[data-workflow-toggle="contract"]');
@@ -277,7 +461,10 @@ trainingList?.addEventListener("click", function (event) {
     }
 });
 
-document.querySelector("form.admin-form")?.addEventListener("submit", syncTrainingIndexes);
+document.querySelector("form.admin-form")?.addEventListener("submit", function () {
+    syncTrainingIndexes();
+    syncInstructionEditor();
+});
 syncTrainingIndexes();
 </script>
 {% endblock %}

@@ -730,6 +730,104 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
     assert "accepted" in html
 
 
+def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="instruction_form", name="Instruction form")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="instruction-admin",
+                form_slug="instruction_form",
+                form_name="Instruction form",
+                officer_decision="TAK",
+                process_status="OFFICER_ACCEPTED",
+            )
+        )
+        db.commit()
+    login(admin_client)
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert "Instrukcja dalszego postępowania" in edit_html
+    assert "Dodaj etap" in edit_html
+    assert "Statusy przypisane do etapu" in edit_html
+    assert "OFFICER_ACCEPTED" in edit_html
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Instruction form",
+            "slug": "instruction_form",
+            "title": "Instruction form",
+            "sort_order": "0",
+            "is_active": "on",
+            "is_public": "on",
+            "instruction_title": "Moja instrukcja",
+            "user_instruction": "  Pierwszy krok.\nDrugi krok.  ",
+            "user_instruction_config": json.dumps(
+                {
+                    "stages": [
+                        {
+                            "label": "Etap pierwszy",
+                            "status_codes": ["FORM_SUBMITTED"],
+                            "description": "Opis pierwszego etapu",
+                            "next_action": "Poczekaj na kontakt.",
+                        },
+                        {
+                            "label": "Etap zaakceptowany",
+                            "status_codes": ["OFFICER_ACCEPTED", "REVIEW_ACCEPTED"],
+                            "description": "Opis drugiego etapu",
+                            "next_action": "Wykonaj własną czynność.",
+                            "final": True,
+                        },
+                    ]
+                }
+            ),
+        },
+    )
+    assert response.status_code == 302
+    with session_factory() as db:
+        saved_form = db.get(Form, form_id)
+        assert saved_form.user_instruction == "Pierwszy krok.\nDrugi krok."
+        assert saved_form.user_instruction_config["title"] == "Moja instrukcja"
+        assert len(saved_form.user_instruction_config["stages"]) == 2
+        assert saved_form.user_instruction_config["stages"][1]["status_codes"] == [
+            "OFFICER_ACCEPTED",
+            "REVIEW_ACCEPTED",
+        ]
+        assert "user_instruction" not in FormSubmission.__table__.columns
+    payload = admin_client.get("/api/submissions/instruction-admin/acceptance-status").get_json()
+    assert payload["form_instruction"] == "Pierwszy krok.\nDrugi krok."
+    assert payload["has_form_instruction"] is True
+    assert payload["instruction"]["title"] == "Moja instrukcja"
+    assert payload["instruction"]["current_stage_label"] == "Etap zaakceptowany"
+    assert payload["instruction"]["next_action"] == "Wykonaj własną czynność."
+
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Instruction form",
+            "slug": "instruction_form",
+            "title": "Instruction form",
+            "sort_order": "0",
+            "is_active": "on",
+            "is_public": "on",
+            "instruction_title": "",
+            "user_instruction": "",
+            "user_instruction_config": '{"stages": []}',
+        },
+    )
+    assert response.status_code == 302
+    with session_factory() as db:
+        saved_form = db.get(Form, form_id)
+        assert saved_form.user_instruction is None
+        assert saved_form.user_instruction_config["stages"] == []
+
+
 def test_officer_decision_mail_uses_mail_dispatch_service_once(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="sample_form", name="Sample")

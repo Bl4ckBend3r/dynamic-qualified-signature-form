@@ -732,3 +732,76 @@ def test_acceptance_status_refresh_does_not_send_decision_email(client, app):
     assert sent == []
     assert app.testing_storage.csv_rows[0]["decision_email_sent"] == ""
     assert app.testing_storage.csv_rows[0]["decision_email_sent_for"] == ""
+
+
+def test_acceptance_status_returns_form_instruction_steps_and_next_action(client, app):
+    instruction = "Pobierz deklarację.\nPodpisz ją elektronicznie."
+    app.testing_storage.form_definition["user_instruction"] = instruction
+    app.testing_storage.form_definition["user_instruction_config"] = {
+        "title": "Instrukcja dla tego formularza",
+        "description": instruction,
+        "stages": [
+            {
+                "key": "sent",
+                "label": "Wysłano własny formularz",
+                "status_codes": ["FORM_SUBMITTED"],
+                "description": "Etap zakończony.",
+                "next_action": "Czekaj.",
+            },
+            {
+                "key": "declaration",
+                "label": "Własna deklaracja",
+                "status_codes": ["OFFICER_ACCEPTED", "REVIEW_ACCEPTED"],
+                "description": "Opis aktualnego etapu.",
+                "next_action": "Wykonaj czynność skonfigurowaną przez urzędnika.",
+            },
+        ],
+    }
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "instruction-1",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "officer_decision": "TAK",
+            "process_status": "OFFICER_ACCEPTED",
+            "user_instruction": "Ta wartość ze zgłoszenia ma być ignorowana.",
+        },
+        {
+            "submission_id": "instruction-empty",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "officer_decision": "TAK",
+            "process_status": "OFFICER_ACCEPTED",
+            "user_instruction": "Instrukcja pojedynczego zgłoszenia",
+        },
+    ]
+
+    with_instruction = client.get(
+        "/api/submissions/instruction-1/acceptance-status",
+        headers={"X-Forwarded-Prefix": "/aplikacja"},
+    ).get_json()
+    assert with_instruction["form_instruction"] == instruction
+    assert with_instruction["has_form_instruction"] is True
+    assert with_instruction["current_step"] == "declaration"
+    assert with_instruction["current_step_label"] == "Własna deklaracja"
+    assert with_instruction["next_action"] == "Wykonaj czynność skonfigurowaną przez urzędnika."
+    assert len(with_instruction["instruction_version"]) == 64
+    current = [step for step in with_instruction["instruction_steps"] if step["current"]]
+    assert len(current) == 1
+    assert current[0]["key"] == "declaration"
+    assert current[0]["description"] == "Opis aktualnego etapu."
+    assert with_instruction["instruction"]["title"] == "Instrukcja dla tego formularza"
+    assert with_instruction["instruction"]["current_stage_key"] == "declaration"
+
+    app.testing_storage.csv_rows[1]["process_status"] = "DECLARATION_WAITING_FOR_SIGNATURE"
+    changed_status = client.get("/api/submissions/instruction-empty/acceptance-status").get_json()
+    assert changed_status["instruction_version"] != with_instruction["instruction_version"]
+
+    app.testing_storage.form_definition["user_instruction"] = ""
+    app.testing_storage.form_definition["user_instruction_config"] = {}
+    without_instruction = client.get("/api/submissions/instruction-empty/acceptance-status").get_json()
+    assert without_instruction["form_instruction"] is None
+    assert without_instruction["has_form_instruction"] is False
+    assert without_instruction["next_action"] == ""
+    assert without_instruction["instruction"]["has_instruction"] is False
+    assert "user_instruction" not in without_instruction

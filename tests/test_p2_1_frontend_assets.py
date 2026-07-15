@@ -111,6 +111,143 @@ console.log(JSON.stringify({{
     assert urls["acceptanceStatusUrl"] == "/aplikacja/api/submissions/abc%20123/acceptance-status"
 
 
+def test_user_instruction_window_is_safe_and_remembers_minimize_and_close():
+    node = shutil.which("node")
+    if not node:
+        return
+
+    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    runner = f"""
+const vm = require("vm");
+function element() {{
+  const classes = new Set(["is-hidden"]);
+  const attributes = {{}};
+  const children = [];
+  return {{
+    value: "",
+    dataset: {{}},
+    textContent: "",
+    innerHTML: "untouched",
+    children,
+    attributes,
+    className: "",
+    classList: {{
+      add(name) {{ classes.add(name); }},
+      remove(name) {{ classes.delete(name); }},
+      contains(name) {{ return classes.has(name); }},
+    }},
+    setAttribute(name, value) {{ attributes[name] = value; }},
+    appendChild(child) {{ children.push(child); return child; }},
+    replaceChildren() {{ children.splice(0, children.length); }},
+    addEventListener() {{}},
+  }};
+}}
+const instructionWindow = element();
+const formInstructionSection = element();
+const formInstructionContent = element();
+const instructionSteps = element();
+const nextActionSection = element();
+const nextActionContent = element();
+const instructionRestore = element();
+const elements = {{
+  "submission_id": {{ value: "", dataset: {{}}, addEventListener() {{}} }},
+  "user-instruction-window": instructionWindow,
+  "form-instruction-section": formInstructionSection,
+  "form-instruction-content": formInstructionContent,
+  "instruction-steps": instructionSteps,
+  "next-action-section": nextActionSection,
+  "next-action-content": nextActionContent,
+  "user-instruction-minimize": element(),
+  "user-instruction-close": element(),
+  "user-instruction-restore": instructionRestore,
+}};
+const storage = new Map();
+global.window = {{
+  APP_BASE_PATH: "/aplikacja",
+  location: {{ pathname: "/aplikacja/do-podpisania" }},
+  setTimeout() {{}},
+  sessionStorage: {{
+    getItem(key) {{ return storage.has(key) ? storage.get(key) : null; }},
+    setItem(key, value) {{ storage.set(key, value); }},
+    removeItem(key) {{ storage.delete(key); }},
+  }},
+}};
+global.document = {{
+  getElementById(id) {{ return elements[id] || null; }},
+  querySelectorAll() {{ return []; }},
+  createElement() {{ return element(); }},
+}};
+vm.runInThisContext({json.dumps(script)});
+
+showUserInstruction({{ has_form_instruction: false, form_instruction: "", next_action: "" }}, "abc");
+const hiddenWithoutContent = instructionWindow.classList.contains("is-hidden");
+showUserInstruction({{ has_form_instruction: false, form_instruction: "", next_action: "Poczekaj", process_status: "FORM_SUBMITTED", instruction_version: "empty-v1", instruction_steps: [] }}, "empty");
+const shownWithNextActionOnly = !instructionWindow.classList.contains("is-hidden");
+showUserInstruction({{
+  has_form_instruction: true,
+  form_instruction: "<img src=x onerror=alert(1)>\\nKrok 2",
+  next_action: "Podpisz dokument",
+  process_status: "OFFICER_ACCEPTED",
+  instruction_version: "v1",
+  instruction_steps: [
+    {{ key: "submitted", label: "Wysłanie formularza", completed: true, current: false }},
+    {{ key: "declaration", label: "Deklaracja", completed: false, current: true }},
+  ],
+}}, "abc");
+const shown = !instructionWindow.classList.contains("is-hidden");
+const safeTextBeforeChange = formInstructionContent.textContent;
+const currentStep = instructionSteps.children.find((item) => item.attributes["aria-current"] === "step");
+const currentStepIsSemanticAndStyled = Boolean(currentStep && currentStep.classList.contains("instruction-step--current"));
+minimizeInstruction();
+const minimized = instructionWindow.classList.contains("is-hidden") && !instructionRestore.classList.contains("is-hidden");
+restoreInstruction();
+const restored = !instructionWindow.classList.contains("is-hidden") && instructionRestore.classList.contains("is-hidden");
+closeInstruction();
+showUserInstruction({{ has_form_instruction: true, form_instruction: "same", next_action: "same", process_status: "OFFICER_ACCEPTED", instruction_version: "v1", instruction_steps: [] }}, "abc");
+const stayedClosed = instructionWindow.classList.contains("is-hidden") && instructionRestore.classList.contains("is-hidden");
+showUserInstruction({{ has_form_instruction: true, form_instruction: "changed", next_action: "changed", process_status: "DECLARATION_WAITING_FOR_SIGNATURE", instruction_version: "v2", instruction_steps: [] }}, "abc");
+const reopenedAfterStatusChange = !instructionWindow.classList.contains("is-hidden");
+console.log(JSON.stringify({{
+  hiddenWithoutContent,
+  shownWithNextActionOnly,
+  shown,
+  currentStepIsSemanticAndStyled,
+  minimized,
+  restored,
+  stayedClosed,
+  reopenedAfterStatusChange,
+  safeTextBeforeChange,
+  innerHtmlUntouched: formInstructionContent.innerHTML,
+  closeKey: storage.get("instruction_closed_abc_OFFICER_ACCEPTED"),
+}}));
+"""
+    completed = subprocess.run(
+        [node, "-e", runner],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result == {
+        "hiddenWithoutContent": True,
+        "shownWithNextActionOnly": True,
+        "shown": True,
+        "currentStepIsSemanticAndStyled": True,
+        "minimized": True,
+        "restored": True,
+        "stayedClosed": True,
+        "reopenedAfterStatusChange": True,
+        "safeTextBeforeChange": "<img src=x onerror=alert(1)>\nKrok 2",
+        "innerHtmlUntouched": "untouched",
+        "closeKey": "v1",
+    }
+
+    stylesheet = Path("static/documents_to_sign.css").read_text(encoding="utf-8")
+    assert ".instruction-step--current" in stylesheet
+    assert "font-weight: 800" in stylesheet
+
+
 def test_training_selection_keeps_full_width_layout():
     template = Path("templates/declaration_form.html").read_text(encoding="utf-8")
     stylesheet = Path("static/style.css").read_text(encoding="utf-8")

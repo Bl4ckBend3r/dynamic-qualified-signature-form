@@ -321,6 +321,8 @@ class Form(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    user_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_instruction_config: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     definition_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

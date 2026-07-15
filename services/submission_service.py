@@ -209,6 +209,7 @@ class SubmissionService:
             "officer_decision": process_state.officer_decision.value,
             "process_status": process_state.status.value,
             "can_sign_documents": process_state.can_sign_documents,
+            "workflow_step": str(row.get("workflow_step") or "").strip(),
             "row": row,
         }
 

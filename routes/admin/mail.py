@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import or_, select
@@ -377,31 +376,15 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
     if templates and template is None:
         template = templates[0]
     footer = next((item for item in footers if item.id == footer_id), None) if footer_id else select_default_footer(footers, form_id=form.id)
-    fallback = template or system_mail_template(form, submission)
-    subject_template = request.form.get("subject", "").strip() or getattr(fallback, "subject", "")
-    body_template = request.form.get("body_html", request.form.get("html_body", "")).strip() or template_body_html(fallback)
-    text_template = request.form.get("body_text", request.form.get("text_body", "")).strip() or template_body_text(fallback) or body_template
-    render_template_obj = SimpleNamespace(
-        id=getattr(template, "id", None),
-        name=getattr(fallback, "name", "") or subject_template or "Mail",
-        subject=subject_template,
-        content_title=getattr(fallback, "content_title", "") or subject_template,
-        html_body=body_template,
-        text_body=text_template,
-        instruction_html=getattr(fallback, "instruction_html", ""),
-        instruction_text=getattr(fallback, "instruction_text", ""),
-        footer_note=getattr(fallback, "footer_note", ""),
-        use_platform_layout=getattr(fallback, "use_platform_layout", True),
-    )
     return send_mail_for_submission(
         db,
         form,
         submission,
-        template=render_template_obj,
+        template=template,
         log_template=template,
         footer=footer,
         to_email=request.form.get("to_email", "").strip() or submission.email,
-        subject_template=subject_template,
+        subject_template=getattr(template, "subject", ""),
         event_type="manual",
     )
 
@@ -409,17 +392,15 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
 def send_selected_submission_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter], *, trigger_event: str):
     template = select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
     footer = select_default_footer(footers, form_id=form.id)
-    if not template:
-        template = system_mail_template(form, submission)
     return send_mail_for_submission(
         db,
         form,
         submission,
         template=template,
-        log_template=template if getattr(template, "id", None) else None,
+        log_template=template,
         footer=footer,
         to_email=submission.email,
-        subject_template=template.subject,
+        subject_template=getattr(template, "subject", ""),
         event_type=trigger_event,
     )
 
@@ -469,29 +450,6 @@ def template_body_text(template) -> str:
         or getattr(template, "text_body", "")
         or getattr(template, "body_text", "")
         or ""
-    )
-
-
-def system_mail_template(form, submission):
-    return SimpleNamespace(
-        id=None,
-        name="Mail systemowy",
-        subject="Informacja dotyczaca zgloszenia {{ submission_id }}",
-        content_title="Informacja dotyczaca zgloszenia",
-        html_body=(
-            "<p>Dzien dobry,</p>"
-            "<p>Przesylamy informacje dotyczaca zgloszenia "
-            "<strong>{{ submission_id }}</strong> w formularzu <strong>{{ form_name }}</strong>.</p>"
-        ),
-        text_body=(
-            "Dzien dobry,\n\n"
-            "Przesylamy informacje dotyczaca zgloszenia {{ submission_id }} "
-            "w formularzu {{ form_name }}."
-        ),
-        instruction_html="",
-        instruction_text="",
-        footer_note="Pozdrawiamy",
-        use_platform_layout=True,
     )
 
 

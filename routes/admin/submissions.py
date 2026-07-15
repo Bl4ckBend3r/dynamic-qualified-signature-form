@@ -141,18 +141,12 @@ def submission_decision_update(form_id: int, submission_pk: int):
                 "warning",
             )
         flash("Decyzja urzednika zostala zapisana.", "success")
-    if result["send_mail"]:
-        try:
-            current_app.extensions["services"].mail_dispatch_service.dispatch_decision_email(result["public_submission_id"], result["decision"])
-        except Exception as exc:
-            current_app.logger.exception("Nie udalo sie wyslac maila decyzji dla %s: %s", result["public_submission_id"], exc)
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
 @bp.post("/forms/<int:form_id>/submissions/decisions")
 @login_required
 def submissions_decisions_update(form_id: int):
-    mail_queue = []
     saved_count = 0
     skipped_count = 0
     missing_reason_count = 0
@@ -176,8 +170,6 @@ def submissions_decisions_update(form_id: int):
                 continue
             saved_count += 1
             schema_warning = schema_warning or result["schema_warning"]
-            if result["send_mail"]:
-                mail_queue.append((result["public_submission_id"], result["decision"]))
         if schema_warning:
             flash(
                 "Czesc decyzji zostala zapisana bez audytu P4, bo schemat bazy wymaga migracji.",
@@ -186,11 +178,6 @@ def submissions_decisions_update(form_id: int):
         if missing_reason_count:
             flash(f"Pominieto {missing_reason_count} decyzji: podaj powod odrzucenia albo poprawy.", "error")
         flash(f"Zapisano decyzje: {saved_count}. Bez zmian: {skipped_count}.", "success" if saved_count else "warning")
-    for public_submission_id, decision in mail_queue:
-        try:
-            current_app.extensions["services"].mail_dispatch_service.dispatch_decision_email(public_submission_id, decision)
-        except Exception as exc:
-            current_app.logger.exception("Nie udalo sie wyslac maila decyzji dla %s: %s", public_submission_id, exc)
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
@@ -299,7 +286,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 officer_email=getattr(g.admin_user, "email", ""),
                 previous_status=previous_status or "",
                 target_status=target_status or "",
-                email_requested=decision in {"accepted", "rejected"} and decision != previous_decision,
+                email_requested=False,
                 email_sent=False,
                 decided_at=datetime.now(timezone.utc),
             )
@@ -320,6 +307,6 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         "missing_reason": False,
         "public_submission_id": public_submission_id,
         "schema_warning": schema_warning,
-        "send_mail": decision in {"accepted", "rejected"} and decision != previous_decision,
+        "send_mail": False,
         "skipped": False,
     }

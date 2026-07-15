@@ -146,6 +146,7 @@ def forms_upload():
             label_background=request.form.get("label_background", "").strip() or "#f7f3ec",
             sort_order=parse_int(request.form.get("sort_order"), 0),
         )
+        current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
         db.add(form)
         db.flush()
         sync_form_fields(db, form, form_definition)
@@ -239,6 +240,7 @@ def form_edit(form_id: int):
             logo_alignment = request.form.get("logo_alignment", "left").strip()
             form.logo_alignment = logo_alignment if logo_alignment in LOGO_ALIGNMENTS else "left"
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
+            current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
             form.definition_json = updated_definition
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):

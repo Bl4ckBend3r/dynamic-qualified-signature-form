@@ -13,6 +13,7 @@ def build_mail_context(
     *,
     documents_to_sign_url_builder=None,
     document_url_builder=None,
+    **context_extra,
 ) -> dict[str, Any]:
     context = build_platform_mail_context(form, submission, files or [])
     if submission:
@@ -25,6 +26,7 @@ def build_mail_context(
                 document_url = ""
             context["document_url"] = document_url
             context["pobierz_url"] = document_url
+    context.update(context_extra)
     return context
 
 

@@ -677,14 +677,7 @@ def test_upload_participant_signed_training_agreement_notifies_with_default_next
 
     assert response.status_code == 302
     assert response.location.endswith("/do-podpisania?submission_id=abc")
-    assert notified
-    assert notified[0]["event_type"] == "AGREEMENT_SIGNED"
-    assert notified[0]["form_config"]["notifications"][0]["to"] == ["form_notifications"]
-    assert notified[0]["form_config"]["notifications"][0]["template"] == "Template/Mail/agreement_signed.html"
-    assert notified[0]["kwargs"]["sent_field"] == "agreement_success_email_sent"
-    assert notified[0]["kwargs"]["idempotency_key"] == "all"
-    assert notified[0]["kwargs"]["context_extra"]["signed_filename"] == "excel-umowa-signed.pdf"
-    assert notified[0]["kwargs"]["context_extra"]["signed_by"] == "participant"
+    assert notified == []
 
 
 def test_acceptance_status_missing_submission(client):

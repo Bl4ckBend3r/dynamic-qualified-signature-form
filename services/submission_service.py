@@ -33,6 +33,7 @@ class SubmissionService:
         workflow_service=None,
         document_service=None,
         notification_service=None,
+        mail_dispatch_service=None,
         audit_log_service=None,
         access_token_service: AccessTokenService | None = None,
         submission_document_service: SubmissionDocumentService | None = None,
@@ -43,6 +44,7 @@ class SubmissionService:
         self.workflow_service = workflow_service
         self.document_service = document_service
         self.notification_service = notification_service
+        self.mail_dispatch_service = mail_dispatch_service
         self.audit_log_service = audit_log_service
         self.access_token_service = access_token_service or AccessTokenService()
         self.submission_document_service = submission_document_service or SubmissionDocumentService(
@@ -184,11 +186,11 @@ class SubmissionService:
         logger.info("Zapis zgloszenia %s zakonczony sukcesem.", submission_id)
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
-        if self.notification_service:
+        if self.mail_dispatch_service:
             try:
-                self.notification_service.notify_event("FORM_SUBMITTED", submission, form_config)
+                self.mail_dispatch_service.dispatch_submission_received(submission_id)
             except Exception as exc:
-                current_app.logger.exception("Nie udało się wysłać powiadomienia FORM_SUBMITTED: %s", exc)
+                current_app.logger.exception("submission_received_mail_failed error=%s", exc.__class__.__name__)
         return submission
 
     def get_submission_context(self, submission_id: str, form_config_service=None, storage=None) -> dict | None:

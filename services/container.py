@@ -18,6 +18,7 @@ from services.form_config_service import FormConfigService
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.legacy_fallback_readiness_service import LegacyFallbackReadinessService
 from services.mail_dispatch_service import MailDispatchService
+from services.mail_settings_service import MailSettingsService
 from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
 from services.rules_service import RulesService
@@ -44,6 +45,7 @@ class ServiceContainer:
     agreement_flow_service: AgreementFlowService
     notification_service: NotificationService
     mail_dispatch_service: MailDispatchService
+    mail_settings_service: MailSettingsService
     submission_document_service: SubmissionDocumentService
     submission_workflow_history_service: SubmissionWorkflowHistoryService
     submission_decision_service: SubmissionDecisionService
@@ -85,10 +87,12 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         audit_log_service=audit_log_service,
         storage=storage,
     )
+    mail_settings_service = MailSettingsService(app.config.get("SECRET_KEY", ""))
     mail_dispatch_service = MailDispatchService(
         notification_service=notification_service,
         submission_repository=submission_repository,
         audit_log_service=audit_log_service,
+        mail_settings_service=mail_settings_service,
     )
     submission_document_service = SubmissionDocumentService(
         submission_repository=submission_repository,
@@ -141,6 +145,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         workflow_service=workflow_service,
         document_service=document_service,
         notification_service=notification_service,
+        mail_dispatch_service=mail_dispatch_service,
         audit_log_service=audit_log_service,
         access_token_service=access_token_service,
         submission_document_service=submission_document_service,
@@ -168,6 +173,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         agreement_flow_service=agreement_flow_service,
         notification_service=notification_service,
         mail_dispatch_service=mail_dispatch_service,
+        mail_settings_service=mail_settings_service,
         submission_document_service=submission_document_service,
         submission_workflow_history_service=submission_workflow_history_service,
         submission_decision_service=submission_decision_service,

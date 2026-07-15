@@ -50,10 +50,35 @@
                 <span>Widoczny publicznie</span>
             </label>
         </div>
+        <div class="admin-section">
+            <h2>Integracja poczty</h2>
+            <div class="admin-form-grid">
+                <label><span>Sposób wysyłki</span><select name="mail_mode" data-mail-mode><option value="system">Użyj domyślnej poczty systemowej</option><option value="custom">Użyj indywidualnej poczty dla tego formularza</option><option value="disabled">Nie wysyłaj maili dla tego formularza</option></select></label>
+            </div>
+            <div class="admin-form-grid" data-custom-smtp hidden>
+                <label><span>SMTP host</span><input name="form_smtp_host"></label>
+                <label><span>SMTP port</span><input type="number" min="1" max="65535" name="form_smtp_port" value="587"></label>
+                <label><span>Użytkownik SMTP</span><input name="form_smtp_user" autocomplete="off"></label>
+                <label><span>Hasło SMTP</span><input type="password" name="form_smtp_password" autocomplete="new-password"></label>
+                <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from"></label>
+                <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name"></label>
+                <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to"></label>
+                <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="30"></label>
+                <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" checked><span>TLS/STARTTLS</span></label>
+                <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl"><span>SSL</span></label>
+            </div>
+        </div>
         <div class="admin-form-actions">
             <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
             <button class="admin-button" type="submit">Wgraj i wykryj pola</button>
         </div>
     </form>
 </div>
+<script>
+const mailMode = document.querySelector("[data-mail-mode]");
+const customSmtp = document.querySelector("[data-custom-smtp]");
+function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mailMode?.value !== "custom"; }
+mailMode?.addEventListener("change", syncMailSettingsVisibility);
+syncMailSettingsVisibility();
+</script>
 {% endblock %}

@@ -5,8 +5,7 @@ from html import escape
 from types import SimpleNamespace
 from typing import Any
 
-from flask import current_app, render_template
-from jinja2 import TemplateNotFound
+from flask import current_app, url_for
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
@@ -44,11 +43,13 @@ class MailDispatchService:
         submission_repository=None,
         audit_log_service=None,
         smtp_sender=None,
+        mail_settings_service=None,
     ) -> None:
         self.notification_service = notification_service
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
         self.smtp_sender = smtp_sender
+        self.mail_settings_service = mail_settings_service
 
     def render_template(self, template: str | None, context: dict[str, Any] | None = None) -> str:
         if not template:
@@ -208,20 +209,37 @@ class MailDispatchService:
                 error_message="Brak adaptera SMTP.",
             )
             return MailDispatchResult("skipped", recipient, subject, "Brak adaptera SMTP.", log)
+        smtp_config = None
+        if self.mail_settings_service and db is not None and form is not None:
+            smtp_config = self.mail_settings_service.resolve_smtp(db, form, current_app.config)
+        if smtp_config is None and not self.mail_settings_service:
+            smtp_config = {
+                "smtp_host": current_app.config.get("SMTP_HOST", ""),
+                "smtp_port": current_app.config.get("SMTP_PORT", 587),
+                "smtp_user": current_app.config.get("SMTP_USER", ""),
+                "smtp_password": current_app.config.get("SMTP_PASSWORD", ""),
+                "mail_from": current_app.config.get("MAIL_FROM", ""),
+                "sender_name": current_app.config.get("MAIL_SENDER_NAME", ""),
+                "reply_to": current_app.config.get("MAIL_REPLY_TO", ""),
+                "use_tls": current_app.config.get("SMTP_USE_TLS", True),
+                "use_ssl": current_app.config.get("SMTP_USE_SSL", False),
+                "timeout": current_app.config.get("SMTP_TIMEOUT", 30),
+            }
+        if smtp_config is None:
+            log = self.log_email(
+                db, form=form, submission=submission, template=template, footer=footer,
+                to_email=recipient, subject=subject, sent_by_id=sent_by_id,
+                status="skipped", error_message="Brak konfiguracji SMTP.",
+            )
+            current_app.logger.warning("mail_skipped reason=smtp_not_configured form_id=%s", getattr(form, "id", None))
+            return MailDispatchResult("skipped", recipient, subject, "Brak konfiguracji SMTP.", log)
         try:
             sender(
-                smtp_host=current_app.config["SMTP_HOST"],
-                smtp_port=current_app.config["SMTP_PORT"],
-                smtp_user=current_app.config["SMTP_USER"],
-                smtp_password=current_app.config["SMTP_PASSWORD"],
-                mail_from=current_app.config["MAIL_FROM"],
+                **smtp_config,
                 to_emails=[recipient],
                 subject=subject,
                 html_body=html_body,
                 text_body=text_body or html_body,
-                use_tls=current_app.config.get("SMTP_USE_TLS", True),
-                use_ssl=current_app.config.get("SMTP_USE_SSL", False),
-                timeout=current_app.config.get("SMTP_TIMEOUT", 30),
             )
             log = self.log_email(
                 db,
@@ -237,7 +255,7 @@ class MailDispatchService:
             return MailDispatchResult("sent", recipient, subject, log=log)
         except Exception as exc:
             error_message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-            current_app.logger.exception("Nie udalo sie wyslac maila do %s: %s", recipient, error_message)
+            current_app.logger.exception("mail_send_failed form_id=%s error=%s", getattr(form, "id", None), error_message)
             log = self.log_email(
                 db,
                 form=form,
@@ -268,10 +286,30 @@ class MailDispatchService:
         context_builders: dict[str, Any] | None = None,
         logo_url_builder=None,
     ) -> MailDispatchResult:
+        if template is None or getattr(template, "is_active", True) is False:
+            current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
+            log = self.log_email(
+                db,
+                form=form,
+                submission=submission,
+                template=template,
+                footer=footer,
+                to_email=to_email or getattr(submission, "email", ""),
+                sent_by_id=sent_by_id,
+                status="skipped",
+                error_message="Brak aktywnego szablonu maila.",
+            )
+            return MailDispatchResult(
+                "skipped",
+                recipient=to_email or getattr(submission, "email", ""),
+                error_message="Brak aktywnego szablonu maila.",
+                log=log,
+            )
         context = self.build_context_for_submission(form, submission, files or [], **(context_builders or {}))
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         footer_html = self.build_footer(footer, logo_url_builder=logo_url_builder)
-        html_body = render_platform_mail_html(template, context, footer_html=footer_html)
+        layout = self._layout_for_db(db)
+        html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
         text_body = render_platform_mail_text(template, context)
         return self.dispatch_raw(
             event_type=event_type,
@@ -289,68 +327,79 @@ class MailDispatchService:
         )
 
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:
-        if not self.submission_repository:
-            return MailDispatchResult("skipped", error_message="Brak repozytorium zgloszen.")
-        submission = self.submission_repository.get_by_id(submission_id)
-        if not submission:
-            return MailDispatchResult("skipped", error_message="Brak zgloszenia.")
-        decision_key = self._decision_key(decision)
-        if self._decision_email_already_sent(submission, decision_key):
-            return MailDispatchResult("skipped", submission.get("email", ""), error_message="Mail decyzji juz wyslany.")
-        email = str(submission.get("email") or "").strip()
-        if not email:
-            return MailDispatchResult("skipped", error_message="Brak odbiorcy.")
-        accepted = decision_key == "accepted"
-        form_title = submission.get("form_name", "")
-        subject = "Wniosek zaakceptowany - dokumenty do podpisu" if accepted else "Wniosek nie zostal zaakceptowany"
-        context = {
-            "submission_id": submission_id,
-            "form_title": form_title,
-            "submission": submission,
-            "accepted": accepted,
-            "decision": decision_key,
-        }
-        html_body = self._render_decision_html(context)
-        text_body = (
-            "Dzien dobry,\n\n"
-            f"wniosek dotyczacy formularza \"{form_title}\" zostal zaakceptowany.\n\n"
-            f"ID wniosku: {submission_id}\n\n"
-            "Mozesz przejsc do podpisywania dokumentow w zakladce \"Do podpisania\".\n\n"
-            "Pozdrawiamy\n"
-            if accepted
-            else
-            "Dzien dobry,\n\n"
-            f"wniosek dotyczacy formularza \"{form_title}\" nie zostal zaakceptowany.\n\n"
-            f"ID wniosku: {submission_id}\n\n"
-            "W razie pytan prosimy o kontakt z urzedem.\n\n"
-            "Pozdrawiamy\n"
-        )
-        result = self.dispatch_raw(
-            event_type="officer_decision",
-            recipient=email,
-            subject=subject,
-            html_body=html_body,
-            text_body=text_body,
-            context=context,
-        )
-        if result.sent:
-            self.submission_repository.update(
-                submission_id,
-                {
-                    "officer_decision_email_sent": "Tak",
-                    "decision_email_sent": "Tak",
-                    "decision_email_sent_for": decision_key,
-                },
-            )
-            if self.audit_log_service:
-                self.audit_log_service.log_event(
-                    "DECISION_EMAIL_SENT",
-                    submission_id,
-                    submission.get("form_slug", ""),
-                    new_value=decision_key,
-                    metadata={"email": email, "accepted": accepted},
+        current_app.logger.info("mail_skipped reason=automatic_decision_email_disabled submission_id=%s", submission_id)
+        return MailDispatchResult("skipped", error_message="Automatyczny mail decyzji jest wyłączony.")
+
+    def dispatch_submission_received(self, submission_id: str) -> MailDispatchResult:
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from models import Form, FormSubmission, PlatformMailTemplate
+        from sqlalchemy import select
+
+        with create_session_factory(database_url)() as db:
+            submission = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if submission is None:
+                return MailDispatchResult("skipped", error_message="Brak zgłoszenia.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            template = db.execute(
+                select(PlatformMailTemplate).where(PlatformMailTemplate.template_type == "submission_received")
+            ).scalar_one_or_none()
+            if form is None or template is None or not template.is_active:
+                current_app.logger.warning("mail_skipped reason=submission_template_missing_or_inactive form_slug=%s", submission.form_slug)
+                log = self.log_email(
+                    db,
+                    form=form,
+                    submission=submission,
+                    to_email=str(submission.email or ""),
+                    status="skipped",
+                    error_message="Brak aktywnego szablonu submission_received.",
                 )
-        return result
+                db.commit()
+                return MailDispatchResult(
+                    "skipped",
+                    recipient=str(submission.email or ""),
+                    error_message="Brak aktywnego szablonu submission_received.",
+                    log=log,
+                )
+            if not str(submission.email or "").strip():
+                log = self.log_email(
+                    db,
+                    form=form,
+                    submission=submission,
+                    status="skipped",
+                    error_message="Brak odbiorcy.",
+                )
+                db.commit()
+                return MailDispatchResult("skipped", error_message="Brak odbiorcy.", log=log)
+            context = self.build_context_for_submission(
+                form,
+                submission,
+                [],
+                status_url=url_for("documents.documents_to_sign", submission_id=submission.submission_id, _external=True),
+                platform_url=url_for("public_forms.index", _external=True),
+                submission_date=submission.created_at,
+            )
+            subject = self.render_subject(template.subject, context)
+            html_body = render_platform_mail_html(template, context, layout=self._layout_for_db(db))
+            text_body = render_platform_mail_text(template, context)
+            result = self.dispatch_raw(
+                event_type="submission_received",
+                recipient=submission.email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+                context=context,
+                db=db,
+                form=form,
+                submission=submission,
+                template=None,
+            )
+            db.commit()
+            return result
 
     def log_email(
         self,
@@ -404,41 +453,17 @@ class MailDispatchService:
                 return None
             return log
 
-    def _render_decision_html(self, context: dict[str, Any]) -> str:
-        template_name = "emails/decision_accepted.html" if context.get("accepted") else "emails/decision_rejected.html"
-        try:
-            return render_template(template_name, **context)
-        except TemplateNotFound:
-            accepted = bool(context.get("accepted"))
-            heading = "Wniosek zaakceptowany" if accepted else "Wniosek nie zostal zaakceptowany"
-            details = "Mozesz przejsc do podpisywania dokumentow." if accepted else "W razie pytan prosimy o kontakt z urzedem."
-            return (
-                "<!doctype html><html lang=\"pl\"><body>"
-                f"<h2>{heading}</h2>"
-                "<p>Dzien dobry,</p>"
-                f"<p>Wniosek dotyczacy formularza <strong>{escape(str(context.get('form_title', '')))}</strong> "
-                f"{'zostal zaakceptowany przez urzednika.' if accepted else 'nie zostal zaakceptowany przez urzednika.'}</p>"
-                f"<p><strong>ID wniosku:</strong> {escape(str(context.get('submission_id', '')))}</p>"
-                f"<p>{details}</p><p>Pozdrawiamy</p>"
-                "</body></html>"
-            )
+    def _layout_for_db(self, db) -> dict[str, Any]:
+        if not self.mail_settings_service or db is None:
+            return {}
+        layout = self.mail_settings_service.get_layout(db)
+        logo_id = layout.get("logo_id")
+        if logo_id:
+            from models import Logo
 
-    def _decision_key(self, decision: str) -> str:
-        normalized = str(decision or "").strip().lower()
-        if normalized in {"accepted", "tak", "officer_accepted"}:
-            return "accepted"
-        if normalized in {"rejected", "nie", "officer_rejected"}:
-            return "rejected"
-        return normalized
-
-    def _decision_email_already_sent(self, submission: dict, decision_key: str) -> bool:
-        sent_values = {
-            str(submission.get("decision_email_sent") or "").strip().lower(),
-            str(submission.get("officer_decision_email_sent") or "").strip().lower(),
-        }
-        if not (sent_values & {"tak", "yes", "true", "1"}):
-            return False
-        sent_for = str(submission.get("decision_email_sent_for") or "").strip()
-        if not sent_for:
-            return True
-        return self._decision_key(sent_for) == decision_key
+            logo = db.get(Logo, logo_id)
+            if logo and logo.active:
+                layout["logo_url"] = url_for(
+                    "public_forms.logo_asset", logo_id=logo.id, filename=logo.filename, _external=True
+                )
+        return layout

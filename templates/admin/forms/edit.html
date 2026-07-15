@@ -43,6 +43,31 @@
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
     </div>
+    {% set form_smtp = form.smtp_config or {} %}
+    <div class="admin-section" data-mail-settings>
+        <h2>Integracja poczty</h2>
+        <div class="admin-form-grid">
+            <label><span>Sposób wysyłki</span><select name="mail_mode" data-mail-mode>
+                <option value="system" {% if (form.mail_mode or 'system') == 'system' %}selected{% endif %}>Użyj domyślnej poczty systemowej</option>
+                <option value="custom" {% if form.mail_mode == 'custom' %}selected{% endif %}>Użyj indywidualnej poczty dla tego formularza</option>
+                <option value="disabled" {% if form.mail_mode == 'disabled' %}selected{% endif %}>Nie wysyłaj maili dla tego formularza</option>
+            </select></label>
+        </div>
+        <div class="admin-form-grid" data-custom-smtp>
+            <label><span>SMTP host</span><input name="form_smtp_host" value="{{ form_smtp.get('host', '') }}"></label>
+            <label><span>SMTP port</span><input type="number" min="1" max="65535" name="form_smtp_port" value="{{ form_smtp.get('port', 587) }}"></label>
+            <label><span>Użytkownik SMTP</span><input name="form_smtp_user" value="{{ form_smtp.get('user', '') }}" autocomplete="off"></label>
+            <label><span>Nowe hasło SMTP</span><input type="password" name="form_smtp_password" value="" autocomplete="new-password" placeholder="{{ 'Hasło jest zapisane' if form.smtp_password_encrypted else 'Brak zapisanego hasła' }}"></label>
+            <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from" value="{{ form_smtp.get('mail_from', '') }}"></label>
+            <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name" value="{{ form_smtp.get('sender_name', '') }}"></label>
+            <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to" value="{{ form_smtp.get('reply_to', '') }}"></label>
+            <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="{{ form_smtp.get('timeout', 30) }}"></label>
+            <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" {% if form_smtp.get('use_tls') %}checked{% endif %}><span>TLS/STARTTLS</span></label>
+            <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl" {% if form_smtp.get('use_ssl') %}checked{% endif %}><span>SSL</span></label>
+            {% if form.smtp_password_encrypted %}<label class="admin-check"><input type="checkbox" name="form_smtp_clear_password"><span>Usuń zapisane hasło</span></label>{% endif %}
+        </div>
+        <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_mail_settings_test', form_id=form.id) }}" formmethod="post">Testuj połączenie</button>
+    </div>
     {% set instruction_config = form.user_instruction_config or {} %}
     <div class="admin-section admin-instruction-editor" data-instruction-editor>
         <h2>Instrukcja dalszego postępowania</h2>
@@ -306,6 +331,12 @@
     </div>
 </form>
 <script>
+const mailMode = document.querySelector("[data-mail-mode]");
+const customSmtp = document.querySelector("[data-custom-smtp]");
+function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mailMode?.value !== "custom"; }
+mailMode?.addEventListener("change", syncMailSettingsVisibility);
+syncMailSettingsVisibility();
+
 const instructionEditor = document.querySelector("[data-instruction-editor]");
 const instructionStages = instructionEditor?.querySelector("[data-instruction-stages]");
 const instructionStageTemplate = document.querySelector("[data-instruction-stage-template]");

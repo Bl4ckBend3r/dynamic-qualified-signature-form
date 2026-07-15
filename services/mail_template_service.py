@@ -584,7 +584,13 @@ def build_mail_context(form, submission, files: list | None = None, extra: dict 
     return context
 
 
-def render_platform_mail_html(template, context: dict[str, Any], footer_html: str = "") -> str:
+def render_platform_mail_html(
+    template,
+    context: dict[str, Any],
+    footer_html: str = "",
+    layout: dict[str, Any] | None = None,
+) -> str:
+    mail_layout = {**MAIL_LAYOUT, **(layout or {})}
     title = render_template_text(getattr(template, "content_title", "") or getattr(template, "name", "") or "Wiadomosc", context)
     raw_body_html = (
         getattr(template, "content_html", "")
@@ -597,14 +603,33 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
     raw_instruction_text = getattr(template, "instruction_text", "") or ""
     instruction_html = render_template_text(raw_instruction_html or build_instruction_html(raw_instruction_text), context)
     instruction_section = (
-        f"""<tr><td class="platform-instruction-title" style="padding:0 24px 16px;color:{MAIL_LAYOUT["primary_color"]};font-size:24px;font-weight:700;line-height:1.4;">Instrukcja</td></tr>
+        f"""<tr><td class="platform-instruction-title" style="padding:0 24px 16px;color:{mail_layout["primary_color"]};font-size:24px;font-weight:700;line-height:1.4;">Instrukcja</td></tr>
 <tr><td style="padding:0 24px 16px;">{instruction_html}</td></tr>"""
         if instruction_html.strip()
         else ""
     )
     instruction_media_css = "  .platform-instruction-title { font-size:20px !important; }\n" if instruction_section else ""
-    footer_note = render_template_text(getattr(template, "footer_note", "") or default_footer_note(), context)
+    footer_note = render_template_text(getattr(template, "footer_note", "") or "", context)
+    footer_note_section = (
+        '<tr><td style="padding:0 24px 16px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;">'
+        f'<tr><td style="padding:24px;color:#ffffff;font-size:16px;line-height:1.4;">{footer_note}</td></tr></table>'
+        '</td></tr>'
+        if footer_note.strip()
+        else ""
+    )
+    layout_footer = render_template_text(str(mail_layout.get("footer_html") or ""), context)
     footer_html = render_template_text(footer_html or "", context)
+    footer_html = "\n".join(part for part in [layout_footer, footer_html] if part)
+    platform_name = html.escape(str(mail_layout.get("platform_name") or ""))
+    logo_url = html.escape(str(mail_layout.get("logo_url") or ""))
+    brand_html = (
+        '<tr><td style="padding:0 24px 16px;text-align:center;">'
+        + (f'<img src="{logo_url}" alt="{platform_name}" style="max-width:180px;max-height:80px;width:auto;height:auto;">' if logo_url else platform_name)
+        + "</td></tr>"
+        if platform_name or logo_url
+        else ""
+    )
     info_rows = [
         ("Formularz", context.get("form_name", "")),
         ("Numer zgloszenia", context.get("submission_id", "")),
@@ -612,7 +637,7 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
     ]
     info_html = "".join(
         f'<tr><td style="padding:4px 0;color:#ffffff;font-size:16px;line-height:1.4;">{html.escape(label)}: '
-        f'<strong style="color:{MAIL_LAYOUT["accent_color"]};">{html.escape(str(value or ""))}</strong></td></tr>'
+        f'<strong style="color:{mail_layout["accent_color"]};">{html.escape(str(value or ""))}</strong></td></tr>'
         for label, value in info_rows
     )
     return f"""<!doctype html>
@@ -627,23 +652,22 @@ def render_platform_mail_html(template, context: dict[str, Any], footer_html: st
 }}
 </style>
 </head>
-<body style="margin:0;padding:0;background:{MAIL_LAYOUT["body_background"]};font-family:{MAIL_LAYOUT["font_family"]};color:{MAIL_LAYOUT["text_color"]};line-height:1.4;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["body_background"]};">
+<body style="margin:0;padding:0;background:{mail_layout["body_background"]};font-family:{mail_layout["font_family"]};color:{mail_layout["text_color"]};line-height:1.4;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["body_background"]};">
 <tr><td align="center" style="padding:24px 0;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="platform-mail-card" style="width:600px;max-width:100%;border-collapse:collapse;background:{MAIL_LAYOUT["card_background"]};">
-<tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;color:{MAIL_LAYOUT["primary_color"]};font-size:42.7px;font-weight:700;line-height:1.4;">{html.escape(title)}</td></tr>
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="platform-mail-card" style="width:600px;max-width:100%;border-collapse:collapse;background:{mail_layout["card_background"]};">
+{brand_html}
+<tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;color:{mail_layout["primary_color"]};font-size:42.7px;font-weight:700;line-height:1.4;">{html.escape(title)}</td></tr>
 <tr><td style="padding:0 24px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{info_html}</table>
 </td></tr></table>
 </td></tr>
 <tr><td style="padding:0 24px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["light_panel_background"]};border:1px solid {MAIL_LAYOUT["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{MAIL_LAYOUT["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["light_panel_background"]};border:1px solid {mail_layout["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{mail_layout["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>
 </td></tr>
 {instruction_section}
-<tr><td style="padding:0 24px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{MAIL_LAYOUT["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;color:#ffffff;font-size:16px;line-height:1.4;">{footer_note}</td></tr></table>
-</td></tr>
+{footer_note_section}
 {f'<tr><td style="padding:0 24px 16px;">{footer_html}</td></tr>' if footer_html else ''}
 </table>
 </td></tr>
@@ -668,13 +692,6 @@ def render_platform_mail_text(template, context: dict[str, Any]) -> str:
         getattr(template, "instruction_text", "") or html_to_text(getattr(template, "instruction_html", "") or ""),
         context,
     )
-    footer = render_template_text(getattr(template, "footer_note", "") or "Pozdrawiamy", context)
+    footer = render_template_text(getattr(template, "footer_note", "") or "", context)
     parts = [title, body, instruction, footer]
     return "\n\n".join(part.strip() for part in parts if part and part.strip())
-
-
-def default_footer_note() -> str:
-    return (
-        'W razie problemow z podpisaniem lub wgraniem dokumentow skontaktuj sie z obsluga projektu '
-        'i podaj numer zgloszenia: <strong style="color:#c8a35d;">{{ submission_id }}</strong>.'
-    )

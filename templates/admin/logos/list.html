@@ -52,7 +52,7 @@
                     </div>
                 </td>
                 <td>{{ logo.name }}</td>
-                <td>{{ logo.filename }}</td>
+                <td>{{ logo.filename }}<br><small>Przypisane formularze: {{ logo_usage.get(logo.id, 0) }}</small></td>
                 <td><span class="admin-badge {% if logo.active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywne" if logo.active else "Nieaktywne" }}</span></td>
                 <td>{{ logo.created_at.strftime("%Y-%m-%d") if logo.created_at else "-" }}</td>
                 {% if g.admin_user.role == "super_admin" %}
@@ -61,6 +61,11 @@
                         <form method="post" action="{{ url_for('admin.logo_toggle', logo_id=logo.id) }}">
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                             <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if logo.active else "Aktywuj" }}</button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin.logo_delete', logo_id=logo.id) }}" onsubmit="return confirm('Czy na pewno chcesz usunąć to logo? Tej operacji nie można cofnąć.');">
+                            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                            <input type="hidden" name="detach" value="1">
+                            <button class="admin-link-button admin-link-danger" type="submit">Usuń logo</button>
                         </form>
                     </td>
                 {% endif %}

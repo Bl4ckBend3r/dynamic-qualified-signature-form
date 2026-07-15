@@ -303,6 +303,7 @@ from . import dashboard  # noqa: E402,F401
 from . import forms  # noqa: E402,F401
 from . import logos  # noqa: E402,F401
 from . import mail  # noqa: E402,F401
+from . import mail_settings  # noqa: E402,F401
 from . import site  # noqa: E402,F401
 from . import submissions  # noqa: E402,F401
 from . import users  # noqa: E402,F401

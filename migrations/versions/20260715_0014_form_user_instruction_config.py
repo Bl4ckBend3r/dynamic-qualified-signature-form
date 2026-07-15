@@ -22,19 +22,20 @@ def _table_columns(table_name: str) -> set[str]:
     return {column["name"] for column in inspector.get_columns(table_name)}
 
 
+def _instruction_config_type():
+    dialect_name = op.get_bind().dialect.name
+    if dialect_name in {"postgresql", "mysql", "mariadb"}:
+        return sa.JSON()
+    return sa.Text()
+
+
 def upgrade() -> None:
     if "user_instruction_config" in _table_columns("forms"):
         return
-    op.add_column("forms", sa.Column("user_instruction_config", sa.JSON(), nullable=True))
-    op.execute(
-        sa.text("UPDATE forms SET user_instruction_config = :empty_config WHERE user_instruction_config IS NULL")
-        .bindparams(empty_config="{}")
+    op.add_column(
+        "forms",
+        sa.Column("user_instruction_config", _instruction_config_type(), nullable=True),
     )
-    if op.get_bind().dialect.name == "sqlite":
-        with op.batch_alter_table("forms") as batch_op:
-            batch_op.alter_column("user_instruction_config", existing_type=sa.JSON(), nullable=False)
-    else:
-        op.alter_column("forms", "user_instruction_config", existing_type=sa.JSON(), nullable=False)
 
 
 def downgrade() -> None:

@@ -43,7 +43,6 @@ from services.nextcloud_storage import (
     NextcloudStorageError,
     create_nextcloud_storage_from_env,
 )
-from services.email_service import send_submission_decision_email
 from services.access_token_service import AccessTokenService
 from services.document_service import (
     DocumentType,
@@ -64,7 +63,6 @@ from services.process_service import (
     build_process_state,
     get_officer_decision,
     is_agreement_required,
-    should_send_officer_decision_email,
 )
 from services.training_agreement_service import (
     build_training_agreement_number as service_build_training_agreement_number,
@@ -424,94 +422,6 @@ def build_signature_update_fields(
             else ProcessStatus.DECLARATION_SIGNATURE_INVALID.value
         ),
     }
-
-
-def build_decision_email_content(submission: dict, accepted: bool) -> tuple[str, str]:
-    template_name = (
-        "emails/decision_accepted.html"
-        if accepted
-        else "emails/decision_rejected.html"
-    )
-
-    html_body = render_template(
-        template_name,
-        submission_id=submission["submission_id"],
-        form_title=submission["form_title"],
-    )
-
-    if accepted:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"Możesz przejść do podpisywania dokumentów w zakładce „Do podpisania”.\n\n"
-            f"Pozdrawiamy\n"
-        )
-    else:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” nie został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"W razie pytań prosimy o kontakt z urzędem.\n\n"
-            f"Pozdrawiamy\n"
-        )
-
-    return html_body, text_body
-
-
-def maybe_send_decision_email(submission: dict) -> None:
-    row = submission["row"]
-
-    email = row.get("email", "").strip()
-    if not email:
-        logger.warning(
-            "Brak adresu e-mail dla wniosku %s",
-            submission["submission_id"],
-        )
-        return
-
-    officer_decision = get_officer_decision(row)
-
-    if officer_decision == OfficerDecision.MISSING:
-        return
-
-    if not should_send_officer_decision_email(row):
-        return
-
-    accepted = officer_decision == OfficerDecision.ACCEPTED
-    decision_value = officer_decision.value
-    html_body, text_body = build_decision_email_content(submission, accepted)
-
-    send_submission_decision_email(
-        smtp_host=app.config["SMTP_HOST"],
-        smtp_port=app.config["SMTP_PORT"],
-        smtp_user=app.config["SMTP_USER"],
-        smtp_password=app.config["SMTP_PASSWORD"],
-        mail_from=app.config["MAIL_FROM"],
-        to_email=email,
-        submission_id=submission["submission_id"],
-        form_title=submission["form_title"],
-        accepted=accepted,
-        html_body=html_body,
-        text_body=text_body,
-    )
-
-    storage.update_csv_row_by_submission_id(
-        submission["form_slug"],
-        submission["submission_id"],
-        {
-            "officer_decision_email_sent": "Tak",
-            "decision_email_sent": "Tak",
-            "decision_email_sent_for": decision_value,
-        },
-    )
-
-    logger.info(
-        "Wysłano e-mail decyzji '%s' na adres %s dla wniosku %s",
-        decision_value,
-        email,
-        submission["submission_id"],
-    )
 
 
 @app.context_processor
@@ -1132,11 +1042,6 @@ def api_acceptance_status(submission_id: str):
             "can_sign_documents": False,
             "message": "Nie znaleziono wniosku o podanym ID.",
         }, 200
-
-    try:
-        maybe_send_decision_email(submission)
-    except Exception as exc:
-        logger.exception("Nie udało się wysłać e-maila decyzji: %s", exc)
 
     if submission["officer_decision"] == OfficerDecision.REJECTED.value:
         return {

@@ -5,15 +5,6 @@ from datetime import date
 from typing import Any
 
 from services.document_service import DocumentType
-from services.document_service import parse_json_list
-
-
-DEFAULT_PARTICIPANT_AGREEMENT_SIGNED_NOTIFICATION = {
-    "event": "AGREEMENT_SIGNED",
-    "to": ["form_notifications"],
-    "template": "Template/Mail/agreement_signed.html",
-    "subject": "Umowa podpisana przez uczestnika",
-}
 
 
 @dataclass
@@ -79,18 +70,7 @@ class AgreementFlowService:
 
     @staticmethod
     def form_config_with_participant_agreement_notification(form_config: dict) -> tuple[dict, str]:
-        notifications = [
-            notification
-            for notification in form_config.get("notifications", [])
-            if isinstance(notification, dict)
-        ]
-        configured_events = {notification.get("event") for notification in notifications}
-        if "AGREEMENT_SIGNED" in configured_events:
-            return form_config, "AGREEMENT_SIGNED"
-        return {
-            **form_config,
-            "notifications": [*notifications, DEFAULT_PARTICIPANT_AGREEMENT_SIGNED_NOTIFICATION],
-        }, "AGREEMENT_SIGNED"
+        return form_config, "AGREEMENT_SIGNED"
 
     def send_participant_agreement_signed_notification(
         self,
@@ -103,35 +83,4 @@ class AgreementFlowService:
         get_submission_context,
         get_form_config,
     ) -> list[dict]:
-        refreshed_submission = get_submission_context(submission_id)
-        if not refreshed_submission:
-            return []
-
-        row = refreshed_submission["row"]
-        if row.get("agreement_signature_valid", "").strip().lower() != "tak":
-            return []
-
-        form_config = get_form_config(slug) or {}
-        agreements = parse_json_list(row.get("training_agreements"))
-        signed_agreement = next(
-            (item for item in agreements if str(item.get("id") or "") == str(agreement_id or "")),
-            agreements[0] if agreements else {},
-        )
-        form_config, event_type = self.form_config_with_participant_agreement_notification(form_config)
-
-        return services.notification_service.notify_event_once(
-            event_type,
-            refreshed_submission,
-            form_config,
-            sent_field="agreement_success_email_sent",
-            idempotency_key="all",
-            context_extra={
-                "agreement_id": agreement_id,
-                "agreement": signed_agreement,
-                "training_agreements": agreements,
-                "source_filename": upload_result.get("source_filename"),
-                "signed_filename": upload_result.get("signed_filename"),
-                "signed_by": "participant",
-                "verification": upload_result.get("verification") or {},
-            },
-        )
+        return []

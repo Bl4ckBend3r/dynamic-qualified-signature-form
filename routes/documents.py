@@ -311,19 +311,6 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
             flash("Podpis umowy nie jest dopuszczalnym podpisem.", "error")
         else:
             flash("Podpisana umowa została poprawnie zweryfikowana.", "success")
-            try:
-                sent = send_participant_agreement_signed_notification(
-                    services=services,
-                    slug=slug,
-                    submission_id=submission_id,
-                    agreement_id=agreement_id,
-                    upload_result=result,
-                )
-                if sent:
-                    flash("Wysłano powiadomienie o umowie podpisanej przez uczestnika.", "success")
-            except Exception as exc:
-                logger.exception("Nie udało się wysłać powiadomienia AGREEMENT_SIGNED: %s", exc)
-                flash("Umowa została podpisana, ale nie udało się wysłać powiadomienia e-mail.", "error")
     except ValueError as exc:
         flash(str(exc), "error")
     except Exception as exc:

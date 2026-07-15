@@ -322,7 +322,7 @@ class Form(Base):
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     user_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
-    user_instruction_config: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    user_instruction_config: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
     definition_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -333,6 +333,9 @@ class Form(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), nullable=True)
     logo_alignment: Mapped[str] = mapped_column(String(16), default="left", nullable=False)
+    mail_mode: Mapped[str] = mapped_column(String(32), default="system", nullable=False)
+    smtp_config: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    smtp_password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -367,6 +370,54 @@ class Form(Base):
     @active.setter
     def active(self, value: bool) -> None:
         self.is_active = bool(value)
+
+
+class SystemMailSettings(Base):
+    __tablename__ = "system_mail_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    smtp_config: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    smtp_password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    layout_config: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_by: Mapped[User | None] = relationship()
+
+
+class PlatformMailTemplate(Base):
+    __tablename__ = "platform_mail_templates"
+    __table_args__ = (UniqueConstraint("template_type", name="uq_platform_mail_templates_type"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    template_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    html_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    text_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_by: Mapped[User | None] = relationship()
 
 
 class FormField(Base):

@@ -26,10 +26,12 @@ from models import (
     MailFooter,
     MailTemplate,
     MailTemplateAsset,
+    PlatformMailTemplate,
     ServiceDocument,
     SubmissionDecision,
     SubmissionFile,
     SubmissionWorkflowEvent,
+    SystemMailSettings,
     User,
 )
 
@@ -722,7 +724,7 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
         assert decision.justification == ""
         assert decision.previous_status == "FORM_SUBMITTED"
         assert decision.target_status in {"OFFICER_ACCEPTED", "accepted_waiting_for_additional_fields"}
-        assert decision.email_requested is True
+        assert decision.email_requested is False
         workflow_event = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id="abc").one()
         assert workflow_event.new_status in {"REVIEW_ACCEPTED", "ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS"}
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
@@ -828,7 +830,7 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
         assert saved_form.user_instruction_config["stages"] == []
 
 
-def test_officer_decision_mail_uses_mail_dispatch_service_once(admin_app, admin_client):
+def test_officer_decision_does_not_send_automatic_mail(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="sample_form", name="Sample")
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
@@ -860,10 +862,10 @@ def test_officer_decision_mail_uses_mail_dispatch_service_once(admin_app, admin_
 
     assert first.status_code == 302
     assert second.status_code == 302
-    assert calls == [("abc", "accepted")]
+    assert calls == []
     with session_factory() as db:
         decisions = db.query(SubmissionDecision).filter_by(public_submission_id="abc").order_by(SubmissionDecision.id).all()
-        assert [decision.email_requested for decision in decisions] == [True, False]
+        assert [decision.email_requested for decision in decisions] == [False, False]
 
 
 def test_officer_decision_update_survives_missing_decision_audit_table(admin_app, admin_client):
@@ -895,7 +897,7 @@ def test_officer_decision_update_survives_missing_decision_audit_table(admin_app
     )
 
     assert response.status_code == 302
-    assert calls == [("abc", "rejected")]
+    assert calls == []
     with session_factory() as db:
         submission = db.get(FormSubmission, submission_pk)
         assert submission.officer_decision == "rejected"
@@ -945,7 +947,7 @@ def test_bulk_officer_decision_update_saves_all_rows(admin_app, admin_client):
     )
 
     assert response.status_code == 302
-    assert calls == [("abc", "accepted")]
+    assert calls == []
     with session_factory() as db:
         first = db.get(FormSubmission, first_pk)
         second = db.get(FormSubmission, second_pk)
@@ -1151,7 +1153,7 @@ def test_send_mail_uses_first_template_when_manual_fields_are_empty(admin_app, a
         assert log.status == "sent"
 
 
-def test_send_mail_uses_system_fallback_only_without_templates(admin_app, admin_client):
+def test_send_mail_without_template_is_skipped(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="sample_form", name="Sample")
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
@@ -1181,12 +1183,7 @@ def test_send_mail_uses_system_fallback_only_without_templates(admin_app, admin_
     )
 
     assert response.status_code == 302
-    assert sent[0]["subject"] == "Informacja dotyczaca zgloszenia abc"
-    assert "Przesylamy informacje dotyczaca zgloszenia" in sent[0]["html_body"]
-    with session_factory() as db:
-        log = db.query(EmailLog).one()
-        assert log.status == "sent"
-        assert log.template_id is None
+    assert sent == []
 
 
 def test_send_mail_failure_flash_includes_error_reason(admin_app, admin_client):
@@ -1204,6 +1201,8 @@ def test_send_mail_failure_flash_includes_error_reason(admin_app, admin_client):
             data_json={"imiona": "Jan"},
         )
         db.add(submission)
+        db.flush()
+        db.add(MailTemplate(form_id=form_id, name="Info", subject="Test", html_body="<p>Test</p>"))
         db.commit()
         submission_pk = submission.id
 
@@ -1216,7 +1215,7 @@ def test_send_mail_failure_flash_includes_error_reason(admin_app, admin_client):
 
     response = admin_client.post(
         f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
-        data={"csrf_token": token, "to_email": "jan@example.com", "subject": "Test", "html_body": "<p>Test</p>"},
+        data={"csrf_token": token, "to_email": "jan@example.com"},
         follow_redirects=True,
     )
 
@@ -2452,3 +2451,276 @@ def test_mail_footer_uses_form_footer_then_global_fallback(admin_app, caplog):
     assert "scope=form" in caplog.text
     assert "scope=global" in caplog.text
     assert "scope=none" in caplog.text
+
+
+def test_form_manager_saves_custom_smtp_with_encrypted_hidden_password(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="manager@example.com", role="admin")
+    form_id = create_form(admin_app, slug="mail_form", name="Mail form", user_id=manager_id)
+    login(admin_client, email="manager@example.com")
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Mail form",
+            "slug": "mail_form",
+            "title": "Mail form",
+            "is_active": "on",
+            "is_public": "on",
+            "user_instruction_config": '{"stages": []}',
+            "mail_mode": "custom",
+            "form_smtp_host": "smtp.form.test",
+            "form_smtp_port": "465",
+            "form_smtp_user": "form-user",
+            "form_smtp_password": "form-secret",
+            "form_smtp_mail_from": "form@example.com",
+            "form_smtp_sender_name": "Form sender",
+            "form_smtp_reply_to": "reply@example.com",
+            "form_smtp_timeout": "20",
+            "form_smtp_use_ssl": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        db.add(
+            SystemMailSettings(
+                smtp_config={"host": "smtp.system.test", "mail_from": "system@example.com"},
+                layout_config={},
+            )
+        )
+        db.flush()
+        assert form.mail_mode == "custom"
+        assert form.smtp_config["host"] == "smtp.form.test"
+        assert form.smtp_password_encrypted != "form-secret"
+        assert service.decrypt_password(form.smtp_password_encrypted) == "form-secret"
+        resolved = service.resolve_smtp(db, form, admin_app.config)
+        assert resolved["smtp_host"] == "smtp.form.test"
+        assert resolved["smtp_password"] == "form-secret"
+
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    assert "form-secret" not in edit_html
+
+
+def test_system_mail_settings_are_superadmin_only_and_password_is_hidden(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/mail-settings").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/mail-settings",
+        data={
+            "csrf_token": token,
+            "system_smtp_host": "smtp.system.test",
+            "system_smtp_port": "587",
+            "system_smtp_user": "system-user",
+            "system_smtp_password": "system-secret",
+            "system_smtp_mail_from": "system@example.com",
+            "system_smtp_sender_name": "System sender",
+            "system_smtp_reply_to": "help@example.com",
+            "system_smtp_timeout": "30",
+            "system_smtp_use_tls": "on",
+            "template_is_active": "on",
+            "template_subject": "Otrzymano {{ submission_id }}",
+            "template_html_body": "<p>Witaj {{ imie }}</p><script>alert(1)</script>",
+            "template_text_body": "Witaj {{ imie }}",
+            "layout_platform_name": "Moja platforma",
+            "layout_primary_color": "#123456",
+            "layout_accent_color": "#abcdef",
+            "layout_footer_html": "<p>Stopka</p>",
+        },
+    )
+
+    assert response.status_code == 302
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        settings = db.query(SystemMailSettings).one()
+        template = db.query(PlatformMailTemplate).filter_by(template_type="submission_received").one()
+        assert settings.smtp_config["host"] == "smtp.system.test"
+        assert settings.smtp_password_encrypted != "system-secret"
+        assert service.decrypt_password(settings.smtp_password_encrypted) == "system-secret"
+        assert settings.layout_config["platform_name"] == "Moja platforma"
+        assert template.is_active is True
+        assert template.subject == "Otrzymano {{ submission_id }}"
+        assert "<script" not in template.html_body
+
+    assert "system-secret" not in admin_client.get("/admin/mail-settings").get_data(as_text=True)
+    admin_client.get("/admin/logout")
+    create_user(admin_app, email="regular@example.com", role="admin")
+    login(admin_client, email="regular@example.com")
+    assert admin_client.get("/admin/mail-settings").status_code == 403
+
+
+def test_superadmin_deletes_used_logo_with_safe_detach_and_regular_admin_is_blocked(admin_app, admin_client):
+    create_user(admin_app)
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "kept-logo.png"
+    logo_path.write_bytes(b"logo-data")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(name="Used logo", filename="kept-logo.png", storage_path=str(logo_path), mime_type="image/png", active=True)
+        db.add(logo)
+        db.flush()
+        form = Form(slug="logo_form", name="Logo form", title="Logo form", definition_json={"fields": []}, logo_id=logo.id)
+        db.add(form)
+        db.add(SystemMailSettings(smtp_config={}, layout_config={"logo_id": logo.id}))
+        db.commit()
+        logo_id = logo.id
+        form_id = form.id
+
+    login(admin_client)
+    html = admin_client.get("/admin/logos").get_data(as_text=True)
+    assert "Przypisane formularze: 1" in html
+    assert f"/admin/logos/{logo_id}/delete" in html
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(f"/admin/logos/{logo_id}/delete", data={"csrf_token": token, "detach": "1"})
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Logo, logo_id) is None
+        assert db.get(Form, form_id).logo_id is None
+        assert db.query(SystemMailSettings).one().layout_config["logo_id"] is None
+    assert logo_path.exists()
+
+    blocked_path = Path(admin_app.config["TEMP_DIR"]) / "blocked-logo.png"
+    blocked_path.write_bytes(b"logo-data")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        blocked_logo = Logo(name="Blocked", filename="blocked-logo.png", storage_path=str(blocked_path), mime_type="image/png", active=True)
+        db.add(blocked_logo)
+        db.commit()
+        blocked_logo_id = blocked_logo.id
+    admin_client.get("/admin/logout")
+    create_user(admin_app, email="regular@example.com", role="admin")
+    login(admin_client, email="regular@example.com")
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    assert admin_client.post(
+        f"/admin/logos/{blocked_logo_id}/delete",
+        data={"csrf_token": token, "detach": "1"},
+    ).status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Logo, blocked_logo_id) is not None
+
+
+def test_submission_received_uses_global_template_layout_and_logs_missing_recipient(admin_app):
+    form_id = create_form(admin_app, slug="receipt_form", name="Receipt form", mail_mode="system")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            SystemMailSettings(
+                smtp_config={
+                    "host": "smtp.system.test",
+                    "port": 587,
+                    "user": "",
+                    "mail_from": "system@example.com",
+                    "sender_name": "System sender",
+                    "use_tls": True,
+                    "use_ssl": False,
+                    "timeout": 30,
+                    "reply_to": "help@example.com",
+                },
+                layout_config={
+                    "platform_name": "Global brand",
+                    "primary_color": "#123456",
+                    "accent_color": "#abcdef",
+                    "footer_html": "<p>Global footer</p>",
+                },
+            )
+        )
+        db.add(
+            PlatformMailTemplate(
+                template_type="submission_received",
+                name="Receipt",
+                subject="Odebrano {{ submission_id }}",
+                html_body="<p>Witaj {{ imie }}</p>",
+                text_body="Witaj {{ imie }}",
+                is_active=True,
+            )
+        )
+        db.add_all(
+            [
+                FormSubmission(
+                    submission_id="receipt-1",
+                    form_slug="receipt_form",
+                    form_name="Receipt form",
+                    email="jan@example.com",
+                    imiona="Jan",
+                    nazwisko="Kowalski",
+                    data_json={"imiona": "Jan"},
+                ),
+                FormSubmission(
+                    submission_id="receipt-no-email",
+                    form_slug="receipt_form",
+                    form_name="Receipt form",
+                    email="",
+                ),
+            ]
+        )
+        db.commit()
+
+    sent = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.test_request_context("/"):
+        result = dispatch.dispatch_submission_received("receipt-1")
+        missing = dispatch.dispatch_submission_received("receipt-no-email")
+
+    assert result.status == "sent"
+    assert missing.status == "skipped"
+    assert len(sent) == 1
+    assert sent[0]["smtp_host"] == "smtp.system.test"
+    assert sent[0]["subject"] == "Odebrano receipt-1"
+    assert "Witaj Jan" in sent[0]["html_body"]
+    assert "Global brand" in sent[0]["html_body"]
+    assert "Global footer" in sent[0]["html_body"]
+    assert "#123456" in sent[0]["html_body"]
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        sent_log = db.query(EmailLog).filter_by(public_submission_id="receipt-1").one()
+        missing_log = db.query(EmailLog).filter_by(public_submission_id="receipt-no-email").one()
+        assert sent_log.status == "sent"
+        assert missing_log.status == "skipped"
+        assert missing_log.error_message == "Brak odbiorcy."
+
+
+def test_submission_received_without_smtp_is_logged_and_does_not_fail(admin_app):
+    create_form(
+        admin_app,
+        slug="no_smtp_form",
+        name="No SMTP form",
+        mail_mode="custom",
+        smtp_config={"host": "", "mail_from": ""},
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            PlatformMailTemplate(
+                template_type="submission_received",
+                name="Receipt",
+                subject="Odebrano {{ submission_id }}",
+                html_body="<p>{{ submission_id }}</p>",
+                is_active=True,
+            )
+        )
+        db.add(
+            FormSubmission(
+                submission_id="no-smtp",
+                form_slug="no_smtp_form",
+                form_name="No SMTP form",
+                email="jan@example.com",
+            )
+        )
+        db.commit()
+
+    sent = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.test_request_context("/"):
+        result = dispatch.dispatch_submission_received("no-smtp")
+
+    assert result.status == "skipped"
+    assert result.error_message == "Brak konfiguracji SMTP."
+    assert sent == []
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        log = db.query(EmailLog).filter_by(public_submission_id="no-smtp").one()
+        assert log.status == "skipped"
+        assert log.error_message == "Brak konfiguracji SMTP."

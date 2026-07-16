@@ -22,6 +22,7 @@ class DocumentViewService:
         download_url_builder: Callable[[str, bool], str],
         available_actions: list[dict] | None = None,
         document_files: list[Mapping[str, Any]] | None = None,
+        allow_legacy_fallback: bool = True,
     ) -> dict:
         documents = []
         files_by_type = self._files_by_type(document_files or [])
@@ -31,7 +32,7 @@ class DocumentViewService:
             signed_metadata = self._metadata_for_document(files_by_type, document_id, signed=True)
             used_legacy_fallback = metadata is None
             filename = str((metadata or {}).get("filename") or "").strip()
-            if not filename:
+            if not filename and allow_legacy_fallback:
                 filename = self.document_filename(row, document_id)
                 used_legacy_fallback = True
             signature_valid = self.document_signature_valid(row, document_id)
@@ -178,7 +179,11 @@ class DocumentViewService:
         declaration_upload_url: str | None,
         generate_agreement_url: str,
         agreement_upload_url_builder: Callable[[str], str],
+        agreement_upload_url: str,
+        agreement_required: bool,
+        agreement_template_configured: bool,
         status_labeler: Callable[[str, dict], str],
+        available_filenames: set[str] | None = None,
     ) -> dict:
         row = submission["row"]
         status_view = build_status_view(process_state.status.value)
@@ -189,6 +194,10 @@ class DocumentViewService:
         declaration_enabled = bool(declaration.get("enabled"))
         declaration_filename = declaration.get("filename", "")
         declaration_ready = bool(declaration_enabled and declaration_filename)
+        available = available_filenames
+
+        def is_available(filename: str) -> bool:
+            return bool(filename) and (available is None or filename in available)
 
         return {
             "submission_id": submission_id,
@@ -198,7 +207,7 @@ class DocumentViewService:
                 "Deklaracja zostala wygenerowana i jest gotowa do podpisania."
                 if declaration_enabled and declaration.get("created")
                 else "Deklaracja jest gotowa do pobrania i podpisania."
-                if declaration_ready
+                if declaration_ready and is_available(declaration_filename)
                 else "Wypelnij deklaracje, aby wygenerowac PDF do podpisu."
                 if declaration_enabled
                 else "Dla tego formularza deklaracja nie jest wymagana."
@@ -216,7 +225,8 @@ class DocumentViewService:
                 step
                 for step, visible in {
                     "declaration": declaration_enabled,
-                    "agreement": process_state.can_generate_agreement or bool(training_agreements),
+                    "agreement": agreement_template_configured
+                    and (process_state.can_generate_agreement or bool(training_agreements)),
                 }.items()
                 if visible
             ],
@@ -248,19 +258,37 @@ class DocumentViewService:
                 )
             ) and bool(selected_trainings),
             "generate_agreement_url": generate_agreement_url,
-            "agreement_generated": str(row.get("agreement_generated", "")).strip().lower() == "tak",
+            "agreement_required": agreement_required,
+            "agreement_template_configured": agreement_template_configured,
+            "agreement_configuration_error": (
+                "Brak szablonu umowy dla tego formularza."
+                if agreement_required and not agreement_template_configured
+                else ""
+            ),
+            "agreement_generated": agreement_template_configured
+            and str(row.get("agreement_generated", "")).strip().lower() == "tak",
             "agreement_filename": row.get("agreement_filename", ""),
             "agreement_generated_at": row.get("agreement_generated_at", ""),
             "agreement_generated_at_iso": row.get("agreement_generated_at", "") or today_iso,
             "agreement_signature_valid": str(row.get("agreement_signature_valid", "")).strip().lower() == "tak",
             "agreement_signature_error": row.get("agreement_signature_error", ""),
+            "agreement_url": (
+                download_url_builder(str(row.get("agreement_filename") or ""), False)
+                if agreement_template_configured and is_available(str(row.get("agreement_filename") or ""))
+                else ""
+            ),
+            "agreement_upload_url": agreement_upload_url if agreement_template_configured else None,
             "training_agreements": [
                 {
                     **agreement,
-                    "url": download_url_builder(agreement.get("filename", ""), False) if agreement.get("filename") else "",
+                    "url": (
+                        download_url_builder(agreement.get("filename", ""), False)
+                        if is_available(str(agreement.get("filename") or ""))
+                        else ""
+                    ),
                     "upload_url": agreement_upload_url_builder(agreement.get("id", "")),
                 }
-                for agreement in training_agreements
+                for agreement in (training_agreements if agreement_template_configured else [])
             ],
         }
 

@@ -187,6 +187,7 @@
     {% endif %}
     {% set workflow = form.definition_json.get("workflow", {}) if form.definition_json else {} %}
     <div class="admin-section admin-workflow-editor">
+        <input type="hidden" name="workflow_controls_present" value="1">
         <div class="admin-section-heading">
             <div>
                 <h2>Workflow</h2>
@@ -223,7 +224,19 @@
             <label class="admin-form-wide admin-code-field" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                 <span>Szablon umowy HTML</span>
                 <textarea name="contract_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ generated_date }}' }}">{{ workflow.get('contract_template_html', '') }}</textarea>
+                <small>Dostępne są dane zgłoszenia i formularza oraz m.in. <code>training</code>, <code>selected_trainings</code>, <code>agreement_number</code> i <code>generated_date</code>. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small>
             </label>
+            <div class="admin-form-grid" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                <label>
+                    <span>Sposób generowania umów</span>
+                    <select name="contract_generation_mode">
+                        <option value="per_training" {% if workflow.get('contract_generation_mode', 'per_training') == 'per_training' %}selected{% endif %}>Osobna umowa dla każdego szkolenia</option>
+                        <option value="single" {% if workflow.get('contract_generation_mode') == 'single' %}selected{% endif %}>Jedna umowa dla zgłoszenia</option>
+                    </select>
+                </label>
+                <label><span>Nazwa pliku PDF</span><input name="contract_filename_pattern" value="{{ workflow.get('contract_filename_pattern', '') }}" placeholder="{{ '{first_name}_{last_name}-{training_id}-umowa.pdf' }}"></label>
+                <label><span>Wzór numeru umowy</span><input name="contract_number_pattern" value="{{ workflow.get('contract_number_pattern', '') }}" placeholder="{{ '{submission_id}/{agreement_sequence}/{generated_date}' }}"></label>
+            </div>
         </div>
     </div>
     {% set training_catalog = training_field.get('catalog', []) if training_field else [] %}

@@ -95,7 +95,12 @@ class FakeDocumentService:
         return b"%PDF delegated"
 
     def get_document_by_id(self, form_config, document_id):
-        return {"id": document_id, "repeat_over": "selected_trainings", "repeat_item_alias": "training"}
+        return {
+            "id": document_id,
+            "repeat_over": "selected_trainings",
+            "repeat_item_alias": "training",
+            "template_html": "<main class=\"document\">Umowa</main>",
+        }
 
     def generate_documents_for_collection(self, *args, **kwargs):
         self.generated_collections.append((args, kwargs))

@@ -356,6 +356,7 @@ def get_training_agreement_config(form_definition: dict) -> dict:
     return {
         "enabled": bool(config.get("enabled", True)),
         "template": config.get("template", ""),
+        "template_html": config.get("template_html", ""),
         "filename_pattern": config.get("filename_pattern") or "{first_name}_{last_name}-{training_id}-umowa.pdf",
         "signature_required": bool(config.get("signature_required", True)),
         "repeat_over": config.get("repeat_over") or "selected_trainings",

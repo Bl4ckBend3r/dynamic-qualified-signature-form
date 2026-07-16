@@ -123,7 +123,7 @@ class FormConfigValidator:
         if workflow.get("requires_declaration") and not str(workflow.get("declaration_template_html") or "").strip():
             errors.append("workflow.declaration_template_html is required when declaration is required")
         if workflow.get("requires_contract") and not str(workflow.get("contract_template_html") or "").strip():
-            errors.append("workflow.contract_template_html is required when contract is required")
+            errors.append("Brak szablonu umowy dla tego formularza.")
         self._validate_reachable_steps(steps, step_ids, initial_step, errors)
 
     def _validate_reachable_steps(self, steps: list[dict], step_ids: set[str], initial_step: str, errors: list[str]) -> None:

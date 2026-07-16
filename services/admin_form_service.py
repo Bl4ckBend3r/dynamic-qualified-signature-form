@@ -79,6 +79,31 @@ def build_form_definition_from_admin_form(current_definition: dict, form_data) -
     workflow["requires_contract"] = form_data.get("requires_contract") == "on"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
+    workflow["contract_generation_mode"] = (
+        form_data.get("contract_generation_mode", workflow.get("contract_generation_mode", "per_training")).strip()
+        or "per_training"
+    )
+    if workflow["contract_generation_mode"] not in {"single", "per_training"}:
+        workflow["contract_generation_mode"] = "per_training"
+    workflow["contract_filename_pattern"] = (
+        form_data.get("contract_filename_pattern", workflow.get("contract_filename_pattern", "")).strip()
+        or (
+            "{first_name}_{last_name}-umowa.pdf"
+            if workflow["contract_generation_mode"] == "single"
+            else "{first_name}_{last_name}-{training_id}-umowa.pdf"
+        )
+    )
+    workflow["contract_number_pattern"] = (
+        form_data.get("contract_number_pattern", workflow.get("contract_number_pattern", "")).strip()
+        or "{submission_id}/{agreement_sequence}/{generated_date}"
+    )
+    workflow["managed_documents"] = bool(
+        form_data.get("workflow_controls_present") == "1"
+        or form_data.get("requires_declaration")
+        or form_data.get("requires_contract")
+        or form_data.get("declaration_template_html")
+        or form_data.get("contract_template_html")
+    )
     definition["workflow"] = workflow
     definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)

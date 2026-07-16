@@ -106,7 +106,14 @@ def document_type_directory(document_type: str | None, signed: bool | None = Non
     signature_dir = "podpisane" if signed else "niepodpisane"
     if document_type in {"declaration", "deklaracja"}:
         return f"deklaracja/{signature_dir}"
-    if document_type in {"agreement", "training_agreement", "umowa", "umowy"}:
+    if document_type in {
+        "agreement",
+        "training_agreement",
+        "signed_agreement",
+        "signed_training_agreement",
+        "umowa",
+        "umowy",
+    }:
         return f"umowy/{signature_dir}"
     return ""
 

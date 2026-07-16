@@ -404,7 +404,7 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
         **app.testing_storage.form_definition,
         "documents": {
             "declaration": {"enabled": True},
-            "agreement": {"enabled": True},
+            "agreement": {"enabled": True, "template_html": "<main class=\"document\">Umowa</main>"},
         },
     }
     row = {
@@ -452,6 +452,63 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert agreement_response.status_code == 200
     assert "excel-umowa.pdf" in agreement_html
     assert "token=secret-token" in agreement_html
+
+
+def test_training_agreement_download_returns_pdf(client, app):
+    import json
+
+    filename = "Jan_Kowalski-excel-umowa.pdf"
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "training-download",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz",
+            "access_token": "training-token",
+            "agreement_filename": filename,
+            "training_agreements": json.dumps([{"id": "excel", "filename": filename}]),
+        }
+    ]
+    app.testing_storage.saved_pdfs[f"output/formularz_zgloszeniowy/pdf/{filename}"] = b"%PDF-1.4\ntraining"
+
+    response = client.get(
+        f"/downloads/pdfs/formularz_zgloszeniowy/{filename}?token=training-token"
+    )
+
+    assert response.status_code == 200
+    assert response.data.startswith(b"%PDF-1.4")
+
+
+def test_documents_to_sign_does_not_render_dead_training_agreement_link(client, app):
+    import json
+
+    filename = "missing-training-agreement.pdf"
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "documents": {
+            "declaration": {"enabled": True, "template_html": "<p>Deklaracja</p>"},
+            "agreement": {"enabled": True, "template_html": "<p>Umowa</p>"},
+        },
+    }
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "missing-agreement",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz",
+            "access_token": "secret-token",
+            "officer_decision": "TAK",
+            "declaration_signature_valid": "Tak",
+            "agreement_generated": "Tak",
+            "agreement_filename": filename,
+            "selected_trainings": json.dumps([{"id": "excel", "name": "Excel", "price": "1200.00"}]),
+            "training_agreements": json.dumps([{"id": "excel", "training_name": "Excel", "filename": filename}]),
+        }
+    ]
+
+    response = client.get("/do-podpisania?submission_id=missing-agreement")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert f'href="/downloads/pdfs/formularz_zgloszeniowy/{filename}' not in html
 
 
 def test_documents_to_sign_get_with_submission_id_shows_current_submission(client, app):
@@ -565,6 +622,15 @@ def test_generate_agreements_uses_today_and_redirects_to_current_submission(clie
     from datetime import date
 
     captured = {}
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "documents": {
+            "agreement": {
+                "enabled": True,
+                "template_html": "<main class=\"document\">Umowa</main>",
+            }
+        },
+    }
     row = {
         "submission_id": "abc",
         "form_slug": "formularz_zgloszeniowy",

@@ -89,6 +89,34 @@ def test_workflow_normalization_adds_html_document_templates():
     assert FormConfigValidator(skip_template_check=True).validate(config) == []
 
 
+def test_admin_managed_contract_disables_legacy_training_agreement_config():
+    config = FormConfigService().normalize_form_config(
+        {
+            "title": "Form",
+            "fields": [],
+            "documents": [
+                {
+                    "id": "training_agreement",
+                    "kind": "generated_pdf",
+                    "enabled": True,
+                    "template": "Template/legacy-umowa.html",
+                }
+            ],
+            "workflow": {
+                "managed_documents": True,
+                "requires_contract": True,
+                "contract_template_html": "<main>Admin agreement</main>",
+                "initial_step": "submission",
+                "steps": [{"id": "submission", "type": "end"}],
+            },
+        }
+    )
+
+    by_id = {document["id"]: document for document in config["documents"]}
+    assert by_id["agreement"]["template_html"] == "<main>Admin agreement</main>"
+    assert by_id["training_agreement"]["enabled"] is False
+
+
 def test_field_stage_defaults_and_validates_values():
     config = FormConfigService().normalize_form_config(
         {

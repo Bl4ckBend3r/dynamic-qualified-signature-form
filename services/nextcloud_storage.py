@@ -181,7 +181,15 @@ class NextcloudStorage:
         if normalized in {"declaration", "deklaracja", "declarations", "deklaracje"}:
             return self.PDF_DECLARATION_DIR
 
-        if normalized in {"agreement", "umowa", "umowy", "agreements"}:
+        if normalized in {
+            "agreement",
+            "training_agreement",
+            "signed_agreement",
+            "signed_training_agreement",
+            "umowa",
+            "umowy",
+            "agreements",
+        }:
             return self.PDF_AGREEMENT_DIR
 
         return None

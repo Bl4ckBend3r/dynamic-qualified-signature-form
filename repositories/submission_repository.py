@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class SubmissionRepository:
+    supports_file_metadata = False
+
     def create(self, submission: dict) -> str:
         raise NotImplementedError
 
@@ -154,6 +156,8 @@ class CsvSubmissionRepository(SubmissionRepository):
 class PostgresSubmissionRepository(SubmissionRepository):
     """Repository adapter for PostgreSQL-backed form_submissions."""
 
+    supports_file_metadata = True
+
     def __init__(self, database_url: str, session_factory=None, create_schema: bool = False) -> None:
         if session_factory is None:
             from database import create_engine, create_session_factory
@@ -261,7 +265,8 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 select(SubmissionFile)
                 .where(SubmissionFile.form_slug == form_slug)
                 .where(SubmissionFile.filename == wanted)
-            ).scalar_one_or_none()
+                .order_by(SubmissionFile.id.desc())
+            ).scalars().first()
             if file_row:
                 return self.get_by_id(file_row.public_submission_id)
 
@@ -279,7 +284,33 @@ class PostgresSubmissionRepository(SubmissionRepository):
                     )
                 )
             ).scalar_one_or_none()
-            return self._to_dict(model) if model else None
+            if model:
+                return self._to_dict(model)
+
+            legacy_rows = session.execute(
+                select(FormSubmission).where(FormSubmission.form_slug == form_slug)
+            ).scalars().all()
+            for legacy_row in legacy_rows:
+                try:
+                    agreements = json.loads(str(legacy_row.training_agreements or ""))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(agreements, list):
+                    continue
+                known_filenames = {
+                    str(agreement.get(key) or "")
+                    for agreement in agreements
+                    if isinstance(agreement, dict)
+                    for key in ("filename", "signed_filename")
+                }
+                if wanted in known_filenames:
+                    logger.warning(
+                        "Legacy training_agreements filename lookup public_submission_id=%s filename=%s.",
+                        legacy_row.submission_id,
+                        wanted,
+                    )
+                    return self._to_dict(legacy_row)
+            return None
 
     def record_file(self, submission_id: str, metadata: dict) -> bool:
         from sqlalchemy import select
@@ -330,9 +361,13 @@ class PostgresSubmissionRepository(SubmissionRepository):
             session.commit()
 
         logger.info(
-            "Zapisano metadane pliku %s dla zgloszenia %s w PostgreSQL.",
-            metadata.get("filename"),
+            "SubmissionFile zapisany public_submission_id=%s internal_submission_id=%s "
+            "filename=%s document_type=%s storage_path=%s.",
             wanted,
+            submission.id,
+            metadata.get("filename"),
+            metadata.get("document_type"),
+            metadata.get("storage_path"),
         )
         return True
 

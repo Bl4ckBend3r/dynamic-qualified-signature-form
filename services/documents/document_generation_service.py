@@ -143,7 +143,11 @@ def generate_training_agreements_for_submission(
         return []
 
     resolved_date = generated_date or date.today().isoformat()
-    template_html = resolve_template_html(agreement_config.get("template", ""))
+    template_html = str(agreement_config.get("template_html") or "").strip()
+    if not template_html and agreement_config.get("template"):
+        template_html = resolve_template_html(agreement_config.get("template", "")) or ""
+    if not template_html:
+        raise RuntimeError("Brak szablonu umowy dla tego formularza.")
     renderer = pdf_render_service or PdfRenderService()
     storage_service = document_storage_service or DocumentStorageService()
     metadata_service = submission_document_service or SubmissionDocumentService(
@@ -198,7 +202,7 @@ def generate_training_agreements_for_submission(
             template_html=template_html,
             context=context,
         )
-        storage_service.save_pdf(
+        storage_path = storage_service.save_pdf(
             storage=storage,
             slug=slug,
             filename=filename,
@@ -206,7 +210,7 @@ def generate_training_agreements_for_submission(
             document_type=None,
             signed=False,
         )
-        metadata_service.record_generated_document(
+        recorded = metadata_service.record_generated_document(
             submission_id=submission_id,
             form_slug=slug,
             filename=filename,
@@ -215,8 +219,22 @@ def generate_training_agreements_for_submission(
             document_type=SubmissionDocumentType.TRAINING_AGREEMENT,
             agreement_number=agreement_number,
             training_key=str(training.get("id") or f"training_{index}"),
+            storage_path=storage_path,
             storage=storage,
         )
+        logger.info(
+            "Training agreement generated public_submission_id=%s internal_submission_id=%s "
+            "filename=%s document_type=%s storage_path=%s file_saved=%s submission_file_created=%s.",
+            submission_id,
+            row.get("id", ""),
+            filename,
+            SubmissionDocumentType.TRAINING_AGREEMENT,
+            storage_path,
+            True,
+            recorded,
+        )
+        if getattr(submission_repository, "supports_file_metadata", False) and not recorded:
+            raise RuntimeError(f"Nie udalo sie zapisac metadanych wygenerowanej umowy: {filename}")
         agreements.append(
             build_training_agreement_record(
                 training=training,

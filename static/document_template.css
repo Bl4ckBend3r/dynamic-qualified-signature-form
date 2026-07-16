@@ -85,6 +85,62 @@ body {
     margin: 0 0 10px;
 }
 
+.document-section,
+.document .document-section {
+    margin: 0 0 18px;
+}
+
+.document-table,
+.document .document-table {
+    width: 100%;
+    margin: 12px 0 16px;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.document-table th,
+.document-table td,
+.document .document-table th,
+.document .document-table td {
+    padding: 7px 8px;
+    border: 1px solid #9ca3af;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.document-table th,
+.document .document-table th {
+    color: #001f5b;
+    text-align: left;
+}
+
+.document-signature,
+.document .document-signature,
+.avoid-break,
+.document .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.document-signature,
+.document .document-signature {
+    margin-top: 28px;
+    min-height: 34mm;
+}
+
+.document-footer,
+.document .document-footer {
+    margin-top: 18px;
+    font-size: 9px;
+    color: #4b5563;
+}
+
+.page-break,
+.document .page-break {
+    break-before: page;
+    page-break-before: always;
+}
+
 .document ol {
     margin: 6px 0 12px 18px;
     padding: 0;

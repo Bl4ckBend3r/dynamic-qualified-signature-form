@@ -128,6 +128,11 @@
                     <p><strong>Powód:</strong> {{ result.agreement_block_reason }}</p>
                 {% endif %}
             {% endif %}
+            {% if result.agreement_configuration_error %}
+                <div class="form-errors" role="alert">
+                    <p>{{ result.agreement_configuration_error }}</p>
+                </div>
+            {% endif %}
 
             {% if result.needs_additional_fields %}
                 <div class="card document-stage-card" data-stage="additional-fields">

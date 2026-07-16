@@ -95,6 +95,24 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
+        resolved_context_extra = dict(context_extra or {})
+        agreement_number = ""
+        if document_id == DocumentType.AGREEMENT:
+            generated_date = str(resolved_context_extra.get("generated_date") or date.today().isoformat())
+            agreement_number = self.build_document_number(
+                document,
+                submission_id=submission_id,
+                sequence=1,
+                generated_date=generated_date,
+            )
+            resolved_context_extra.update(
+                {
+                    "generated_date": generated_date,
+                    "agreement_generated_at": generated_date,
+                    "agreement_sequence": 1,
+                    "agreement_number": agreement_number,
+                }
+            )
         existing_filename = str(row.get(f"{document_id}_filename") or "").strip()
         generated_field = f"{document_id}_generated"
 
@@ -118,7 +136,7 @@ class DocumentService:
                     "document_id": document_id,
                 }
 
-        render_row = {**row, **(context_extra or {})}
+        render_row = {**row, **resolved_context_extra}
         filename = self.build_filename_for_document(document, render_row, document_id)
         context = build_document_pdf_context(
             form_definition=form_config,
@@ -129,15 +147,15 @@ class DocumentService:
             pdf_image_url=self.resolve_pdf_image_url(form_config),
             document_type=document_id,
         )
-        context.update(context_extra or {})
+        context.update(resolved_context_extra)
         self._add_collection_context(context, render_row)
         document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
-            template_html=document.get("template_html") or self.resolve_template_html(document.get("template", "")),
+            template_html=self.resolve_document_template(document),
             context=context,
         )
-        self.document_storage_service.save_pdf(
+        storage_path = self.document_storage_service.save_pdf(
             storage=self.storage,
             slug=slug,
             filename=filename,
@@ -145,17 +163,28 @@ class DocumentService:
             document_type=self._storage_document_type(document_id),
             signed=False,
         )
-        current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
-        self.submission_document_service.record_generated_document(
+        recorded = self.submission_document_service.record_generated_document(
             submission_id=submission_id,
             form_slug=slug,
             filename=filename,
             file_bytes=document_bytes,
             document_id=document_id,
             document_type=self._document_metadata_type(document_id, signed=False),
+            agreement_number=agreement_number,
+            storage_path=storage_path,
             storage=self.storage,
         )
+        self._log_document_write(
+            submission,
+            filename=filename,
+            document_type=self._document_metadata_type(document_id, signed=False),
+            storage_path=storage_path,
+            metadata_recorded=recorded,
+        )
+        self._require_metadata_record(recorded, filename)
         updates = self._generated_updates(document_id, filename)
+        if document_id == DocumentType.AGREEMENT:
+            updates["agreement_generated_at"] = resolved_context_extra["generated_date"]
         self._update_submission(submission, updates)
         self._audit("DOCUMENT_GENERATED", submission, metadata={"document_id": document_id, "filename": filename})
         return {
@@ -188,7 +217,7 @@ class DocumentService:
             raise RuntimeError("Nie wybrano elementów do wygenerowania dokumentów.")
 
         generated_date = (context_extra or {}).get("generated_date") or date.today().isoformat()
-        template_html = self.resolve_template_html(document.get("template", ""))
+        template_html = self.resolve_document_template(document)
         generated_documents = []
 
         for sequence, item in enumerate(items, start=1):
@@ -231,7 +260,7 @@ class DocumentService:
                 template_html=template_html,
                 context=context,
             )
-            self.document_storage_service.save_pdf(
+            storage_path = self.document_storage_service.save_pdf(
                 storage=self.storage,
                 slug=slug,
                 filename=filename,
@@ -239,8 +268,7 @@ class DocumentService:
                 document_type=self._storage_document_type(document_id),
                 signed=False,
             )
-            current_app.logger.info("Upload dokumentu do Nextcloud zakonczony sukcesem: %s", filename)
-            self.submission_document_service.record_generated_document(
+            recorded = self.submission_document_service.record_generated_document(
                 submission_id=submission_id,
                 form_slug=slug,
                 filename=filename,
@@ -249,8 +277,17 @@ class DocumentService:
                 document_type=self._document_metadata_type(document_id, signed=False),
                 agreement_number=agreement_number,
                 training_key=str(item_id),
+                storage_path=storage_path,
                 storage=self.storage,
             )
+            self._log_document_write(
+                submission,
+                filename=filename,
+                document_type=self._document_metadata_type(document_id, signed=False),
+                storage_path=storage_path,
+                metadata_recorded=recorded,
+            )
+            self._require_metadata_record(recorded, filename)
             generated_documents.append(
                 {
                     "id": str(item_id),
@@ -316,7 +353,7 @@ class DocumentService:
         is_signed = bool(verification.get("is_signed"))
         is_valid = bool(verification.get("is_allowed_signature") or verification.get("is_szafir_signature"))
         if is_valid:
-            self.document_storage_service.save_pdf(
+            storage_path = self.document_storage_service.save_pdf(
                 storage=self.storage,
                 slug=slug,
                 filename=signed_filename,
@@ -324,8 +361,7 @@ class DocumentService:
                 document_type=self._storage_document_type(document_id),
                 signed=True,
             )
-            current_app.logger.info("Upload podpisanego dokumentu do Nextcloud zakonczony sukcesem: %s", signed_filename)
-            self.submission_document_service.record_signed_document(
+            recorded = self.submission_document_service.record_signed_document(
                 submission_id=self._submission_id(submission),
                 form_slug=slug,
                 filename=signed_filename,
@@ -336,8 +372,17 @@ class DocumentService:
                 signature_status="valid" if is_valid else "invalid",
                 signature_validation_result=verification,
                 training_key=str(instance_id or ""),
+                storage_path=storage_path,
                 storage=self.storage,
             )
+            self._log_document_write(
+                submission,
+                filename=signed_filename,
+                document_type=self._document_metadata_type(document_id, signed=True),
+                storage_path=storage_path,
+                metadata_recorded=recorded,
+            )
+            self._require_metadata_record(recorded, signed_filename)
 
         updates = self._signed_updates(
             row,
@@ -399,13 +444,35 @@ class DocumentService:
 
     def build_documents_view(self, submission: dict, form_config: dict, available_actions: list[dict] | None = None) -> dict:
         row = self._row(submission)
-        return self.document_view_service.build_documents_view(
+        document_files = self.available_document_files(submission)
+        view = self.document_view_service.build_documents_view(
             row=row,
             documents_config=self.get_documents_config(form_config),
             download_url_builder=lambda filename, signed=False: self.build_download_url(submission, filename, signed=signed),
             available_actions=available_actions,
-            document_files=self.submission_document_service.list_documents(self._submission_id(submission)),
+            document_files=document_files,
+            allow_legacy_fallback=not getattr(self.submission_repository, "supports_file_metadata", False),
         )
+        view["available_filenames"] = {
+            str(item.get("filename") or "") for item in document_files if item.get("filename")
+        }
+        return view
+
+    def available_document_files(self, submission: dict) -> list[dict]:
+        self.submission_document_service.backfill_existing_legacy_documents(submission)
+        if getattr(self.submission_repository, "supports_file_metadata", False):
+            return self.submission_document_service.list_available_documents(submission)
+
+        available = []
+        for candidate in self.submission_document_service.sync_from_legacy_fields(submission):
+            if self.document_storage_service.document_exists(
+                storage=self.storage,
+                slug=self._slug(submission),
+                filename=str(candidate.get("filename") or ""),
+                metadata=None,
+            ):
+                available.append({**candidate, "storage_exists": True})
+        return available
 
     def _file_metadata(self, submission: dict, filename: str, *, signed: bool) -> dict | None:
         submission_id = self._submission_id(submission)
@@ -474,6 +541,20 @@ class DocumentService:
             raise RuntimeError(f"Nie znaleziono szablonu dokumentu w Nextcloud: {normalized_path}")
         return template_html
 
+    def resolve_document_template(self, document: Mapping[str, Any]) -> str:
+        inline_template = str(document.get("template_html") or "").strip()
+        if inline_template:
+            return inline_template
+        template_path = str(document.get("template") or "").strip()
+        if template_path:
+            resolved = self.resolve_template_html(template_path)
+            if resolved:
+                return resolved
+        document_id = str(document.get("id") or "")
+        if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+            raise RuntimeError("Brak szablonu umowy dla tego formularza.")
+        raise RuntimeError("Brak szablonu dokumentu dla tego formularza.")
+
     def resolve_pdf_image_url(self, form_definition: dict) -> str | None:
         image_value = form_definition.get("header_image") or form_definition.get("logo_url")
         if not image_value:
@@ -529,6 +610,32 @@ class DocumentService:
             self._submission_id(submission),
             self._slug(submission),
             metadata=metadata or {},
+        )
+
+    def _require_metadata_record(self, recorded: bool, filename: str) -> None:
+        if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
+            raise RuntimeError(f"Nie udalo sie zapisac metadanych wygenerowanego dokumentu: {filename}")
+
+    def _log_document_write(
+        self,
+        submission: dict,
+        *,
+        filename: str,
+        document_type: str,
+        storage_path: str,
+        metadata_recorded: bool,
+    ) -> None:
+        row = self._row(submission)
+        current_app.logger.info(
+            "Document generated public_submission_id=%s internal_submission_id=%s filename=%s "
+            "document_type=%s storage_path=%s file_saved=%s submission_file_created=%s.",
+            self._submission_id(submission),
+            row.get("id", ""),
+            filename,
+            document_type,
+            storage_path,
+            True,
+            metadata_recorded,
         )
 
     def _storage_document_type(self, document_id: str) -> str | None:

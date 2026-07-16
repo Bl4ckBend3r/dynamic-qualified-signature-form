@@ -69,7 +69,7 @@ class DocumentSigningService:
         if not verification.get("is_szafir_signature"):
             raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
 
-        self.document_storage_service.save_pdf(
+        storage_path = self.document_storage_service.save_pdf(
             storage=self.storage,
             slug=slug,
             filename=signed_pdf_filename,
@@ -79,7 +79,7 @@ class DocumentSigningService:
         )
         logger.info("Upload podpisanego PDF do Nextcloud zakonczony sukcesem: %s", signed_pdf_filename)
         self.submission_repository.update(submission_id, {"signed_pdf_filename": signed_pdf_filename})
-        self.submission_document_service.record_signed_document(
+        recorded = self.submission_document_service.record_signed_document(
             submission_id=submission_id,
             form_slug=slug,
             filename=signed_pdf_filename,
@@ -89,8 +89,11 @@ class DocumentSigningService:
             original_filename=str(uploaded_file.filename or ""),
             signature_status="valid",
             signature_validation_result=verification,
+            storage_path=storage_path,
             storage=self.storage,
         )
+        if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
+            raise RuntimeError(f"Nie udalo sie zapisac metadanych podpisanego dokumentu: {signed_pdf_filename}")
         return SignedSubmissionPdfUpload(
             signed_filename=signed_pdf_filename,
             verification=verification,

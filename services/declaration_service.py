@@ -120,7 +120,7 @@ def ensure_declaration_generated(
     )
 
     storage_service = document_storage_service or DocumentStorageService()
-    storage_service.save_pdf(
+    storage_path = storage_service.save_pdf(
         storage=storage,
         slug=slug,
         filename=declaration_filename,
@@ -132,15 +132,18 @@ def ensure_declaration_generated(
         submission_repository=submission_repository,
         storage=storage,
     )
-    metadata_service.record_generated_document(
+    recorded = metadata_service.record_generated_document(
         submission_id=submission_id,
         form_slug=slug,
         filename=declaration_filename,
         file_bytes=document_bytes,
         document_id=DocumentType.DECLARATION,
         document_type=SubmissionDocumentType.DECLARATION,
+        storage_path=storage_path,
         storage=storage,
     )
+    if getattr(submission_repository, "supports_file_metadata", False) and not recorded:
+        raise RuntimeError(f"Nie udalo sie zapisac metadanych wygenerowanej deklaracji: {declaration_filename}")
 
     updates = build_declaration_generated_updates(declaration_filename)
     storage.update_csv_row_by_submission_id(slug, submission_id, updates)

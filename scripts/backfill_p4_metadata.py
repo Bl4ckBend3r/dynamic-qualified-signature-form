@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database import create_session_factory
+from config import Config
 from models import EmailLog, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
 from services.document_naming_service import resolve_pdf_storage_path
 from services.submission_document_service import SubmissionDocumentType
@@ -60,11 +61,13 @@ class BackfillP4Metadata:
         apply: bool = False,
         output_dir: str = "output",
         file_exists=None,
+        storage=None,
     ) -> None:
         self.session_factory = session_factory
         self.apply = apply
         self.output_dir = output_dir
-        self.file_exists = file_exists or self._local_file_exists
+        self.storage = storage
+        self.file_exists = file_exists or (storage.exists if storage and hasattr(storage, "exists") else self._local_file_exists)
 
     def run(self, *, limit: int | None = None, submission_id: str | None = None) -> dict:
         report = empty_report(dry_run=not self.apply)
@@ -105,6 +108,14 @@ class BackfillP4Metadata:
             return
         if not self.file_exists(storage_path):
             report["documents"]["missing_file"] += 1
+            self._error(
+                report,
+                submission.submission_id,
+                candidate.document_type,
+                "missing_file",
+                storage_path,
+            )
+            return
 
         if existing:
             updates = self._missing_metadata_updates(existing, candidate, storage_path)
@@ -259,7 +270,12 @@ class BackfillP4Metadata:
                     signed_at=updated_at,
                 )
             )
-        if submission.agreement_filename:
+        training_filenames = {
+            str(item.get("filename") or "").strip()
+            for item in self._json_list(submission.training_agreements)
+            if str(item.get("filename") or "").strip()
+        }
+        if submission.agreement_filename and submission.agreement_filename not in training_filenames:
             candidates.append(
                 DocumentCandidate(
                     document_id="agreement",
@@ -483,15 +499,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    database_url = args.database_url or os.getenv("DATABASE_URL", "").strip()
+    database_url = args.database_url or Config.DATABASE_URL
     if not database_url:
         print("DATABASE_URL is required for P4 backfill.", file=sys.stderr)
         return 2
     session_factory = create_session_factory(database_url)
+    storage = None
+    if Config.NEXTCLOUD_BASE_URL and Config.NEXTCLOUD_USERNAME and Config.NEXTCLOUD_APP_PASSWORD:
+        from services.nextcloud_storage import create_nextcloud_storage_from_env
+
+        storage = create_nextcloud_storage_from_env()
     runner = BackfillP4Metadata(
         session_factory,
         apply=bool(args.apply),
         output_dir=args.output_dir,
+        storage=storage,
     )
     report = runner.run(limit=args.limit, submission_id=args.submission_id)
     write_report(report, args.report)

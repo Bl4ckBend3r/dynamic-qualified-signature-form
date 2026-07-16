@@ -518,6 +518,10 @@ def test_workflow_edit_shows_tooltips_and_conditional_html_fields(admin_app, adm
     assert "Szablon umowy HTML" in html
     assert "Szablon deklaracji HTML" in html
     assert 'data-workflow-template="contract"' in html
+    assert 'name="contract_generation_mode"' in html
+    assert 'name="contract_filename_pattern"' in html
+    assert 'name="contract_number_pattern"' in html
+    assert "Wspólny CSS dokumentów zostanie dołączony automatycznie." in html
 
 
 def test_admin_submission_list_renders_workflow_status_label(admin_app, admin_client):

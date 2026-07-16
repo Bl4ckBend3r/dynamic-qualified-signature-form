@@ -117,6 +117,30 @@ def test_build_form_definition_from_admin_form_updates_workflow():
     assert definition["workflow"]["declaration_template_html"] == "<p>Deklaracja</p>"
 
 
+def test_admin_contract_settings_create_generated_agreement_config():
+    definition = build_form_definition_from_admin_form(
+        {"title": "Form", "fields": []},
+        {
+            "workflow_json": '{"steps": []}',
+            "workflow_name": "Umowy",
+            "workflow_initial_step": "",
+            "requires_contract": "on",
+            "contract_template_html": "<main>Umowa {{ agreement_number }}</main>",
+            "contract_generation_mode": "single",
+            "contract_filename_pattern": "{first_name}_{last_name}-contract.pdf",
+            "contract_number_pattern": "U/{submission_id}/{generated_date}",
+        },
+    )
+
+    agreement = next(item for item in definition["documents"] if item["id"] == "agreement")
+    assert definition["workflow"]["managed_documents"] is True
+    assert agreement["enabled"] is True
+    assert agreement["template_html"] == "<main>Umowa {{ agreement_number }}</main>"
+    assert agreement["generation_mode"] == "single"
+    assert agreement["filename_pattern"] == "{first_name}_{last_name}-contract.pdf"
+    assert agreement["numbering"]["number_pattern"] == "U/{submission_id}/{generated_date}"
+
+
 def test_parse_training_dates_text_validates_and_sorts_dates():
     dates = parse_training_dates_text(
         "2026-09-10||10:00|12:00|Sala 2|Opis\n2026-08-01||||Sala 1|"

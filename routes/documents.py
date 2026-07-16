@@ -15,6 +15,7 @@ from sqlalchemy import select
 from database import create_session_factory
 from models import Form
 from services.document_service import DocumentType
+from services.submission_document_service import SubmissionDocumentType
 from services.process_service import build_process_state
 from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
@@ -320,6 +321,32 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
     return redirect(documents_to_sign_url(submission_id))
 
 
+@bp.post("/agreement/<slug>/<submission_id>/upload")
+def upload_signed_agreement(slug: str, submission_id: str):
+    submission = get_submission_context(submission_id)
+    if not submission or submission["form_slug"] != slug:
+        flash("Nie znaleziono wniosku dla podpisanej umowy.", "error")
+        return redirect(documents_to_sign_url(submission_id))
+    try:
+        result = get_services().document_signing_service.upload_signed_document(
+            submission=submission,
+            document_id=DocumentType.AGREEMENT,
+            uploaded_file=request.files.get("signed_agreement_pdf"),
+        )
+        if not result["is_signed"]:
+            flash("Przesłany plik nie zawiera podpisu PDF.", "error")
+        elif not result["is_valid"]:
+            flash("Podpis umowy nie jest dopuszczalnym podpisem.", "error")
+        else:
+            flash("Podpisana umowa została poprawnie zweryfikowana.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception as exc:
+        logger.exception("Błąd uploadu podpisanej umowy: %s", exc)
+        flash("Wystąpił błąd podczas wgrywania lub weryfikacji umowy.", "error")
+    return redirect(documents_to_sign_url(submission_id))
+
+
 @bp.post("/upload-signed/<slug>/<submission_id>")
 def upload_signed_pdf(slug: str, submission_id: str):
     if not get_form_config(slug):
@@ -428,6 +455,22 @@ def build_documents_to_sign_result(
     current_step = services.workflow_service.get_current_step(row, form_config)
     available_actions = services.workflow_service.get_available_actions(row, form_config)
     documents_view = services.document_service.build_documents_view(refreshed_submission, form_config, available_actions)
+    configured_agreement = services.document_service.get_document_by_id(form_config, DocumentType.AGREEMENT)
+    configured_training_agreement = services.document_service.get_document_by_id(
+        form_config, DocumentType.TRAINING_AGREEMENT
+    )
+    agreement_document = (
+        configured_agreement
+        if configured_agreement and str(configured_agreement.get("template_html") or "").strip()
+        else configured_training_agreement
+        if configured_training_agreement and configured_training_agreement.get("enabled", True)
+        else configured_agreement
+    )
+    agreement_required = bool(agreement_document and agreement_document.get("enabled", True))
+    agreement_template_configured = bool(
+        agreement_required
+        and str(agreement_document.get("template_html") or agreement_document.get("template") or "").strip()
+    )
 
     return services.document_service.document_view_service.build_documents_to_sign_result(
         submission_id=submission_id,
@@ -459,7 +502,15 @@ def build_documents_to_sign_result(
             submission_id=submission_id,
             agreement_id=agreement_id,
         ),
+        agreement_upload_url=url_for(
+            "documents.upload_signed_agreement",
+            slug=refreshed_submission["form_slug"],
+            submission_id=submission_id,
+        ),
+        agreement_required=agreement_required,
+        agreement_template_configured=agreement_template_configured,
         status_labeler=workflow_status_label,
+        available_filenames=documents_view.get("available_filenames", set()),
     )
 
 
@@ -574,6 +625,21 @@ def download_pdf(slug: str, filename: str):
         submission = services.submission_repository.find_by_pdf(slug, clean_filename)
         if not submission:
             abort(404)
+        services.submission_document_service.backfill_existing_legacy_documents(submission)
+        metadata = services.submission_repository.get_file_metadata(
+            submission.get("submission_id", ""), clean_filename, signed=None
+        )
+        allowed_types = {
+            "",
+            SubmissionDocumentType.FORM_PDF,
+            SubmissionDocumentType.DECLARATION,
+            SubmissionDocumentType.AGREEMENT,
+            SubmissionDocumentType.TRAINING_AGREEMENT,
+            SubmissionDocumentType.SIGNED_AGREEMENT,
+            SubmissionDocumentType.SIGNED_TRAINING_AGREEMENT,
+        }
+        if metadata and str(metadata.get("document_type") or "") not in allowed_types:
+            abort(404)
         form_config = get_form_config(slug) or {}
         if clean_filename == str(submission.get("declaration_filename") or "") and requires_additional_fields(form_config, submission):
             flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
@@ -588,17 +654,33 @@ def download_pdf(slug: str, filename: str):
             document_service=services.document_service,
             submission=submission,
             filename=clean_filename,
-            signed=False,
+            signed=bool((metadata or {}).get("signed", False)),
+        )
+        logger.info(
+            "Document download public_submission_id=%s internal_submission_id=%s filename=%s "
+            "document_type=%s storage_path=%s file_found=%s.",
+            submission.get("submission_id", ""),
+            submission.get("id", ""),
+            clean_filename,
+            (metadata or {}).get("document_type", "legacy"),
+            (metadata or {}).get("storage_path", ""),
+            True,
         )
         services.audit_log_service.log_event(
             "DOCUMENT_DOWNLOADED",
             submission.get("submission_id", ""),
             slug,
-            metadata={"filename": clean_filename, "signed": False},
+            metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
         )
     except HTTPException:
         raise
     except Exception:
+        logger.warning(
+            "Document download failed slug=%s filename=%s.",
+            slug,
+            Path(filename).name,
+            exc_info=True,
+        )
         abort(404)
 
     return send_file(
@@ -617,6 +699,19 @@ def download_signed_pdf(slug: str, filename: str):
         submission = services.submission_repository.find_by_pdf(slug, clean_filename)
         if not submission:
             abort(404)
+        services.submission_document_service.backfill_existing_legacy_documents(submission)
+        metadata = services.submission_repository.get_file_metadata(
+            submission.get("submission_id", ""), clean_filename, signed=True
+        )
+        allowed_types = {
+            "",
+            SubmissionDocumentType.SIGNED_FORM_PDF,
+            SubmissionDocumentType.SIGNED_DECLARATION,
+            SubmissionDocumentType.SIGNED_AGREEMENT,
+            SubmissionDocumentType.SIGNED_TRAINING_AGREEMENT,
+        }
+        if metadata and str(metadata.get("document_type") or "") not in allowed_types:
+            abort(404)
         if not services.document_download_service.verify_access(
             document_service=services.document_service,
             submission=submission,
@@ -628,6 +723,16 @@ def download_signed_pdf(slug: str, filename: str):
             submission=submission,
             filename=clean_filename,
             signed=True,
+        )
+        logger.info(
+            "Signed document download public_submission_id=%s internal_submission_id=%s filename=%s "
+            "document_type=%s storage_path=%s file_found=%s.",
+            submission.get("submission_id", ""),
+            submission.get("id", ""),
+            clean_filename,
+            (metadata or {}).get("document_type", "legacy"),
+            (metadata or {}).get("storage_path", ""),
+            True,
         )
         services.audit_log_service.log_event(
             "DOCUMENT_DOWNLOADED",
@@ -644,4 +749,10 @@ def download_signed_pdf(slug: str, filename: str):
     except HTTPException:
         raise
     except Exception:
+        logger.warning(
+            "Signed document download failed slug=%s filename=%s.",
+            slug,
+            Path(filename).name,
+            exc_info=True,
+        )
         abort(404)

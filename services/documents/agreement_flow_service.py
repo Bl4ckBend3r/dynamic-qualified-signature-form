@@ -18,9 +18,10 @@ class AgreementFlowResult:
 class AgreementFlowService:
     def form_config_with_training_adapter(self, *, form_config: dict, document_service) -> tuple[dict, dict]:
         training_document = document_service.get_document_by_id(form_config, DocumentType.TRAINING_AGREEMENT)
-        if training_document:
-            return form_config, training_document
         agreement_document = document_service.get_document_by_id(form_config, DocumentType.AGREEMENT)
+        admin_inline_agreement = bool(agreement_document and str(agreement_document.get("template_html") or "").strip())
+        if training_document and training_document.get("enabled", True) and not admin_inline_agreement:
+            return form_config, training_document
         if not agreement_document:
             return form_config, {"id": DocumentType.TRAINING_AGREEMENT, "enabled": False}
         adapter = {
@@ -49,11 +50,50 @@ class AgreementFlowService:
                 message="Najpierw wgraj poprawnie podpisana deklaracje.",
                 error_code="declaration_signature_required",
             )
+        agreement_document = document_service.get_document_by_id(form_config, DocumentType.AGREEMENT)
+        training_document = document_service.get_document_by_id(form_config, DocumentType.TRAINING_AGREEMENT)
+        source_document = (
+            agreement_document
+            if agreement_document and str(agreement_document.get("template_html") or "").strip()
+            else training_document or agreement_document
+        )
+        if not source_document or not source_document.get("enabled", True):
+            return AgreementFlowResult(
+                success=False,
+                message="Umowa nie jest wymagana dla tego formularza.",
+                error_code="agreement_not_required",
+            )
+        if not str(source_document.get("template_html") or source_document.get("template") or "").strip():
+            return AgreementFlowResult(
+                success=False,
+                message="Brak szablonu umowy dla tego formularza.",
+                error_code="agreement_template_missing",
+            )
+        resolved_date = generated_date or date.today().isoformat()
+        generation_mode = str(source_document.get("generation_mode") or "per_training").strip()
+        uses_explicit_training_document = bool(
+            training_document
+            and training_document.get("enabled", True)
+            and not (agreement_document and str(agreement_document.get("template_html") or "").strip())
+        )
+        if not uses_explicit_training_document and generation_mode == "single":
+            generated = document_service.generate_document(
+                submission,
+                form_config,
+                DocumentType.AGREEMENT,
+                context_extra={"generated_date": resolved_date, "agreement_generated_at": resolved_date},
+                force=True,
+            )
+            return AgreementFlowResult(
+                success=True,
+                message="Wygenerowano umowę.",
+                agreements=[generated],
+            )
+
         resolved_form_config, document = self.form_config_with_training_adapter(
             form_config=form_config,
             document_service=document_service,
         )
-        resolved_date = generated_date or date.today().isoformat()
         agreements = document_service.generate_documents_for_collection(
             submission,
             resolved_form_config,

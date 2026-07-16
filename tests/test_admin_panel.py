@@ -2,6 +2,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,6 +111,213 @@ def login(client, email="admin@example.com", password="secret"):
     html = response.get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     return client.post("/admin/", data={"email": email, "password": password, "csrf_token": token})
+
+
+def create_rollback_submission(app, *, form_slug="rollback_form", email="participant@example.com", status="AGREEMENT_WAITING_FOR_SIGNATURE"):
+    session_factory = create_session_factory(app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="rollback-public-uuid",
+            form_slug=form_slug,
+            form_name="Rollback Form",
+            email=email,
+            process_status=status,
+            workflow_step="agreement_signature",
+            officer_decision="accepted",
+            declaration_required="Tak",
+            declaration_generated="Tak",
+            declaration_filename="declaration.pdf",
+            declaration_signed="Tak",
+            declaration_signature_valid="Tak",
+            declaration_signed_filename="signed-declaration.pdf",
+            agreement_required="Tak",
+            agreement_generated="Tak",
+            agreement_filename="agreement.pdf",
+            training_agreements='[{"id":"one","filename":"agreement.pdf"}]',
+        )
+        db.add(submission)
+        db.commit()
+        return submission.id, submission.submission_id
+
+
+def admin_csrf(client):
+    with client.session_transaction() as session:
+        return session["admin_csrf_token"]
+
+
+@pytest.mark.parametrize("role,email", [("admin", "rollback-admin@example.com"), ("super_admin", "rollback-super@example.com")])
+def test_stage_rollback_button_is_visible_for_admin_roles(admin_app, admin_client, role, email):
+    user_id = create_user(admin_app, email=email, role=role)
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form", user_id=user_id)
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client, email=email)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}",
+        environ_overrides={"SCRIPT_NAME": "/aplikacja"},
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Cofnij etap" in html
+    assert f'/aplikacja/admin/submissions/{submission_id}/rollback-stage' in html
+    assert "Powód cofnięcia" in html
+    assert "Wyślij powiadomienie do użytkownika" in html
+
+
+def test_stage_rollback_is_hidden_and_endpoint_returns_403_for_form_manager(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="rollback-manager@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form", user_id=manager_id)
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client, email="rollback-manager@example.com")
+
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/rollback-stage",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "target_status": "DECLARATION_SIGNED",
+            "rollback_reason": "Nie powinno się udać",
+        },
+    )
+
+    assert "Cofnij etap" not in detail.get_data(as_text=True)
+    assert response.status_code == 403
+
+
+def test_stage_rollback_endpoint_updates_status_history_instruction_and_sends_mail(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    instruction_config = {
+        "stages": [
+            {
+                "key": "review-accepted",
+                "label": "Wniosek zaakceptowany",
+                "status_codes": ["OFFICER_ACCEPTED"],
+                "next_action": "Uzupełnij ponownie wymagane dokumenty.",
+            }
+        ]
+    }
+    form_id = create_form(
+        admin_app,
+        slug="rollback_form",
+        name="Rollback Form",
+        user_instruction_config=instruction_config,
+    )
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client)
+    captured = {}
+
+    def fake_dispatch(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(status="sent", recipient=kwargs["to_email"], error_message="")
+
+    monkeypatch.setattr(
+        admin_app.extensions["services"].mail_dispatch_service,
+        "dispatch_to_submission",
+        fake_dispatch,
+    )
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/rollback-stage",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "target_status": "OFFICER_ACCEPTED",
+            "rollback_reason": "Ponowna kontrola danych",
+            "send_notification": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.location.endswith(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert captured["event_type"] == "stage_rollback"
+    assert captured["extra_context"]["rollback_reason"] == "Ponowna kontrola danych"
+    assert captured["extra_context"]["rollback_next_action"] == "Uzupełnij ponownie wymagane dokumenty."
+
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        event = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id=submission_id).one()
+        assert submission.process_status == "OFFICER_ACCEPTED"
+        assert submission.declaration_filename == ""
+        assert submission.agreement_filename == ""
+        assert event.submission_id == submission_pk
+        assert event.previous_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+        assert event.new_status == "OFFICER_ACCEPTED"
+        assert event.source == "stage_rollback"
+
+    status_response = admin_client.get(f"/api/submissions/{submission_id}/workflow-status")
+    payload = status_response.get_json()
+    assert payload["process_status"] == "OFFICER_ACCEPTED"
+    assert payload["current_step"] == "declaration"
+
+
+def test_stage_rollback_without_email_address_does_not_fail(admin_app, admin_client):
+    create_user(admin_app)
+    create_form(admin_app, slug="rollback_form", name="Rollback Form")
+    _, submission_id = create_rollback_submission(admin_app, email="")
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/rollback-stage",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "target_status": "DECLARATION_SIGNED",
+            "rollback_reason": "Ponowienie podpisu",
+            "send_notification": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "nie ma adresu e-mail" in response.get_data(as_text=True)
+
+
+def test_stage_rollback_endpoint_requires_reason_and_keeps_status(admin_app, admin_client):
+    create_user(admin_app)
+    create_form(admin_app, slug="rollback_form", name="Rollback Form")
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/rollback-stage",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "target_status": "DECLARATION_SIGNED",
+            "rollback_reason": "",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Powód cofnięcia jest wymagany" in response.get_data(as_text=True)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(FormSubmission, submission_pk).process_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+        assert db.query(SubmissionWorkflowEvent).count() == 0
+
+
+def test_submission_detail_rejects_manual_process_status_bypass(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form")
+    submission_pk, _ = create_rollback_submission(admin_app)
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "process_status": "FORM_SUBMITTED",
+            "officer_decision": "accepted",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Statusu nie można zmieniać ręcznie" in response.get_data(as_text=True)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(FormSubmission, submission_pk).process_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+        assert db.query(SubmissionWorkflowEvent).count() == 0
 
 
 def test_admin_requires_login(admin_client):

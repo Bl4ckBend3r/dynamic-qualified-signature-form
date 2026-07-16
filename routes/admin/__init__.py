@@ -93,6 +93,7 @@ MAIL_TEMPLATE_TYPES = [
     "agreement_ready",
     "agreement_signed_by_user",
     "agreement_signed_by_office",
+    "stage_rollback",
     "custom",
 ]
 

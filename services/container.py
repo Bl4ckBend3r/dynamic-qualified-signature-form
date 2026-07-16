@@ -26,6 +26,7 @@ from services.strict_mode_stabilization_service import StrictModeStabilizationSe
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 from services.workflow_service import WorkflowService
 
@@ -47,6 +48,7 @@ class ServiceContainer:
     mail_dispatch_service: MailDispatchService
     mail_settings_service: MailSettingsService
     submission_document_service: SubmissionDocumentService
+    submission_stage_rollback_service: SubmissionStageRollbackService
     submission_workflow_history_service: SubmissionWorkflowHistoryService
     submission_decision_service: SubmissionDecisionService
     legacy_fallback_report_service: LegacyFallbackReportService
@@ -99,6 +101,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage=storage,
         log=app.logger,
     )
+    submission_stage_rollback_service = SubmissionStageRollbackService()
     submission_workflow_history_service = SubmissionWorkflowHistoryService(
         submission_repository=submission_repository,
         log=app.logger,
@@ -175,6 +178,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         mail_dispatch_service=mail_dispatch_service,
         mail_settings_service=mail_settings_service,
         submission_document_service=submission_document_service,
+        submission_stage_rollback_service=submission_stage_rollback_service,
         submission_workflow_history_service=submission_workflow_history_service,
         submission_decision_service=submission_decision_service,
         legacy_fallback_report_service=legacy_fallback_report_service,

@@ -354,6 +354,8 @@ class SubmissionDocumentService:
         available = []
         for file_row in files:
             item = dict(file_row)
+            if str(item.get("status") or "").strip().lower() == "superseded":
+                continue
             item["storage_exists"] = storage_service.document_exists(
                 storage=self.storage,
                 slug=form_slug,

@@ -767,6 +767,15 @@
     padding-right: 0;
 }
 
+.admin-confirm-dialog__box .admin-alert-warning {
+    max-width: none;
+    padding: 12px 14px;
+    border-left: 4px solid #b7791f;
+    border-radius: 4px;
+    background: #fff8e6;
+    color: #68410b;
+}
+
 .admin-training-editor {
     display: grid;
     gap: 18px;

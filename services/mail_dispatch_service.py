@@ -287,6 +287,7 @@ class MailDispatchService:
         sent_by_id: int | None = None,
         files: list | None = None,
         context_builders: dict[str, Any] | None = None,
+        extra_context: dict[str, Any] | None = None,
         logo_url_builder=None,
     ) -> MailDispatchResult:
         if template is None or getattr(template, "is_active", True) is False:
@@ -309,6 +310,7 @@ class MailDispatchService:
                 log=log,
             )
         context = self.build_context_for_submission(form, submission, files or [], **(context_builders or {}))
+        context.update(extra_context or {})
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         footer_html = self.build_footer(footer, logo_url_builder=logo_url_builder)
         layout = self._layout_for_db(db)

@@ -162,6 +162,17 @@ def is_agreement_signature_valid(row: Mapping[str, Any]) -> bool:
 
 
 def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
+    # The persisted workflow status is authoritative. Field-derived resolution is
+    # retained only as a compatibility fallback for historical rows which do not
+    # have a valid explicit status.
+    explicit_status = normalize_text(row.get(FIELD_PROCESS_STATUS))
+
+    if explicit_status:
+        try:
+            return ProcessStatus(explicit_status)
+        except ValueError:
+            pass
+
     if is_agreement_signature_valid(row):
         return ProcessStatus.AGREEMENT_SIGNED
 
@@ -180,14 +191,6 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
 
     if is_yes(row.get("declaration_signed")) and not is_declaration_signature_valid(row):
         return ProcessStatus.DECLARATION_SIGNATURE_INVALID
-
-    explicit_status = normalize_text(row.get(FIELD_PROCESS_STATUS))
-
-    if explicit_status:
-        try:
-            return ProcessStatus(explicit_status)
-        except ValueError:
-            pass
 
     decision = get_officer_decision(row)
 

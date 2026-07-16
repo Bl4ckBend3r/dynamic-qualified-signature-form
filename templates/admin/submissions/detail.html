@@ -3,17 +3,48 @@
 {% block content %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
+{% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
+    <button class="admin-button-secondary" type="button" data-rollback-modal="rollback-stage-dialog">Cofnij etap</button>
+    <dialog class="admin-confirm-dialog" id="rollback-stage-dialog">
+        <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-confirm-dialog__box admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <h2>Cofnij etap zgłoszenia</h2>
+            <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
+            <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
+            <label>
+                <span>Docelowy etap/status</span>
+                <select name="target_status" required>
+                    {% for option in rollback_options %}
+                        <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Powód cofnięcia</span>
+                <textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea>
+            </label>
+            <label class="admin-check">
+                <input type="checkbox" name="send_notification" checked>
+                <span>Wyślij powiadomienie do użytkownika</span>
+            </label>
+            <div class="admin-form-actions">
+                <button class="admin-button-secondary" type="button" data-close-rollback>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Cofnij etap</button>
+            </div>
+        </form>
+    </dialog>
+{% endif %}
 <form method="post" class="form-card">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <label>Status procesu</label>
-    <input name="process_status" value="{{ submission.process_status }}">
+    <input name="process_status" value="{{ submission.process_status }}" readonly aria-readonly="true">
     <label>Decyzja urzednika</label>
     <select name="officer_decision">
         <option value="" {% if not submission.officer_decision %}selected{% endif %}>Brak</option>
         <option value="TAK" {% if submission.officer_decision == "TAK" %}selected{% endif %}>TAK</option>
         <option value="NIE" {% if submission.officer_decision == "NIE" %}selected{% endif %}>NIE</option>
     </select>
-    <button class="btn-primary" type="submit">Zapisz status</button>
+    <button class="btn-primary" type="submit">Zapisz dane</button>
     <a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
 </form>
 <h2>Dane zgłoszenia</h2>
@@ -99,4 +130,19 @@
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
 </table>
+{% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
+<script>
+document.querySelectorAll("[data-rollback-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const dialog = document.getElementById(button.dataset.rollbackModal);
+        if (dialog && typeof dialog.showModal === "function") {
+            dialog.showModal();
+        }
+    });
+});
+document.querySelectorAll("[data-close-rollback]").forEach((button) => {
+    button.addEventListener("click", () => button.closest("dialog")?.close());
+});
+</script>
+{% endif %}
 {% endblock %}

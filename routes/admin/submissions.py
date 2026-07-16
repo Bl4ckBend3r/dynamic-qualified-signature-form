@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from models import EmailLog, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
+from models import (
+    EmailLog,
+    Form,
+    FormSubmission,
+    MailFooter,
+    MailTemplate,
+    SubmissionDecision,
+    SubmissionFile,
+    SubmissionWorkflowEvent,
+)
 from services.admin_form_service import form_has_additional_fields
 from services.admin_submission_service import (
     admin_status_label,
@@ -17,10 +27,13 @@ from services.admin_submission_service import (
     submission_value,
 )
 from services.process_service import ProcessStatus
+from services.process_instruction_service import build_process_instruction_view
+from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
 from statuses import WAITING_FOR_CORRECTION
 
 from . import (
     OFFICER_DECISIONS,
+    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     active_fields_for_form,
     bp,
@@ -28,6 +41,7 @@ from . import (
     ensure_form_access,
     list_accessible_forms,
     login_required,
+    role_required,
 )
 
 
@@ -94,16 +108,14 @@ def submission_detail(form_id: int, submission_pk: int):
         if submission.form_slug != form.slug:
             abort(404)
         if request.method == "POST":
-            current_app.extensions["services"].workflow_service.transition_submission(
-                submission,
-                request.form.get("process_status", "").strip() or submission.process_status,
-                actor="officer",
-                reason="admin_manual_status_edit",
-            )
+            requested_status = request.form.get("process_status", "").strip()
+            if requested_status and requested_status != submission.process_status:
+                flash("Statusu nie można zmieniać ręcznie. Użyj kontrolowanej funkcji „Cofnij etap”.", "error")
+                return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
             submission.officer_decision = request.form.get("officer_decision", "").strip()
             submission.updated_at = datetime.now(timezone.utc)
             db.commit()
-            flash("Status zgloszenia zostal zmieniony.", "success")
+            flash("Dane administracyjne zgłoszenia zostały zapisane.", "success")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         submission_data = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
         services = current_app.extensions["services"]
@@ -111,6 +123,14 @@ def submission_detail(form_id: int, submission_pk: int):
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
         detail_view = build_submission_detail_sections(form, submission)
+        rollback_options = []
+        if g.admin_user.role in ALLOWED_ROLES:
+            rollback_options = services.submission_stage_rollback_service.get_allowed_targets(
+                db,
+                submission,
+                actor_role=g.admin_user.role,
+                form_config=form.definition_json or {},
+            )
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -119,8 +139,168 @@ def submission_detail(form_id: int, submission_pk: int):
             files=files,
             workflow_history=workflow_history,
             decision_history=decision_history,
+            rollback_options=rollback_options,
             status_label=lambda status: admin_status_label(status, form),
         )
+
+
+@bp.post("/submissions/<submission_id>/rollback-stage")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def submission_stage_rollback(submission_id: str):
+    public_submission_id = str(submission_id or "").strip()
+    with db_session_factory()() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == public_submission_id)
+        ).scalar_one_or_none()
+        if submission is None:
+            abort(404)
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            abort(404)
+        ensure_form_access(db, form.id)
+
+        target_status = request.form.get("target_status", "").strip()
+        reason = request.form.get("rollback_reason", "").strip()
+        send_notification = request.form.get("send_notification") == "on"
+        service = current_app.extensions["services"].submission_stage_rollback_service
+        try:
+            result = service.rollback(
+                db,
+                submission,
+                target_status=target_status,
+                reason=reason,
+                actor=g.admin_user,
+                form_config=form.definition_json or {},
+            )
+            db.commit()
+        except StageRollbackError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        current_app.logger.info(
+            "submission_stage_rollback public_submission_id=%s internal_submission_id=%s "
+            "previous_status=%s new_status=%s actor_role=%s superseded_files=%s",
+            submission.submission_id,
+            submission.id,
+            result.previous_status,
+            result.new_status,
+            g.admin_user.role,
+            result.superseded_files,
+        )
+
+        mail_result = None
+        if send_notification:
+            if not str(submission.email or "").strip():
+                flash("Etap cofnięto, ale użytkownik nie ma adresu e-mail — powiadomienie nie zostało wysłane.", "warning")
+            else:
+                try:
+                    mail_result = _send_stage_rollback_email(db, form, submission, reason, result.new_status)
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    current_app.logger.exception(
+                        "stage_rollback_mail_failed public_submission_id=%s error=%s",
+                        submission.submission_id,
+                        exc.__class__.__name__,
+                    )
+                    mail_result = None
+                if mail_result is None:
+                    flash("Etap cofnięto, ale nie udało się przygotować powiadomienia e-mail.", "warning")
+                elif mail_result.status != "sent":
+                    flash(
+                        "Etap cofnięto, ale powiadomienie e-mail nie zostało wysłane: "
+                        + (mail_result.error_message or "brak szczegółów błędu"),
+                        "warning",
+                    )
+
+        flash(
+            f"Cofnięto etap zgłoszenia do: {admin_status_label(result.new_status, form)}.",
+            "success",
+        )
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+def _send_stage_rollback_email(db, form, submission, reason: str, target_status: str):
+    template = db.execute(
+        select(MailTemplate)
+        .where(
+            MailTemplate.form_id == form.id,
+            MailTemplate.template_type == "stage_rollback",
+            MailTemplate.is_active.is_(True),
+        )
+        .order_by(MailTemplate.id.desc())
+    ).scalars().first()
+    if template is None:
+        template = MailTemplate(
+            form_id=form.id,
+            name="Cofnięcie etapu zgłoszenia",
+            template_type="stage_rollback",
+            subject="Cofnięto etap zgłoszenia {{ submission_id }}",
+            content_html=(
+                "<p>Etap Twojego zgłoszenia został cofnięty.</p>"
+                "<p><strong>Aktualny status:</strong> {{ rollback_status_label }}</p>"
+                "<p><strong>Powód:</strong> {{ rollback_reason }}</p>"
+                "<p>{{ rollback_next_action }}</p>"
+            ),
+            content_text=(
+                "Etap Twojego zgłoszenia został cofnięty.\n"
+                "Aktualny status: {{ rollback_status_label }}\n"
+                "Powód: {{ rollback_reason_text }}\n"
+                "{{ rollback_next_action_text }}"
+            ),
+            use_platform_layout=True,
+            is_active=True,
+        )
+
+    footer = db.execute(
+        select(MailFooter)
+        .where(
+            MailFooter.is_active.is_(True),
+            (MailFooter.form_id == form.id) | (MailFooter.form_id.is_(None)),
+        )
+        .order_by(MailFooter.form_id.desc(), MailFooter.is_default.desc(), MailFooter.id.desc())
+    ).scalars().first()
+    instruction = build_process_instruction_view(
+        target_status,
+        instruction_config=form.user_instruction_config,
+        legacy_description=form.user_instruction,
+    )
+    next_action = str(instruction.get("next_action") or "").strip()
+    if not next_action:
+        next_action = "Sprawdź aktualny status i dalsze instrukcje w aplikacji."
+    services = current_app.extensions["services"]
+    files = services.submission_document_service.list_documents(submission.submission_id)
+    return services.mail_dispatch_service.dispatch_to_submission(
+        db=db,
+        form=form,
+        submission=submission,
+        template=template,
+        footer=footer,
+        to_email=submission.email,
+        subject_template=template.subject,
+        event_type="stage_rollback",
+        sent_by_id=g.admin_user.id,
+        files=files,
+        context_builders={
+            "documents_to_sign_url_builder": lambda item: url_for(
+                "documents.documents_to_sign", submission_id=item.submission_id, _external=True
+            ),
+            "document_url_builder": lambda item, filename: services.document_service.build_download_url(
+                {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},
+                filename,
+            ),
+        },
+        extra_context={
+            "rollback_reason": html.escape(reason),
+            "rollback_reason_text": reason,
+            "rollback_status": target_status,
+            "rollback_status_label": admin_status_label(target_status, form),
+            "rollback_next_action": html.escape(next_action),
+            "rollback_next_action_text": next_action,
+        },
+    )
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")

@@ -60,6 +60,7 @@ def build_filename_from_pattern(pattern: str, row: Mapping[str, Any], fallback: 
         "participant_name": sanitize_filename_part(build_participant_name(row), "Uczestnik"),
         "submission_id": sanitize_filename_part(row.get("submission_id"), "wniosek"),
         "training_id": sanitize_filename_part(row.get("training_id"), "szkolenie"),
+        "training_name": sanitize_filename_part(row.get("training_name"), "szkolenie"),
         "agreement_sequence": sanitize_filename_part(row.get("agreement_sequence"), "1"),
         "generated_date": sanitize_filename_part(row.get("generated_date") or row.get("agreement_generated_at"), "data"),
     }

@@ -261,7 +261,7 @@ class FormConfigService:
         normalized["requires_contract"] = bool(normalized.get("requires_contract", False))
         normalized.setdefault("declaration_template_html", "")
         normalized.setdefault("contract_template_html", "")
-        normalized.setdefault("contract_generation_mode", "per_training")
+        normalized["contract_generation_mode"] = "per_training"
         normalized.setdefault("contract_filename_pattern", "")
         normalized.setdefault("contract_number_pattern", "")
         normalized.setdefault("managed_documents", False)
@@ -303,10 +303,7 @@ class FormConfigService:
                 elif workflow.get("managed_documents"):
                     documents_by_id[document_id].pop("template_html", None)
                 if document_id == "agreement":
-                    mode = str(workflow.get("contract_generation_mode") or "per_training").strip()
-                    documents_by_id[document_id]["generation_mode"] = (
-                        mode if mode in {"single", "per_training"} else "per_training"
-                    )
+                    documents_by_id[document_id]["generation_mode"] = "per_training"
                     filename_pattern = str(workflow.get("contract_filename_pattern") or "").strip()
                     if filename_pattern:
                         documents_by_id[document_id]["filename_pattern"] = filename_pattern

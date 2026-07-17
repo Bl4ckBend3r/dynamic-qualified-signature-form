@@ -430,13 +430,20 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
                     "training_name": "Excel",
                     "filename": "excel-umowa.pdf",
                     "signature_valid": False,
-                }
+                },
+                {
+                    "id": "english",
+                    "training_name": "English",
+                    "filename": "english-umowa.pdf",
+                    "signature_valid": False,
+                },
             ]
         ),
     }
     app.testing_storage.csv_rows = [row]
     app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/deklaracja.pdf"] = b"%PDF-1.4\n"
     app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/excel-umowa.pdf"] = b"%PDF-1.4\n"
+    app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/english-umowa.pdf"] = b"%PDF-1.4\n"
 
     declaration_response = client.post("/do-podpisania", data={"submission_id": "abc", "akceptacja": "Tak"})
     declaration_html = declaration_response.get_data(as_text=True)
@@ -451,31 +458,38 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
 
     assert agreement_response.status_code == 200
     assert "excel-umowa.pdf" in agreement_html
+    assert "english-umowa.pdf" in agreement_html
     assert "token=secret-token" in agreement_html
 
 
-def test_training_agreement_download_returns_pdf(client, app):
+def test_all_training_agreement_downloads_return_pdf(client, app):
     import json
 
-    filename = "Jan_Kowalski-excel-umowa.pdf"
+    filenames = ["Jan_Kowalski-excel-umowa.pdf", "Jan_Kowalski-english-umowa.pdf"]
     app.testing_storage.csv_rows = [
         {
             "submission_id": "training-download",
             "form_slug": "formularz_zgloszeniowy",
             "form_name": "Formularz",
             "access_token": "training-token",
-            "agreement_filename": filename,
-            "training_agreements": json.dumps([{"id": "excel", "filename": filename}]),
+            "agreement_filename": filenames[0],
+            "training_agreements": json.dumps(
+                [
+                    {"id": "excel", "filename": filenames[0]},
+                    {"id": "english", "filename": filenames[1]},
+                ]
+            ),
         }
     ]
-    app.testing_storage.saved_pdfs[f"output/formularz_zgloszeniowy/pdf/{filename}"] = b"%PDF-1.4\ntraining"
+    for filename in filenames:
+        app.testing_storage.saved_pdfs[f"output/formularz_zgloszeniowy/pdf/{filename}"] = b"%PDF-1.4\ntraining"
 
-    response = client.get(
-        f"/downloads/pdfs/formularz_zgloszeniowy/{filename}?token=training-token"
-    )
-
-    assert response.status_code == 200
-    assert response.data.startswith(b"%PDF-1.4")
+    for filename in filenames:
+        response = client.get(
+            f"/downloads/pdfs/formularz_zgloszeniowy/{filename}?token=training-token"
+        )
+        assert response.status_code == 200
+        assert response.data.startswith(b"%PDF-1.4")
 
 
 def test_documents_to_sign_does_not_render_dead_training_agreement_link(client, app):

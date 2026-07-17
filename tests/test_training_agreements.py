@@ -74,7 +74,13 @@ def test_generate_training_agreements_creates_one_agreement_per_training(app, mo
 
     monkeypatch.setattr(legacy_app, "get_form_definition", lambda slug: form_definition)
     monkeypatch.setattr(legacy_app, "resolve_nextcloud_template_html", lambda path: "<html></html>")
-    monkeypatch.setattr(legacy_app, "generate_document_pdf_bytes", lambda **kwargs: b"%PDF-1.4\n")
+    rendered_contexts = []
+
+    def capture_pdf_context(**kwargs):
+        rendered_contexts.append(kwargs["context"])
+        return b"%PDF-1.4\n"
+
+    monkeypatch.setattr(legacy_app, "generate_document_pdf_bytes", capture_pdf_context)
 
     agreements = legacy_app.generate_training_agreements_for_submission(
         {
@@ -97,6 +103,15 @@ def test_generate_training_agreements_creates_one_agreement_per_training(app, mo
     updated = app.testing_storage.csv_rows[0]
     assert updated["agreement_generated"] == "Tak"
     assert len(json.loads(updated["training_agreements"])) == 2
+    assert len(rendered_contexts) == 2
+    for index, context in enumerate(rendered_contexts):
+        assert context["selected_trainings"] == [context["training"]]
+        assert context["selected_trainings_normalized"] == [context["training"]]
+        assert context["submission"]["selected_trainings"] == [context["training"]]
+        assert len(context["training_agreements"]) == 1
+        assert context["agreement_sequence"] == index + 1
+        assert context["training_agreement"] == context["agreement"]
+        assert context["selected_trainings_total_formatted"] == context["training"]["price_formatted"]
 
 
 def test_force_regenerates_existing_declaration(app, monkeypatch):

@@ -230,8 +230,7 @@
                 <label>
                     <span>Sposób generowania umów</span>
                     <select name="contract_generation_mode">
-                        <option value="per_training" {% if workflow.get('contract_generation_mode', 'per_training') == 'per_training' %}selected{% endif %}>Osobna umowa dla każdego szkolenia</option>
-                        <option value="single" {% if workflow.get('contract_generation_mode') == 'single' %}selected{% endif %}>Jedna umowa dla zgłoszenia</option>
+                        <option value="per_training" selected>Osobna umowa dla każdego szkolenia</option>
                     </select>
                 </label>
                 <label><span>Nazwa pliku PDF</span><input name="contract_filename_pattern" value="{{ workflow.get('contract_filename_pattern', '') }}" placeholder="{{ '{first_name}_{last_name}-{training_id}-umowa.pdf' }}"></label>

@@ -104,7 +104,7 @@ def agreement_config(template_html="<main class=\"document\">ADMIN TEMPLATE {{ t
     }
 
 
-@pytest.mark.parametrize("training_count", [1, 2])
+@pytest.mark.parametrize("training_count", [1, 3])
 def test_training_agreement_generation_persists_every_pdf(tmp_path, training_count):
     trainings = [
         {"id": f"training-{index}", "name": f"Training {index}", "price": f"{index}200.00"}
@@ -134,6 +134,7 @@ def test_training_agreement_generation_persists_every_pdf(tmp_path, training_cou
         assert all(item.document_type == SubmissionDocumentType.TRAINING_AGREEMENT for item in files)
         assert [item.filename for item in files] == [item["filename"] for item in agreements]
         assert [item.agreement_number for item in files] == [item["number"] for item in agreements]
+        assert all(item["agreement_number"] == item["number"] for item in agreements)
         assert all("/umowy/niepodpisane/" in item.storage_path for item in files)
         assert all(item.storage_path in storage.files for item in files)
 
@@ -142,6 +143,102 @@ def test_training_agreement_generation_persists_every_pdf(tmp_path, training_cou
         item["filename"] for item in agreements
     ]
     assert all(call["template_html"].startswith("<main") for call in renderer.calls)
+    assert len(renderer.calls) == training_count
+    for index, call in enumerate(renderer.calls):
+        context = call["context"]
+        expected_training = context["training"]
+        assert context["selected_trainings"] == [expected_training]
+        assert context["selected_trainings_normalized"] == [expected_training]
+        assert context["submission"]["selected_trainings"] == [expected_training]
+        assert len(context["training_agreements"]) == 1
+        assert context["training_agreement"]["sequence"] == index + 1
+        assert context["agreement"] == context["training_agreement"]
+        assert context["agreement_number"] == agreements[index]["number"]
+        assert context["selected_trainings_total_formatted"] == expected_training["price_formatted"]
+
+        rendered_table = app.jinja_env.from_string(
+            "<table>{% for item in selected_trainings %}<tr><td>{{ item.name }}</td>"
+            "<td>{{ item.price_formatted }}</td></tr>{% endfor %}</table>"
+            "<strong>{{ selected_trainings_total_formatted }}</strong>"
+        ).render(**context)
+        assert rendered_table.count("<tr>") == 1
+        assert expected_training["name"] in rendered_table
+        assert expected_training["price_formatted"] in rendered_table
+
+
+def test_duplicate_training_names_get_unique_filenames_and_numbers(tmp_path):
+    trainings = [
+        {"id": "digital-a", "name": "Digital Skills", "price": "1000.00"},
+        {"id": "digital-b", "name": "Digital Skills", "price": "1000.00"},
+    ]
+    service, repository, session_factory, storage, renderer, submission = build_service(tmp_path, trainings)
+    config = agreement_config()
+    config["documents"][0]["filename_pattern"] = "{first_name}_{last_name}-{training_name}-umowa.pdf"
+    config["documents"][0]["numbering"] = {"number_pattern": "U/{submission_id}/{generated_date}"}
+    app = Flask(__name__)
+    app.config.update(TEMP_DIR=tmp_path, NEXTCLOUD_FORMS_DIR="Formularze", NEXTCLOUD_OUTPUT_DIR="output")
+
+    with app.test_request_context("/"):
+        agreements = service.generate_documents_for_collection(
+            submission,
+            config,
+            "training_agreement",
+            "selected_trainings",
+            "training",
+            context_extra={"generated_date": "2026-07-16"},
+        )
+
+    assert [item["filename"] for item in agreements] == [
+        "Jan_Kowalski-Digital_Skills-1-umowa.pdf",
+        "Jan_Kowalski-Digital_Skills-2-umowa.pdf",
+    ]
+    assert [item["number"] for item in agreements] == [
+        "U/public-uuid/2026-07-16/1",
+        "U/public-uuid/2026-07-16/2",
+    ]
+    assert len(storage.files) == 2
+    assert len(renderer.calls) == 2
+    with session_factory() as db:
+        files = db.query(SubmissionFile).order_by(SubmissionFile.id).all()
+        assert [item.filename for item in files] == [item["filename"] for item in agreements]
+        assert [item.agreement_number for item in files] == [item["number"] for item in agreements]
+    persisted = json.loads(repository.get_by_id("public-uuid")["training_agreements"])
+    assert persisted == agreements
+
+
+def test_regeneration_does_not_overwrite_existing_agreement_pdf(tmp_path):
+    service, repository, session_factory, storage, renderer, submission = build_service(
+        tmp_path,
+        [{"id": "excel", "name": "Excel", "price": "1200.00"}],
+    )
+    app = Flask(__name__)
+    app.config.update(TEMP_DIR=tmp_path, NEXTCLOUD_FORMS_DIR="Formularze", NEXTCLOUD_OUTPUT_DIR="output")
+
+    with app.test_request_context("/"):
+        first = service.generate_documents_for_collection(
+            submission,
+            agreement_config(),
+            "training_agreement",
+            "selected_trainings",
+            "training",
+            context_extra={"generated_date": "2026-07-16"},
+        )
+        second = service.generate_documents_for_collection(
+            submission,
+            agreement_config(),
+            "training_agreement",
+            "selected_trainings",
+            "training",
+            context_extra={"generated_date": "2026-07-16"},
+        )
+
+    assert first[0]["filename"] == "Jan_Kowalski-excel-umowa.pdf"
+    assert second[0]["filename"] == "Jan_Kowalski-excel-2-umowa.pdf"
+    assert len(storage.files) == 2
+    with session_factory() as db:
+        files = db.query(SubmissionFile).order_by(SubmissionFile.id).all()
+        assert [item.filename for item in files] == [first[0]["filename"], second[0]["filename"]]
+    assert json.loads(repository.get_by_id("public-uuid")["training_agreements"]) == second
 
 
 def test_inline_admin_agreement_template_wins_over_legacy_template_path(tmp_path):
@@ -202,7 +299,7 @@ def test_agreement_generation_refuses_missing_template(tmp_path):
     assert renderer.calls == []
 
 
-def test_single_agreement_mode_creates_one_agreement_submission_file(tmp_path):
+def test_single_agreement_mode_is_normalized_to_one_agreement_per_training(tmp_path):
     service, _, session_factory, storage, renderer, submission = build_service(
         tmp_path,
         [
@@ -237,10 +334,23 @@ def test_single_agreement_mode_creates_one_agreement_submission_file(tmp_path):
         )
 
     assert result.success is True
+    assert len(result.agreements) == 2
+    assert [item["number"] for item in result.agreements] == [
+        "U/public-uuid/2026-07-16/1",
+        "U/public-uuid/2026-07-16/2",
+    ]
+    assert [item["filename"] for item in result.agreements] == [
+        "Jan_Kowalski-1-umowa.pdf",
+        "Jan_Kowalski-2-umowa.pdf",
+    ]
     with session_factory() as db:
-        file_row = db.query(SubmissionFile).one()
-        assert file_row.document_id == "agreement"
-        assert file_row.document_type == SubmissionDocumentType.AGREEMENT
-        assert file_row.agreement_number == "U/public-uuid/2026-07-16"
-        assert file_row.storage_path in storage.files
-    assert renderer.calls[0]["template_html"].startswith("<main>One agreement")
+        file_rows = db.query(SubmissionFile).order_by(SubmissionFile.id).all()
+        assert len(file_rows) == 2
+        assert all(file_row.document_id == "training_agreement" for file_row in file_rows)
+        assert all(file_row.document_type == SubmissionDocumentType.TRAINING_AGREEMENT for file_row in file_rows)
+        assert [file_row.agreement_number for file_row in file_rows] == [
+            "U/public-uuid/2026-07-16/1",
+            "U/public-uuid/2026-07-16/2",
+        ]
+        assert all(file_row.storage_path in storage.files for file_row in file_rows)
+    assert all(call["template_html"].startswith("<main>One agreement") for call in renderer.calls)

@@ -136,7 +136,7 @@ def test_admin_contract_settings_create_generated_agreement_config():
     assert definition["workflow"]["managed_documents"] is True
     assert agreement["enabled"] is True
     assert agreement["template_html"] == "<main>Umowa {{ agreement_number }}</main>"
-    assert agreement["generation_mode"] == "single"
+    assert agreement["generation_mode"] == "per_training"
     assert agreement["filename_pattern"] == "{first_name}_{last_name}-contract.pdf"
     assert agreement["numbering"]["number_pattern"] == "U/{submission_id}/{generated_date}"
 

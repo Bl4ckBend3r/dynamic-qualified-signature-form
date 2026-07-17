@@ -70,7 +70,8 @@ class AgreementFlowService:
                 error_code="agreement_template_missing",
             )
         resolved_date = generated_date or date.today().isoformat()
-        generation_mode = str(source_document.get("generation_mode") or "per_training").strip()
+        # Training agreements are always generated one file per selected training.
+        generation_mode = "per_training"
         uses_explicit_training_document = bool(
             training_document
             and training_document.get("enabled", True)

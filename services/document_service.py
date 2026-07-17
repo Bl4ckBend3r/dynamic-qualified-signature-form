@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import tempfile
 import json
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -19,6 +20,7 @@ from services.documents.pdf_render_service import (
     generate_document_pdf_bytes as render_document_pdf_bytes,
 )
 from services.documents.signed_document_service import SignedDocumentService
+from services.file_metadata import resolve_pdf_storage_path
 from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.training_service import format_price_pln, parse_decimal_price, parse_training_snapshots
@@ -27,6 +29,81 @@ from services.upload_validation import UploadValidationError, validate_pdf_uploa
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
 BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+
+
+def append_filename_sequence(filename: str, sequence: int) -> str:
+    path = Path(filename)
+    stem = path.stem
+    if stem.casefold().endswith("-umowa"):
+        stem = f"{stem[:-6]}-{sequence}-umowa"
+    else:
+        stem = f"{stem}-{sequence}"
+    return f"{stem}{path.suffix or '.pdf'}"
+
+
+def build_unique_collection_filenames(filenames: list[str]) -> list[str]:
+    """Disambiguate duplicate PDF names without collapsing collection items."""
+    normalized = [Path(filename).name for filename in filenames]
+    counts = Counter(filename.casefold() for filename in normalized)
+    used: set[str] = set()
+    result: list[str] = []
+    for sequence, filename in enumerate(normalized, start=1):
+        candidate = filename
+        if counts[filename.casefold()] > 1:
+            candidate = append_filename_sequence(filename, sequence)
+        collision = 2
+        base_candidate = candidate
+        while candidate.casefold() in used:
+            path = Path(base_candidate)
+            candidate = f"{path.stem}-{collision}{path.suffix or '.pdf'}"
+            collision += 1
+        used.add(candidate.casefold())
+        result.append(candidate)
+    return result
+
+
+def build_available_storage_filename(
+    *,
+    storage_service: DocumentStorageService,
+    storage,
+    slug: str,
+    filename: str,
+    document_type: str | None,
+    signed: bool = False,
+) -> str:
+    """Return a filename which does not overwrite an existing storage object."""
+    base_filename = Path(filename).name
+    if not hasattr(storage_service, "document_exists"):
+        return base_filename
+    candidate = base_filename
+    sequence = 2
+    while True:
+        storage_path = resolve_pdf_storage_path(
+            storage,
+            slug,
+            candidate,
+            document_type=document_type,
+            signed=signed,
+        )
+        if not storage_service.document_exists(
+            storage=storage,
+            slug=slug,
+            filename=candidate,
+            metadata={"storage_path": storage_path},
+        ):
+            return candidate
+        candidate = append_filename_sequence(base_filename, sequence)
+        sequence += 1
+
+
+def build_unique_collection_numbers(numbers: list[str]) -> list[str]:
+    """Ensure every agreement instance has a distinct public number."""
+    normalized = [str(number or "").strip() for number in numbers]
+    counts = Counter(number.casefold() for number in normalized)
+    return [
+        f"{number}/{sequence}" if counts[number.casefold()] > 1 else number
+        for sequence, number in enumerate(normalized, start=1)
+    ]
 
 
 class DocumentType:
@@ -219,7 +296,7 @@ class DocumentService:
         generated_date = (context_extra or {}).get("generated_date") or date.today().isoformat()
         template_html = self.resolve_document_template(document)
         generated_documents = []
-
+        prepared_documents = []
         for sequence, item in enumerate(items, start=1):
             item_id = item.get("id") or item.get("value") or f"{item_alias}_{sequence}"
             agreement_number = self.build_document_number(
@@ -241,14 +318,76 @@ class DocumentService:
                 "agreement_number": agreement_number,
                 "generated_date": generated_date,
                 "agreement_generated_at": generated_date,
+                collection_field: [item],
+                "selected_trainings": [item],
+                "selected_trainings_normalized": [item],
             }
-            filename = self.build_filename_for_document(document, render_row, document_id)
+            record = {
+                "id": str(item_id),
+                "training_id": str(item_id),
+                "training_name": item.get("name", item.get("label", "")),
+                "training_price": item.get("price", ""),
+                "training_price_formatted": item.get("price_formatted") or format_price_pln(item.get("price"), item.get("currency")),
+                "sequence": sequence,
+                "number": agreement_number,
+                "agreement_number": agreement_number,
+                "generated_at": generated_date,
+                "filename": "",
+                "signed": False,
+                "signature_valid": False,
+                "signed_filename": "",
+                "signature_type": "",
+                "signature_error": "",
+            }
+            render_row.update(
+                {
+                    "training_agreement": record,
+                    "agreement": record,
+                    "training_agreements": [record],
+                }
+            )
+            prepared_documents.append(
+                {
+                    "item_id": item_id,
+                    "render_row": render_row,
+                    "record": record,
+                    "filename": self.build_filename_for_document(document, render_row, document_id),
+                }
+            )
+
+        unique_filenames = build_unique_collection_filenames(
+            [prepared["filename"] for prepared in prepared_documents]
+        )
+        unique_numbers = build_unique_collection_numbers(
+            [prepared["record"]["agreement_number"] for prepared in prepared_documents]
+        )
+        for prepared, filename, agreement_number in zip(
+            prepared_documents,
+            unique_filenames,
+            unique_numbers,
+            strict=True,
+        ):
+            item_id = prepared["item_id"]
+            render_row = prepared["render_row"]
+            record = prepared["record"]
+            filename = build_available_storage_filename(
+                storage_service=self.document_storage_service,
+                storage=self.storage,
+                slug=slug,
+                filename=filename,
+                document_type=self._storage_document_type(document_id),
+                signed=False,
+            )
+            record["filename"] = filename
+            record["number"] = agreement_number
+            record["agreement_number"] = agreement_number
+            render_row["agreement_number"] = agreement_number
             context = build_document_pdf_context(
                 form_definition=form_config,
                 submission_id=submission_id,
                 row=render_row,
-                submission_view=build_submission_view(form_config, row),
-                consents_view=build_consents_view(form_config, row),
+                submission_view=build_submission_view(form_config, render_row),
+                consents_view=build_consents_view(form_config, render_row),
                 pdf_image_url=self.resolve_pdf_image_url(form_config),
                 document_type=document_id,
             )
@@ -275,7 +414,7 @@ class DocumentService:
                 file_bytes=document_bytes,
                 document_id=document_id,
                 document_type=self._document_metadata_type(document_id, signed=False),
-                agreement_number=agreement_number,
+                agreement_number=record["agreement_number"],
                 training_key=str(item_id),
                 storage_path=storage_path,
                 storage=self.storage,
@@ -288,24 +427,7 @@ class DocumentService:
                 metadata_recorded=recorded,
             )
             self._require_metadata_record(recorded, filename)
-            generated_documents.append(
-                {
-                    "id": str(item_id),
-                    "training_id": str(item_id),
-                    "training_name": item.get("name", item.get("label", "")),
-                    "training_price": item.get("price", ""),
-                    "training_price_formatted": item.get("price_formatted") or format_price_pln(item.get("price"), item.get("currency")),
-                    "sequence": sequence,
-                    "number": agreement_number,
-                    "generated_at": generated_date,
-                    "filename": filename,
-                    "signed": False,
-                    "signature_valid": False,
-                    "signed_filename": "",
-                    "signature_type": "",
-                    "signature_error": "",
-                }
-            )
+            generated_documents.append(record)
 
         updates = {
             "agreement_generated": "Tak",
@@ -912,6 +1034,7 @@ def build_filename_from_pattern(pattern: str, row: Mapping[str, Any], fallback: 
         "participant_name": sanitize_filename_part(build_participant_name(row), "Uczestnik"),
         "submission_id": sanitize_filename_part(row.get("submission_id"), "wniosek"),
         "training_id": sanitize_filename_part(row.get("training_id"), "szkolenie"),
+        "training_name": sanitize_filename_part(row.get("training_name"), "szkolenie"),
         "agreement_sequence": sanitize_filename_part(row.get("agreement_sequence"), "1"),
         "generated_date": sanitize_filename_part(row.get("generated_date") or row.get("agreement_generated_at"), "data"),
     }

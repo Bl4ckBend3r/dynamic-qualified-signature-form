@@ -454,6 +454,7 @@ class DocumentService:
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Nie wybrano podpisanego pliku PDF.")
         row = self._row(submission)
+        previous_status = str(row.get("process_status") or "")
         slug = self._slug(submission)
         uploaded_bytes = uploaded_file.read()
         self.signed_document_service.validate_pdf_bytes(uploaded_bytes)
@@ -516,6 +517,14 @@ class DocumentService:
             update_target,
         )
         self._update_submission(submission, updates)
+        new_status = str(updates.get("process_status") or previous_status)
+        if is_valid and new_status != previous_status:
+            self._record_document_workflow_event(
+                submission,
+                previous_status=previous_status,
+                new_status=new_status,
+                document_id=document_id,
+            )
         self._audit("SIGNED_DOCUMENT_UPLOADED", submission, metadata={"document_id": document_id, "filename": signed_filename})
         self._audit("SIGNATURE_VERIFIED" if is_valid else "SIGNATURE_INVALID", submission, metadata=verification)
         return {
@@ -723,6 +732,38 @@ class DocumentService:
         if self.submission_repository and submission_id:
             return self.submission_repository.update(submission_id, updates)
         return False
+
+    def _record_document_workflow_event(
+        self,
+        submission: dict,
+        *,
+        previous_status: str,
+        new_status: str,
+        document_id: str,
+    ) -> None:
+        if not self.submission_repository or not hasattr(self.submission_repository, "record_workflow_event"):
+            return
+        source = "declaration_uploaded" if document_id == DocumentType.DECLARATION else "agreement_uploaded"
+        try:
+            self.submission_repository.record_workflow_event(
+                self._submission_id(submission),
+                {
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "previous_step": "",
+                    "new_step": source,
+                    "actor_role": "participant",
+                    "reason": source,
+                    "source": source,
+                },
+            )
+        except Exception:
+            current_app.logger.warning(
+                "Nie udalo sie zapisac historii uploadu dokumentu submission_id=%s source=%s.",
+                self._submission_id(submission),
+                source,
+                exc_info=True,
+            )
 
     def _audit(self, event_type: str, submission: dict, metadata: dict | None = None) -> None:
         if not self.audit_log_service:

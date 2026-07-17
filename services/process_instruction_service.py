@@ -10,6 +10,24 @@ from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_st
 
 DEFAULT_INSTRUCTION_TITLE = "Instrukcja dalszego postępowania"
 MAX_STAGES = 100
+DEFAULT_STATUS_INSTRUCTIONS = {
+    ProcessStatus.AGREEMENT_UPLOADED.value: {
+        "key": "agreement-officer-review",
+        "label": "Umowa podpisana przez beneficjenta - do potwierdzenia",
+        "description": "Podpisana umowa została wgrana i oczekuje na potwierdzenie przez urzędnika.",
+        "next_action": "Nie musisz teraz nic robić. Poczekaj na decyzję urzędnika.",
+        "final": False,
+        "rejected": False,
+    },
+    ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value: {
+        "key": "agreement-correction",
+        "label": "Podpisana umowa wymaga poprawy",
+        "description": "Urzędnik odrzucił wgraną umowę albo skierował ją do poprawy.",
+        "next_action": "Popraw umowę, podpisz ją i wgraj ponownie.",
+        "final": False,
+        "rejected": True,
+    },
+}
 
 
 def instruction_status_options() -> list[dict[str, str]]:
@@ -90,9 +108,20 @@ def build_process_instruction_view(
     raw_status = _plain_text(process_status, limit=128)
     config = normalize_instruction_config(instruction_config, legacy_description=legacy_description)
     configured_stages = config["stages"]
+    default_stage = DEFAULT_STATUS_INSTRUCTIONS.get(raw_status)
+    current_index = _find_current_stage(configured_stages, raw_status)
+    if current_index is None and default_stage:
+        configured_stages = [
+            *configured_stages,
+            {
+                **default_stage,
+                "status_codes": [raw_status],
+                "sort_order": len(configured_stages) + 1,
+            },
+        ]
+        current_index = len(configured_stages) - 1
     has_instruction = bool(config["description"] or configured_stages)
 
-    current_index = _find_current_stage(configured_stages, raw_status)
     stages: list[dict[str, Any]] = []
     for index, configured in enumerate(configured_stages):
         stage = dict(configured)
@@ -120,7 +149,7 @@ def build_process_instruction_view(
         current_stage = fallback
 
     instruction = {
-        "title": config["title"],
+        "title": config["title"] or (DEFAULT_INSTRUCTION_TITLE if has_instruction else ""),
         "description": config["description"],
         "has_instruction": has_instruction,
         "current_stage_key": current_stage["key"] if current_stage else None,

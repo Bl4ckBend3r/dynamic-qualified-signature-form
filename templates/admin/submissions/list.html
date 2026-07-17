@@ -12,7 +12,7 @@
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
         <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
+        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "OFFICER_ACCEPTED", "DECLARATION_SIGNED", "AGREEMENT_WAITING_FOR_SIGNATURE", "AGREEMENT_UPLOADED", "BENEFICIARY_AGREEMENT_REJECTED", "PROCESS_COMPLETED"] %}
             <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
     </select>
@@ -97,19 +97,25 @@
                     {% endfor %}
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
                     <td>
-                        <div class="admin-decision-controls">
-                            <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
-                                {% for value, label in officer_decisions %}
-                                    <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            <input
-                                name="officer_decision_reason_{{ submission.id }}"
-                                class="admin-decision-reason"
-                                value="{{ submission.officer_decision_reason }}"
-                                placeholder="Powod"
-                            >
-                        </div>
+                        {% if can_edit_application_decision(submission) %}
+                            <div class="admin-decision-controls">
+                                <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
+                                    {% for value, label in officer_decisions %}
+                                        <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                <input
+                                    name="officer_decision_reason_{{ submission.id }}"
+                                    class="admin-decision-reason"
+                                    value="{{ submission.officer_decision_reason }}"
+                                    placeholder="Powód"
+                                >
+                            </div>
+                        {% elif submission.officer_decision %}
+                            <span class="admin-badge">{{ "Wniosek zaakceptowany" if submission.officer_decision|lower in ["accepted", "tak"] else "Wniosek odrzucony" }}</span>
+                        {% else %}
+                            <span>Etap zakończony</span>
+                        {% endif %}
                     </td>
                     <td>
                         <div class="admin-actions">

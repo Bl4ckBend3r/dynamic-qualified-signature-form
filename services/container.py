@@ -8,6 +8,7 @@ from repositories.storage_repository import StorageRepository
 from repositories.submission_repository import CsvSubmissionRepository, PostgresSubmissionRepository
 from services.access_token_service import AccessTokenService
 from services.audit_log_service import AuditLogService
+from services.beneficiary_agreement_service import BeneficiaryAgreementService
 from services.document_service import DocumentService
 from services.documents.agreement_flow_service import AgreementFlowService
 from services.documents.declaration_flow_service import DeclarationFlowService
@@ -38,6 +39,7 @@ class ServiceContainer:
     submission_repository: object
     submission_service: SubmissionService
     workflow_service: WorkflowService
+    beneficiary_agreement_service: BeneficiaryAgreementService
     document_service: DocumentService
     document_access_service: DocumentAccessService
     document_download_service: DocumentDownloadService
@@ -84,6 +86,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
     workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)
+    beneficiary_agreement_service = BeneficiaryAgreementService()
     notification_service = NotificationService(
         submission_repository,
         audit_log_service=audit_log_service,
@@ -168,6 +171,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_repository=submission_repository,
         submission_service=submission_service,
         workflow_service=workflow_service,
+        beneficiary_agreement_service=beneficiary_agreement_service,
         document_service=document_service,
         document_access_service=document_access_service,
         document_download_service=document_download_service,

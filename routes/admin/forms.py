@@ -21,6 +21,10 @@ from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.process_instruction_service import instruction_status_options, normalize_instruction_config
 from services.site_document_service import save_document_upload, update_form_regulation_from_upload
 from services.upload_validation import UploadValidationError
+from services.workflow_config_service import (
+    WorkflowConfigNormalizer,
+    workflow_status_options,
+)
 
 from . import (
     ROLE_SUPER_ADMIN,
@@ -170,8 +174,13 @@ def form_edit(form_id: int):
                 instruction_config = _instruction_config_from_admin_form(
                     request.form,
                     existing=form.user_instruction_config,
+                    allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
-                updated_definition = build_form_definition_from_admin_form(form.definition_json or {}, request.form)
+                updated_definition = build_form_definition_from_admin_form(
+                    form.definition_json or {},
+                    request.form,
+                    allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
+                )
                 updated_definition.pop("user_instruction", None)
                 updated_definition.pop("user_instruction_config", None)
             except Exception as exc:
@@ -179,6 +188,10 @@ def form_edit(form_id: int):
                 validation_errors = [str(exc) or "Niepoprawne dane formularza."]
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)
+                workflow_context = _workflow_editor_context(
+                    updated_definition.get("workflow") or {},
+                    workflow_json=request.form.get("workflow_json"),
+                )
                 return render_template(
                     "admin/forms/edit.html",
                     form=form,
@@ -187,12 +200,18 @@ def form_edit(form_id: int):
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
                     training_field=get_declaration_training_field(updated_definition),
-                    workflow_json=request.form.get("workflow_json", ""),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
+                    **workflow_context,
                 ), 400
-            validation_errors = validate_admin_form_config(updated_definition)
+            validation_errors = validate_admin_form_config(
+                updated_definition,
+                validate_visual_workflow=bool(
+                    request.form.get("workflow_builder_json")
+                    or request.form.get("workflow_use_advanced_json") == "on"
+                ),
+            )
             if validation_errors:
                 flash("Nie można zapisać workflow: " + " ".join(validation_errors), "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
@@ -205,10 +224,10 @@ def form_edit(form_id: int):
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
                     training_field=get_declaration_training_field(updated_definition),
-                    workflow_json=format_json(updated_definition.get("workflow") or {}),
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
+                    **_workflow_editor_context(updated_definition.get("workflow") or {}),
                 ), 400
             form.name = request.form.get("name", "").strip() or form.name
             form.title = request.form.get("title", "").strip() or form.title
@@ -226,6 +245,9 @@ def form_edit(form_id: int):
                     logos=logos,
                     training_field=get_declaration_training_field(form.definition_json or {}),
                     instruction_statuses=instruction_statuses,
+                    validation_errors=[],
+                    trigger_descriptions=TRIGGER_DESCRIPTIONS,
+                    **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
                 ), 400
             form.user_instruction = instruction_config["description"] or None
             form.user_instruction_config = instruction_config
@@ -267,10 +289,10 @@ def form_edit(form_id: int):
                         assigned_user_ids=assigned_user_ids,
                         logos=logos,
                         training_field=get_declaration_training_field(form.definition_json or {}),
-                        workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
                         trigger_descriptions=TRIGGER_DESCRIPTIONS,
                         instruction_statuses=instruction_statuses,
                         validation_errors=[],
+                        **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
                     ), 400
                 regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
                 update_form_regulation_from_upload(regulation, metadata, uploaded_by_user_id=g.admin_user.id)
@@ -297,14 +319,49 @@ def form_edit(form_id: int):
             assigned_user_ids=assigned_user_ids,
             logos=logos,
             training_field=get_declaration_training_field(form.definition_json or {}),
-            workflow_json=format_json((form.definition_json or {}).get("workflow") or {}),
             trigger_descriptions=TRIGGER_DESCRIPTIONS,
             instruction_statuses=instruction_statuses,
             validation_errors=[],
+            **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
         )
 
 
-def _instruction_config_from_admin_form(form_data, *, existing: dict | None = None) -> dict:
+def _instruction_config_from_admin_form(
+    form_data,
+    *,
+    existing: dict | None = None,
+    allow_advanced_json: bool = False,
+) -> dict:
+    workflow_builder_json = (
+        form_data.get("workflow_json")
+        if allow_advanced_json and form_data.get("workflow_use_advanced_json") == "on"
+        else form_data.get("workflow_builder_json")
+    )
+    if workflow_builder_json:
+        parsed_workflow = json.loads(workflow_builder_json)
+        if not isinstance(parsed_workflow, dict):
+            raise ValueError("Niepoprawna konfiguracja etapów workflow.")
+        normalized_workflow = WorkflowConfigNormalizer().normalize(parsed_workflow)
+        stages = [
+            {
+                "key": step["id"],
+                "label": step["user_label"],
+                "status_codes": [step["status"]],
+                "description": step["description"],
+                "next_action": step["next_action"],
+                "final": step["final"],
+                "rejected": step["rejected"],
+                "sort_order": index,
+            }
+            for index, step in enumerate(normalized_workflow["steps"], start=1)
+        ]
+        return normalize_instruction_config(
+            {
+                "title": form_data.get("instruction_title", ""),
+                "description": form_data.get("user_instruction", ""),
+                "stages": stages,
+            }
+        )
     raw_json = form_data.get("user_instruction_config")
     if raw_json is None:
         stages = (existing or {}).get("stages", [])
@@ -320,6 +377,20 @@ def _instruction_config_from_admin_form(form_data, *, existing: dict | None = No
             "stages": stages,
         }
     )
+
+
+def _workflow_editor_context(workflow: dict, *, workflow_json: str | None = None) -> dict:
+    normalizer = WorkflowConfigNormalizer()
+    normalized = normalizer.normalize(workflow)
+    existing_statuses = [step.get("status") for step in normalized.get("steps", [])]
+    for decision in normalized.get("decision_settings", []):
+        existing_statuses.extend((decision.get("yes_status"), decision.get("no_status")))
+    return {
+        "workflow_builder": normalized,
+        "workflow_json": workflow_json if workflow_json is not None else format_json(normalized),
+        "workflow_statuses": workflow_status_options(existing_statuses),
+        "workflow_advanced_elements": normalizer.advanced_elements(normalized),
+    }
 
 
 @bp.post("/forms/<int:form_id>/toggle")

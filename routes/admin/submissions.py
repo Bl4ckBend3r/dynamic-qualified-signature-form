@@ -18,6 +18,12 @@ from models import (
     SubmissionWorkflowEvent,
 )
 from services.admin_form_service import form_has_additional_fields
+from services.admin_workflow_view_service import build_admin_workflow_view
+from services.beneficiary_agreement_service import (
+    AGREEMENT_DECISION_ROLES,
+    BeneficiaryAgreementDecisionError,
+    can_edit_application_decision,
+)
 from services.admin_submission_service import (
     admin_status_label,
     build_submission_detail_sections,
@@ -95,6 +101,7 @@ def submissions_list(form_id: int):
             submission_value=submission_value,
             filter_fields=build_filter_fields(fields, submissions),
             officer_decisions=OFFICER_DECISIONS,
+            can_edit_application_decision=can_edit_application_decision,
             status_label=lambda status: admin_status_label(status, form),
         )
 
@@ -112,16 +119,19 @@ def submission_detail(form_id: int, submission_pk: int):
             if requested_status and requested_status != submission.process_status:
                 flash("Statusu nie można zmieniać ręcznie. Użyj kontrolowanej funkcji „Cofnij etap”.", "error")
                 return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
-            submission.officer_decision = request.form.get("officer_decision", "").strip()
-            submission.updated_at = datetime.now(timezone.utc)
-            db.commit()
-            flash("Dane administracyjne zgłoszenia zostały zapisane.", "success")
+            flash("Użyj aktywnej decyzji w odpowiedniej sekcji workflow.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         submission_data = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
         services = current_app.extensions["services"]
         files = services.submission_document_service.list_documents(submission.submission_id)
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
+        can_review_agreement = services.beneficiary_agreement_service.can_review(db, submission)
+        workflow_view = build_admin_workflow_view(
+            submission,
+            decisions=decision_history.get("decisions") or [],
+            can_review_agreement=can_review_agreement,
+        )
         detail_view = build_submission_detail_sections(form, submission)
         rollback_options = []
         if g.admin_user.role in ALLOWED_ROLES:
@@ -139,6 +149,7 @@ def submission_detail(form_id: int, submission_pk: int):
             files=files,
             workflow_history=workflow_history,
             decision_history=decision_history,
+            workflow_view=workflow_view,
             rollback_options=rollback_options,
             status_label=lambda status: admin_status_label(status, form),
         )
@@ -303,6 +314,77 @@ def _send_stage_rollback_email(db, form, submission, reason: str, target_status:
     )
 
 
+def _notify_beneficiary_agreement_decision(db, form, submission, decision_result) -> None:
+    decision_record = decision_result.decision_record
+    if not str(submission.email or "").strip():
+        flash("Decyzję zapisano, ale użytkownik nie ma adresu e-mail.", "warning")
+        return
+    confirmed = decision_result.decision_status == ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value
+    template_type = "agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"
+    template = db.execute(
+        select(MailTemplate)
+        .where(
+            MailTemplate.form_id == form.id,
+            MailTemplate.template_type == template_type,
+            MailTemplate.is_active.is_(True),
+        )
+        .order_by(MailTemplate.id.desc())
+    ).scalars().first()
+    if template is None:
+        template = MailTemplate(
+            form_id=form.id,
+            name="Decyzja dotycząca podpisanej umowy",
+            template_type=template_type,
+            subject="Decyzja dotycząca umowy {{ submission_id }}",
+            content_html=(
+                "<p>Podpisana umowa została potwierdzona przez urzędnika.</p>"
+                if confirmed
+                else "<p>Podpisana umowa wymaga poprawy.</p><p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
+            ),
+            content_text=(
+                "Podpisana umowa została potwierdzona przez urzędnika."
+                if confirmed
+                else "Podpisana umowa wymaga poprawy. Powód: {{ agreement_decision_reason_text }}"
+            ),
+            use_platform_layout=True,
+            is_active=True,
+        )
+    footer = db.execute(
+        select(MailFooter)
+        .where(
+            MailFooter.is_active.is_(True),
+            (MailFooter.form_id == form.id) | (MailFooter.form_id.is_(None)),
+        )
+        .order_by(MailFooter.form_id.desc(), MailFooter.is_default.desc(), MailFooter.id.desc())
+    ).scalars().first()
+    services = current_app.extensions["services"]
+    mail_result = services.mail_dispatch_service.dispatch_to_submission(
+        db=db,
+        form=form,
+        submission=submission,
+        template=template,
+        footer=footer,
+        to_email=submission.email,
+        subject_template=template.subject,
+        event_type=("beneficiary_agreement_confirmed" if confirmed else "beneficiary_agreement_rejected"),
+        sent_by_id=g.admin_user.id,
+        files=services.submission_document_service.list_documents(submission.submission_id),
+        extra_context={
+            "agreement_decision_reason": html.escape(decision_record.justification or ""),
+            "agreement_decision_reason_text": decision_record.justification or "",
+        },
+    )
+    decision_record.email_sent = mail_result.sent
+    decision_record.email_log_id = getattr(mail_result.log, "id", None)
+    db.commit()
+    if not mail_result.sent:
+        flash(
+            "Decyzję zapisano, ale e-mail nie został wysłany: "
+            + (mail_result.error_message or "brak szczegółów błędu"),
+            "warning",
+        )
+
+
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")
 @login_required
 def submission_decision_update(form_id: int, submission_pk: int):
@@ -312,6 +394,9 @@ def submission_decision_update(form_id: int, submission_pk: int):
         if submission.form_slug != form.slug:
             abort(404)
         result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""))
+        if result["invalid_stage"]:
+            flash("Decyzja o wniosku jest dostępna tylko na etapie jego weryfikacji.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         if result["missing_reason"]:
             flash("Podaj powod odrzucenia albo skierowania wniosku do poprawy.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
@@ -324,12 +409,55 @@ def submission_decision_update(form_id: int, submission_pk: int):
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/beneficiary-agreement-decision")
+@login_required
+def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
+    if g.admin_user.role not in AGREEMENT_DECISION_ROLES:
+        abort(403)
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        send_notification = request.form.get("send_notification") == "on"
+        try:
+            result = current_app.extensions["services"].beneficiary_agreement_service.decide(
+                db,
+                submission,
+                decision=request.form.get("agreement_decision", ""),
+                reason=request.form.get("agreement_decision_reason", ""),
+                actor=g.admin_user,
+                email_requested=send_notification,
+            )
+            db.commit()
+        except BeneficiaryAgreementDecisionError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        current_app.logger.info(
+            "beneficiary_agreement_decision public_submission_id=%s internal_submission_id=%s "
+            "previous_status=%s decision_status=%s final_status=%s actor_role=%s",
+            submission.submission_id,
+            submission.id,
+            result.previous_status,
+            result.decision_status,
+            result.final_status,
+            g.admin_user.role,
+        )
+        if send_notification:
+            _notify_beneficiary_agreement_decision(db, form, submission, result)
+        flash("Decyzja dotycząca podpisanej umowy została zapisana.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
 @bp.post("/forms/<int:form_id>/submissions/decisions")
 @login_required
 def submissions_decisions_update(form_id: int):
     saved_count = 0
     skipped_count = 0
     missing_reason_count = 0
+    invalid_stage_count = 0
     schema_warning = False
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
@@ -342,6 +470,9 @@ def submissions_decisions_update(form_id: int):
             decision = request.form.get(f"officer_decision_{submission.id}", "")
             reason = request.form.get(f"officer_decision_reason_{submission.id}", "")
             result = save_officer_decision(db, form, submission, decision, reason, skip_unchanged=True)
+            if result["invalid_stage"]:
+                invalid_stage_count += 1
+                continue
             if result["missing_reason"]:
                 missing_reason_count += 1
                 continue
@@ -357,6 +488,8 @@ def submissions_decisions_update(form_id: int):
             )
         if missing_reason_count:
             flash(f"Pominieto {missing_reason_count} decyzji: podaj powod odrzucenia albo poprawy.", "error")
+        if invalid_stage_count:
+            flash(f"Pominieto {invalid_stage_count} decyzji: etap weryfikacji wniosku jest juz zakonczony.", "warning")
         flash(f"Zapisano decyzje: {saved_count}. Bez zmian: {skipped_count}.", "success" if saved_count else "warning")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
@@ -407,6 +540,14 @@ def delete_submissions_transactionally(db, submissions: list[FormSubmission]) ->
 
 
 def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:
+    if not can_edit_application_decision(submission):
+        return {
+            "invalid_stage": True,
+            "missing_reason": False,
+            "skipped": False,
+            "schema_warning": False,
+            "send_mail": False,
+        }
     decision = str(decision_value or "").strip()
     allowed_decisions = {value for value, _ in OFFICER_DECISIONS}
     if decision not in allowed_decisions:
@@ -414,14 +555,14 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     reason = str(reason_value or "").strip() if decision in {"rejected", "correction"} else ""
     if decision in {"rejected", "correction"} and not reason:
-        return {"missing_reason": True, "skipped": False, "schema_warning": False, "send_mail": False}
+        return {"invalid_stage": False, "missing_reason": True, "skipped": False, "schema_warning": False, "send_mail": False}
 
     previous_decision = submission.officer_decision or ""
     previous_reason = submission.officer_decision_reason or ""
     previous_status = submission.process_status
     public_submission_id = submission.submission_id
     if skip_unchanged and decision == previous_decision and reason == previous_reason:
-        return {"missing_reason": False, "skipped": True, "schema_warning": False, "send_mail": False}
+        return {"invalid_stage": False, "missing_reason": False, "skipped": True, "schema_warning": False, "send_mail": False}
 
     submission.officer_decision = decision
     submission.officer_decision_reason = reason
@@ -484,6 +625,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     return {
         "decision": decision,
+        "invalid_stage": False,
         "missing_reason": False,
         "public_submission_id": public_submission_id,
         "schema_warning": schema_warning,

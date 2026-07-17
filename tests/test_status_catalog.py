@@ -12,12 +12,16 @@ from services.status_catalog import (
 def test_normalize_status_returns_catalog_code_for_legacy_status():
     assert normalize_status("OFFICER_REJECTED") == ProcessStatusCode.REVIEW_REJECTED
     assert normalize_status("AGREEMENT_SIGNED") == ProcessStatusCode.COMPLETED
+    assert normalize_status("AGREEMENT_UPLOADED") == ProcessStatusCode.WAITING_FOR_REVIEW
+    assert normalize_status("BENEFICIARY_AGREEMENT_CONFIRMED") == ProcessStatusCode.COMPLETED
 
 
 def test_status_flags_and_labels_are_shared():
     assert get_status_label("accepted_waiting_for_additional_fields") == "Wniosek zaakceptowany - uzupełnij dodatkowe informacje"
     assert is_rejected_status("OFFICER_REJECTED")
     assert is_final_status("AGREEMENT_SIGNED")
+    assert not is_final_status("AGREEMENT_UPLOADED")
+    assert get_status_label("BENEFICIARY_AGREEMENT_REJECTED") == "Podpisana umowa wymaga poprawy"
 
 
 def test_transition_matrix_for_target_statuses():

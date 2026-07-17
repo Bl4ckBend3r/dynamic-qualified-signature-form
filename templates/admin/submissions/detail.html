@@ -34,19 +34,62 @@
         </form>
     </dialog>
 {% endif %}
-<form method="post" class="form-card">
-    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-    <label>Status procesu</label>
-    <input name="process_status" value="{{ submission.process_status }}" readonly aria-readonly="true">
-    <label>Decyzja urzednika</label>
-    <select name="officer_decision">
-        <option value="" {% if not submission.officer_decision %}selected{% endif %}>Brak</option>
-        <option value="TAK" {% if submission.officer_decision == "TAK" %}selected{% endif %}>TAK</option>
-        <option value="NIE" {% if submission.officer_decision == "NIE" %}selected{% endif %}>NIE</option>
-    </select>
-    <button class="btn-primary" type="submit">Zapisz dane</button>
-    <a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
-</form>
+<h2>Workflow zgłoszenia</h2>
+<div class="admin-workflow-grid">
+    {% for section in workflow_view.sections %}
+        <section class="admin-card admin-workflow-section admin-workflow-section--{{ section.state }}">
+            <h3>{{ section.title }}</h3>
+            <dl class="admin-workflow-summary">
+                <dt>Status</dt><dd>{{ section.status }}</dd>
+                <dt>Ostatnia decyzja</dt><dd>{{ section.decision }}</dd>
+                <dt>Data aktualizacji</dt><dd>{{ section.updated_at or "-" }}</dd>
+                <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
+            </dl>
+
+            {% if section.key == "application" and workflow_view.can_edit_application_decision %}
+                <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                    <input type="hidden" name="next" value="{{ request.path }}">
+                    <label><span>Decyzja o zaakceptowaniu wniosku</span>
+                        <select name="officer_decision" required>
+                            <option value="">Wybierz decyzję</option>
+                            <option value="accepted">Tak</option>
+                            <option value="rejected">Nie</option>
+                            <option value="correction">Do poprawy</option>
+                        </select>
+                    </label>
+                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                        <textarea name="officer_decision_reason" rows="3"></textarea>
+                    </label>
+                    <button class="admin-button" type="submit">Zapisz decyzję</button>
+                </form>
+            {% endif %}
+
+            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin", "form_manager"] %}
+                <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                    <label><span>Umowa podpisana przez beneficjenta</span>
+                        <select name="agreement_decision" required>
+                            <option value="">Wybierz decyzję</option>
+                            <option value="accepted">Tak</option>
+                            <option value="rejected">Nie</option>
+                            <option value="correction">Do poprawy</option>
+                        </select>
+                    </label>
+                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                        <textarea name="agreement_decision_reason" rows="3"></textarea>
+                    </label>
+                    <label class="admin-check">
+                        <input type="checkbox" name="send_notification" checked>
+                        <span>Wyślij powiadomienie do użytkownika</span>
+                    </label>
+                    <button class="admin-button" type="submit">Zapisz decyzję dotyczącą umowy</button>
+                </form>
+            {% endif %}
+        </section>
+    {% endfor %}
+</div>
+<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij e-mail</a></p>
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">

@@ -19,6 +19,7 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 from services.training_service import decimal_price_to_storage, normalize_trainings_config
 from validators.form_config_validator import FormConfigValidator
 
@@ -61,22 +62,49 @@ def normalize_admin_form_definition(form_definition: dict) -> dict:
     return FormConfigService().normalize_form_config(normalized)
 
 
-def validate_admin_form_config(form_definition: dict) -> list[str]:
+def validate_admin_form_config(form_definition: dict, *, validate_visual_workflow: bool = True) -> list[str]:
     try:
         validate_form_definition(form_definition)
     except Exception as exc:
         return [str(exc)]
     validator = FormConfigValidator(skip_template_check=True)
-    return validator.validate(form_definition)
+    errors = validator.validate(form_definition)
+    if validate_visual_workflow:
+        errors.extend(WorkflowConfigValidator().validate(form_definition.get("workflow") or {}))
+    return list(dict.fromkeys(errors))
 
 
-def build_form_definition_from_admin_form(current_definition: dict, form_data) -> dict:
+def build_form_definition_from_admin_form(
+    current_definition: dict,
+    form_data,
+    *,
+    allow_advanced_json: bool = False,
+) -> dict:
     definition = normalize_admin_form_definition(current_definition or {})
-    workflow = parse_workflow_json(form_data.get("workflow_json", ""), definition.get("workflow") or {})
+    normalizer = WorkflowConfigNormalizer()
+    builder_value = str(form_data.get("workflow_builder_json", "") or "").strip()
+    advanced_value = str(form_data.get("workflow_json", "") or "").strip()
+    use_advanced_json = allow_advanced_json and form_data.get("workflow_use_advanced_json") == "on"
+    if use_advanced_json:
+        workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
+    elif builder_value:
+        workflow = parse_workflow_json(builder_value, definition.get("workflow") or {})
+    elif allow_advanced_json and advanced_value and advanced_value not in {"{}", "null"}:
+        # Kompatybilność ze starszym panelem, który wysyłał wyłącznie workflow_json.
+        workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
+    else:
+        workflow = dict(definition.get("workflow") or {})
+    workflow = normalizer.normalize(workflow)
     workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
-    workflow["initial_step"] = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
+    requested_initial_step = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
+    workflow["initial_step"] = requested_initial_step
     workflow["requires_declaration"] = form_data.get("requires_declaration") == "on"
     workflow["requires_contract"] = form_data.get("requires_contract") == "on"
+    workflow["requires_agreement_confirmation"] = form_data.get("requires_agreement_confirmation") == "on"
+    workflow["send_email_notifications"] = form_data.get("send_email_notifications") == "on"
+    workflow["allow_correction"] = form_data.get("allow_correction") == "on"
+    workflow["electronic_signature_required"] = form_data.get("electronic_signature_required") == "on"
+    workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     workflow["contract_generation_mode"] = "per_training"
@@ -95,9 +123,81 @@ def build_form_definition_from_admin_form(current_definition: dict, form_data) -
         or form_data.get("declaration_template_html")
         or form_data.get("contract_template_html")
     )
+    workflow["decision_settings"] = _workflow_decision_settings(form_data, workflow.get("decision_settings") or [])
+    workflow["email_notifications"] = _workflow_email_notifications(form_data, workflow.get("email_notifications") or [])
+    workflow = normalizer.normalize(workflow)
+    if "workflow_initial_step" in form_data:
+        workflow["initial_step"] = requested_initial_step
+    if builder_value or use_advanced_json:
+        workflow_errors = WorkflowConfigValidator().validate(workflow)
+        if workflow_errors:
+            raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
     definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)
+
+
+def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
+    existing_by_id = {str(item.get("id") or ""): dict(item) for item in existing if isinstance(item, dict)}
+    definitions = (
+        ("application_decision", "Decyzja o akceptacji wniosku", ""),
+        ("declaration_confirmation", "Potwierdzenie podpisanej deklaracji", ""),
+        ("agreement_confirmation", "Potwierdzenie podpisanej umowy przez beneficjenta", ""),
+        ("correction_required", "Wymagana korekta", ""),
+        ("application_rejection", "Odrzucenie wniosku", ""),
+        ("agreement_rejection", "Odrzucenie podpisanej umowy", ""),
+    )
+    result = []
+    for decision_id, label, default_step in definitions:
+        current = existing_by_id.get(decision_id, {})
+        result.append(
+            {
+                **current,
+                "id": decision_id,
+                "label": form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label,
+                "step_id": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
+                "values": ["accepted", "rejected", "correction"],
+                "yes_status": form_data.get(
+                    f"decision_{decision_id}_yes_status", current.get("yes_status", "")
+                ).strip(),
+                "no_status": form_data.get(
+                    f"decision_{decision_id}_no_status", current.get("no_status", "")
+                ).strip(),
+                "reason_required": form_data.get(f"decision_{decision_id}_reason_required") == "on",
+                "send_email": form_data.get(f"decision_{decision_id}_send_email") == "on",
+            }
+        )
+    return result
+
+
+def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]:
+    existing_by_id = {str(item.get("id") or ""): dict(item) for item in existing if isinstance(item, dict)}
+    events = (
+        ("application_accepted", "Po akceptacji wniosku"),
+        ("application_rejected", "Po odrzuceniu wniosku"),
+        ("correction_required", "Po wymaganiu korekty"),
+        ("declaration_uploaded", "Po wgraniu deklaracji"),
+        ("beneficiary_agreement_confirmed", "Po potwierdzeniu umowy"),
+        ("beneficiary_agreement_rejected", "Po odrzuceniu umowy"),
+    )
+    result = []
+    for event_id, label in events:
+        current = existing_by_id.get(event_id, {})
+        result.append(
+            {
+                **current,
+                "id": event_id,
+                "label": label,
+                "enabled": form_data.get(f"notification_{event_id}_enabled") == "on",
+                "template_type": form_data.get(
+                    f"notification_{event_id}_template",
+                    current.get("template_type", event_id),
+                ).strip(),
+                "manual_confirmation": form_data.get(f"notification_{event_id}_manual") == "on",
+                "automatic": form_data.get(f"notification_{event_id}_automatic") == "on",
+            }
+        )
+    return result
 
 
 def apply_training_selection_from_admin_form(definition: dict, form_data) -> dict:

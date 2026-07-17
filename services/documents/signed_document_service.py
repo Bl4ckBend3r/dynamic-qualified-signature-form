@@ -109,7 +109,7 @@ class SignedDocumentService:
                 "agreement_signature_valid": "Tak" if all_valid else "",
                 "agreement_signed_filename": signed_filename if all_valid else "",
                 "process_status": (
-                    ProcessStatus.AGREEMENT_SIGNED.value
+                    ProcessStatus.AGREEMENT_UPLOADED.value
                     if all_valid
                     else ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value
                 ),
@@ -122,7 +122,7 @@ class SignedDocumentService:
             "agreement_signature_valid": "Tak" if is_valid else "Nie",
             "agreement_signature_error": signature_error,
             "process_status": (
-                ProcessStatus.AGREEMENT_SIGNED.value
+                ProcessStatus.AGREEMENT_UPLOADED.value
                 if is_valid
                 else ProcessStatus.AGREEMENT_SIGNATURE_INVALID.value
             ),

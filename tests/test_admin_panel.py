@@ -113,6 +113,40 @@ def login(client, email="admin@example.com", password="secret"):
     return client.post("/admin/", data={"email": email, "password": password, "csrf_token": token})
 
 
+def readable_workflow_definition():
+    return {
+        "title": "Workflow Form",
+        "fields": [],
+        "workflow": {
+            "name": "Obsługa wniosku",
+            "initial_step": "submission",
+            "legacy_extension": {"preserve": True},
+            "steps": [
+                {
+                    "id": "submission",
+                    "status": "application_submitted",
+                    "next": "review",
+                },
+                {
+                    "id": "review",
+                    "admin_label": "Ocena wniosku",
+                    "user_label": "Weryfikacja wniosku",
+                    "status": "OFFICER_REVIEW",
+                    "next": "completed",
+                    "requires_officer_action": True,
+                },
+                {
+                    "id": "completed",
+                    "admin_label": "Zakończenie",
+                    "user_label": "Proces zakończony",
+                    "status": "PROCESS_COMPLETED",
+                    "final": True,
+                },
+            ],
+        },
+    }
+
+
 def create_rollback_submission(app, *, form_slug="rollback_form", email="participant@example.com", status="AGREEMENT_WAITING_FOR_SIGNATURE"):
     session_factory = create_session_factory(app.config["DATABASE_URL"])
     with session_factory() as db:
@@ -941,7 +975,8 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
         assert workflow_event.new_status in {"REVIEW_ACCEPTED", "ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS"}
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
     assert "Decyzja urzednika" in html
-    assert "accepted" in html
+    assert "Wniosek zaakceptowany" in html
+    assert f'name="officer_decision_{submission_pk}"' not in html
 
 
 def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_client):
@@ -1077,7 +1112,7 @@ def test_officer_decision_does_not_send_automatic_mail(admin_app, admin_client):
     assert calls == []
     with session_factory() as db:
         decisions = db.query(SubmissionDecision).filter_by(public_submission_id="abc").order_by(SubmissionDecision.id).all()
-        assert [decision.email_requested for decision in decisions] == [False, False]
+        assert [decision.email_requested for decision in decisions] == [False]
 
 
 def test_officer_decision_update_survives_missing_decision_audit_table(admin_app, admin_client):
@@ -3015,3 +3050,321 @@ def test_submission_received_omits_unavailable_logo_without_failing(admin_app):
     assert "Body remains" in sent[0]["html_body"]
     assert "Footer remains" in sent[0]["html_body"]
     assert sent[0]["inline_images"] == []
+
+
+def _create_submission_waiting_for_agreement_review(admin_app, form_slug: str, submission_id: str = "agreement-review"):
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id=submission_id,
+            form_slug=form_slug,
+            form_name="Agreement review",
+            email="beneficiary@example.com",
+            officer_decision="accepted",
+            declaration_required="Tak",
+            declaration_signed="Tak",
+            declaration_signature_valid="Tak",
+            agreement_required="Tak",
+            agreement_generated="Tak",
+            agreement_signed="Tak",
+            agreement_signature_valid="Tak",
+            agreement_signed_filename="agreement-signed.pdf",
+            process_status="AGREEMENT_UPLOADED",
+        )
+        db.add(submission)
+        db.flush()
+        db.add(
+            SubmissionFile(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=form_slug,
+                document_id="agreement",
+                document_type="signed_agreement",
+                filename="agreement-signed.pdf",
+                storage_path=f"output/{form_slug}/agreements/signed/agreement-signed.pdf",
+                signed=True,
+                status="signed",
+            )
+        )
+        db.commit()
+        return submission.id
+
+
+def test_admin_shows_application_decision_only_during_review_and_agreement_decision_after_upload(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="agreement_review_form", name="Agreement review")
+    submission_pk = _create_submission_waiting_for_agreement_review(admin_app, "agreement_review_form")
+    login(admin_client)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}",
+        environ_overrides={"SCRIPT_NAME": "/aplikacja"},
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Decyzja o zaakceptowaniu wniosku" not in html
+    assert "Umowa podpisana przez beneficjenta" in html
+    assert f'/aplikacja/admin/forms/{form_id}/submissions/{submission_pk}/beneficiary-agreement-decision' in html
+
+
+def test_admin_confirms_uploaded_agreement_and_finishes_process(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="agreement_confirm_form", name="Agreement confirm")
+    submission_pk = _create_submission_waiting_for_agreement_review(admin_app, "agreement_confirm_form", "agreement-confirm")
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/beneficiary-agreement-decision",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "agreement_decision": "accepted",
+            "agreement_decision_reason": "",
+        },
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "PROCESS_COMPLETED"
+        decision = db.query(SubmissionDecision).filter_by(public_submission_id="agreement-confirm").one()
+        assert decision.decision == "beneficiary_agreement_accepted"
+        assert decision.target_status == "BENEFICIARY_AGREEMENT_CONFIRMED"
+        assert [event.source for event in db.query(SubmissionWorkflowEvent).order_by(SubmissionWorkflowEvent.id)] == [
+            "beneficiary_agreement_confirmed",
+            "process_completed",
+        ]
+
+
+def test_admin_rejects_uploaded_agreement_with_reason_and_blocks_decision_without_file(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="agreement_reject_form", name="Agreement reject")
+    submission_pk = _create_submission_waiting_for_agreement_review(admin_app, "agreement_reject_form", "agreement-reject")
+    login(admin_client)
+
+    rejected = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/beneficiary-agreement-decision",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "agreement_decision": "rejected",
+            "agreement_decision_reason": "Brakuje podpisu na ostatniej stronie.",
+        },
+    )
+    assert rejected.status_code == 302
+
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "BENEFICIARY_AGREEMENT_REJECTED"
+        assert submission.agreement_signature_valid == ""
+        assert db.query(SubmissionDecision).one().justification == "Brakuje podpisu na ostatniej stronie."
+
+        blocked = FormSubmission(
+            submission_id="agreement-no-file",
+            form_slug="agreement_reject_form",
+            form_name="Agreement reject",
+            agreement_required="Tak",
+            agreement_signature_valid="Tak",
+            process_status="AGREEMENT_UPLOADED",
+        )
+        db.add(blocked)
+        db.commit()
+        blocked_pk = blocked.id
+
+    blocked_response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{blocked_pk}/beneficiary-agreement-decision",
+        data={"csrf_token": admin_csrf(admin_client), "agreement_decision": "accepted"},
+        follow_redirects=True,
+    )
+    assert blocked_response.status_code == 200
+    assert "Nie znaleziono wgranej podpisanej umowy" in blocked_response.get_data(as_text=True)
+
+
+def test_application_decision_backend_rejects_second_acceptance_after_declaration_stage(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="application_locked_form", name="Application locked")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="application-locked",
+            form_slug="application_locked_form",
+            form_name="Application locked",
+            officer_decision="accepted",
+            declaration_required="Tak",
+            declaration_signed="Tak",
+            declaration_signature_valid="Tak",
+            process_status="DECLARATION_SIGNED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": admin_csrf(admin_client), "officer_decision": "accepted"},
+        follow_redirects=True,
+    )
+
+    assert "tylko na etapie jego weryfikacji" in response.get_data(as_text=True)
+    with session_factory() as db:
+        assert db.query(SubmissionDecision).count() == 0
+
+
+def test_form_manager_with_form_permission_can_review_uploaded_agreement(admin_app, admin_client):
+    email = "agreement-manager@example.com"
+    manager_id = create_user(admin_app, email=email, role="form_manager")
+    form_id = create_form(
+        admin_app,
+        slug="agreement_manager_form",
+        name="Agreement manager",
+        user_id=manager_id,
+    )
+    submission_pk = _create_submission_waiting_for_agreement_review(
+        admin_app,
+        "agreement_manager_form",
+        "agreement-manager",
+    )
+    login(admin_client, email=email)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/beneficiary-agreement-decision",
+        data={"csrf_token": admin_csrf(admin_client), "agreement_decision": "accepted"},
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(FormSubmission, submission_pk).process_status == "PROCESS_COMPLETED"
+def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="visual_workflow", definition_json=readable_workflow_definition())
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+
+    for heading in (
+        "Ustawienia procesu",
+        "Etapy workflow",
+        "Decyzje urzędnika",
+        "Dokumenty wymagane w procesie",
+        "Instrukcje dla użytkownika",
+        "Powiadomienia e-mail",
+    ):
+        assert heading in html
+    assert "Wniosek złożony" in html
+    assert "Elementy zaawansowane" in html
+    assert "legacy_extension" in html
+    assert "data-add-workflow-step" in html
+    assert "data-remove-workflow-step" in html
+    assert "data-workflow-step-up" in html
+
+
+def test_regular_admin_does_not_receive_advanced_json_editor(admin_app, admin_client):
+    user_id = create_user(admin_app, role="admin")
+    form_id = create_form(
+        admin_app,
+        slug="regular_admin_workflow",
+        user_id=user_id,
+        definition_json=readable_workflow_definition(),
+    )
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+
+    assert "Tryb zaawansowany — edycja JSON" not in html
+    assert '<textarea name="workflow_json"' not in html
+    assert "Etapy workflow" in html
+
+
+def test_super_admin_receives_collapsed_advanced_json_editor(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="advanced_workflow", definition_json=readable_workflow_definition())
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+
+    assert "Tryb zaawansowany — edycja JSON" in html
+    assert "Zmiana JSON-a może uszkodzić workflow" in html
+    assert '<details class="admin-section workflow-section workflow-json-advanced"' in html
+    assert '<textarea name="workflow_json"' in html
+
+
+def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="save_visual_workflow", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    workflow = readable_workflow_definition()["workflow"]
+    workflow["steps"] = [workflow["steps"][1], workflow["steps"][0], workflow["steps"][2]]
+    workflow["initial_step"] = "submission"
+    workflow["steps"][0]["description"] = "Urzędnik sprawdza dane."
+    workflow["steps"][0]["next_action"] = "Poczekaj na wynik weryfikacji."
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Workflow Form",
+            "slug": "save_visual_workflow",
+            "title": "Workflow Form",
+            "workflow_name": "Obsługa wniosku",
+            "workflow_initial_step": "submission",
+            "workflow_builder_json": json.dumps(workflow, ensure_ascii=False),
+            "instruction_title": "Co dalej?",
+            "user_instruction": "Sprawdź aktualny etap.",
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        assert [step["id"] for step in form.definition_json["workflow"]["steps"]] == [
+            "review", "submission", "completed"
+        ]
+        assert form.definition_json["workflow"]["legacy_extension"] == {"preserve": True}
+        assert form.user_instruction_config["stages"][0]["label"] == "Weryfikacja wniosku"
+        assert form.user_instruction_config["stages"][0]["next_action"] == "Poczekaj na wynik weryfikacji."
+
+
+def test_workflow_builder_rejects_missing_initial_stage(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="invalid_visual_workflow", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Workflow Form",
+            "slug": "invalid_visual_workflow",
+            "title": "Workflow Form",
+            "workflow_name": "Workflow",
+            "workflow_initial_step": "",
+            "workflow_builder_json": json.dumps(readable_workflow_definition()["workflow"]),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Wybierz status początkowy workflow." in response.get_data(as_text=True)
+
+
+def test_workflow_builder_action_respects_application_prefix(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="prefixed_workflow", definition_json=readable_workflow_definition())
+    login(admin_client)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/edit",
+        environ_overrides={"SCRIPT_NAME": "/aplikacja"},
+    )
+    html = response.get_data(as_text=True)
+
+    assert 'href="/aplikacja/admin/forms"' in html
+    assert "Zapisz workflow" in html

@@ -236,7 +236,7 @@ function showUserInstruction(data, submissionId) {
     }
 
     if (formInstructionContent) {
-        formInstructionContent.textContent = instruction;
+        formInstructionContent.innerHTML = instruction;
     }
     if (instructionTitle) {
         instructionTitle.textContent = String(nested?.title || "Instrukcja dalszego postępowania");
@@ -253,7 +253,7 @@ function showUserInstruction(data, submissionId) {
         hideElement(instructionStagesSection);
     }
     if (currentStageDescription) {
-        currentStageDescription.textContent = stageDescription;
+        currentStageDescription.innerHTML = stageDescription;
     }
     if (stageDescription) {
         showElement(currentStageDescriptionSection);
@@ -261,7 +261,7 @@ function showUserInstruction(data, submissionId) {
         hideElement(currentStageDescriptionSection);
     }
     if (nextActionContent) {
-        nextActionContent.textContent = nextAction;
+        nextActionContent.innerHTML = nextAction;
     }
     if (nextAction) {
         showElement(nextActionSection);

@@ -999,8 +999,34 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
     token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     assert "Instrukcja dalszego postępowania" in edit_html
     assert "Dodaj etap" in edit_html
-    assert "Statusy przypisane do etapu" in edit_html
+    assert "Lista zawiera wyłącznie etapy użyte w aktualnym workflow" in edit_html
+    assert "Podgląd instrukcji" in edit_html
     assert "OFFICER_ACCEPTED" in edit_html
+
+    instruction_workflow = {
+        "name": "Instrukcje",
+        "initial_step": "submitted",
+        "steps": [
+            {
+                "id": "submitted",
+                "admin_label": "Etap pierwszy",
+                "user_label": "Etap pierwszy",
+                "status": "FORM_SUBMITTED",
+                "description": "Opis pierwszego etapu",
+                "next_action": "Poczekaj na kontakt.",
+                "next": "accepted",
+            },
+            {
+                "id": "accepted",
+                "admin_label": "Etap zaakceptowany",
+                "user_label": "Etap zaakceptowany",
+                "status": "OFFICER_ACCEPTED",
+                "description": "Opis drugiego etapu",
+                "next_action": "Wykonaj własną czynność.",
+                "final": True,
+            },
+        ],
+    }
 
     response = admin_client.post(
         f"/admin/forms/{form_id}/edit",
@@ -1014,6 +1040,7 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
             "is_public": "on",
             "instruction_title": "Moja instrukcja",
             "user_instruction": "  Pierwszy krok.\nDrugi krok.  ",
+            "workflow_builder_json": json.dumps(instruction_workflow, ensure_ascii=False),
             "user_instruction_config": json.dumps(
                 {
                     "stages": [
@@ -1041,10 +1068,7 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
         assert saved_form.user_instruction == "Pierwszy krok.\nDrugi krok."
         assert saved_form.user_instruction_config["title"] == "Moja instrukcja"
         assert len(saved_form.user_instruction_config["stages"]) == 2
-        assert saved_form.user_instruction_config["stages"][1]["status_codes"] == [
-            "OFFICER_ACCEPTED",
-            "REVIEW_ACCEPTED",
-        ]
+        assert saved_form.user_instruction_config["stages"][1]["status_codes"] == ["OFFICER_ACCEPTED"]
         assert "user_instruction" not in FormSubmission.__table__.columns
     payload = admin_client.get("/api/submissions/instruction-admin/acceptance-status").get_json()
     assert payload["form_instruction"] == "Pierwszy krok.\nDrugi krok."
@@ -2312,6 +2336,12 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     assert "RRRR-MM-DD|" not in edit_html
     assert 'type="date" name="training_date_start_date" value="2026-09-01"' in edit_html
     assert "Dodaj termin" in edit_html
+    assert '<details class="admin-training-item admin-training-card"' in edit_html
+    assert "Rozwiń wszystkie" in edit_html
+    assert "Zwiń wszystkie" in edit_html
+    assert "Mało miejsc" in edit_html
+    assert "Brak terminów" in edit_html
+    assert "data-training-summary-name" in edit_html
 
     declaration_response = admin_client.get("/declaration/training_form/training-declaration-1")
     declaration_html = declaration_response.get_data(as_text=True)
@@ -3249,6 +3279,7 @@ def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app,
     for heading in (
         "Ustawienia procesu",
         "Etapy workflow",
+        "Podgląd workflow",
         "Decyzje urzędnika",
         "Dokumenty wymagane w procesie",
         "Instrukcje dla użytkownika",
@@ -3261,6 +3292,10 @@ def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app,
     assert "data-add-workflow-step" in html
     assert "data-remove-workflow-step" in html
     assert "data-workflow-step-up" in html
+    assert "Pokaż jak zobaczy to użytkownik" in html
+    assert "data-workflow-preview-list" in html
+    assert "function renderWorkflowPreview()" in html
+    assert "Brak kolejnego etapu." in html
 
 
 def test_regular_admin_does_not_receive_advanced_json_editor(admin_app, admin_client):
@@ -3331,6 +3366,72 @@ def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app,
         assert form.definition_json["workflow"]["legacy_extension"] == {"preserve": True}
         assert form.user_instruction_config["stages"][0]["label"] == "Weryfikacja wniosku"
         assert form.user_instruction_config["stages"][0]["next_action"] == "Poczekaj na wynik weryfikacji."
+
+
+def test_workflow_instruction_html_is_sanitized_before_save_and_returned_as_safe_html(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="safe_instruction", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    workflow = readable_workflow_definition()["workflow"]
+    workflow["steps"][0]["description"] = '<p onclick="bad()"><strong>Ważny etap</strong><script>bad()</script></p>'
+    workflow["steps"][0]["next_action"] = '<a href="https://example.com" onclick="bad()">Czytaj dalej</a><img src=x>'
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Safe instruction",
+            "slug": "safe_instruction",
+            "title": "Safe instruction",
+            "workflow_name": "Workflow",
+            "workflow_initial_step": "submission",
+            "workflow_builder_json": json.dumps(workflow, ensure_ascii=False),
+            "instruction_title": "Instrukcja",
+            "user_instruction": '<p><em>Opis</em><iframe src="x">zło</iframe></p>',
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        step = form.definition_json["workflow"]["steps"][0]
+        assert step["description"] == "<p><strong>Ważny etap</strong></p>"
+        assert step["next_action"] == '<a href="https://example.com" target="_blank" rel="noopener noreferrer">Czytaj dalej</a>'
+        assert form.user_instruction == "<p><em>Opis</em></p>"
+        db.add(FormSubmission(submission_id="safe-html-submission", form_slug="safe_instruction", form_name="Safe", process_status="application_submitted"))
+        db.commit()
+    payload = admin_client.get("/api/submissions/safe-html-submission/acceptance-status").get_json()
+    assert payload["instruction"]["description"] == "<p><em>Opis</em></p>"
+    assert "onclick" not in payload["instruction"]["current_stage_description"]
+    assert "<script" not in payload["instruction"]["current_stage_description"]
+
+
+def test_removed_workflow_instruction_is_shown_as_inactive(admin_app, admin_client):
+    create_user(admin_app)
+    definition = readable_workflow_definition()
+    form_id = create_form(admin_app, slug="inactive_instruction", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        form.user_instruction_config = {
+            "title": "Instrukcja",
+            "stages": [
+                {"key": "submission", "label": "Wniosek", "status_codes": ["application_submitted"]},
+                {"key": "removed", "label": "Usunięta instrukcja", "status_codes": ["REMOVED_STATUS"], "description": "Archiwalna treść"},
+            ],
+        }
+        db.commit()
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=instructions").get_data(as_text=True)
+
+    assert "Instrukcje nieaktywne" in html
+    assert "Usunięta instrukcja" in html
+    assert "Ten etap nie występuje już w workflow." in html
+    assert "data-workflow-instruction-list" in html
 
 
 def test_workflow_builder_rejects_missing_initial_stage(admin_app, admin_client):

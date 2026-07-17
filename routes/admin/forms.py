@@ -18,7 +18,11 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
-from services.process_instruction_service import instruction_status_options, normalize_instruction_config
+from services.process_instruction_service import (
+    instruction_status_options,
+    normalize_instruction_config,
+    reconcile_instruction_config,
+)
 from services.site_document_service import save_document_upload, update_form_regulation_from_upload
 from services.upload_validation import UploadValidationError
 from services.workflow_config_service import (
@@ -190,6 +194,7 @@ def form_edit(form_id: int):
                 instruction_config = _instruction_config_from_admin_form(
                     request.form,
                     existing=form.user_instruction_config,
+                    workflow=(form.definition_json or {}).get("workflow") or {},
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
                 updated_definition = build_form_definition_from_admin_form(
@@ -208,6 +213,7 @@ def form_edit(form_id: int):
                 workflow_context = _workflow_editor_context(
                     updated_definition.get("workflow") or {},
                     workflow_json=request.form.get("workflow_json"),
+                    instruction_config=form.user_instruction_config,
                 )
                 return render_template(
                     "admin/forms/edit.html",
@@ -247,7 +253,9 @@ def form_edit(form_id: int):
                     instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
                     active_tab=active_tab,
-                    **_workflow_editor_context(updated_definition.get("workflow") or {}),
+                    **_workflow_editor_context(
+                        updated_definition.get("workflow") or {}, instruction_config=instruction_config
+                    ),
                 ), 400
             form.name = request.form.get("name", "").strip() or form.name
             form.title = request.form.get("title", "").strip() or form.title
@@ -268,7 +276,10 @@ def form_edit(form_id: int):
                     validation_errors=[],
                     active_tab="basic",
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
-                    **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
+                    **_workflow_editor_context(
+                        (form.definition_json or {}).get("workflow") or {},
+                        instruction_config=form.user_instruction_config,
+                    ),
                 ), 400
             form.user_instruction = instruction_config["description"] or None
             form.user_instruction_config = instruction_config
@@ -316,7 +327,10 @@ def form_edit(form_id: int):
                         instruction_statuses=instruction_statuses,
                         validation_errors=[],
                         active_tab="documents",
-                        **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
+                        **_workflow_editor_context(
+                            (form.definition_json or {}).get("workflow") or {},
+                            instruction_config=form.user_instruction_config,
+                        ),
                     ), 400
                 regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
                 update_form_regulation_from_upload(regulation, metadata, uploaded_by_user_id=g.admin_user.id)
@@ -347,7 +361,10 @@ def form_edit(form_id: int):
             instruction_statuses=instruction_statuses,
             validation_errors=[],
             active_tab=active_tab,
-            **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
+            **_workflow_editor_context(
+                (form.definition_json or {}).get("workflow") or {},
+                instruction_config=form.user_instruction_config,
+            ),
         )
 
 
@@ -388,6 +405,7 @@ def _instruction_config_from_admin_form(
     form_data,
     *,
     existing: dict | None = None,
+    workflow: dict | None = None,
     allow_advanced_json: bool = False,
 ) -> dict:
     workflow_builder_json = (
@@ -413,12 +431,12 @@ def _instruction_config_from_admin_form(
             }
             for index, step in enumerate(normalized_workflow["steps"], start=1)
         ]
-        return normalize_instruction_config(
-            {
-                "title": form_data.get("instruction_title", ""),
-                "description": form_data.get("user_instruction", ""),
-                "stages": stages,
-            }
+        return reconcile_instruction_config(
+            existing,
+            normalized_workflow,
+            active_stages=stages,
+            title=form_data.get("instruction_title", ""),
+            description=form_data.get("user_instruction", ""),
         )
     raw_json = form_data.get("user_instruction_config")
     if raw_json is None:
@@ -428,16 +446,18 @@ def _instruction_config_from_admin_form(
         if not isinstance(parsed, dict):
             raise ValueError("Niepoprawna konfiguracja instrukcji.")
         stages = parsed.get("stages", [])
-    return normalize_instruction_config(
-        {
-            "title": form_data.get("instruction_title", ""),
-            "description": form_data.get("user_instruction", ""),
-            "stages": stages,
-        }
+    normalized = normalize_instruction_config(
+        {"title": form_data.get("instruction_title", ""), "description": form_data.get("user_instruction", ""), "stages": stages}
     )
+    return reconcile_instruction_config(normalized, workflow or {})
 
 
-def _workflow_editor_context(workflow: dict, *, workflow_json: str | None = None) -> dict:
+def _workflow_editor_context(
+    workflow: dict,
+    *,
+    workflow_json: str | None = None,
+    instruction_config: dict | None = None,
+) -> dict:
     normalizer = WorkflowConfigNormalizer()
     normalized = normalizer.normalize(workflow)
     existing_statuses = [step.get("status") for step in normalized.get("steps", [])]
@@ -448,6 +468,7 @@ def _workflow_editor_context(workflow: dict, *, workflow_json: str | None = None
         "workflow_json": workflow_json if workflow_json is not None else format_json(normalized),
         "workflow_statuses": workflow_status_options(existing_statuses),
         "workflow_advanced_elements": normalizer.advanced_elements(normalized),
+        "instruction_config_view": reconcile_instruction_config(instruction_config, normalized),
     }
 
 

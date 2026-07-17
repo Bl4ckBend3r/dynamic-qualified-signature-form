@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from services.instruction_html_service import sanitize_instruction_html
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
@@ -167,8 +168,8 @@ class WorkflowConfigNormalizer:
                 "admin_label": label,
                 "user_label": _modern_workflow_label(str(item.get("user_label") or label).strip()),
                 "status": status,
-                "description": str(item.get("description") or "").strip(),
-                "next_action": str(item.get("next_action") or "").strip(),
+                "description": sanitize_instruction_html(item.get("description")),
+                "next_action": sanitize_instruction_html(item.get("next_action")),
                 "next": str(item.get("next") or "").strip(),
                 "final": bool(item.get("final", item.get("type") == "end" and step_id == "completed")),
                 "rejected": bool(item.get("rejected", "reject" in step_id)),

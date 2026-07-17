@@ -86,7 +86,7 @@
         <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_mail_settings_test', form_id=form.id) }}" formmethod="post">Testuj połączenie</button>
     </div>
     </section>
-    {% set instruction_config = form.user_instruction_config or {} %}
+    {% set instruction_config = instruction_config_view if instruction_config_view is defined else (form.user_instruction_config or {}) %}
     {% if false %}
     <div class="admin-section admin-instruction-editor" data-instruction-editor data-legacy-editor hidden>
         <h2>Instrukcja dalszego postępowania</h2>
@@ -265,8 +265,8 @@
                             <label><span>Nazwa dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required></label>
                             <label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
                             <label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label>
-                            <label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description rows="3">{{ step.get('description') }}</textarea></label>
-                            <label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action rows="3">{{ step.get('next_action') }}</textarea></label>
+                            <label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description data-rich-text rows="3">{{ step.get('description') }}</textarea></label>
+                            <label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action data-rich-text rows="3">{{ step.get('next_action') }}</textarea></label>
                         </div>
                         <div class="workflow-stage-options">
                             <label class="admin-check"><input type="checkbox" data-step-user-action {% if step.get('requires_user_action') %}checked{% endif %}><span>Wymaga akcji użytkownika</span></label>
@@ -278,6 +278,19 @@
                 {% endfor %}
             </div>
             <p class="workflow-empty" data-workflow-empty {% if workflow.get('steps') %}hidden{% endif %}>Nie dodano jeszcze żadnego etapu.</p>
+        </section>
+
+        <section class="admin-section workflow-section admin-form-tab-panel workflow-preview" data-form-tab-panel="workflow" data-workflow-preview {% if active_tab != 'workflow' %}hidden{% endif %}>
+            <div class="admin-section-heading">
+                <div><h2>Podgląd workflow</h2><p>Podgląd odzwierciedla aktualnie edytowane etapy, przejścia, dokumenty, decyzje, wiadomości i instrukcje.</p></div>
+                <div class="admin-actions">
+                    <label class="admin-check compact"><input type="checkbox" data-workflow-user-preview><span>Pokaż jak zobaczy to użytkownik</span></label>
+                    <button type="button" class="admin-button-secondary" data-refresh-workflow-preview>Odśwież podgląd</button>
+                </div>
+            </div>
+            <div class="workflow-preview-errors" data-workflow-preview-errors hidden></div>
+            <ol class="workflow-preview-list" data-workflow-preview-list></ol>
+            <p class="workflow-empty" data-workflow-preview-empty hidden>Brak etapów do wyświetlenia.</p>
         </section>
 
         {% set decision_definitions = [
@@ -338,14 +351,32 @@
             </div>
         </section>
 
-        <section class="admin-section workflow-section admin-form-tab-panel" id="form-tab-instructions" role="tabpanel" data-form-tab-panel="instructions" {% if active_tab != 'instructions' %}hidden{% endif %}>
-            <div class="admin-section-heading"><div><h2>Instrukcje dla użytkownika</h2><p>Opis i komunikat „Co dalej?” dla poszczególnych etapów edytujesz bezpośrednio na kartach etapów.</p></div></div>
-            <p class="workflow-help">Statusy przypisane do etapu wybierasz na jego karcie w polu „Status etapu”.</p>
+        <section class="admin-section workflow-section admin-form-tab-panel" id="form-tab-instructions" role="tabpanel" data-form-tab-panel="instructions" data-active-instruction-editor {% if active_tab != 'instructions' %}hidden{% endif %}>
+            <div class="admin-section-heading"><div><h2>Instrukcje dla użytkownika</h2><p>Lista zawiera wyłącznie etapy użyte w aktualnym workflow. Zmiany są automatycznie synchronizowane z kartami workflow.</p></div></div>
             <div class="admin-form-grid">
                 <label class="admin-form-wide"><span>Tytuł okna instrukcji</span><input id="instruction_title" name="instruction_title" value="{{ instruction_config.get('title', '') }}" placeholder="Instrukcja dalszego postępowania"></label>
-                <label class="admin-form-wide"><span>Ogólny tekst instrukcji</span><textarea id="user_instruction" name="user_instruction" rows="4">{{ instruction_config.get('description') or form.user_instruction or '' }}</textarea></label>
+                <label class="admin-form-wide"><span>Ogólny tekst instrukcji</span><textarea id="user_instruction" name="user_instruction" data-rich-text rows="4">{{ instruction_config.get('description') or form.user_instruction or '' }}</textarea></label>
             </div>
-            <div class="workflow-instruction-preview"><strong>Aktualny etap będzie pogrubiony</strong><p>Okno instrukcji dobiera etap na podstawie statusu zgłoszenia i pokaże opis oraz komunikat „Co dalej?”.</p></div>
+            <div class="workflow-linked-instructions" data-workflow-instruction-list></div>
+            <p class="workflow-empty" data-workflow-instruction-empty hidden>Workflow nie zawiera etapów, dla których można zdefiniować instrukcję.</p>
+            {% set inactive_instructions = instruction_config.get('stages', [])|rejectattr('active')|list %}
+            <section class="workflow-inactive-instructions" data-inactive-instructions {% if not inactive_instructions %}hidden{% endif %}>
+                <h3>Instrukcje nieaktywne</h3>
+                <p>Te instrukcje zachowano, ale nie są używane w publicznym statusie użytkownika.</p>
+                {% for stage in inactive_instructions %}
+                    <article class="workflow-inactive-instruction" data-inactive-instruction>
+                        <strong>{{ stage.get('label') }}</strong>
+                        <span class="workflow-warning-badge">Ten etap nie występuje już w workflow.</span>
+                        {% if stage.get('description') %}<div class="instruction-safe-html">{{ stage.get('description')|safe }}</div>{% endif %}
+                    </article>
+                {% endfor %}
+            </section>
+            <section class="admin-instruction-preview" aria-label="Podgląd instrukcji" data-live-instruction-preview>
+                <div class="admin-section-heading"><div><h3>Podgląd instrukcji</h3><p>Tak sformatowane treści zobaczy użytkownik.</p></div><button type="button" class="admin-button-secondary" data-refresh-instruction-preview>Odśwież podgląd</button></div>
+                <h4 data-live-instruction-title></h4>
+                <div class="admin-instruction-preview__text instruction-safe-html" data-live-instruction-general></div>
+                <div data-live-instruction-stages></div>
+            </section>
         </section>
 
         {% set notification_definitions = [
@@ -414,7 +445,7 @@
             <script type="application/json" data-workflow-step-source>{}</script><input type="hidden" data-step-id value="">
             <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-workflow-step-up>↑</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down>↓</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
             <div class="workflow-stage-badges" data-step-badges></div>
-            <div class="workflow-stage-fields"><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label><label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description rows="3"></textarea></label><label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action rows="3"></textarea></label></div>
+            <div class="workflow-stage-fields"><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label><label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description data-rich-text rows="3"></textarea></label><label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action data-rich-text rows="3"></textarea></label></div>
             <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div>
         </article>
     </template>
@@ -496,15 +527,26 @@
             <label><span>Waluta</span><input name="training_selection_currency" value="{{ training_field.get('currency', 'PLN') if training_field else 'PLN' }}"></label>
             <label class="admin-check"><input type="checkbox" name="training_selection_required" {% if not training_field or training_field.get('required', true) %}checked{% endif %}><span>Wymagany wybór co najmniej jednego szkolenia</span></label>
         </div>
-        <div class="admin-training-list" data-training-list>
+        <div class="admin-training-list-toolbar">
+            <button class="admin-button-secondary compact" type="button" data-expand-all-trainings>Rozwiń wszystkie</button>
+            <button class="admin-button-secondary compact" type="button" data-collapse-all-trainings>Zwiń wszystkie</button>
+        </div>
+        <div class="admin-training-list" data-training-list data-training-storage-key="form-{{ form.id }}-training-cards" data-training-server-errors="{{ validation_errors|join(' ') }}">
             {% for item in training_catalog %}
                 {% set training_index = loop.index0 %}
-                <section class="admin-training-item" data-training-card>
+                <details class="admin-training-item admin-training-card" data-training-card data-training-key="{{ item.get('id') or 'training-' ~ loop.index }}" {% if training_catalog|length <= 1 %}open{% endif %}>
                     <input type="hidden" name="training_item_id" value="{{ item.get('id', '') }}">
-                    <div class="admin-training-item-heading">
-                        <h3>Szkolenie <span data-training-number>{{ loop.index }}</span></h3>
-                        <button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button>
-                    </div>
+                    <summary class="admin-training-summary">
+                        <span class="admin-training-summary__title"><span class="admin-training-number">Szkolenie <span data-training-number>{{ loop.index }}</span></span><strong data-training-summary-name>{{ item.get('name') or 'Bez nazwy' }}</strong></span>
+                        <span class="admin-training-summary__facts"><span data-training-summary-price>{{ item.get('price', '—') }} PLN</span><span><span data-training-summary-capacity>{{ item.get('capacity', 0) }}</span> miejsc</span><span><span data-training-summary-dates>{{ item.get('dates', [])|length }}</span> terminów</span></span>
+                        <span class="admin-training-summary__badges" data-training-summary-badges>
+                            <span class="training-badge {{ 'is-active' if item.get('active', true) else 'is-inactive' }}">{{ 'Aktywne' if item.get('active', true) else 'Nieaktywne' }}</span>
+                            {% if (item.get('capacity') or 0)|int == 0 %}<span class="training-badge is-warning">Brak miejsc</span>{% elif (item.get('capacity') or 0)|int <= 5 %}<span class="training-badge is-warning">Mało miejsc</span>{% endif %}
+                            {% if not item.get('dates') %}<span class="training-badge is-warning">Brak terminów</span>{% endif %}
+                        </span>
+                    </summary>
+                    <div class="admin-training-card__body">
+                    <div class="admin-training-item-heading"><h3>Szczegóły szkolenia</h3><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button></div>
                     <div class="admin-training-fields">
                         <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ item.get('sort_order', loop.index) }}" min="0"></label>
                         <label class="admin-training-name"><span>Nazwa szkolenia</span><input name="training_item_name" value="{{ item.get('name', '') }}" required></label>
@@ -532,7 +574,8 @@
                         </div>
                         <button class="admin-button-secondary" type="button" data-add-training-date>Dodaj termin</button>
                     </div>
-                </section>
+                    </div>
+                </details>
             {% endfor %}
         </div>
         <p class="admin-training-empty" data-training-empty {% if training_catalog %}hidden{% endif %}>Brak skonfigurowanych szkoleń.</p>
@@ -541,12 +584,11 @@
 
     </section>
     <template data-training-card-template>
-        <section class="admin-training-item" data-training-card>
+        <details class="admin-training-item admin-training-card" data-training-card open>
             <input type="hidden" name="training_item_id" value="">
-            <div class="admin-training-item-heading">
-                <h3>Szkolenie <span data-training-number></span></h3>
-                <button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button>
-            </div>
+            <summary class="admin-training-summary"><span class="admin-training-summary__title"><span class="admin-training-number">Szkolenie <span data-training-number></span></span><strong data-training-summary-name>Nowe szkolenie</strong></span><span class="admin-training-summary__facts"><span data-training-summary-price>— PLN</span><span><span data-training-summary-capacity>0</span> miejsc</span><span><span data-training-summary-dates>0</span> terminów</span></span><span class="admin-training-summary__badges" data-training-summary-badges></span></summary>
+            <div class="admin-training-card__body">
+            <div class="admin-training-item-heading"><h3>Szczegóły szkolenia</h3><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button></div>
             <div class="admin-training-fields">
                 <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="" min="0"></label>
                 <label class="admin-training-name"><span>Nazwa szkolenia</span><input name="training_item_name" value="" required></label>
@@ -561,7 +603,8 @@
                 <div class="admin-training-dates" data-training-dates></div>
                 <button class="admin-button-secondary" type="button" data-add-training-date>Dodaj termin</button>
             </div>
-        </section>
+            </div>
+        </details>
     </template>
 
     <template data-training-date-template>
@@ -578,7 +621,7 @@
     </template>
     <div class="admin-form-actions admin-form-tab-save">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
-        <button class="admin-button" type="submit" title="Zapisz workflow i pozostałe zmiany">Zapisz zmiany</button>
+        <button class="admin-button" type="submit" data-save-form title="Zapisz workflow i pozostałe zmiany">Zapisz zmiany</button>
     </div>
 </form>
 <script>
@@ -749,6 +792,70 @@ const workflowBuilderInput = workflowBuilder?.querySelector("[data-workflow-buil
 const workflowInitialSelect = workflowBuilder?.querySelector("[data-workflow-initial]");
 let workflowSource = {{ workflow_builder|tojson }};
 
+function sanitizeInstructionPreview(value) {
+    const template = document.createElement("template");
+    template.innerHTML = String(value || "");
+    const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "A"]);
+    const dropped = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "SVG", "MATH", "TEMPLATE"]);
+    function clean(node) {
+        Array.from(node.children).forEach((child) => {
+            if (dropped.has(child.tagName)) { child.remove(); return; }
+            clean(child);
+            if (!allowed.has(child.tagName)) { child.replaceWith(...child.childNodes); return; }
+            const rawHref = child.tagName === "A" ? String(child.getAttribute("href") || "").trim() : "";
+            Array.from(child.attributes).forEach((attribute) => child.removeAttribute(attribute.name));
+            if (child.tagName === "A") {
+                let href = rawHref;
+                try {
+                    const parsed = new URL(rawHref, window.location.origin);
+                    if (!["http:", "https:", "mailto:", "tel:"].includes(parsed.protocol) && !rawHref.startsWith("/") && !rawHref.startsWith("#")) href = "";
+                } catch (_) { href = ""; }
+                if (href) child.setAttribute("href", href);
+                child.setAttribute("rel", "noopener noreferrer");
+                if (/^https?:/i.test(href)) child.setAttribute("target", "_blank");
+            }
+        });
+    }
+    clean(template.content);
+    return template.innerHTML;
+}
+
+function insertInstructionMarkup(textarea, tag, attributes = "") {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const selected = textarea.value.slice(start, end) || (tag === "a" ? "tekst linku" : "tekst");
+    const markup = tag === "br" ? "<br>" : `<${tag}${attributes}>${selected}</${tag}>`;
+    textarea.setRangeText(markup, start, end, "end");
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+    textarea.focus();
+}
+
+function enhanceRichTextFields(root = document) {
+    root.querySelectorAll("textarea[data-rich-text]:not([data-rich-text-ready])").forEach((textarea) => {
+        textarea.dataset.richTextReady = "1";
+        const toolbar = document.createElement("div");
+        toolbar.className = "instruction-format-toolbar";
+        const actions = [
+            ["strong", "B", "Pogrubienie"], ["em", "I", "Kursywa"], ["ul", "• Lista", "Lista punktowana"],
+            ["ol", "1. Lista", "Lista numerowana"], ["p", "Akapit", "Akapit"], ["br", "↵", "Nowa linia"],
+        ];
+        actions.forEach(([tag, label, title]) => {
+            const button = document.createElement("button");
+            button.type = "button"; button.className = "instruction-format-button"; button.textContent = label; button.title = title;
+            button.addEventListener("click", () => insertInstructionMarkup(textarea, tag));
+            toolbar.appendChild(button);
+        });
+        const link = document.createElement("button");
+        link.type = "button"; link.className = "instruction-format-button"; link.textContent = "Link"; link.title = "Dodaj hiperłącze";
+        link.addEventListener("click", () => {
+            const href = window.prompt("Adres linku (https://…)", "https://");
+            if (href) insertInstructionMarkup(textarea, "a", ` href="${String(href).replace(/[\"<>]/g, "")}"`);
+        });
+        toolbar.appendChild(link);
+        textarea.before(toolbar);
+    });
+}
+
 function workflowStepSource(card) {
     try { return JSON.parse(card.querySelector("[data-workflow-step-source]")?.textContent || "{}"); }
     catch (_) { return {}; }
@@ -818,8 +925,134 @@ function collectWorkflow() {
         ...workflowSource,
         name: workflowBuilder?.querySelector('[name="workflow_name"]')?.value.trim() || "Workflow",
         initial_step: workflowInitialSelect?.value || "",
+        requires_declaration: Boolean(workflowBuilder?.querySelector('[name="requires_declaration"]')?.checked),
+        requires_contract: Boolean(workflowBuilder?.querySelector('[name="requires_contract"]')?.checked),
+        requires_agreement_confirmation: Boolean(workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]')?.checked),
         steps,
     };
+}
+
+function workflowStepType(step) {
+    if (step.final) return "Etap końcowy";
+    if (step.rejected) return "Odrzucenie";
+    if (String(step.type || "").includes("correction")) return "Korekta";
+    if (step.requires_user_action) return "Akcja użytkownika";
+    if (step.requires_officer_action || step.type === "manual_decision") return "Akcja urzędnika";
+    return "Etap automatyczny";
+}
+
+function currentDecisionSettings() {
+    return Array.from(document.querySelectorAll(".workflow-option-card")).map((card) => ({
+        label: card.querySelector('input[name$="_label"]')?.value.trim() || card.querySelector("h3")?.textContent.trim() || "Decyzja urzędnika",
+        step_id: card.querySelector('select[name$="_step"]')?.value || "",
+        yes_status: card.querySelector('select[name$="_yes_status"]')?.value || "",
+        no_status: card.querySelector('select[name$="_no_status"]')?.value || "",
+    })).filter((item) => item.step_id);
+}
+
+function emailsForWorkflowStep(step) {
+    const id = String(step.id || "");
+    const status = String(step.status || "");
+    return Array.from(document.querySelectorAll(".workflow-notification-row")).filter((row) => {
+        if (!row.querySelector('input[name$="_enabled"]')?.checked) return false;
+        const name = row.querySelector('input[name$="_enabled"]')?.name || "";
+        if (name.includes("declaration")) return id.includes("declaration") || status.includes("DECLARATION");
+        if (name.includes("agreement")) return id.includes("agreement") || status.includes("AGREEMENT");
+        return id.includes("review") || status.includes("OFFICER") || status.includes("REVIEW");
+    }).map((row) => row.querySelector("h3")?.textContent.trim() || "Powiadomienie e-mail");
+}
+
+function renderWorkflowPreview() {
+    const preview = document.querySelector("[data-workflow-preview]");
+    const list = preview?.querySelector("[data-workflow-preview-list]");
+    if (!preview || !list) return;
+    const config = collectWorkflow();
+    const userMode = Boolean(preview.querySelector("[data-workflow-user-preview]")?.checked);
+    preview.classList.toggle("is-user-mode", userMode);
+    const ids = new Set(config.steps.map((step) => step.id));
+    const labels = new Map(config.steps.map((step) => [step.id, step.admin_label || "Etap bez nazwy"]));
+    const decisions = currentDecisionSettings();
+    const errors = [];
+    if (!config.steps.length) errors.push("Workflow nie zawiera żadnego etapu.");
+    if (config.initial_step && !ids.has(config.initial_step)) errors.push("Status początkowy prowadzi do nieistniejącego etapu.");
+    if (config.requires_contract && !config.steps.some((step) => String(step.status).startsWith("AGREEMENT_") || ["agreement", "training_agreement"].includes(step.document_id))) {
+        errors.push("Etap umowy jest wymagany, ale nie został dodany.");
+    }
+    if (document.querySelector("[data-inactive-instruction]")) errors.push("Instrukcja przypisana do etapu spoza workflow została oznaczona jako nieaktywna.");
+    list.replaceChildren();
+    config.steps.forEach((step, index) => {
+        const localErrors = [];
+        const stepDecisions = Object.entries(step.decisions || {});
+        if (!step.final && !step.rejected && !step.next && !stepDecisions.length) localErrors.push("Brak kolejnego etapu.");
+        if (step.next && !ids.has(step.next)) localErrors.push("Przejście prowadzi do nieistniejącego etapu.");
+        stepDecisions.forEach(([choice, target]) => { if (target && !ids.has(target)) localErrors.push(`Decyzja „${choice}” prowadzi do nieistniejącego etapu.`); });
+        errors.push(...localErrors.map((error) => `${step.admin_label || step.id}: ${error}`));
+
+        const item = document.createElement("li");
+        item.className = `workflow-preview-step${localErrors.length ? " has-error" : ""}`;
+        const card = document.createElement("article");
+        const heading = document.createElement("div"); heading.className = "workflow-preview-step__heading";
+        const title = document.createElement("h3"); title.textContent = `${index + 1}. ${userMode ? step.user_label : step.admin_label}`;
+        heading.appendChild(title);
+        if (!userMode) {
+            const badge = document.createElement("span"); badge.className = "workflow-status-badge"; badge.textContent = workflowStepType(step); heading.appendChild(badge);
+        }
+        card.appendChild(heading);
+        if (!userMode) {
+            const userLabel = document.createElement("p"); userLabel.innerHTML = `<strong>Nazwa dla użytkownika:</strong> ${String(step.user_label || "—").replace(/[<>&]/g, "")}`; card.appendChild(userLabel);
+            const technical = document.createElement("code"); technical.textContent = step.status || "Brak statusu"; card.appendChild(technical);
+            if (step.document_id) { const doc = document.createElement("p"); doc.textContent = `Dokument: ${step.document_id}`; card.appendChild(doc); }
+            emailsForWorkflowStep(step).forEach((label) => { const mail = document.createElement("p"); mail.textContent = `E-mail: ${label}`; card.appendChild(mail); });
+            decisions.filter((decision) => decision.step_id === step.id).forEach((decision) => { const row = document.createElement("p"); row.textContent = `Decyzja: ${decision.label} — Tak: ${decision.yes_status || "bez zmiany"}, Nie: ${decision.no_status || "bez zmiany"}`; card.appendChild(row); });
+            stepDecisions.forEach(([choice, target]) => { const row = document.createElement("p"); row.textContent = `${choice} → ${labels.get(target) || target || "brak celu"}`; card.appendChild(row); });
+        }
+        if (step.description) { const description = document.createElement("div"); description.className = "instruction-safe-html"; description.innerHTML = sanitizeInstructionPreview(step.description); card.appendChild(description); }
+        if (step.next_action) { const nextAction = document.createElement("div"); nextAction.className = "workflow-preview-next instruction-safe-html"; nextAction.innerHTML = sanitizeInstructionPreview(step.next_action); card.appendChild(nextAction); }
+        if (!userMode && step.next) { const transition = document.createElement("p"); transition.className = "workflow-preview-transition"; transition.textContent = `→ ${labels.get(step.next) || step.next}`; card.appendChild(transition); }
+        localErrors.forEach((error) => { const warning = document.createElement("p"); warning.className = "workflow-preview-error"; warning.textContent = error; card.appendChild(warning); });
+        item.appendChild(card); list.appendChild(item);
+    });
+    const errorBox = preview.querySelector("[data-workflow-preview-errors]");
+    if (errorBox) { errorBox.hidden = !errors.length; errorBox.replaceChildren(...errors.map((error) => { const p = document.createElement("p"); p.textContent = error; return p; })); }
+    const empty = preview.querySelector("[data-workflow-preview-empty]"); if (empty) empty.hidden = config.steps.length > 0;
+}
+
+function renderLinkedInstructionEditors() {
+    const holder = document.querySelector("[data-workflow-instruction-list]");
+    const empty = document.querySelector("[data-workflow-instruction-empty]");
+    if (!holder) return;
+    const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
+    holder.replaceChildren();
+    cards.forEach((workflowCard, index) => {
+        const article = document.createElement("article"); article.className = "workflow-linked-instruction"; article.dataset.instructionStepId = workflowCard.querySelector("[data-step-id]")?.value || "";
+        const heading = document.createElement("div"); heading.className = "workflow-linked-instruction__heading";
+        const title = document.createElement("h3"); title.textContent = `${index + 1}. ${workflowCard.querySelector("[data-step-user-label]")?.value || "Etap bez nazwy"}`;
+        const status = document.createElement("code"); status.textContent = workflowCard.querySelector("[data-step-status]")?.value || "Brak statusu";
+        heading.append(title, status); article.appendChild(heading);
+        [["Opis etapu", "description", "[data-step-description]"], ["Co użytkownik ma zrobić dalej?", "next-action", "[data-step-next-action]"]].forEach(([labelText, key, selector]) => {
+            const label = document.createElement("label"); const span = document.createElement("span"); span.textContent = labelText;
+            const textarea = document.createElement("textarea"); textarea.rows = 3; textarea.dataset.richText = ""; textarea.dataset.linkedInstruction = key; textarea.value = workflowCard.querySelector(selector)?.value || "";
+            label.append(span, textarea); article.appendChild(label);
+        });
+        holder.appendChild(article);
+    });
+    if (empty) empty.hidden = cards.length > 0;
+    enhanceRichTextFields(holder);
+    renderInstructionPreview();
+}
+
+function renderInstructionPreview() {
+    const preview = document.querySelector("[data-live-instruction-preview]");
+    if (!preview) return;
+    const title = preview.querySelector("[data-live-instruction-title]"); if (title) title.textContent = document.getElementById("instruction_title")?.value || "Instrukcja dalszego postępowania";
+    const general = preview.querySelector("[data-live-instruction-general]"); if (general) general.innerHTML = sanitizeInstructionPreview(document.getElementById("user_instruction")?.value || "");
+    const stages = preview.querySelector("[data-live-instruction-stages]"); stages?.replaceChildren();
+    document.querySelectorAll("[data-workflow-instruction-list] [data-instruction-step-id]").forEach((card) => {
+        const box = document.createElement("article"); box.className = "instruction-preview-stage";
+        const heading = document.createElement("strong"); heading.textContent = card.querySelector("h3")?.textContent || "Etap"; box.appendChild(heading);
+        card.querySelectorAll("textarea").forEach((textarea) => { if (!textarea.value.trim()) return; const content = document.createElement("div"); content.className = "instruction-safe-html"; content.innerHTML = sanitizeInstructionPreview(textarea.value); box.appendChild(content); });
+        stages?.appendChild(box);
+    });
 }
 
 function syncWorkflowBuilder() {
@@ -854,6 +1087,8 @@ function syncWorkflowBuilder() {
     const empty = workflowBuilder?.querySelector("[data-workflow-empty]");
     if (empty) empty.hidden = cards.length > 0;
     if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+    renderWorkflowPreview();
+    renderLinkedInstructionEditors();
 }
 
 function renderWorkflowFromJson(config) {
@@ -888,6 +1123,24 @@ workflowBuilder?.addEventListener("click", (event) => {
     if (down?.nextElementSibling) workflowStepList?.insertBefore(down.nextElementSibling, down);
     syncWorkflowBuilder();
 });
+
+document.querySelector("[data-workflow-instruction-list]")?.addEventListener("input", (event) => {
+    const textarea = event.target.closest("textarea[data-linked-instruction]");
+    if (!textarea) return;
+    const card = textarea.closest("[data-instruction-step-id]");
+    const workflowCard = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).find((item) => item.querySelector("[data-step-id]")?.value === card?.dataset.instructionStepId);
+    const selector = textarea.dataset.linkedInstruction === "description" ? "[data-step-description]" : "[data-step-next-action]";
+    const source = workflowCard?.querySelector(selector);
+    if (source) source.value = textarea.value;
+    if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+    renderInstructionPreview();
+    renderWorkflowPreview();
+});
+document.getElementById("instruction_title")?.addEventListener("input", renderInstructionPreview);
+document.getElementById("user_instruction")?.addEventListener("input", renderInstructionPreview);
+document.querySelector("[data-refresh-workflow-preview]")?.addEventListener("click", renderWorkflowPreview);
+document.querySelector("[data-workflow-user-preview]")?.addEventListener("change", renderWorkflowPreview);
+document.querySelector("[data-refresh-instruction-preview]")?.addEventListener("click", renderInstructionPreview);
 
 document.querySelector("[data-refresh-workflow-json]")?.addEventListener("click", () => {
     const input = document.querySelector("[data-workflow-json]");
@@ -977,6 +1230,45 @@ const trainingCardTemplate = document.querySelector("[data-training-card-templat
 const trainingDateTemplate = document.querySelector("[data-training-date-template]");
 const trainingEmpty = document.querySelector("[data-training-empty]");
 
+function trainingStateKey() { return trainingList?.dataset.trainingStorageKey || "training-cards"; }
+
+function saveTrainingExpansionState() {
+    if (!trainingList) return;
+    const state = {};
+    trainingList.querySelectorAll("[data-training-card]").forEach((card, index) => { state[card.dataset.trainingKey || String(index)] = Boolean(card.open); });
+    try { sessionStorage.setItem(trainingStateKey(), JSON.stringify(state)); } catch (_) { /* storage is optional */ }
+}
+
+function restoreTrainingExpansionState() {
+    if (!trainingList) return;
+    let state = {};
+    try { state = JSON.parse(sessionStorage.getItem(trainingStateKey()) || "{}"); } catch (_) { state = {}; }
+    const cards = Array.from(trainingList.querySelectorAll("[data-training-card]"));
+    cards.forEach((card, index) => {
+        card.dataset.trainingKey ||= card.querySelector('input[name="training_item_id"]')?.value || `training-${index + 1}`;
+        if (Object.prototype.hasOwnProperty.call(state, card.dataset.trainingKey)) card.open = Boolean(state[card.dataset.trainingKey]);
+        else if (cards.length > 1) card.open = false;
+    });
+}
+
+function updateTrainingSummary(card) {
+    const name = card.querySelector('input[name="training_item_name"]')?.value.trim() || "Bez nazwy";
+    const price = card.querySelector('input[name="training_item_price"]')?.value || "—";
+    const capacity = Number(card.querySelector('input[name="training_item_capacity"]')?.value || 0);
+    const active = Boolean(card.querySelector('input[name="training_item_active"]')?.checked);
+    const dates = card.querySelectorAll("[data-training-date]").length;
+    const setText = (selector, value) => { const target = card.querySelector(selector); if (target) target.textContent = String(value); };
+    setText("[data-training-summary-name]", name); setText("[data-training-summary-price]", `${price} PLN`); setText("[data-training-summary-capacity]", capacity); setText("[data-training-summary-dates]", dates);
+    const badges = card.querySelector("[data-training-summary-badges]");
+    if (badges) {
+        const values = [[active ? "Aktywne" : "Nieaktywne", active ? "is-active" : "is-inactive"]];
+        if (capacity <= 0) values.push(["Brak miejsc", "is-warning"]); else if (capacity <= 5) values.push(["Mało miejsc", "is-warning"]);
+        if (!dates) values.push(["Brak terminów", "is-warning"]);
+        if (card.classList.contains("has-error")) values.push(["Błąd konfiguracji", "is-error"]);
+        badges.replaceChildren(...values.map(([label, state]) => { const badge = document.createElement("span"); badge.className = `training-badge ${state}`; badge.textContent = label; return badge; }));
+    }
+}
+
 function syncTrainingIndexes() {
     const cards = trainingList ? Array.from(trainingList.querySelectorAll("[data-training-card]")) : [];
     cards.forEach((card, index) => {
@@ -987,6 +1279,7 @@ function syncTrainingIndexes() {
         card.querySelectorAll('input[name="training_date_training_index"]').forEach((input) => {
             input.value = String(index);
         });
+        updateTrainingSummary(card);
     });
     if (trainingEmpty) trainingEmpty.hidden = cards.length > 0;
 }
@@ -994,7 +1287,10 @@ function syncTrainingIndexes() {
 addTrainingButton?.addEventListener("click", function () {
     if (!trainingList || !trainingCardTemplate) return;
     trainingList.appendChild(trainingCardTemplate.content.cloneNode(true));
+    const added = trainingList.lastElementChild;
+    if (added) { added.dataset.trainingKey = `new-${Date.now()}`; added.open = true; }
     syncTrainingIndexes();
+    saveTrainingExpansionState();
 });
 
 trainingList?.addEventListener("click", function (event) {
@@ -1002,6 +1298,7 @@ trainingList?.addEventListener("click", function (event) {
     if (removeTrainingButton) {
         removeTrainingButton.closest("[data-training-card]")?.remove();
         syncTrainingIndexes();
+        saveTrainingExpansionState();
         return;
     }
 
@@ -1020,12 +1317,38 @@ trainingList?.addEventListener("click", function (event) {
     }
 });
 
+trainingList?.addEventListener("input", (event) => { const card = event.target.closest("[data-training-card]"); if (card) updateTrainingSummary(card); });
+trainingList?.addEventListener("change", (event) => { const card = event.target.closest("[data-training-card]"); if (card) updateTrainingSummary(card); });
+trainingList?.addEventListener("toggle", (event) => { if (event.target.matches?.("[data-training-card]")) saveTrainingExpansionState(); }, true);
+trainingList?.addEventListener("invalid", (event) => {
+    const card = event.target.closest("[data-training-card]");
+    if (!card) return;
+    card.open = true; card.classList.add("has-error"); updateTrainingSummary(card); saveTrainingExpansionState();
+}, true);
+document.querySelectorAll('form.admin-form button[data-save-form]').forEach((button) => {
+    button.addEventListener("click", () => {
+        trainingList?.querySelectorAll("[data-training-card]").forEach((card) => {
+            const invalid = Array.from(card.querySelectorAll("input[required], select[required], textarea[required]")).some((field) => field.validity?.valid === false);
+            if (invalid) { card.open = true; card.classList.add("has-error"); updateTrainingSummary(card); }
+        });
+        saveTrainingExpansionState();
+    });
+});
+document.querySelector("[data-expand-all-trainings]")?.addEventListener("click", () => { trainingList?.querySelectorAll("[data-training-card]").forEach((card) => { card.open = true; }); saveTrainingExpansionState(); });
+document.querySelector("[data-collapse-all-trainings]")?.addEventListener("click", () => { trainingList?.querySelectorAll("[data-training-card]").forEach((card) => { card.open = false; }); saveTrainingExpansionState(); });
+
 document.querySelector("form.admin-form")?.addEventListener("submit", function () {
     formIsSubmitting = true;
     syncTrainingIndexes();
     syncInstructionEditor();
     syncWorkflowBuilder();
 });
+restoreTrainingExpansionState();
+if (/szkol|training/i.test(trainingList?.dataset.trainingServerErrors || "")) {
+    const card = trainingList?.querySelector("[data-training-card]");
+    if (card) { card.open = true; card.classList.add("has-error"); }
+}
 syncTrainingIndexes();
+enhanceRichTextFields();
 </script>
 {% endblock %}

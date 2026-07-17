@@ -1216,6 +1216,151 @@
     background: var(--admin-surface-soft, #f8f9fb);
 }
 
+.workflow-preview-list {
+    display: grid;
+    gap: 1rem;
+    margin: 0;
+    padding-left: 1.6rem;
+}
+
+.workflow-preview-step {
+    position: relative;
+}
+
+.workflow-preview-step:not(:last-child)::after {
+    content: "↓";
+    position: absolute;
+    left: -1.45rem;
+    bottom: -.95rem;
+    color: var(--admin-primary, #24375b);
+    font-weight: 800;
+}
+
+.workflow-preview-step article {
+    padding: 1rem;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 12px;
+    background: #fff;
+}
+
+.workflow-preview-step.has-error article {
+    border-color: #b42318;
+    box-shadow: 0 0 0 2px rgba(180, 35, 24, .1);
+}
+
+.workflow-preview-step__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+}
+
+.workflow-preview-step__heading h3 { margin: 0; }
+.workflow-preview-step code { display: inline-block; margin: .55rem 0; }
+.workflow-preview-transition { font-weight: 750; color: var(--admin-primary, #24375b); }
+.workflow-preview-next { margin-top: .65rem; padding: .75rem; border-left: 3px solid #b38d45; background: #fffaf0; }
+.workflow-preview-error, .workflow-preview-errors { color: #8f1d14; font-weight: 700; }
+.workflow-preview-errors { margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid #f1aaa3; border-radius: 10px; background: #fff4f2; }
+.workflow-preview-errors p { margin: .2rem 0; }
+.workflow-preview.is-user-mode .workflow-preview-list { max-width: 720px; }
+
+.workflow-linked-instructions {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.workflow-linked-instruction,
+.workflow-inactive-instruction,
+.instruction-preview-stage {
+    padding: 1rem;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 12px;
+    background: #fff;
+}
+
+.workflow-linked-instruction { display: grid; gap: .85rem; }
+.workflow-linked-instruction label { display: grid; gap: .4rem; }
+.workflow-linked-instruction__heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.workflow-linked-instruction__heading h3 { margin: 0; }
+.workflow-inactive-instructions { margin-top: 1.25rem; padding: 1rem; border: 1px solid #e6b85c; border-radius: 12px; background: #fffaf0; }
+.workflow-inactive-instruction { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: .65rem; }
+.workflow-warning-badge, .training-badge { display: inline-flex; align-items: center; padding: .2rem .55rem; border-radius: 999px; font-size: .78rem; font-weight: 750; }
+.workflow-warning-badge { color: #7a4b00; background: #ffedbf; }
+.instruction-preview-stage + .instruction-preview-stage { margin-top: .75rem; }
+.instruction-safe-html > :first-child { margin-top: 0; }
+.instruction-safe-html > :last-child { margin-bottom: 0; }
+
+.instruction-format-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+    margin: .25rem 0 .4rem;
+    padding: .35rem;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 8px 8px 0 0;
+    background: #f7f8fa;
+}
+
+.instruction-format-button {
+    min-height: 32px;
+    padding: .25rem .55rem;
+    border: 1px solid #c8ced8;
+    border-radius: 6px;
+    color: #24375b;
+    background: #fff;
+    cursor: pointer;
+}
+
+.instruction-format-button:hover,
+.instruction-format-button:focus-visible { border-color: #24375b; background: #eef2f8; }
+
+.admin-training-list-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin: 1rem 0 .75rem;
+}
+
+.admin-training-card { padding: 0; overflow: clip; }
+.admin-training-card[open] { padding: 0; }
+.admin-training-card.has-error { border-color: #b42318; box-shadow: 0 0 0 2px rgba(180, 35, 24, .12); }
+
+.admin-training-summary {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(180px, 1.5fr) minmax(220px, 1fr) auto;
+    gap: .8rem;
+    align-items: center;
+    padding: 1rem;
+    cursor: pointer;
+    list-style: none;
+    background: #f8fafc;
+}
+
+.admin-training-summary::-webkit-details-marker { display: none; }
+.admin-training-summary::before { content: "›"; position: absolute; transform: translateX(-.15rem); font-size: 1.35rem; font-weight: 800; }
+.admin-training-card[open] > .admin-training-summary::before { transform: translateX(-.15rem) rotate(90deg); }
+.admin-training-summary__title { display: grid; gap: .18rem; min-width: 0; padding-left: 1.1rem; }
+.admin-training-summary__title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-training-number { color: #667085; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+.admin-training-summary__facts, .admin-training-summary__badges { display: flex; flex-wrap: wrap; gap: .4rem .7rem; }
+.admin-training-summary__facts { color: #475467; font-size: .88rem; }
+.training-badge.is-active { color: #176b3a; background: #ddf6e7; }
+.training-badge.is-inactive { color: #5f6672; background: #e9ecf1; }
+.training-badge.is-warning { color: #7a4b00; background: #ffedbf; }
+.training-badge.is-error { color: #8f1d14; background: #fee4e2; }
+.admin-training-card__body { padding: 1rem; border-top: 1px solid var(--admin-border, #d9dce3); }
+
+@media (max-width: 760px) {
+    .workflow-preview-step__heading,
+    .workflow-linked-instruction__heading { align-items: flex-start; flex-direction: column; }
+    .admin-training-summary { grid-template-columns: 1fr; gap: .45rem; }
+    .admin-training-summary__facts, .admin-training-summary__badges { padding-left: 1.1rem; }
+    .admin-training-summary__title strong { white-space: normal; }
+    .admin-training-card__body { padding: .75rem; }
+}
+
 .workflow-stage-card__heading,
 .workflow-stage-actions,
 .workflow-stage-options,

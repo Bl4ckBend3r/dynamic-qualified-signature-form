@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from services.instruction_html_service import sanitize_instruction_html
 from services.process_service import ProcessStatus
 from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_status_label
 
@@ -77,12 +78,12 @@ def normalize_instruction_config(
     *,
     legacy_description: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize untrusted JSON to the plain-text instruction schema."""
+    """Normalize untrusted JSON to the safe instruction schema."""
     source = value if isinstance(value, Mapping) else {}
     title = _plain_text(source.get("title"), limit=255)
-    description = _plain_text(source.get("description"), limit=50_000)
+    description = sanitize_instruction_html(source.get("description"))
     if not description:
-        description = _plain_text(legacy_description, limit=50_000)
+        description = sanitize_instruction_html(legacy_description)
 
     raw_stages = source.get("stages")
     if not isinstance(raw_stages, list):
@@ -110,11 +111,13 @@ def normalize_instruction_config(
             {
                 "key": key,
                 "label": label,
-                "description": _plain_text(raw_stage.get("description"), limit=50_000),
-                "next_action": _plain_text(raw_stage.get("next_action"), limit=50_000),
+                "description": sanitize_instruction_html(raw_stage.get("description")),
+                "next_action": sanitize_instruction_html(raw_stage.get("next_action")),
                 "status_codes": status_codes,
                 "final": _as_bool(raw_stage.get("final")),
                 "rejected": _as_bool(raw_stage.get("rejected")),
+                "active": _as_bool(raw_stage.get("active", True)),
+                "inactive_reason": _plain_text(raw_stage.get("inactive_reason"), limit=500),
                 "sort_order": len(stages) + 1,
             }
         )
@@ -137,7 +140,7 @@ def build_process_instruction_view(
     """Build the public instruction exclusively from the form configuration."""
     raw_status = _plain_text(process_status, limit=128)
     config = normalize_instruction_config(instruction_config, legacy_description=legacy_description)
-    configured_stages = config["stages"]
+    configured_stages = [stage for stage in config["stages"] if stage.get("active", True)]
     default_stage = DEFAULT_STATUS_INSTRUCTIONS.get(raw_status)
     current_index = _find_current_stage(configured_stages, raw_status)
     if current_index is None and default_stage:
@@ -199,6 +202,46 @@ def build_process_instruction_view(
         "next_action_label": "Co dalej?",
         "instruction_steps": instruction["stages"],
     }
+
+
+def reconcile_instruction_config(
+    value: Mapping[str, Any] | None,
+    workflow: Mapping[str, Any] | None,
+    *,
+    active_stages: list[Mapping[str, Any]] | None = None,
+    title: object | None = None,
+    description: object | None = None,
+) -> dict[str, Any]:
+    """Mark removed workflow instructions inactive and optionally replace active stages."""
+    current = normalize_instruction_config(value)
+    steps = [step for step in (workflow or {}).get("steps", []) if isinstance(step, Mapping)]
+    active_keys = {str(step.get("id") or "").strip() for step in steps}
+    active_statuses = {str(step.get("status") or step.get("status_code") or "").strip() for step in steps}
+
+    def belongs_to_workflow(stage: Mapping[str, Any]) -> bool:
+        key = str(stage.get("key") or "").strip()
+        statuses = {str(code or "").strip() for code in stage.get("status_codes", [])}
+        return bool((key and key in active_keys) or (statuses - {""}) & active_statuses)
+
+    if active_stages is None:
+        stages = current["stages"]
+    else:
+        stages = [dict(stage) for stage in active_stages]
+        stages.extend(stage for stage in current["stages"] if not belongs_to_workflow(stage))
+
+    classified = []
+    for stage in stages:
+        item = dict(stage)
+        item["active"] = belongs_to_workflow(item)
+        item["inactive_reason"] = "" if item["active"] else "Ten etap nie występuje już w workflow."
+        classified.append(item)
+    return normalize_instruction_config(
+        {
+            "title": current["title"] if title is None else title,
+            "description": current["description"] if description is None else description,
+            "stages": classified,
+        }
+    )
 
 
 def _find_current_stage(stages: list[dict[str, Any]], raw_status: str) -> int | None:

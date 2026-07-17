@@ -1,4 +1,8 @@
-from services.process_instruction_service import build_process_instruction_view, normalize_instruction_config
+from services.process_instruction_service import (
+    build_process_instruction_view,
+    normalize_instruction_config,
+    reconcile_instruction_config,
+)
 
 
 def config(*stages, title="Moja instrukcja", description="Opis ogólny"):
@@ -91,11 +95,38 @@ def test_unassigned_status_uses_safe_fallback_without_error():
     assert view["next_action"] == ""
 
 
-def test_instruction_content_is_plain_text_and_control_bytes_are_removed():
+def test_instruction_content_allows_safe_html_and_removes_dangerous_markup():
     normalized = normalize_instruction_config(
-        config(stage("<b>Etap</b>\x00", ["FORM_SUBMITTED"], next_action="<script>alert(1)</script>"))
+        config(
+            stage(
+                "<b>Etap</b>\x00",
+                ["FORM_SUBMITTED"],
+                description='<p onclick="alert(1)"><strong>Ważne</strong><img src=x></p>',
+                next_action='<script>alert(1)</script><a href="javascript:alert(1)">Niebezpieczny</a><a href="https://example.com" style="color:red">Przejdź</a>',
+            )
+        )
     )
 
     assert normalized["stages"][0]["label"] == "<b>Etap</b>"
     assert "\x00" not in normalized["stages"][0]["label"]
-    assert normalized["stages"][0]["next_action"] == "<script>alert(1)</script>"
+    assert normalized["stages"][0]["description"] == "<p><strong>Ważne</strong></p>"
+    assert "javascript:" not in normalized["stages"][0]["next_action"]
+    assert normalized["stages"][0]["next_action"].endswith(
+        '<a href="https://example.com" target="_blank" rel="noopener noreferrer">Przejdź</a>'
+    )
+
+
+def test_inactive_instruction_is_preserved_but_not_exposed_publicly():
+    reconciled = reconcile_instruction_config(
+        config(
+            {"key": "submission", **stage("Wniosek", ["FORM_SUBMITTED"])},
+            {"key": "removed", **stage("Usunięty etap", ["REMOVED_STATUS"], next_action="Nie pokazuj")},
+        ),
+        {"steps": [{"id": "submission", "status": "FORM_SUBMITTED"}]},
+    )
+
+    inactive = next(item for item in reconciled["stages"] if item["key"] == "removed")
+    assert inactive["active"] is False
+    assert inactive["inactive_reason"] == "Ten etap nie występuje już w workflow."
+    view = build_process_instruction_view("REMOVED_STATUS", instruction_config=reconciled)
+    assert all(item["key"] != "removed" for item in view["instruction_steps"])

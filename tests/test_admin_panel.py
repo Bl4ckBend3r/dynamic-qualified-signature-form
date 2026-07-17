@@ -3069,7 +3069,7 @@ def _create_submission_waiting_for_agreement_review(admin_app, form_slug: str, s
             agreement_signed="Tak",
             agreement_signature_valid="Tak",
             agreement_signed_filename="agreement-signed.pdf",
-            process_status="AGREEMENT_UPLOADED",
+            process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
         )
         db.add(submission)
         db.flush()
@@ -3104,7 +3104,9 @@ def test_admin_shows_application_decision_only_during_review_and_agreement_decis
 
     assert response.status_code == 200
     assert "Decyzja o zaakceptowaniu wniosku" not in html
-    assert "Umowa podpisana przez beneficjenta" in html
+    assert "Umowa podpisana przez urząd" in html
+    assert "Zaznacz, czy umowa została podpisana po stronie urzędu" in html
+    assert "Umowa podpisana przez beneficjenta" not in html
     assert f'/aplikacja/admin/forms/{form_id}/submissions/{submission_pk}/beneficiary-agreement-decision' in html
 
 
@@ -3129,10 +3131,10 @@ def test_admin_confirms_uploaded_agreement_and_finishes_process(admin_app, admin
         submission = db.get(FormSubmission, submission_pk)
         assert submission.process_status == "PROCESS_COMPLETED"
         decision = db.query(SubmissionDecision).filter_by(public_submission_id="agreement-confirm").one()
-        assert decision.decision == "beneficiary_agreement_accepted"
-        assert decision.target_status == "BENEFICIARY_AGREEMENT_CONFIRMED"
+        assert decision.decision == "office_agreement_accepted"
+        assert decision.target_status == "AGREEMENT_SIGNED_BY_OFFICE"
         assert [event.source for event in db.query(SubmissionWorkflowEvent).order_by(SubmissionWorkflowEvent.id)] == [
-            "beneficiary_agreement_confirmed",
+            "agreement_signed_by_office",
             "process_completed",
         ]
 
@@ -3156,7 +3158,7 @@ def test_admin_rejects_uploaded_agreement_with_reason_and_blocks_decision_withou
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with session_factory() as db:
         submission = db.get(FormSubmission, submission_pk)
-        assert submission.process_status == "BENEFICIARY_AGREEMENT_REJECTED"
+        assert submission.process_status == "AGREEMENT_REJECTED_BY_OFFICE"
         assert submission.agreement_signature_valid == ""
         assert db.query(SubmissionDecision).one().justification == "Brakuje podpisu na ostatniej stronie."
 
@@ -3166,7 +3168,7 @@ def test_admin_rejects_uploaded_agreement_with_reason_and_blocks_decision_withou
             form_name="Agreement reject",
             agreement_required="Tak",
             agreement_signature_valid="Tak",
-            process_status="AGREEMENT_UPLOADED",
+            process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
         )
         db.add(blocked)
         db.commit()
@@ -3368,3 +3370,191 @@ def test_workflow_builder_action_respects_application_prefix(admin_app, admin_cl
 
     assert 'href="/aplikacja/admin/forms"' in html
     assert "Zapisz workflow" in html
+
+
+def test_form_edit_renders_tabbed_configuration(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="tabbed_form", definition_json=readable_workflow_definition())
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+
+    for label in (
+        "Podstawowe", "Pola formularza", "Szkolenia", "Deklaracja", "Umowa", "Workflow",
+        "Instrukcje", "E-maile", "Regulaminy i dokumenty", "Logo i wygląd", "Uprawnienia",
+        "Ustawienia zaawansowane",
+    ):
+        assert label in html
+    assert 'data-form-tab-target="basic"' in html
+    assert 'data-form-tab-panel="basic"' in html
+    assert 'data-form-tab-select' in html
+    assert 'data-active-tab-input' in html
+
+
+def test_form_edit_marks_requested_tab_as_active(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="active_tab_form", definition_json=readable_workflow_definition())
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
+
+    assert 'data-initial-tab="workflow"' in html
+    assert 'name="active_tab" value="workflow"' in html
+    assert 'data-form-tab-target="workflow" aria-controls="form-tab-workflow" aria-selected="true"' in html
+
+
+def test_regular_admin_cannot_open_permissions_or_advanced_tabs(admin_app, admin_client):
+    user_id = create_user(admin_app, role="admin")
+    form_id = create_form(
+        admin_app,
+        slug="role_tabs_form",
+        user_id=user_id,
+        definition_json=readable_workflow_definition(),
+    )
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=advanced").get_data(as_text=True)
+
+    assert "Ustawienia zaawansowane" not in html
+    assert "Pełna konfiguracja formularza JSON" not in html
+    assert "Uprawnienia" not in html
+    assert 'data-initial-tab="basic"' in html
+
+
+def test_form_save_returns_to_active_tab(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="return_tab_form", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=appearance").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "appearance",
+            "name": "Workflow Form",
+            "slug": "return_tab_form",
+            "title": "Workflow Form",
+            "workflow_json": json.dumps(readable_workflow_definition()["workflow"]),
+            "label_color": "#112233",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.location.endswith(f"/admin/forms/{form_id}/edit?tab=appearance")
+
+
+def test_workflow_validation_opens_agreement_tab(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="error_tab_form", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "workflow",
+            "name": "Workflow Form",
+            "slug": "error_tab_form",
+            "title": "Workflow Form",
+            "workflow_name": "Workflow",
+            "workflow_initial_step": "submission",
+            "workflow_builder_json": json.dumps(readable_workflow_definition()["workflow"]),
+            "requires_contract": "on",
+            "contract_template_html": "<p>Umowa</p>",
+        },
+    )
+
+    assert response.status_code == 400
+    response_html = response.get_data(as_text=True)
+    assert 'data-initial-tab="agreement"' in response_html
+    assert "Proces wymaga umowy" in response_html
+
+
+def test_invalid_full_json_opens_advanced_tab(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="json_error_tab", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=advanced").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "advanced",
+            "name": "Workflow Form",
+            "slug": "json_error_tab",
+            "title": "Workflow Form",
+            "use_form_definition_json": "on",
+            "form_definition_json": "{niepoprawny",
+        },
+    )
+
+    assert response.status_code == 400
+    assert 'data-initial-tab="advanced"' in response.get_data(as_text=True)
+
+
+def test_fields_editor_uses_same_tabs(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="fields_tabs_form")
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+
+    assert 'class="admin-form-tab is-active">Pola formularza</a>' in html
+    assert "Regulaminy i dokumenty" in html
+    assert "Kolejność" in html
+
+
+def test_form_upload_uses_tabs_and_polish_labels(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+
+    html = admin_client.get("/admin/forms/upload").get_data(as_text=True)
+
+    assert "Utwórz formularz" in html
+    assert 'data-upload-tab="fields"' in html
+    assert "Obsługiwane formaty" in html
+    assert "Kolejność sortowania" in html
+    assert "Powrót" in html
+
+
+def test_super_admin_can_import_full_form_definition_json(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="full_json_form", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=advanced").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    imported = readable_workflow_definition()
+    imported["fields"] = [{"name": "imported_field", "type": "text", "label": "Pole z importu"}]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "advanced",
+            "name": "Workflow Form",
+            "slug": "full_json_form",
+            "title": "Workflow Form",
+            "use_form_definition_json": "on",
+            "form_definition_json": json.dumps(imported, ensure_ascii=False),
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        assert form.definition_json["fields"][0]["name"] == "imported_field"
+        assert db.query(FormField).filter_by(form_id=form_id, name="imported_field", active=True).one()
+
+
+def test_form_tabs_have_mobile_css():
+    css = (Path(__file__).parents[1] / "static" / "admin.css").read_text(encoding="utf-8")
+
+    assert ".admin-form-tab-mobile" in css
+    assert "@media (max-width: 720px)" in css
+    assert ".admin-form-tabs" in css

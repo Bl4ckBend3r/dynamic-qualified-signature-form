@@ -11,22 +11,52 @@ from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_st
 DEFAULT_INSTRUCTION_TITLE = "Instrukcja dalszego postępowania"
 MAX_STAGES = 100
 DEFAULT_STATUS_INSTRUCTIONS = {
-    ProcessStatus.AGREEMENT_UPLOADED.value: {
-        "key": "agreement-officer-review",
-        "label": "Umowa podpisana przez beneficjenta - do potwierdzenia",
-        "description": "Podpisana umowa została wgrana i oczekuje na potwierdzenie przez urzędnika.",
-        "next_action": "Nie musisz teraz nic robić. Poczekaj na decyzję urzędnika.",
+    ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY.value: {
+        "key": "agreement-uploaded-by-beneficiary",
+        "label": "Podpisana umowa wgrana przez beneficjenta",
+        "description": "Podpisana umowa została wgrana. Oczekuje na podpis i potwierdzenie po stronie urzędu.",
+        "next_action": "Nie musisz teraz wykonywać dodatkowych czynności.",
         "final": False,
         "rejected": False,
     },
-    ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value: {
+    ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value: {
+        "key": "agreement-waiting-for-office-signature",
+        "label": "Umowa oczekuje na podpis po stronie urzędu",
+        "description": "Umowa oczekuje na podpis po stronie urzędu. Nie musisz teraz wykonywać dodatkowych czynności.",
+        "next_action": "Poczekaj na zakończenie etapu po stronie urzędu.",
+        "final": False,
+        "rejected": False,
+    },
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value: {
+        "key": "agreement-signed-by-office",
+        "label": "Umowa podpisana przez urząd",
+        "description": "Umowa została podpisana przez urząd. Proces został zakończony.",
+        "next_action": "Nie musisz wykonywać dodatkowych czynności.",
+        "final": True,
+        "rejected": False,
+    },
+    ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value: {
         "key": "agreement-correction",
-        "label": "Podpisana umowa wymaga poprawy",
-        "description": "Urzędnik odrzucił wgraną umowę albo skierował ją do poprawy.",
-        "next_action": "Popraw umowę, podpisz ją i wgraj ponownie.",
+        "label": "Umowa wymaga poprawy",
+        "description": "Umowa wymaga poprawy. Wgraj poprawny podpisany dokument zgodnie z uwagami urzędu.",
+        "next_action": "Popraw umowę, podpisz ją i wgraj ponownie zgodnie z uwagami urzędu.",
         "final": False,
         "rejected": True,
     },
+}
+
+# Historyczne statusy otrzymują aktualne komunikaty, bez zmiany zapisanych danych.
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_UPLOADED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value],
+    "key": "legacy-agreement-waiting-for-office-signature",
+}
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value],
+    "key": "legacy-agreement-signed-by-office",
+}
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value],
+    "key": "legacy-agreement-rejected-by-office",
 }
 
 

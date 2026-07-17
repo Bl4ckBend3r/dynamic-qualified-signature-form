@@ -15,6 +15,8 @@ APPLICATION_TARGETS = {
     "WAITING_FOR_CORRECTION",
 }
 AGREEMENT_TARGETS = {
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
+    ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
     ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value,
     ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
 }
@@ -22,7 +24,9 @@ COMPLETED_STATUSES = {
     ProcessStatus.PROCESS_COMPLETED.value,
     ProcessStatus.PARTICIPANT_ACCEPTED.value,
     ProcessStatus.AGREEMENT_NOT_REQUIRED.value,
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
     ProcessStatus.AGREEMENT_SIGNED.value,
+    ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value,
 }
 
 
@@ -147,8 +151,11 @@ def _agreement_action(status: str, required: bool, can_review: bool) -> str:
     if not required:
         return "Etap pominięty"
     if can_review:
-        return "Potwierdź podpisanie umowy przez beneficjenta"
-    if status == ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value:
+        return "Potwierdź podpisanie umowy przez urząd"
+    if status in {
+        ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
+        ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
+    }:
         return "Oczekiwanie na ponowne wgranie poprawnej umowy"
     if status in COMPLETED_STATUSES:
         return "Etap zakończony"
@@ -158,7 +165,10 @@ def _agreement_action(status: str, required: bool, can_review: bool) -> str:
 def _agreement_state(status: str, required: bool, can_review: bool) -> str:
     if not required or status in COMPLETED_STATUSES:
         return "completed"
-    if can_review or status == ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value:
+    if can_review or status in {
+        ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
+        ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
+    }:
         return "current"
     return "future"
 

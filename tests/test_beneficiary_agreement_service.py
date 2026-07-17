@@ -36,7 +36,7 @@ def add_uploaded_agreement(db, *, with_file: bool = True, agreement_required: st
         agreement_signed="Tak",
         agreement_signature_valid="Tak",
         agreement_signed_filename="agreement-signed.pdf",
-        process_status=ProcessStatus.AGREEMENT_UPLOADED.value,
+        process_status=ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value,
     )
     db.add(submission)
     db.flush()
@@ -75,13 +75,13 @@ def test_confirming_uploaded_agreement_records_decision_history_and_completes_pr
     )
     db.commit()
 
-    assert result.decision_status == ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value
+    assert result.decision_status == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
     assert submission.process_status == ProcessStatus.PROCESS_COMPLETED.value
     decision = db.query(SubmissionDecision).one()
-    assert decision.decision == "beneficiary_agreement_accepted"
+    assert decision.decision == "office_agreement_accepted"
     assert decision.email_requested is True
     events = db.query(SubmissionWorkflowEvent).order_by(SubmissionWorkflowEvent.id).all()
-    assert [event.source for event in events] == ["beneficiary_agreement_confirmed", "process_completed"]
+    assert [event.source for event in events] == ["agreement_signed_by_office", "process_completed"]
     assert events[0].actor_id == 7
 
 
@@ -95,11 +95,11 @@ def test_rejecting_uploaded_agreement_requires_reason_and_allows_reupload(db):
     service.decide(db, submission, decision="correction", reason="Brakuje strony 2.", actor=officer())
     db.commit()
 
-    assert submission.process_status == ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value
+    assert submission.process_status == ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value
     assert submission.agreement_signature_valid == ""
     assert submission.agreement_signature_error == "Brakuje strony 2."
     assert db.query(SubmissionDecision).one().justification == "Brakuje strony 2."
-    assert db.query(SubmissionWorkflowEvent).one().source == "beneficiary_agreement_rejected"
+    assert db.query(SubmissionWorkflowEvent).one().source == "agreement_rejected_by_office"
 
 
 def test_agreement_cannot_be_confirmed_without_uploaded_submission_file(db):
@@ -133,13 +133,24 @@ def test_admin_workflow_only_exposes_agreement_action_after_upload(db):
     assert "Potwierdź" in agreement["action"]
 
 
-def test_public_instruction_explains_uploaded_and_rejected_agreement_states():
-    uploaded = build_process_instruction_view(ProcessStatus.AGREEMENT_UPLOADED.value)
-    rejected = build_process_instruction_view(ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value)
+def test_office_signature_action_does_not_require_optional_signature_verification_flag(db):
+    submission = add_uploaded_agreement(db)
+    submission.agreement_signature_valid = ""
+
+    assert BeneficiaryAgreementService().can_review(db, submission) is True
+
+
+def test_public_instruction_explains_office_signature_and_rejected_agreement_states():
+    uploaded = build_process_instruction_view(ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY.value)
+    waiting = build_process_instruction_view(ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value)
+    signed = build_process_instruction_view(ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value)
+    rejected = build_process_instruction_view(ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value)
 
     assert uploaded["has_form_instruction"] is True
-    assert "urzędnika" in uploaded["next_action"]
+    assert "po stronie urzędu" in uploaded["instruction_steps"][-1]["description"]
     assert uploaded["instruction_steps"][-1]["current"] is True
+    assert "Nie musisz" in waiting["instruction_steps"][-1]["description"]
+    assert "podpisana przez urząd" in signed["instruction_steps"][-1]["description"]
     assert "wgraj ponownie" in rejected["next_action"]
     assert rejected["instruction_steps"][-1]["current"] is True
 
@@ -155,7 +166,7 @@ def test_valid_agreement_upload_waits_for_officer_instead_of_finishing_process()
         None,
     )
 
-    assert updates["process_status"] == ProcessStatus.AGREEMENT_UPLOADED.value
+    assert updates["process_status"] == ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
 
 
 def test_declaration_skips_agreement_stage_when_form_does_not_require_it():
@@ -178,9 +189,21 @@ def test_default_workflow_places_officer_review_after_agreement_upload():
     )
     steps = {step["id"]: step for step in config["workflow"]["steps"]}
 
-    assert steps["agreement_signature"]["next"] == "beneficiary_agreement_review"
-    assert steps["beneficiary_agreement_review"]["type"] == "manual_decision"
-    assert steps["beneficiary_agreement_review"]["decisions"]["accepted"] == "completed"
+    assert steps["agreement_signature"]["next"] == "office_agreement_signature"
+    assert steps["office_agreement_signature"]["type"] == "manual_decision"
+    assert steps["office_agreement_signature"]["label"] == "Umowa podpisana przez urząd"
+    assert steps["office_agreement_signature"]["decisions"]["accepted"] == "completed"
+
+
+def test_legacy_uploaded_status_still_allows_office_signature_decision(db):
+    submission = add_uploaded_agreement(db)
+    submission.process_status = ProcessStatus.AGREEMENT_UPLOADED.value
+
+    result = BeneficiaryAgreementService().decide(
+        db, submission, decision="accepted", reason="", actor=officer()
+    )
+
+    assert result.decision_status == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
 
 
 def test_agreement_upload_records_dedicated_workflow_event():
@@ -197,8 +220,8 @@ def test_agreement_upload_records_dedicated_workflow_event():
 
     service._record_document_workflow_event(
         {"submission_id": "public-uuid", "form_slug": "sample", "row": {}},
-        previous_status=ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
-        new_status=ProcessStatus.AGREEMENT_UPLOADED.value,
+        previous_status=ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
+        new_status=ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value,
         document_id="agreement",
     )
 

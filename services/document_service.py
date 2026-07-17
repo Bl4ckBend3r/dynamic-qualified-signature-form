@@ -434,7 +434,7 @@ class DocumentService:
             "agreement_filename": generated_documents[0]["filename"] if generated_documents else "",
             "agreement_generated_at": generated_date,
             "training_agreements": serialize_json_list(generated_documents),
-            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
         }
         self._update_submission(submission, updates)
         self._audit(
@@ -853,7 +853,7 @@ class DocumentService:
                 "agreement_required": "Tak",
                 "agreement_generated": "Tak",
                 "agreement_filename": filename,
-                "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+                "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
             }
         return {
             f"{document_id}_generated": "Tak",

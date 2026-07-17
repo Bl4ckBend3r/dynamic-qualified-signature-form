@@ -11,13 +11,15 @@
         <a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Ustawienia</a>
     </div>
 </div>
+{% set active_tab = 'fields' %}
+{% include "admin/forms/_tabs.html" %}
 <form method="post" class="admin-card">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <div class="admin-table-wrap">
         <table class="admin-table">
             <thead>
                 <tr>
-                    <th>Kolejnosc</th>
+                    <th>Kolejność</th>
                     <th>Nazwa pola</th>
                     <th>Etykieta</th>
                     <th>Typ</th>
@@ -53,10 +55,10 @@
                         </select>
                     </td>
                     <td><input name="field_{{ field.id }}_section" value="{{ field.section }}"></td>
-                    <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usun pole</button></td>
+                    <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usuń pole</button></td>
                 </tr>
             {% else %}
-                <tr><td colspan="9">Brak aktywnych pol.</td></tr>
+                <tr><td colspan="9">Brak aktywnych pól.</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -74,7 +76,7 @@
                     {% endfor %}
                 </select>
             </label>
-            <label><span>Kolejnosc</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
+            <label><span>Kolejność</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
             <label><span>Sekcja</span><input name="new_section"></label>
             <label>
                 <span>Etap</span>
@@ -85,7 +87,7 @@
                 </select>
             </label>
             <label class="admin-check"><input type="checkbox" name="new_required"><span>Wymagane</span></label>
-            <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox mozna uzyc value|label."></textarea></label>
+            <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox można użyć value|label."></textarea></label>
         </div>
         <div class="admin-form-actions">
             <button class="admin-button-secondary" type="submit" name="action" value="add">Dodaj pole</button>
@@ -96,4 +98,13 @@
         <button class="admin-button" type="submit" name="action" value="save">Zapisz</button>
     </div>
 </form>
+<script>
+const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id)|tojson }};
+document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
+    tab.addEventListener("click", () => { window.location.href = `${editFormUrl}?tab=${encodeURIComponent(tab.dataset.formTabTarget)}`; });
+});
+document.querySelector("[data-form-tab-select]")?.addEventListener("change", (event) => {
+    if (event.target.value !== "fields") window.location.href = `${editFormUrl}?tab=${encodeURIComponent(event.target.value)}`;
+});
+</script>
 {% endblock %}

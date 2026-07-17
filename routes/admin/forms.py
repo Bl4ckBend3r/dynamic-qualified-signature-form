@@ -46,6 +46,20 @@ from . import (
 
 
 FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel"]
+FORM_EDITOR_TABS = {
+    "basic",
+    "fields",
+    "trainings",
+    "declaration",
+    "agreement",
+    "workflow",
+    "instructions",
+    "emails",
+    "documents",
+    "appearance",
+    "permissions",
+    "advanced",
+}
 FIELD_STAGES = [
     (FIELD_STAGE_INITIAL, "Podstawowe"),
     (FIELD_STAGE_AFTER_ACCEPTANCE, "Dodatkowe pole po akceptacji"),
@@ -132,7 +146,7 @@ def forms_upload():
     user_instruction = instruction_config["description"] or None
     with db_session_factory()() as db:
         if db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none():
-            flash("Formularz o takim slugu juz istnieje.", "error")
+            flash("Formularz o takim slugu już istnieje.", "error")
             return render_template("admin/forms/upload.html"), 400
         form = Form(
             slug=slug,
@@ -157,7 +171,7 @@ def forms_upload():
         db.add(FormPermission(user_id=g.admin_user.id, form_id=form.id, can_manage=True))
         db.commit()
         form_id = form.id
-    flash("Formularz zostal wgrany, a pola zostaly wykryte.", "success")
+    flash("Formularz został wgrany, a pola zostały wykryte.", "success")
     return redirect(url_for("admin.form_fields", form_id=form_id))
 
 
@@ -169,6 +183,8 @@ def form_edit(form_id: int):
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
         instruction_statuses = instruction_status_options()
+        requested_tab = request.form.get("active_tab") if request.method == "POST" else request.args.get("tab")
+        active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
         if request.method == "POST":
             try:
                 instruction_config = _instruction_config_from_admin_form(
@@ -186,6 +202,7 @@ def form_edit(form_id: int):
             except Exception as exc:
                 updated_definition = normalize_admin_form_definition(form.definition_json or {})
                 validation_errors = [str(exc) or "Niepoprawne dane formularza."]
+                active_tab = _tab_for_form_error(validation_errors, active_tab, request.form)
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)
                 workflow_context = _workflow_editor_context(
@@ -203,6 +220,7 @@ def form_edit(form_id: int):
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
+                    active_tab=active_tab,
                     **workflow_context,
                 ), 400
             validation_errors = validate_admin_form_config(
@@ -213,6 +231,7 @@ def form_edit(form_id: int):
                 ),
             )
             if validation_errors:
+                active_tab = _tab_for_form_error(validation_errors, active_tab, request.form)
                 flash("Nie można zapisać workflow: " + " ".join(validation_errors), "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)
@@ -227,13 +246,14 @@ def form_edit(form_id: int):
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     instruction_statuses=instruction_statuses,
                     validation_errors=validation_errors,
+                    active_tab=active_tab,
                     **_workflow_editor_context(updated_definition.get("workflow") or {}),
                 ), 400
             form.name = request.form.get("name", "").strip() or form.name
             form.title = request.form.get("title", "").strip() or form.title
             new_slug = normalize_slug(request.form.get("slug", form.slug))
             if new_slug != form.slug and db.execute(select(Form).where(Form.slug == new_slug)).scalar_one_or_none():
-                flash("Formularz o takim slugu juz istnieje.", "error")
+                flash("Formularz o takim slugu już istnieje.", "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)
                 return render_template(
@@ -246,6 +266,7 @@ def form_edit(form_id: int):
                     training_field=get_declaration_training_field(form.definition_json or {}),
                     instruction_statuses=instruction_statuses,
                     validation_errors=[],
+                    active_tab="basic",
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
                 ), 400
@@ -264,6 +285,8 @@ def form_edit(form_id: int):
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
             current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
             form.definition_json = updated_definition
+            if g.admin_user.role == ROLE_SUPER_ADMIN and request.form.get("use_form_definition_json") == "on":
+                sync_form_fields(db, form, updated_definition)
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
                 abort(403)
@@ -292,6 +315,7 @@ def form_edit(form_id: int):
                         trigger_descriptions=TRIGGER_DESCRIPTIONS,
                         instruction_statuses=instruction_statuses,
                         validation_errors=[],
+                        active_tab="documents",
                         **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
                     ), 400
                 regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
@@ -306,8 +330,8 @@ def form_edit(form_id: int):
                     if user.id not in selected_user_ids and user.id in existing:
                         db.delete(existing[user.id])
             db.commit()
-            flash("Formularz zostal zapisany.", "success")
-            return redirect(url_for("admin.forms_list"))
+            flash("Formularz został zapisany.", "success")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab=active_tab))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
         form.definition_json = normalize_admin_form_definition(form.definition_json or {})
@@ -322,8 +346,42 @@ def form_edit(form_id: int):
             trigger_descriptions=TRIGGER_DESCRIPTIONS,
             instruction_statuses=instruction_statuses,
             validation_errors=[],
+            active_tab=active_tab,
             **_workflow_editor_context((form.definition_json or {}).get("workflow") or {}),
         )
+
+
+def _normalize_form_editor_tab(value: str | None, role: str) -> str:
+    tab = str(value or "basic").strip().lower()
+    if tab not in FORM_EDITOR_TABS:
+        return "basic"
+    if tab in {"permissions", "advanced"} and role != ROLE_SUPER_ADMIN:
+        return "basic"
+    return tab
+
+
+def _tab_for_form_error(errors: list[str], fallback: str, form_data) -> str:
+    text = " ".join(errors).lower()
+    if (
+        form_data.get("workflow_use_advanced_json") == "on"
+        or form_data.get("use_form_definition_json") == "on"
+    ) and ("json" in text or "konfigurac" in text):
+        return "advanced"
+    if "deklarac" in text:
+        return "declaration"
+    if "umow" in text or "contract" in text or "agreement" in text:
+        return "agreement"
+    if "szkol" in text or "training" in text:
+        return "trainings"
+    if "workflow" in text or "etap" in text or "status" in text or "decyzj" in text:
+        return "workflow"
+    if "mail" in text or "e-mail" in text or "smtp" in text:
+        return "emails"
+    if "regulamin" in text or "plik" in text:
+        return "documents"
+    if "slug" in text or "nazwa" in text or "tytu" in text:
+        return "basic"
+    return fallback
 
 
 def _instruction_config_from_admin_form(
@@ -401,7 +459,7 @@ def form_toggle(form_id: int):
         form.is_active = not form.is_active
         db.commit()
         is_active = form.is_active
-    flash("Formularz zostal aktywowany." if is_active else "Formularz zostal dezaktywowany.", "success")
+    flash("Formularz został aktywowany." if is_active else "Formularz został dezaktywowany.", "success")
     return redirect(url_for("admin.forms_list"))
 
 
@@ -416,7 +474,7 @@ def form_fields(form_id: int):
             if action == "add":
                 field_name = normalize_slug(request.form.get("new_name", "")).replace("-", "_")
                 if not field_name:
-                    flash("Podaj nazwe pola.", "error")
+                    flash("Podaj nazwę pola.", "error")
                     return redirect(url_for("admin.form_fields", form_id=form.id))
                 existing = db.execute(
                     select(FormField).where(FormField.form_id == form.id, FormField.name == field_name)
@@ -446,7 +504,7 @@ def form_fields(form_id: int):
                         )
                     )
                 db.commit()
-                flash("Pole formularza zostalo dodane.", "success")
+                flash("Pole formularza zostało dodane.", "success")
                 return redirect(url_for("admin.form_fields", form_id=form.id))
             if action.startswith("delete:"):
                 field_id = parse_optional_int(action.split(":", 1)[1])
@@ -455,7 +513,7 @@ def form_fields(form_id: int):
                     abort(404)
                 field.active = False
                 db.commit()
-                flash("Pole zostalo ukryte. Dane historyczne pozostaja w zgloszeniach.", "success")
+                flash("Pole zostało ukryte. Dane historyczne pozostają w zgłoszeniach.", "success")
                 return redirect(url_for("admin.form_fields", form_id=form.id))
 
             for field in fields:
@@ -468,7 +526,7 @@ def form_fields(form_id: int):
                 field.sort_order = parse_int(request.form.get(prefix + "sort_order"), field.sort_order)
                 field.options = parse_field_options(field.type, request.form.get(prefix + "options", ""))
             db.commit()
-            flash("Pola formularza zostaly zapisane.", "success")
+            flash("Pola formularza zostały zapisane.", "success")
             return redirect(url_for("admin.form_fields", form_id=form.id))
         return render_template(
             "admin/forms/fields.html",

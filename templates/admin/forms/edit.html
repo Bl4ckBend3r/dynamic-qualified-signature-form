@@ -11,15 +11,27 @@
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrót</a>
     </div>
 </div>
-<form method="post" enctype="multipart/form-data" class="admin-card admin-form">
+{% include "admin/forms/_tabs.html" %}
+<form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-    <div class="admin-form-grid">
+    <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
+    <section class="admin-form-tab-panel" id="form-tab-basic" role="tabpanel" data-form-tab-panel="basic" {% if active_tab != 'basic' %}hidden{% endif %}>
+        <div class="admin-section-heading"><div><h2>Podstawowe</h2><p>Najważniejsze informacje i dostępność formularza.</p></div></div>
+        <div class="admin-form-grid">
         <label><span>Nazwa</span><input name="name" value="{{ form.name }}" required></label>
         <label><span>Slug</span><input name="slug" value="{{ form.slug }}" required></label>
         <label><span>Tytuł</span><input name="title" value="{{ form.title }}"></label>
         <label><span>Kolejność sortowania</span><input type="number" name="sort_order" value="{{ form.sort_order }}"></label>
         <label class="admin-form-wide"><span>Opis</span><textarea name="description">{{ form.description }}</textarea></label>
-        <label><span>Etykieta</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08"></label>
+        <label><span>Etykieta formularza</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08"></label>
+        <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
+        <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
+        </div>
+    </section>
+
+    <section class="admin-form-tab-panel" id="form-tab-appearance" role="tabpanel" data-form-tab-panel="appearance" {% if active_tab != 'appearance' %}hidden{% endif %}>
+        <div class="admin-section-heading"><div><h2>Logo i wygląd</h2><p>Dostosuj oznaczenie i nagłówek publicznego formularza.</p></div></div>
+        <div class="admin-form-grid">
         <label><span>Wariant etykiety</span><input name="label_variant" value="{{ form.label_variant }}"></label>
         <label><span>Kolor tekstu etykiety</span><input name="label_color" value="{{ form.label_color }}"></label>
         <label><span>Tło etykiety</span><input name="label_background" value="{{ form.label_background }}"></label>
@@ -40,12 +52,17 @@
                 <option value="right" {% if form.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
             </select>
         </label>
-        <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
-        <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
-    </div>
+        </div>
+        <div class="admin-form-header-preview" data-form-header-preview>
+            <span class="admin-form-header-preview__label" style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
+            <h3>{{ form.title or form.name }}</h3>
+            <p>Podgląd nagłówka formularza publicznego</p>
+        </div>
+    </section>
     {% set form_smtp = form.smtp_config or {} %}
+    <section class="admin-form-tab-panel" id="form-tab-emails" role="tabpanel" data-form-tab-panel="emails" {% if active_tab != 'emails' %}hidden{% endif %}>
     <div class="admin-section" data-mail-settings>
-        <h2>Integracja poczty</h2>
+        <h2>Ustawienia wysyłki e-mail</h2>
         <div class="admin-form-grid">
             <label><span>Sposób wysyłki</span><select name="mail_mode" data-mail-mode>
                 <option value="system" {% if (form.mail_mode or 'system') == 'system' %}selected{% endif %}>Użyj domyślnej poczty systemowej</option>
@@ -68,6 +85,7 @@
         </div>
         <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_mail_settings_test', form_id=form.id) }}" formmethod="post">Testuj połączenie</button>
     </div>
+    </section>
     {% set instruction_config = form.user_instruction_config or {} %}
     {% if false %}
     <div class="admin-section admin-instruction-editor" data-instruction-editor data-legacy-editor hidden>
@@ -163,6 +181,7 @@
         </section>
     </template>
     {% endif %}
+    <section class="admin-form-tab-panel" id="form-tab-documents" role="tabpanel" data-form-tab-panel="documents" {% if active_tab != 'documents' %}hidden{% endif %}>
     <div class="admin-section">
         <h2>Regulamin</h2>
         {% if form.regulation %}
@@ -177,7 +196,9 @@
             <input type="file" name="regulation_file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
         </label>
     </div>
+    </section>
     {% if g.admin_user.role == "super_admin" %}
+        <section class="admin-form-tab-panel" id="form-tab-permissions" role="tabpanel" data-form-tab-panel="permissions" {% if active_tab != 'permissions' %}hidden{% endif %}>
         <div class="admin-section">
             <h2>Uprawnienia</h2>
             <div class="admin-check-grid">
@@ -186,6 +207,7 @@
                 {% endfor %}
             </div>
         </div>
+        </section>
     {% endif %}
     {% set workflow = workflow_builder %}
     <div class="admin-workflow-builder" data-workflow-builder>
@@ -199,7 +221,7 @@
             </div>
         {% endif %}
 
-        <section class="admin-section workflow-section">
+        <section class="admin-section workflow-section admin-form-tab-panel" id="form-tab-workflow" role="tabpanel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
             <div class="admin-section-heading">
                 <div><p class="admin-eyebrow">Kreator workflow</p><h2>Ustawienia procesu</h2><p>Określ główne zasady procesu. Kolejne szczegóły ustawisz w etapach poniżej.</p></div>
             </div>
@@ -212,13 +234,14 @@
                 </label>
                 <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
                 <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
-                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Wymaga potwierdzenia podpisania umowy przez urzędnika</span></label>
+                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Wymaga potwierdzenia podpisania umowy przez urząd</span></label>
                 <label class="admin-check"><input type="checkbox" name="send_email_notifications" {% if workflow.get('send_email_notifications') %}checked{% endif %}><span>Wysyłaj powiadomienia e-mail</span></label>
                 <label class="admin-check"><input type="checkbox" name="allow_correction" {% if workflow.get('allow_correction') %}checked{% endif %}><span>Pozwól na korektę zgłoszenia</span></label>
             </div>
+            <p class="workflow-help">Dokumenty wymagane w procesie konfigurujesz w osobnych zakładkach „Deklaracja” i „Umowa”.</p>
         </section>
 
-        <section class="admin-section workflow-section">
+        <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
             <div class="admin-section-heading">
                 <div><h2>Etapy workflow</h2><p>Każda karta opisuje jeden etap widoczny w panelu i w instrukcji dla użytkownika.</p></div>
                 <button class="admin-button-secondary" type="button" data-add-workflow-step>Dodaj etap</button>
@@ -260,12 +283,12 @@
         {% set decision_definitions = [
             ('application_decision', 'Decyzja o akceptacji wniosku'),
             ('declaration_confirmation', 'Potwierdzenie podpisanej deklaracji'),
-            ('agreement_confirmation', 'Potwierdzenie podpisanej umowy przez beneficjenta'),
+            ('agreement_confirmation', 'Potwierdzenie podpisania umowy przez urząd'),
             ('correction_required', 'Wymagana korekta'),
             ('application_rejection', 'Odrzucenie wniosku'),
-            ('agreement_rejection', 'Odrzucenie podpisanej umowy')
+            ('agreement_rejection', 'Skierowanie umowy do poprawy')
         ] %}
-        <section class="admin-section workflow-section">
+        <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
             <div class="admin-section-heading"><div><h2>Decyzje urzędnika</h2><p>Wskaż etap, na którym decyzja jest dostępna, oraz jej skutki.</p></div></div>
             <div class="workflow-decision-grid">
                 {% for decision_id, default_label in decision_definitions %}
@@ -286,18 +309,27 @@
             </div>
         </section>
 
-        <section class="admin-section workflow-section">
-            <div class="admin-section-heading"><div><h2>Dokumenty wymagane w procesie</h2><p>Ustaw dokumenty, podpis i osobę odpowiedzialną za wgranie pliku.</p></div></div>
+        <section class="admin-section workflow-section admin-form-tab-panel" role="tabpanel" data-form-tab-panel="declaration agreement" {% if active_tab not in ['declaration', 'agreement'] %}hidden{% endif %}>
+            <div class="admin-section-heading" data-form-tab-only="declaration"><div><h2>Deklaracja</h2><p>Skonfiguruj wymagalność, szablon, generowanie i podpis deklaracji.</p></div></div>
+            <div class="admin-section-heading" data-form-tab-only="agreement"><div><h2>Umowa</h2><p>Skonfiguruj szablon, numerację, pliki i podpisy umów szkoleniowych.</p></div></div>
             <div class="admin-check-grid">
-                <label class="admin-check"><input type="checkbox" data-document-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymagana deklaracja</span></label>
-                <label class="admin-check"><input type="checkbox" data-document-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymagana umowa</span></label>
-                <label class="admin-check"><input type="checkbox" checked disabled><span>Jedna umowa na jedno szkolenie</span></label>
+                <label class="admin-check" data-form-tab-only="declaration"><input type="checkbox" data-document-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymagana deklaracja</span></label>
+                <label class="admin-check" data-form-tab-only="agreement"><input type="checkbox" data-document-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymagana umowa</span></label>
+                <label class="admin-check" data-form-tab-only="agreement"><input type="checkbox" checked disabled><span>Jedna umowa na jedno szkolenie</span></label>
                 <label class="admin-check"><input type="checkbox" name="electronic_signature_required" {% if workflow.get('electronic_signature_required') %}checked{% endif %}><span>Wymagany podpis elektroniczny</span></label>
             </div>
             <div class="workflow-document-fields">
-                <label class="admin-form-wide admin-code-field" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}><span>Szablon deklaracji HTML</span><textarea name="declaration_template_html" rows="8" spellcheck="false">{{ workflow.get('declaration_template_html', '') }}</textarea><small>Brak szablonu uniemożliwi zapis procesu wymagającego deklaracji.</small></label>
-                <label class="admin-form-wide admin-code-field" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}><span>Szablon umowy HTML</span><textarea name="contract_template_html" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small></label>
-                <div class="admin-form-grid" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                <div data-form-tab-only="declaration" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
+                    <label class="admin-form-wide admin-code-field"><span>Szablon deklaracji HTML</span><textarea name="declaration_template_html" data-template-content="declaration" rows="8" spellcheck="false">{{ workflow.get('declaration_template_html', '') }}</textarea><small>Brak szablonu uniemożliwi zapis procesu wymagającego deklaracji.</small></label>
+                    <label><span>Wgraj szablon deklaracji HTML</span><input type="file" accept="text/html,.html" data-template-file="declaration"></label>
+                    <label><span>Nazwa pliku deklaracji</span><input name="declaration_filename_pattern" value="{{ workflow.get('declaration_filename_pattern', '') }}" placeholder="Imię_Nazwisko-deklaracja.pdf"></label>
+                    <p class="workflow-help">Deklaracja jest generowana jako jeden dokument dla zgłoszenia.</p>
+                </div>
+                <div data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                    <label class="admin-form-wide admin-code-field"><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small></label>
+                    <label><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
+                </div>
+                <div class="admin-form-grid" data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                     <input type="hidden" name="contract_generation_mode" value="per_training">
                     <label><span>Kto wgrywa podpisany dokument</span><select name="signed_document_uploader"><option value="beneficiary" {% if workflow.get('signed_document_uploader') == 'beneficiary' %}selected{% endif %}>Beneficjent</option><option value="officer" {% if workflow.get('signed_document_uploader') == 'officer' %}selected{% endif %}>Urzędnik</option></select></label>
                     <label><span>Nazwa pliku PDF</span><input name="contract_filename_pattern" value="{{ workflow.get('contract_filename_pattern', '') }}" placeholder="Imię_Nazwisko-szkolenie-umowa.pdf"></label>
@@ -306,7 +338,7 @@
             </div>
         </section>
 
-        <section class="admin-section workflow-section">
+        <section class="admin-section workflow-section admin-form-tab-panel" id="form-tab-instructions" role="tabpanel" data-form-tab-panel="instructions" {% if active_tab != 'instructions' %}hidden{% endif %}>
             <div class="admin-section-heading"><div><h2>Instrukcje dla użytkownika</h2><p>Opis i komunikat „Co dalej?” dla poszczególnych etapów edytujesz bezpośrednio na kartach etapów.</p></div></div>
             <p class="workflow-help">Statusy przypisane do etapu wybierasz na jego karcie w polu „Status etapu”.</p>
             <div class="admin-form-grid">
@@ -319,10 +351,10 @@
         {% set notification_definitions = [
             ('application_accepted', 'Po akceptacji wniosku'), ('application_rejected', 'Po odrzuceniu wniosku'),
             ('correction_required', 'Po wymaganiu korekty'), ('declaration_uploaded', 'Po wgraniu deklaracji'),
-            ('beneficiary_agreement_confirmed', 'Po potwierdzeniu umowy'), ('beneficiary_agreement_rejected', 'Po odrzuceniu umowy')
+            ('beneficiary_agreement_confirmed', 'Po podpisaniu umowy przez urząd'), ('beneficiary_agreement_rejected', 'Po skierowaniu umowy do poprawy')
         ] %}
         {% set available_mail_templates = form.mail_templates|selectattr('is_active')|list %}
-        <section class="admin-section workflow-section">
+        <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="emails" {% if active_tab != 'emails' %}hidden{% endif %}>
             <div class="admin-section-heading"><div><h2>Powiadomienia e-mail</h2><p>Włącz wiadomości wysyłane po najważniejszych zmianach statusu.</p></div></div>
             <div class="workflow-notification-list">
                 {% for event_id, event_label in notification_definitions %}
@@ -344,15 +376,26 @@
         </section>
 
         {% if workflow_advanced_elements %}
-            <section class="admin-section workflow-section workflow-advanced-summary">
+            <section class="admin-section workflow-section workflow-advanced-summary admin-form-tab-panel" data-form-tab-panel="advanced" {% if active_tab != 'advanced' %}hidden{% endif %}>
                 <h2>Elementy zaawansowane</h2><p>Te ustawienia zostały zachowane z istniejącej konfiguracji i nie są usuwane przez kreator.</p>
                 <ul>{% for element in workflow_advanced_elements %}<li>{{ element }}</li>{% endfor %}</ul>
             </section>
         {% endif %}
 
         {% if g.admin_user.role == 'super_admin' %}
-            <details class="admin-section workflow-section workflow-json-advanced" data-workflow-advanced>
-                <summary>Tryb zaawansowany — edycja JSON</summary>
+            <details class="admin-section workflow-section workflow-json-advanced" id="form-tab-advanced" role="tabpanel" data-form-tab-panel="advanced" data-workflow-advanced {% if active_tab != 'advanced' %}hidden{% endif %}>
+                <summary>Konfiguracja techniczna i narzędzia JSON</summary>
+                <div class="admin-validation-errors"><p>Zmiany w ustawieniach zaawansowanych mogą wpłynąć na działanie formularza.</p></div>
+                <div class="workflow-advanced-diagnostics">
+                    <p><strong>Liczba pól w definicji:</strong> {{ (form.definition_json.get('fields', []) if form.definition_json else [])|length }}</p>
+                    <p><strong>Liczba etapów workflow:</strong> {{ workflow.get('steps', [])|length }}</p>
+                    <p><strong>Elementy nierozpoznane przez kreator:</strong> {{ workflow_advanced_elements|length }}</p>
+                </div>
+                <label class="admin-form-wide admin-code-field"><span>Pełna konfiguracja formularza JSON</span><textarea name="form_definition_json" data-form-definition-json rows="18" spellcheck="false">{{ form.definition_json|tojson }}</textarea></label>
+                <label class="admin-check"><input type="checkbox" name="use_form_definition_json"><span>Zapisz pełną konfigurację z pola JSON</span></label>
+                <div class="admin-actions"><button type="button" class="admin-button-secondary" data-export-form-json>Eksportuj JSON</button><label class="admin-button-secondary admin-file-button">Importuj JSON<input type="file" accept="application/json,.json" data-import-form-json hidden></label></div>
+                <h3>Workflow JSON</h3>
+                <p><strong>Tryb zaawansowany — edycja JSON</strong></p>
                 <div class="admin-validation-errors"><p>Zmiana JSON-a może uszkodzić workflow. Korzystaj tylko, jeśli wiesz, co robisz.</p></div>
                 <label class="admin-check"><input type="checkbox" name="workflow_use_advanced_json" data-use-advanced-json><span>Zapisz konfigurację z pola JSON i odśwież kreator</span></label>
                 <label class="admin-form-wide admin-code-field"><span>Konfiguracja workflow JSON</span><textarea name="workflow_json" data-workflow-json rows="18" spellcheck="false">{{ workflow_json }}</textarea></label>
@@ -376,7 +419,6 @@
         </article>
     </template>
 
-    <div class="admin-form-actions workflow-save-actions"><a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a><button class="admin-button" type="submit">Zapisz workflow</button></div>
 
     {% set workflow = form.definition_json.get("workflow", {}) if form.definition_json else {} %}
     {% if false %}
@@ -433,6 +475,7 @@
         </div>
     </div>
     {% endif %}
+    <section class="admin-form-tab-panel" id="form-tab-trainings" role="tabpanel" data-form-tab-panel="trainings" {% if active_tab != 'trainings' %}hidden{% endif %}>
     {% set training_catalog = training_field.get('catalog', []) if training_field else [] %}
     <div class="admin-section admin-training-editor">
         <input type="hidden" name="training_active_present" value="1">
@@ -496,6 +539,7 @@
         <button class="admin-button-secondary" type="button" data-add-training>Dodaj szkolenie</button>
     </div>
 
+    </section>
     <template data-training-card-template>
         <section class="admin-training-item" data-training-card>
             <input type="hidden" name="training_item_id" value="">
@@ -532,15 +576,74 @@
             <button class="admin-link-button admin-link-danger admin-training-date-remove" type="button" data-remove-training-date>Usuń termin</button>
         </div>
     </template>
-    <div class="admin-form-actions">
+    <div class="admin-form-actions admin-form-tab-save">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
-        <button class="admin-button" type="submit">Zapisz zmiany</button>
+        <button class="admin-button" type="submit" title="Zapisz workflow i pozostałe zmiany">Zapisz zmiany</button>
     </div>
 </form>
 <script>
 document.querySelectorAll("[data-legacy-editor] input, [data-legacy-editor] select, [data-legacy-editor] textarea, [data-legacy-editor] button").forEach((control) => {
     control.disabled = true;
 });
+
+const tabbedForm = document.querySelector("[data-form-tabbed]");
+const activeTabInput = tabbedForm?.querySelector("[data-active-tab-input]");
+const tabButtons = Array.from(document.querySelectorAll("[data-form-tab-target]"));
+const tabSelect = document.querySelector("[data-form-tab-select]");
+let activeFormTab = tabbedForm?.dataset.initialTab || "basic";
+let formIsDirty = false;
+let formIsSubmitting = false;
+
+function setActiveFormTab(tabName, updateAddress = true) {
+    if (tabName === "fields") {
+        if (formIsDirty && !window.confirm("Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?")) return;
+        window.location.href = tabbedForm.dataset.fieldsUrl;
+        return;
+    }
+    const matchingPanels = Array.from(document.querySelectorAll("[data-form-tab-panel]")).filter((panel) =>
+        (panel.dataset.formTabPanel || "").split(/\s+/).includes(tabName)
+    );
+    if (!matchingPanels.length) return;
+    activeFormTab = tabName;
+    document.querySelectorAll("[data-form-tab-panel]").forEach((panel) => {
+        panel.hidden = !(panel.dataset.formTabPanel || "").split(/\s+/).includes(tabName);
+    });
+    document.querySelectorAll("[data-form-tab-only]").forEach((fragment) => {
+        fragment.style.display = (fragment.dataset.formTabOnly || "").split(/\s+/).includes(tabName) ? "" : "none";
+    });
+    tabButtons.forEach((button) => {
+        const selected = button.dataset.formTabTarget === tabName;
+        button.classList.toggle("is-active", selected);
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    if (tabSelect) tabSelect.value = tabName;
+    if (activeTabInput) activeTabInput.value = tabName;
+    if (updateAddress) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", tabName);
+        window.history.replaceState({}, "", url);
+    }
+}
+
+tabButtons.forEach((button) => button.addEventListener("click", () => setActiveFormTab(button.dataset.formTabTarget)));
+tabSelect?.addEventListener("change", () => setActiveFormTab(tabSelect.value));
+document.querySelector("[data-form-external-tab]")?.addEventListener("click", (event) => {
+    if (formIsDirty && !window.confirm("Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?")) event.preventDefault();
+});
+tabbedForm?.addEventListener("input", () => { formIsDirty = true; });
+tabbedForm?.addEventListener("change", () => { formIsDirty = true; });
+tabbedForm?.addEventListener("invalid", (event) => {
+    const fragment = event.target.closest("[data-form-tab-only]");
+    const panel = event.target.closest("[data-form-tab-panel]");
+    const tabName = fragment?.dataset.formTabOnly?.split(/\s+/)[0] || panel?.dataset.formTabPanel?.split(/\s+/)[0];
+    if (tabName) setActiveFormTab(tabName);
+}, true);
+window.addEventListener("beforeunload", (event) => {
+    if (!formIsDirty || formIsSubmitting) return;
+    event.preventDefault();
+    event.returnValue = "";
+});
+setActiveFormTab(activeFormTab, false);
 
 const mailMode = document.querySelector("[data-mail-mode]");
 const customSmtp = document.querySelector("[data-custom-smtp]");
@@ -799,6 +902,46 @@ document.querySelector("[data-refresh-workflow-json]")?.addEventListener("click"
     }
 });
 
+document.querySelector("[data-import-form-json]")?.addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+        const target = document.querySelector("[data-form-definition-json]");
+        try {
+            const parsed = JSON.parse(String(reader.result || "{}"));
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Konfiguracja musi być obiektem.");
+            if (target) target.value = JSON.stringify(parsed, null, 2);
+            formIsDirty = true;
+        } catch (exception) {
+            window.alert(`Niepoprawny plik JSON: ${exception.message}`);
+        }
+    });
+    reader.readAsText(file);
+});
+document.querySelectorAll("[data-template-file]").forEach((input) => {
+    input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        const target = document.querySelector(`[data-template-content="${input.dataset.templateFile}"]`);
+        if (!file || !target) return;
+        const reader = new FileReader();
+        reader.addEventListener("load", () => {
+            target.value = String(reader.result || "");
+            target.dispatchEvent(new Event("input", {bubbles: true}));
+        });
+        reader.readAsText(file);
+    });
+});
+document.querySelector("[data-export-form-json]")?.addEventListener("click", () => {
+    const content = document.querySelector("[data-form-definition-json]")?.value || "{}";
+    try { JSON.parse(content); } catch (exception) { window.alert(`Nie można wyeksportować niepoprawnego JSON-a: ${exception.message}`); return; }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([content], {type: "application/json"}));
+    link.download = `${document.querySelector('[name="slug"]')?.value || "formularz"}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+});
+
 syncWorkflowBuilder();
 
 function syncWorkflowTemplateVisibility() {
@@ -878,6 +1021,7 @@ trainingList?.addEventListener("click", function (event) {
 });
 
 document.querySelector("form.admin-form")?.addEventListener("submit", function () {
+    formIsSubmitting = true;
     syncTrainingIndexes();
     syncInstructionEditor();
     syncWorkflowBuilder();

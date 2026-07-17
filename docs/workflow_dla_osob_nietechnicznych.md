@@ -33,7 +33,7 @@ Każdy status przypisz do jednego, najlepiej pasującego etapu. Przykładowo:
 
 - „Wniosek złożony” i „Oczekuje na decyzję urzędnika” należą do etapu Wniosek.
 - „Deklaracja oczekuje na podpis” i „Deklaracja podpisana” należą do etapu Deklaracja.
-- „Umowa oczekuje na podpis”, „Umowa podpisana przez beneficjenta — do potwierdzenia” i „Podpisana umowa wymaga poprawy” należą do etapu Umowa.
+- „Umowa oczekuje na podpis beneficjenta”, „Umowa oczekuje na podpis po stronie urzędu”, „Umowa podpisana przez urząd” i „Umowa wymaga poprawy” należą do etapu Umowa.
 - „Proces zakończony” należy do etapu Zakończenie.
 
 Nie przypisuj tego samego statusu do kilku etapów, ponieważ użytkownik nie będzie wiedział, który krok jest aktualny.
@@ -67,7 +67,10 @@ Bez etapu deklaracji i bez szablonu panel nie zapisze procesu wymagającego dekl
 2. Dodaj szablon umowy w sekcji dokumentów.
 3. Dodaj etap „Umowa oczekuje na podpis beneficjenta”.
 4. Dodaj etap „Podpisana umowa wgrana przez beneficjenta”.
-5. Jeżeli urzędnik ma sprawdzać podpis, włącz potwierdzenie i dodaj decyzję na etapie wgranej umowy.
+5. Dodaj etap „Umowa oczekuje na podpis po stronie urzędu”.
+6. Włącz potwierdzenie i dodaj decyzję „Umowa podpisana przez urząd”.
+
+Beneficjent najpierw podpisuje umowę i wgrywa ją do systemu. Następnie urząd podpisuje tę umowę po swojej stronie. Urzędnik zaznacza w systemie „Tak” dopiero wtedy, gdy podpis urzędu został złożony. Nie jest to potwierdzenie samego podpisu beneficjenta.
 
 Opcja „Jedna umowa na jedno szkolenie” oznacza, że osoba wybierająca trzy szkolenia otrzyma trzy osobne umowy. Każda z nich ma własny plik i numer. W aktualnym procesie szkoleniowym ta opcja jest zawsze włączona.
 
@@ -83,7 +86,9 @@ Przykładowe komunikaty:
 
 - „Wniosek został wysłany. Poczekaj na decyzję urzędnika.”
 - „Deklaracja jest gotowa. Pobierz ją, podpisz i wgraj ponownie.”
-- „Podpisana umowa została wgrana. Poczekaj na potwierdzenie przez urzędnika.”
+- „Podpisana umowa została wgrana. Oczekuje na podpis i potwierdzenie po stronie urzędu.”
+- „Umowa oczekuje na podpis po stronie urzędu. Nie musisz teraz wykonywać dodatkowych czynności.”
+- „Umowa została podpisana przez urząd. Proces został zakończony.”
 - „Umowa wymaga poprawy. Przeczytaj uzasadnienie, popraw dokument i wgraj go ponownie.”
 - „Proces został zakończony. Nie musisz wykonywać dalszych czynności.”
 
@@ -96,7 +101,7 @@ E-mail warto wysłać wtedy, gdy użytkownik musi wykonać nową czynność albo
 - zaakceptowaniu albo odrzuceniu wniosku,
 - przygotowaniu dokumentu do podpisu,
 - odrzuceniu dokumentu i wskazaniu powodu,
-- potwierdzeniu podpisanej umowy,
+- podpisaniu umowy przez urząd,
 - zakończeniu procesu.
 
 Treść e-maila powinna być zgodna z instrukcją widoczną po sprawdzeniu statusu. Brak adresu e-mail nie może zatrzymać decyzji urzędnika.
@@ -110,8 +115,9 @@ Aby włączyć wiadomość, przejdź do sekcji „Powiadomienia e-mail”, wybie
 3. Użytkownik podpisuje deklarację.
 4. System generuje umowę.
 5. Użytkownik podpisuje i wgrywa umowę.
-6. Urzędnik potwierdza, że umowa została podpisana przez beneficjenta.
-7. Proces zostaje zakończony.
+6. Urząd podpisuje umowę po swojej stronie.
+7. Urzędnik oznacza etap „Umowa podpisana przez urząd”.
+8. Proces zostaje zakończony.
 
 Jeżeli urzędnik odrzuci umowę, proces wraca do punktu 5. Użytkownik otrzymuje powód i może wgrać poprawny dokument.
 

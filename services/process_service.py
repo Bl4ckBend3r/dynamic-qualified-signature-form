@@ -20,6 +20,12 @@ class ProcessStatus(StrEnum):
     AGREEMENT_NOT_REQUIRED = "AGREEMENT_NOT_REQUIRED"
     AGREEMENT_BLOCKED = "AGREEMENT_BLOCKED"
     AGREEMENT_READY = "AGREEMENT_READY"
+    AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE = "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    AGREEMENT_UPLOADED_BY_BENEFICIARY = "AGREEMENT_UPLOADED_BY_BENEFICIARY"
+    AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE = "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE"
+    AGREEMENT_SIGNED_BY_OFFICE = "AGREEMENT_SIGNED_BY_OFFICE"
+    AGREEMENT_REJECTED_BY_OFFICE = "AGREEMENT_REJECTED_BY_OFFICE"
+    # Historyczne kody pozostają obsługiwane przy odczycie istniejących zgłoszeń.
     AGREEMENT_WAITING_FOR_SIGNATURE = "AGREEMENT_WAITING_FOR_SIGNATURE"
     AGREEMENT_UPLOADED = "AGREEMENT_UPLOADED"
     BENEFICIARY_AGREEMENT_CONFIRMED = "BENEFICIARY_AGREEMENT_CONFIRMED"
@@ -177,14 +183,14 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
             pass
 
     if is_agreement_signature_valid(row):
-        return ProcessStatus.AGREEMENT_SIGNED
+        return ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE
 
     if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
         return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
 
     if is_declaration_signature_valid(row):
         if is_yes(row.get("agreement_generated")):
-            return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
+            return ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE
 
         if not is_agreement_required(row):
             return ProcessStatus.AGREEMENT_NOT_REQUIRED
@@ -209,7 +215,7 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
         return ProcessStatus.DECLARATION_NOT_REQUIRED
 
     if is_yes(row.get("agreement_generated")):
-        return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
+        return ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE
 
     if is_agreement_blocked(row):
         return ProcessStatus.AGREEMENT_BLOCKED

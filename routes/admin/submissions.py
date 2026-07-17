@@ -319,7 +319,7 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
     if not str(submission.email or "").strip():
         flash("Decyzję zapisano, ale użytkownik nie ma adresu e-mail.", "warning")
         return
-    confirmed = decision_result.decision_status == ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value
+    confirmed = decision_result.decision_status == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
     template_type = "agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"
     template = db.execute(
         select(MailTemplate)
@@ -337,12 +337,12 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
             template_type=template_type,
             subject="Decyzja dotycząca umowy {{ submission_id }}",
             content_html=(
-                "<p>Podpisana umowa została potwierdzona przez urzędnika.</p>"
+                "<p>Umowa została podpisana przez urząd.</p>"
                 if confirmed
                 else "<p>Podpisana umowa wymaga poprawy.</p><p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
             ),
             content_text=(
-                "Podpisana umowa została potwierdzona przez urzędnika."
+                "Umowa została podpisana przez urząd."
                 if confirmed
                 else "Podpisana umowa wymaga poprawy. Powód: {{ agreement_decision_reason_text }}"
             ),
@@ -366,7 +366,7 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
         footer=footer,
         to_email=submission.email,
         subject_template=template.subject,
-        event_type=("beneficiary_agreement_confirmed" if confirmed else "beneficiary_agreement_rejected"),
+        event_type=("agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"),
         sent_by_id=g.admin_user.id,
         files=services.submission_document_service.list_documents(submission.submission_id),
         extra_context={
@@ -447,7 +447,7 @@ def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
         )
         if send_notification:
             _notify_beneficiary_agreement_decision(db, form, submission, result)
-        flash("Decyzja dotycząca podpisanej umowy została zapisana.", "success")
+        flash("Potwierdzenie podpisania umowy przez urząd zostało zapisane.", "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 

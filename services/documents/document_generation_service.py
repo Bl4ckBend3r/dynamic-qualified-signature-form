@@ -290,7 +290,7 @@ def generate_training_agreements_for_submission(
         "agreement_filename": agreements[0]["filename"] if agreements else "",
         "agreement_generated_at": resolved_date,
         "training_agreements": serialize_json_list(agreements),
-        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
     }
     storage.update_csv_row_by_submission_id(slug, submission_id, updates)
     row.update(updates)

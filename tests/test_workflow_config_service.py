@@ -2,6 +2,7 @@ from services.workflow_config_service import (
     WorkflowConfigNormalizer,
     WorkflowConfigValidator,
     workflow_status_label,
+    workflow_status_options,
 )
 
 
@@ -13,6 +14,27 @@ def test_legacy_statuses_have_readable_labels():
     assert workflow_status_label("document_uploaded") == "Dokument wgrany"
     assert workflow_status_label("contract_required") == "Umowa wymagana"
     assert workflow_status_label("declaration_required") == "Deklaracja wymagana"
+
+
+def test_new_workflow_options_use_office_signature_statuses_and_modernize_old_label():
+    options = {item["value"] for item in workflow_status_options()}
+    normalized = WorkflowConfigNormalizer().normalize(
+        {
+            "initial_step": "office_signature",
+            "steps": [
+                {
+                    "id": "office_signature",
+                    "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+                    "label": "Umowa podpisana przez beneficjenta",
+                }
+            ],
+        }
+    )
+
+    assert "AGREEMENT_SIGNED_BY_OFFICE" in options
+    assert "BENEFICIARY_AGREEMENT_CONFIRMED" not in options
+    assert normalized["steps"][0]["admin_label"] == "Umowa podpisana przez urząd"
+    assert normalized["steps"][0]["user_label"] == "Umowa podpisana przez urząd"
 
 
 def test_normalizer_preserves_advanced_workflow_and_step_fields():
@@ -77,7 +99,7 @@ def test_validator_requires_agreement_and_confirmation_stages():
     )
 
     assert "Proces wymaga umowy, ale nie ma etapu umowy." in errors
-    assert any("Umowa podpisana przez beneficjenta" in error for error in errors)
+    assert any("Potwierdzenie podpisania umowy przez urząd" in error for error in errors)
 
 
 def test_officer_agreement_decision_is_allowed_only_after_upload():
@@ -103,4 +125,3 @@ def test_officer_agreement_decision_is_allowed_only_after_upload():
     errors = WorkflowConfigValidator().validate(base)
 
     assert any("nie może być dostępna na wybranym etapie" in error for error in errors)
-

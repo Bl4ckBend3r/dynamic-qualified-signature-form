@@ -68,13 +68,14 @@
             {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin", "form_manager"] %}
                 <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                    <label><span>Umowa podpisana przez beneficjenta</span>
+                    <label><span>Umowa podpisana przez urząd</span>
                         <select name="agreement_decision" required>
                             <option value="">Wybierz decyzję</option>
                             <option value="accepted">Tak</option>
                             <option value="rejected">Nie</option>
                             <option value="correction">Do poprawy</option>
                         </select>
+                        <small>Zaznacz, czy umowa została podpisana po stronie urzędu i może zakończyć proces.</small>
                     </label>
                     <label><span>Uzasadnienie decyzji negatywnej</span>
                         <textarea name="agreement_decision_reason" rows="3"></textarea>

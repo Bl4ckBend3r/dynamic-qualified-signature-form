@@ -1059,6 +1059,129 @@
         grid-template-columns: 1fr;
     }
 }
+.admin-form-tabs {
+    position: sticky;
+    top: .75rem;
+    z-index: 12;
+    display: flex;
+    gap: .35rem;
+    margin: 0 0 1rem;
+    padding: .55rem;
+    overflow-x: auto;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .97);
+    box-shadow: 0 6px 20px rgba(25, 32, 45, .08);
+    scrollbar-width: thin;
+}
+
+.admin-form-tab {
+    flex: 0 0 auto;
+    padding: .62rem .8rem;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--admin-muted, #596170);
+    font: inherit;
+    font-size: .9rem;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.admin-form-tab:hover {
+    background: #f0f3f8;
+    color: #24344d;
+}
+
+.admin-form-tab.is-active,
+.admin-form-tab[aria-selected="true"] {
+    background: #244a79;
+    color: #fff;
+    box-shadow: 0 3px 10px rgba(36, 74, 121, .22);
+}
+
+.admin-form-tab-mobile {
+    display: none;
+    margin-bottom: 1rem;
+}
+
+.admin-form-tab-panel {
+    min-width: 0;
+}
+
+.admin-form-tabbed {
+    position: relative;
+    min-height: 18rem;
+}
+
+.admin-form-tab-save {
+    position: sticky;
+    bottom: .75rem;
+    z-index: 10;
+    margin-top: 1.25rem;
+    padding: .8rem;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .97);
+    box-shadow: 0 8px 24px rgba(25, 32, 45, .12);
+}
+
+.admin-form-header-preview {
+    margin-top: 1rem;
+    padding: 1.25rem;
+    border: 1px dashed var(--admin-border, #cfd4dd);
+    border-radius: 12px;
+    text-align: center;
+    background: #fafbfc;
+}
+
+.admin-form-header-preview__label {
+    display: inline-flex;
+    margin-bottom: .65rem;
+    padding: .28rem .65rem;
+    border-radius: 999px;
+    font-size: .78rem;
+    font-weight: 800;
+}
+
+.workflow-advanced-diagnostics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .75rem;
+    margin: 1rem 0;
+}
+
+.workflow-advanced-diagnostics p {
+    margin: 0;
+    padding: .8rem;
+    border-radius: 10px;
+    background: #f2f5f9;
+}
+
+.admin-file-button {
+    cursor: pointer;
+}
+
+@media (max-width: 720px) {
+    .admin-form-tabs {
+        display: none;
+    }
+
+    .admin-form-tab-mobile {
+        display: grid;
+    }
+
+    .workflow-advanced-diagnostics {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-form-tab-save {
+        bottom: .4rem;
+    }
+}
+
 .admin-shell [hidden] {
     display: none !important;
 }

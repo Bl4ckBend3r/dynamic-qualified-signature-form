@@ -219,7 +219,7 @@ class FormConfigService:
                         "id": "agreement_signature",
                         "type": "signature_upload",
                         "document_id": "agreement",
-                        "next": "beneficiary_agreement_review",
+                        "next": "office_agreement_signature",
                     },
                 ]
             )
@@ -239,7 +239,7 @@ class FormConfigService:
                         "type": "signature_upload_many",
                         "document_id": "training_agreement",
                         "repeat_over": "selected_trainings",
-                        "next": "beneficiary_agreement_review",
+                        "next": "office_agreement_signature",
                     },
                 ]
             )
@@ -247,9 +247,9 @@ class FormConfigService:
         if {"agreement", "training_agreement"} & document_ids:
             steps.append(
                 {
-                    "id": "beneficiary_agreement_review",
+                    "id": "office_agreement_signature",
                     "type": "manual_decision",
-                    "label": "Umowa podpisana przez beneficjenta",
+                    "label": "Umowa podpisana przez urząd",
                     "decisions": {
                         "accepted": "completed",
                         "rejected": "agreement_correction",
@@ -262,7 +262,7 @@ class FormConfigService:
                     "id": "agreement_correction",
                     "type": "signature_upload",
                     "document_id": "agreement",
-                    "next": "beneficiary_agreement_review",
+                    "next": "office_agreement_signature",
                 }
             )
 

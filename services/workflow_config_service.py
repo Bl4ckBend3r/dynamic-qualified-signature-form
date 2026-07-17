@@ -30,9 +30,14 @@ STATUS_LABELS: dict[str, str] = {
     "contract_required": "Umowa wymagana",
     "AGREEMENT_READY": "Umowa gotowa",
     "AGREEMENT_GENERATED": "Umowa wygenerowana",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
     "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
-    "AGREEMENT_UPLOADED": "Podpisana umowa wgrana przez beneficjenta",
-    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
     "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
     "WAITING_FOR_CORRECTION": "Wymagana korekta",
     "CORRECTION_REQUIRED": "Wymagana korekta",
@@ -53,10 +58,11 @@ DEFAULT_STEP_STATUS = {
     "declaration_signature": "DECLARATION_WAITING_FOR_SIGNATURE",
     "agreement": "AGREEMENT_READY",
     "training_agreements": "AGREEMENT_READY",
-    "agreement_signature": "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "training_agreements_signature": "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "beneficiary_agreement_review": "AGREEMENT_UPLOADED",
-    "agreement_correction": "BENEFICIARY_AGREEMENT_REJECTED",
+    "agreement_signature": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "training_agreements_signature": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "beneficiary_agreement_review": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "office_agreement_signature": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "agreement_correction": "AGREEMENT_REJECTED_BY_OFFICE",
     "end_rejected": "OFFICER_REJECTED",
     "completed": "PROCESS_COMPLETED",
 }
@@ -96,10 +102,11 @@ PREFERRED_WORKFLOW_STATUSES = (
     "DECLARATION_SIGNED",
     "AGREEMENT_REQUIRED",
     "AGREEMENT_GENERATED",
-    "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "AGREEMENT_UPLOADED",
-    "BENEFICIARY_AGREEMENT_CONFIRMED",
-    "BENEFICIARY_AGREEMENT_REJECTED",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "AGREEMENT_SIGNED_BY_OFFICE",
+    "AGREEMENT_REJECTED_BY_OFFICE",
     "CORRECTION_REQUIRED",
     "PROCESS_COMPLETED",
     "PROCESS_CANCELLED",
@@ -136,6 +143,9 @@ class WorkflowConfigNormalizer:
         source["electronic_signature_required"] = bool(source.get("electronic_signature_required", True))
         source["signed_document_uploader"] = str(source.get("signed_document_uploader") or "beneficiary")
         source["decision_settings"] = self._mapping_list(source.get("decision_settings"))
+        for decision in source["decision_settings"]:
+            if decision.get("label"):
+                decision["label"] = _modern_workflow_label(str(decision["label"]).strip())
         source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
         source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
         return source
@@ -144,18 +154,18 @@ class WorkflowConfigNormalizer:
         item = dict(step)
         step_id = self._step_id(item.get("id"), index)
         status = str(item.get("status") or item.get("status_code") or DEFAULT_STEP_STATUS.get(step_id) or "").strip()
-        label = str(
+        label = _modern_workflow_label(str(
             item.get("admin_label")
             or item.get("label")
             or item.get("name")
             or workflow_status_label(status)
             or f"Etap {index + 1}"
-        ).strip()
+        ).strip())
         item.update(
             {
                 "id": step_id,
                 "admin_label": label,
-                "user_label": str(item.get("user_label") or label).strip(),
+                "user_label": _modern_workflow_label(str(item.get("user_label") or label).strip()),
                 "status": status,
                 "description": str(item.get("description") or "").strip(),
                 "next_action": str(item.get("next_action") or "").strip(),
@@ -182,6 +192,7 @@ class WorkflowConfigNormalizer:
             "requires_agreement_confirmation", "send_email_notifications", "allow_correction",
             "electronic_signature_required", "signed_document_uploader", "decision_settings",
             "email_notifications", "declaration_template_html", "contract_template_html",
+            "declaration_filename_pattern", "declaration_generation_mode",
             "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern", "managed_documents",
         }
         result.extend(str(key) for key in normalized if key not in known_workflow)
@@ -253,8 +264,13 @@ class WorkflowConfigValidator:
             any(status.startswith("AGREEMENT_") for status in statuses) or {"agreement", "training_agreement"} & document_ids
         ):
             errors.append("Proces wymaga umowy, ale nie ma etapu umowy.")
-        if config["requires_agreement_confirmation"] and "AGREEMENT_UPLOADED" not in statuses:
-            errors.append("Dodaj etap „Umowa podpisana przez beneficjenta — potwierdzenie urzędnika”.")
+        office_signature_statuses = {
+            "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+            "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+            "AGREEMENT_UPLOADED",
+        }
+        if config["requires_agreement_confirmation"] and not office_signature_statuses & statuses:
+            errors.append("Dodaj etap „Potwierdzenie podpisania umowy przez urząd”.")
         decision_rules = {
             "application_decision": {
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
@@ -263,8 +279,8 @@ class WorkflowConfigValidator:
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
             },
             "declaration_confirmation": {"DECLARATION_UPLOADED", "DECLARATION_SIGNED"},
-            "agreement_confirmation": {"AGREEMENT_UPLOADED"},
-            "agreement_rejection": {"AGREEMENT_UPLOADED"},
+            "agreement_confirmation": office_signature_statuses,
+            "agreement_rejection": office_signature_statuses,
         }
         for decision in config.get("decision_settings", []):
             step_id = str(decision.get("step_id") or "").strip()
@@ -293,3 +309,16 @@ class WorkflowConfigValidator:
                     f"Powiadomienie „{notification.get('label') or notification.get('id')}” nie może być jednocześnie ręczne i automatyczne."
                 )
         return errors
+
+
+LEGACY_VISIBLE_LABELS = {
+    "Umowa podpisana przez beneficjenta": "Umowa podpisana przez urząd",
+    "Potwierdzenie podpisanej umowy przez beneficjenta": "Potwierdzenie podpisania umowy przez urząd",
+    "Umowa wgrana przez beneficjenta — do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+    "Umowa podpisana przez beneficjenta — do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+    "Umowa podpisana przez beneficjenta - do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+}
+
+
+def _modern_workflow_label(value: str) -> str:
+    return LEGACY_VISIBLE_LABELS.get(value, value)

@@ -12,7 +12,7 @@
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
         <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "OFFICER_ACCEPTED", "DECLARATION_SIGNED", "AGREEMENT_WAITING_FOR_SIGNATURE", "AGREEMENT_UPLOADED", "BENEFICIARY_AGREEMENT_REJECTED", "PROCESS_COMPLETED"] %}
+        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "OFFICER_ACCEPTED", "DECLARATION_SIGNED", "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE", "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_REJECTED_BY_OFFICE", "AGREEMENT_SIGNED_BY_OFFICE", "PROCESS_COMPLETED"] %}
             <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
     </select>

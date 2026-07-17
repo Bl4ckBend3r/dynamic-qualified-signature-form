@@ -1,56 +1,66 @@
 {% extends "admin/base.html" %}
-{% block title %}Upload formularza{% endblock %}
+{% block title %}Tworzenie formularza{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">Formularze</p>
-        <h1>Wgraj formularz</h1>
+        <h1>Utwórz formularz</h1>
     </div>
-    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrot</a>
+    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrót</a>
 </div>
+{% set upload_tab = request.form.get('active_tab', 'fields') %}
+<nav class="admin-form-tabs" role="tablist" aria-label="Etapy tworzenia formularza" data-upload-tabs>
+    <button type="button" class="admin-form-tab{% if upload_tab == 'fields' %} is-active{% endif %}" data-upload-tab="fields">Pola formularza</button>
+    <button type="button" class="admin-form-tab{% if upload_tab == 'basic' %} is-active{% endif %}" data-upload-tab="basic">Podstawowe</button>
+    <button type="button" class="admin-form-tab{% if upload_tab == 'emails' %} is-active{% endif %}" data-upload-tab="emails">E-maile</button>
+    <button type="button" class="admin-form-tab{% if upload_tab == 'appearance' %} is-active{% endif %}" data-upload-tab="appearance">Logo i wygląd</button>
+</nav>
+<label class="admin-form-tab-mobile"><span>Obszar tworzenia</span><select data-upload-tab-select><option value="fields">Pola formularza</option><option value="basic">Podstawowe</option><option value="emails">E-maile</option><option value="appearance">Logo i wygląd</option></select></label>
 <div class="admin-card">
-    <form method="post" enctype="multipart/form-data" class="admin-form">
+    <form method="post" enctype="multipart/form-data" class="admin-form" data-upload-form data-upload-active="{{ upload_tab }}">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <input type="hidden" name="active_tab" value="{{ upload_tab }}" data-upload-active-input>
+        <p>Po wgraniu pliku przejdziesz do edytora pól. Zakładki szkoleń, dokumentów, workflow i instrukcji będą dostępne po utworzeniu formularza.</p>
         <div class="admin-form-grid">
-            <label>
+            <label data-upload-panel="fields">
                 <span>Plik formularza</span>
                 <input type="file" name="form_file" accept="application/json,.json,text/html,.html,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required>
-                <small>Obslugiwane formaty: JSON, HTML, DOCX.</small>
+                <small>Obsługiwane formaty: JSON, HTML, DOCX.</small>
             </label>
-            <label>
+            <label data-upload-panel="basic">
                 <span>Nazwa formularza</span>
                 <input type="text" name="name" placeholder="np. Formularz rekrutacyjny">
             </label>
-            <label>
+            <label data-upload-panel="basic">
                 <span>Slug</span>
                 <input type="text" name="slug" placeholder="np. formularz_rekrutacyjny">
             </label>
-            <label>
-                <span>Kolejnosc sortowania</span>
+            <label data-upload-panel="basic">
+                <span>Kolejność sortowania</span>
                 <input type="number" name="sort_order" value="0">
             </label>
-            <label>
+            <label data-upload-panel="appearance">
                 <span>Etykieta projektu</span>
                 <input type="text" name="label_text" placeholder="np. PROJEKT 6.08">
             </label>
-            <label>
+            <label data-upload-panel="appearance">
                 <span>Kolor tekstu etykiety</span>
                 <input type="text" name="label_color" value="#b38d45">
             </label>
-            <label>
-                <span>Tlo etykiety</span>
+            <label data-upload-panel="appearance">
+                <span>Tło etykiety</span>
                 <input type="text" name="label_background" value="#f7f3ec">
             </label>
-            <label class="admin-check">
+            <label class="admin-check" data-upload-panel="basic">
                 <input type="checkbox" name="is_active" checked>
                 <span>Aktywny po wgraniu</span>
             </label>
-            <label class="admin-check">
+            <label class="admin-check" data-upload-panel="basic">
                 <input type="checkbox" name="is_public" checked>
                 <span>Widoczny publicznie</span>
             </label>
         </div>
-        <div class="admin-section">
+        <div class="admin-section" data-upload-panel="emails">
             <h2>Integracja poczty</h2>
             <div class="admin-form-grid">
                 <label><span>Sposób wysyłki</span><select name="mail_mode" data-mail-mode><option value="system">Użyj domyślnej poczty systemowej</option><option value="custom">Użyj indywidualnej poczty dla tego formularza</option><option value="disabled">Nie wysyłaj maili dla tego formularza</option></select></label>
@@ -75,6 +85,24 @@
     </form>
 </div>
 <script>
+const uploadForm = document.querySelector("[data-upload-form]");
+const uploadTabButtons = Array.from(document.querySelectorAll("[data-upload-tab]"));
+const uploadActiveInput = document.querySelector("[data-upload-active-input]");
+const uploadTabSelect = document.querySelector("[data-upload-tab-select]");
+function setUploadTab(tabName) {
+    document.querySelectorAll("[data-upload-panel]").forEach((panel) => { panel.hidden = panel.dataset.uploadPanel !== tabName; });
+    uploadTabButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.uploadTab === tabName));
+    if (uploadTabSelect) uploadTabSelect.value = tabName;
+    if (uploadActiveInput) uploadActiveInput.value = tabName;
+}
+uploadTabButtons.forEach((button) => button.addEventListener("click", () => setUploadTab(button.dataset.uploadTab)));
+uploadTabSelect?.addEventListener("change", () => setUploadTab(uploadTabSelect.value));
+uploadForm?.addEventListener("invalid", (event) => {
+    const panel = event.target.closest("[data-upload-panel]");
+    if (panel) setUploadTab(panel.dataset.uploadPanel);
+}, true);
+setUploadTab(uploadForm?.dataset.uploadActive || "fields");
+
 const mailMode = document.querySelector("[data-mail-mode]");
 const customSmtp = document.querySelector("[data-custom-smtp]");
 function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mailMode?.value !== "custom"; }

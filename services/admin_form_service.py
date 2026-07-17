@@ -81,6 +81,13 @@ def build_form_definition_from_admin_form(
     allow_advanced_json: bool = False,
 ) -> dict:
     definition = normalize_admin_form_definition(current_definition or {})
+    full_definition_value = str(form_data.get("form_definition_json", "") or "").strip()
+    use_full_definition = allow_advanced_json and form_data.get("use_form_definition_json") == "on"
+    if use_full_definition:
+        parsed_definition = json.loads(full_definition_value)
+        if not isinstance(parsed_definition, dict):
+            raise ValueError("Pełna konfiguracja JSON musi być obiektem.")
+        definition = normalize_admin_form_definition(parsed_definition)
     normalizer = WorkflowConfigNormalizer()
     builder_value = str(form_data.get("workflow_builder_json", "") or "").strip()
     advanced_value = str(form_data.get("workflow_json", "") or "").strip()
@@ -106,6 +113,11 @@ def build_form_definition_from_admin_form(
     workflow["electronic_signature_required"] = form_data.get("electronic_signature_required") == "on"
     workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
+    workflow["declaration_filename_pattern"] = (
+        form_data.get("declaration_filename_pattern", workflow.get("declaration_filename_pattern", "")).strip()
+        or "{first_name}_{last_name}-deklaracja.pdf"
+    )
+    workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     workflow["contract_generation_mode"] = "per_training"
     workflow["contract_filename_pattern"] = (
@@ -142,10 +154,10 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
     definitions = (
         ("application_decision", "Decyzja o akceptacji wniosku", ""),
         ("declaration_confirmation", "Potwierdzenie podpisanej deklaracji", ""),
-        ("agreement_confirmation", "Potwierdzenie podpisanej umowy przez beneficjenta", ""),
+        ("agreement_confirmation", "Potwierdzenie podpisania umowy przez urząd", ""),
         ("correction_required", "Wymagana korekta", ""),
         ("application_rejection", "Odrzucenie wniosku", ""),
-        ("agreement_rejection", "Odrzucenie podpisanej umowy", ""),
+        ("agreement_rejection", "Skierowanie umowy do poprawy", ""),
     )
     result = []
     for decision_id, label, default_step in definitions:
@@ -154,7 +166,9 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
             {
                 **current,
                 "id": decision_id,
-                "label": form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label,
+                "label": _modern_decision_label(
+                    form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label
+                ),
                 "step_id": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
                 "values": ["accepted", "rejected", "correction"],
                 "yes_status": form_data.get(
@@ -177,8 +191,8 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
         ("application_rejected", "Po odrzuceniu wniosku"),
         ("correction_required", "Po wymaganiu korekty"),
         ("declaration_uploaded", "Po wgraniu deklaracji"),
-        ("beneficiary_agreement_confirmed", "Po potwierdzeniu umowy"),
-        ("beneficiary_agreement_rejected", "Po odrzuceniu umowy"),
+        ("beneficiary_agreement_confirmed", "Po podpisaniu umowy przez urząd"),
+        ("beneficiary_agreement_rejected", "Po skierowaniu umowy do poprawy"),
     )
     result = []
     for event_id, label in events:
@@ -198,6 +212,14 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
             }
         )
     return result
+
+
+def _modern_decision_label(value: str) -> str:
+    return {
+        "Potwierdzenie podpisanej umowy przez beneficjenta": "Potwierdzenie podpisania umowy przez urząd",
+        "Umowa podpisana przez beneficjenta": "Umowa podpisana przez urząd",
+        "Odrzucenie podpisanej umowy": "Skierowanie umowy do poprawy",
+    }.get(value, value)
 
 
 def apply_training_selection_from_admin_form(definition: dict, form_data) -> dict:

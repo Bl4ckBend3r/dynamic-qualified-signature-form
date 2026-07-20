@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,9 @@ from services.admin_mail_context_service import build_mail_context, mail_templat
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,25 +83,39 @@ class MailDispatchService:
     def build_footer(self, footer=None, logo_url_builder=None) -> str:
         if not footer:
             return ""
-        parts = []
         alignment = str(getattr(footer, "logo_alignment", "left") or "left")
         if alignment not in {"left", "center", "right"}:
             alignment = "left"
+        position = str(getattr(footer, "logo_position", "top") or "top")
+        if position not in {"top", "bottom", "left", "right", "inline"}:
+            position = "top"
+        width = self._footer_logo_dimension(getattr(footer, "logo_width", None), 20, 800)
+        height = self._footer_logo_dimension(getattr(footer, "logo_height", None), 20, 400)
+
         logo = getattr(footer, "logo", None)
+        logo_html = ""
+        inline_logo_html = ""
         if logo and getattr(logo, "active", False) and logo_url_builder:
             logo_url = logo_url_builder(logo)
-            parts.append(
-                f'<div style="margin-bottom:16px;text-align:{alignment};">'
+            image_width = width if width is not None else (None if height is not None else 160)
+            image_styles = ["display:inline-block", "max-width:800px", "max-height:400px"]
+            image_styles.append(f"width:{image_width}px" if image_width is not None else "width:auto")
+            image_styles.append(f"height:{height}px" if height is not None else "height:auto")
+            image_html = (
                 f'<img src="{escape(str(logo_url))}" alt="{escape(str(getattr(logo, "name", "")))}" '
-                f'style="display:inline-block;max-width:180px;max-height:80px;width:auto;height:auto;">'
-                "</div>"
+                f'style="{";".join(image_styles)};">'
             )
+            logo_html = f'<div class="mail-footer-logo" style="text-align:{alignment};">{image_html}</div>'
+            inline_logo_html = (
+                f'<span class="mail-footer-logo" style="display:inline-block;text-align:{alignment};">'
+                f"{image_html}</span>"
+            )
+
         html_body = sanitize_instruction_html(getattr(footer, "html_body", "") or "")
-        if html_body:
-            parts.append(html_body)
+        content_parts = []
         contact_html = sanitize_instruction_html(getattr(footer, "contact_html", "") or "")
         if contact_html:
-            parts.append(f'<div class="mail-footer-contact">{contact_html}</div>')
+            content_parts.append(f'<div class="mail-footer-contact">{contact_html}</div>')
         links = getattr(footer, "links", None) or []
         link_parts = []
         for item in links:
@@ -108,11 +126,52 @@ class MailDispatchService:
             if label and url.lower().startswith(("https://", "http://", "mailto:", "tel:")):
                 link_parts.append(f'<a href="{escape(url, quote=True)}" rel="noopener noreferrer">{label}</a>')
         if link_parts:
-            parts.append('<div class="mail-footer-links">' + " · ".join(link_parts) + "</div>")
+            content_parts.append('<div class="mail-footer-links">' + " · ".join(link_parts) + "</div>")
         legal_text = sanitize_instruction_html(getattr(footer, "legal_text", "") or "")
         if legal_text:
-            parts.append(f'<div class="mail-footer-legal">{legal_text}</div>')
-        return "\n".join(parts)
+            content_parts.append(f'<div class="mail-footer-legal">{legal_text}</div>')
+
+        placeholder = "{{ footer_logo }}"
+        if position == "inline":
+            if placeholder in html_body:
+                html_body = html_body.replace(placeholder, inline_logo_html)
+                logo_html = ""
+            elif logo_html:
+                logger.warning(
+                    "mail_footer_inline_logo_placeholder_missing footer_id=%s",
+                    getattr(footer, "id", None),
+                )
+                position = "bottom"
+        elif placeholder in html_body:
+            html_body = html_body.replace(placeholder, "")
+        if html_body:
+            content_parts.insert(0, html_body)
+        content_html = "\n".join(content_parts)
+
+        if not logo_html:
+            return content_html
+        if position == "bottom":
+            separator = "\n" if content_html else ""
+            return content_html + separator + f'<div style="margin-top:16px;">{logo_html}</div>'
+        if position in {"left", "right"}:
+            padding = "0 16px 0 0" if position == "left" else "0 0 0 16px"
+            logo_cell = f'<td style="vertical-align:top;padding:{padding};">{logo_html}</td>'
+            content_cell = f'<td style="vertical-align:top;width:100%;">{content_html}</td>'
+            cells = logo_cell + content_cell if position == "left" else content_cell + logo_cell
+            return (
+                '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+                f'style="width:100%;border-collapse:collapse;"><tr>{cells}</tr></table>'
+            )
+        separator = "\n" if content_html else ""
+        return f'<div style="margin-bottom:16px;">{logo_html}</div>' + separator + content_html
+
+    @staticmethod
+    def _footer_logo_dimension(value, minimum: int, maximum: int) -> int | None:
+        try:
+            parsed = int(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed is not None and minimum <= parsed <= maximum else None
 
     def select_template(self, templates: list[Any], submission=None, event_type: str | None = None):
         if not templates:

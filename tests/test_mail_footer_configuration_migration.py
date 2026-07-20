@@ -100,6 +100,9 @@ def test_mail_footer_migration_completes_partially_migrated_tables(monkeypatch, 
 
 def test_mail_footer_migration_allows_mail_footer_orm_query(monkeypatch):
     migration = importlib.import_module(MIGRATION_MODULE)
+    logo_layout_migration = importlib.import_module(
+        "migrations.versions.20260720_0018_mail_footer_logo_layout"
+    )
     engine = create_engine("sqlite:///:memory:")
     metadata = MetaData()
     legacy_footers = Table(
@@ -136,6 +139,8 @@ def test_mail_footer_migration_allows_mail_footer_orm_query(monkeypatch):
         )
         monkeypatch.setattr(migration, "op", _operations(connection))
         migration.upgrade()
+        monkeypatch.setattr(logo_layout_migration, "op", _operations(connection))
+        logo_layout_migration.upgrade()
 
         with Session(bind=connection) as session:
             footers = session.execute(select(MailFooter)).scalars().all()
@@ -146,6 +151,9 @@ def test_mail_footer_migration_allows_mail_footer_orm_query(monkeypatch):
     assert footers[0].contact_html is None
     assert footers[0].links is None
     assert footers[0].legal_text is None
+    assert footers[0].logo_width is None
+    assert footers[0].logo_height is None
+    assert footers[0].logo_position == "top"
 
 
 def test_mail_footer_migration_downgrade_checks_columns_before_removing(monkeypatch):

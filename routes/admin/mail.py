@@ -367,7 +367,19 @@ def mail_footer_edit(form_id: int, footer_id: int | None = None):
             abort(404)
         logos = list_active_logos(db)
         if request.method == "POST":
-            _update_mail_footer_from_form(footer)
+            try:
+                _update_mail_footer_from_form(footer)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return render_template(
+                    "admin/mail_footers/edit.html",
+                    form=form,
+                    footer=footer,
+                    logos=logos,
+                    is_global=False,
+                    global_footer=_global_mail_footer(db),
+                    footer_usage_label="Używana jest stopka formularza",
+                ), 400
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             from . import can_select_active_logo
 
@@ -405,7 +417,19 @@ def global_mail_footer_edit():
         footer = _global_mail_footer(db) or MailFooter(form_id=None, name="Stopka ogólna", html_body="", is_default=True)
         logos = list_active_logos(db)
         if request.method == "POST":
-            _update_mail_footer_from_form(footer)
+            try:
+                _update_mail_footer_from_form(footer)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return render_template(
+                    "admin/mail_footers/edit.html",
+                    form=None,
+                    footer=footer,
+                    logos=logos,
+                    is_global=True,
+                    global_footer=footer,
+                    footer_usage_label="Używana jest stopka ogólna",
+                ), 400
             footer.form_id = None
             footer.is_default = True
             footer.use_global = False
@@ -439,14 +463,49 @@ def _global_mail_footer(db) -> MailFooter | None:
 
 
 def _update_mail_footer_from_form(footer: MailFooter) -> None:
+    alignment = str(request.form.get("logo_alignment") or "left").strip()
+    if alignment not in {"left", "center", "right"}:
+        raise ValueError("Wybierz prawidłowe wyrównanie logo.")
+    position = str(request.form.get("logo_position") or "top").strip()
+    if position not in {"top", "bottom", "left", "right", "inline"}:
+        raise ValueError("Wybierz prawidłowe położenie logo.")
+    width = _parse_footer_logo_dimension(
+        request.form.get("logo_width"),
+        minimum=20,
+        maximum=800,
+        label="Szerokość logo",
+    )
+    height = _parse_footer_logo_dimension(
+        request.form.get("logo_height"),
+        minimum=20,
+        maximum=400,
+        label="Wysokość logo",
+    )
+
     footer.name = request.form.get("name", "").strip() or ("Stopka ogólna" if footer.form_id is None else "Stopka formularza")
     footer.html_body = sanitize_instruction_html(request.form.get("html_body", ""))
     footer.contact_html = sanitize_instruction_html(request.form.get("contact_html", ""))
     footer.legal_text = sanitize_instruction_html(request.form.get("legal_text", ""))
-    footer.logo_alignment = request.form.get("logo_alignment", "left") if request.form.get("logo_alignment") in {"left", "center", "right"} else "left"
+    footer.logo_alignment = alignment
+    footer.logo_position = position
+    footer.logo_width = width
+    footer.logo_height = height
     footer.links = _parse_footer_links(request.form.get("links_text", ""))
     footer.is_active = request.form.get("is_active") == "on"
     footer.use_global = request.form.get("use_global") == "on"
+
+
+def _parse_footer_logo_dimension(value: str | None, *, minimum: int, maximum: int, label: str) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label} musi być liczbą całkowitą od {minimum} do {maximum} px.") from exc
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"{label} musi mieć wartość od {minimum} do {maximum} px.")
+    return parsed
 
 
 def _parse_footer_links(value: str) -> list[dict[str, str]]:

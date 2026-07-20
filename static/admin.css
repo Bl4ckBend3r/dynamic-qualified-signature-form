@@ -1348,8 +1348,15 @@
 .mail-footer-example__subject { padding: .8rem 1rem; border-bottom: 1px solid var(--admin-border, #d9dce3); background: var(--admin-surface-soft, #f8f9fb); }
 .mail-footer-example__body { padding: 1rem; }
 .mail-footer-example__footer { display: grid; gap: .7rem; padding: 1rem; border-top: 1px solid var(--admin-border, #d9dce3); color: var(--admin-muted, #626975); background: #f8fafc; }
-.mail-footer-example__footer img { display: inline-block; max-width: 180px; max-height: 80px; width: auto; height: auto; }
+.mail-footer-example__footer img { display: inline-block; max-width: 800px; max-height: 400px; width: 160px; height: auto; }
 .mail-footer-example__footer [data-preview-footer-legal] { font-size: .8rem; }
+.mail-footer-example__footer [data-preview-footer-content] { display: grid; gap: .7rem; min-width: 0; }
+.mail-footer-example__footer.is-logo-left { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+.mail-footer-example__footer.is-logo-right { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.mail-footer-example__footer.is-logo-inline .admin-preview-logo { display: inline-block; margin: .25rem .5rem; vertical-align: middle; }
+.admin-input-with-unit { display: flex; align-items: center; gap: .5rem; }
+.admin-input-with-unit input { flex: 1 1 auto; min-width: 0; }
+.admin-input-with-unit small { flex: 0 0 auto; }
 
 .admin-training-list-toolbar {
     display: flex;
@@ -1397,6 +1404,8 @@
     .admin-training-card__body { padding: .75rem; }
     .workflow-stage-actions { align-items: stretch; width: 100%; }
     .workflow-stage-actions > button { flex: 1 1 9rem; }
+    .mail-footer-example__footer.is-logo-left,
+    .mail-footer-example__footer.is-logo-right { grid-template-columns: 1fr; }
 }
 
 .workflow-stage-card__heading,

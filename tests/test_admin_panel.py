@@ -2758,6 +2758,10 @@ def test_global_and_form_footer_editors_render_preview_and_sanitize_html(admin_a
     global_html = admin_client.get("/admin/mail-footer").get_data(as_text=True)
     assert "Podgląd stopki e-mail" in global_html
     assert "Przykładowa wiadomość" in global_html
+    assert 'name="logo_width"' in global_html
+    assert 'name="logo_height"' in global_html
+    assert 'name="logo_position"' in global_html
+    assert "{{ footer_logo }}" in global_html
     token = global_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     response = admin_client.post(
         "/admin/mail-footer",
@@ -2769,6 +2773,9 @@ def test_global_and_form_footer_editors_render_preview_and_sanitize_html(admin_a
             "links_text": "Serwis|https://example.com",
             "legal_text": "<p>Tekst prawny</p>",
             "logo_alignment": "center",
+            "logo_position": "right",
+            "logo_width": "260",
+            "logo_height": "90",
             "is_active": "on",
         },
     )
@@ -2780,7 +2787,79 @@ def test_global_and_form_footer_editors_render_preview_and_sanitize_html(admin_a
         footer = db.query(MailFooter).filter(MailFooter.form_id.is_(None)).one()
         assert footer.html_body == "<p><strong>Kontakt</strong></p>"
         assert footer.logo_alignment == "center"
+        assert footer.logo_position == "right"
+        assert footer.logo_width == 260
+        assert footer.logo_height == 90
         assert footer.links == [{"label": "Serwis", "url": "https://example.com"}]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("logo_width", "19", "Szerokość logo musi mieć wartość od 20 do 800 px."),
+        ("logo_width", "801", "Szerokość logo musi mieć wartość od 20 do 800 px."),
+        ("logo_width", "duże", "Szerokość logo musi być liczbą całkowitą od 20 do 800 px."),
+        ("logo_height", "19", "Wysokość logo musi mieć wartość od 20 do 400 px."),
+        ("logo_height", "401", "Wysokość logo musi mieć wartość od 20 do 400 px."),
+        ("logo_height", "wysokie", "Wysokość logo musi być liczbą całkowitą od 20 do 400 px."),
+        ("logo_alignment", "justify", "Wybierz prawidłowe wyrównanie logo."),
+        ("logo_position", "floating", "Wybierz prawidłowe położenie logo."),
+    ],
+)
+def test_mail_footer_rejects_invalid_logo_layout(admin_app, admin_client, field, value, message):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/mail-footer").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    data = {
+        "csrf_token": token,
+        "name": "Stopka",
+        "html_body": "<p>Treść</p>",
+        "logo_alignment": "left",
+        "logo_position": "top",
+        "logo_width": "",
+        "logo_height": "",
+        "is_active": "on",
+    }
+    data[field] = value
+
+    response = admin_client.post("/admin/mail-footer", data=data)
+
+    assert response.status_code == 400
+    assert message in response.get_data(as_text=True)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(MailFooter).count() == 0
+
+
+def test_form_admin_can_save_footer_logo_size_and_position(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="footer-manager@example.com", role="admin")
+    form_id = create_form(admin_app, slug="footer_layout", user_id=manager_id)
+    login(admin_client, email="footer-manager@example.com")
+    html = admin_client.get(f"/admin/forms/{form_id}/mail-footers/new").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-footers/new",
+        data={
+            "csrf_token": token,
+            "name": "Stopka formularza",
+            "html_body": "<p>Treść {{ footer_logo }}</p>",
+            "logo_alignment": "right",
+            "logo_position": "inline",
+            "logo_width": "320",
+            "logo_height": "",
+            "is_active": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        footer = db.query(MailFooter).filter(MailFooter.form_id == form_id).one()
+        assert footer.logo_position == "inline"
+        assert footer.logo_alignment == "right"
+        assert footer.logo_width == 320
+        assert footer.logo_height is None
+        assert "{{ footer_logo }}" in footer.html_body
 
 
 def test_form_manager_saves_custom_smtp_with_encrypted_hidden_password(admin_app, admin_client):

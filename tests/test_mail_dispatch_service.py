@@ -49,6 +49,80 @@ def test_build_footer_aligns_logo(alignment):
     assert f"text-align:{alignment}" in rendered
 
 
+def _footer_with_logo(**values):
+    defaults = {
+        "id": 17,
+        "logo": SimpleNamespace(active=True, name="Logo", filename="logo.png"),
+        "logo_alignment": "left",
+        "logo_position": "top",
+        "logo_width": None,
+        "logo_height": None,
+        "html_body": "<p>Treść stopki</p>",
+        "contact_html": "",
+        "links": [],
+        "legal_text": "",
+    }
+    defaults.update(values)
+    return SimpleNamespace(**defaults)
+
+
+@pytest.mark.parametrize(
+    ("position", "logo_before_content"),
+    [("top", True), ("bottom", False), ("left", True), ("right", False)],
+)
+def test_build_footer_places_logo_around_content(position, logo_before_content):
+    rendered = MailDispatchService().build_footer(
+        _footer_with_logo(logo_position=position),
+        logo_url_builder=lambda logo: f"https://cdn/{logo.filename}",
+    )
+
+    assert (rendered.index("logo.png") < rendered.index("Treść stopki")) is logo_before_content
+    assert ('<table role="presentation"' in rendered) is (position in {"left", "right"})
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected_width", "expected_height"),
+    [
+        (None, None, "width:160px", "height:auto"),
+        (240, None, "width:240px", "height:auto"),
+        (None, 90, "width:auto", "height:90px"),
+        (240, 90, "width:240px", "height:90px"),
+    ],
+)
+def test_build_footer_applies_optional_logo_dimensions(width, height, expected_width, expected_height):
+    rendered = MailDispatchService().build_footer(
+        _footer_with_logo(logo_width=width, logo_height=height),
+        logo_url_builder=lambda logo: f"https://cdn/{logo.filename}",
+    )
+
+    assert expected_width in rendered
+    assert expected_height in rendered
+
+
+def test_build_footer_replaces_inline_logo_placeholder():
+    rendered = MailDispatchService().build_footer(
+        _footer_with_logo(
+            logo_position="inline",
+            html_body="<p>Przed {{ footer_logo }} po logo.</p>",
+        ),
+        logo_url_builder=lambda logo: f"https://cdn/{logo.filename}",
+    )
+
+    assert "{{ footer_logo }}" not in rendered
+    assert '<span class="mail-footer-logo"' in rendered
+    assert rendered.index("Przed") < rendered.index("logo.png") < rendered.index("po logo")
+
+
+def test_build_footer_falls_back_to_bottom_when_inline_placeholder_is_missing(caplog):
+    rendered = MailDispatchService().build_footer(
+        _footer_with_logo(logo_position="inline"),
+        logo_url_builder=lambda logo: f"https://cdn/{logo.filename}",
+    )
+
+    assert rendered.index("Treść stopki") < rendered.index("logo.png")
+    assert "mail_footer_inline_logo_placeholder_missing footer_id=17" in caplog.text
+
+
 def test_dispatch_is_safe_without_sender_and_calls_sender_when_provided():
     service = MailDispatchService()
     request = MailDispatchRequest("EVENT", "user@example.com", "Temat", "<p>Body</p>", {"a": 1})

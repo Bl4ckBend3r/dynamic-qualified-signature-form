@@ -19,6 +19,7 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.qualification_condition_service import QualificationConditionService
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 from services.training_service import decimal_price_to_storage, normalize_trainings_config
 from validators.form_config_validator import FormConfigValidator
@@ -145,6 +146,26 @@ def build_form_definition_from_admin_form(
         if workflow_errors:
             raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
+    if "qualification_conditions_json" in form_data:
+        raw_conditions = str(form_data.get("qualification_conditions_json") or "").strip() or "[]"
+        parsed_conditions = json.loads(raw_conditions)
+        if not isinstance(parsed_conditions, list):
+            raise ValueError("Konfiguracja warunków kwalifikujących musi być listą.")
+        qualification_service = QualificationConditionService()
+        qualification_config = qualification_service.normalize_config(
+            {
+                "enabled": form_data.get("qualification_conditions_enabled") == "on",
+                "conditions": parsed_conditions,
+            },
+            definition.get("fields") or [],
+        )
+        qualification_errors = qualification_service.validate_config(
+            qualification_config,
+            definition.get("fields") or [],
+        )
+        if qualification_errors:
+            raise ValueError(" ".join(qualification_errors))
+        definition["qualification_conditions"] = qualification_config
     definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)
 

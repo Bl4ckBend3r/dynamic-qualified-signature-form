@@ -5,6 +5,7 @@ from pathlib import Path
 
 from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.qualification_condition_service import QualificationConditionService
 
 
 ALLOWED_FILENAME_PLACEHOLDERS = {
@@ -39,6 +40,12 @@ class FormConfigValidator:
         self._validate_workflow(form_config.get("workflow") or {}, document_ids, errors)
         self._validate_rules(form_config.get("rules") or [], errors)
         self._validate_notifications(form_config.get("notifications") or [], errors)
+        errors.extend(
+            QualificationConditionService().validate_config(
+                form_config.get("qualification_conditions"),
+                form_config.get("fields") or [],
+            )
+        )
         return errors
 
     def _validate_fields(self, fields: list[dict], errors: list[str]) -> None:

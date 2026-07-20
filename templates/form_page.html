@@ -29,7 +29,15 @@
             {% endif %}
         </div>
 
-        <form method="post" action="{{ url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
+        {% if correction_mode %}
+            <div class="alert alert-warning" role="status">
+                <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
+                {% if correction_message %}<p>{{ correction_message }}</p>{% endif %}
+                <p>Uzupełnij formularz i wyślij go ponownie. Warunki kwalifikujące zostaną sprawdzone ponownie.</p>
+            </div>
+        {% endif %}
+        <form method="post" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
+            {% if correction_mode %}<input type="hidden" name="token" value="{{ access_token }}">{% endif %}
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">
@@ -166,7 +174,7 @@
             {% endfor %}
 
             <div class="submit-row">
-                <button type="submit" class="btn-primary">Wyślij</button>
+                <button type="submit" class="btn-primary">{{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}</button>
             </div>
         </form>
     </div>

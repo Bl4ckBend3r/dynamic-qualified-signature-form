@@ -35,6 +35,7 @@ from services.admin_submission_service import (
 from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
 from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
+from services.submission_correction_service import SubmissionCorrectionError
 from statuses import WAITING_FOR_CORRECTION
 
 from . import (
@@ -231,6 +232,126 @@ def submission_stage_rollback(submission_id: str):
             "success",
         )
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+@bp.post("/submissions/<submission_id>/return-for-correction")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def submission_return_for_correction(submission_id: str):
+    payload = request.get_json(silent=True) if request.is_json else request.form
+    payload = payload or {}
+    reason = str(payload.get("reason") or "").strip()
+    message_to_user = str(payload.get("message_to_user") or "").strip()
+    clear_submission = _request_bool(payload, "clear_submission", default=True)
+    send_email = _request_bool(payload, "send_email", default=True)
+
+    with db_session_factory()() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == str(submission_id).strip())
+        ).scalar_one_or_none()
+        if submission is None:
+            abort(404)
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            abort(404)
+        ensure_form_access(db, form.id, manage=True)
+        if not str(submission.access_token or "").strip():
+            submission.access_token = current_app.extensions["services"].access_token_service.generate_token()
+        try:
+            result = current_app.extensions["services"].submission_correction_service.return_for_correction(
+                db,
+                submission,
+                form_config=form.definition_json or {},
+                reason=reason,
+                message_to_user=message_to_user,
+                clear_submission=clear_submission,
+                actor=g.admin_user,
+            )
+            db.commit()
+        except SubmissionCorrectionError as exc:
+            db.rollback()
+            if request.is_json:
+                return {"ok": False, "error": str(exc)}, 400
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        current_app.logger.info(
+            "submission_returned_for_correction public_submission_id=%s internal_submission_id=%s "
+            "previous_status=%s new_status=%s cleared=%s superseded_files=%s email_requested=%s",
+            submission.submission_id,
+            submission.id,
+            result.previous_status,
+            result.new_status,
+            result.cleared,
+            result.superseded_files,
+            send_email,
+        )
+        try:
+            current_app.extensions["services"].audit_log_service.log_event(
+                "RETURNED_FOR_CORRECTION",
+                submission.submission_id,
+                submission.form_slug,
+                old_value=result.previous_status,
+                new_value=result.new_status,
+                actor=str(g.admin_user.email or g.admin_user.role),
+                metadata={
+                    "reason": reason,
+                    "message_to_user": message_to_user,
+                    "cleared": result.cleared,
+                    "superseded_files": result.superseded_files,
+                },
+            )
+        except Exception as exc:
+            current_app.logger.exception(
+                "returned_for_correction_audit_failed public_submission_id=%s error=%s",
+                submission.submission_id,
+                exc.__class__.__name__,
+            )
+        mail_status = "not_requested"
+        if send_email:
+            if not result.recipient_email:
+                mail_status = "skipped_no_recipient"
+            else:
+                try:
+                    mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_returned_for_correction(
+                        submission.submission_id,
+                        reason=reason,
+                        message_to_user=message_to_user,
+                        cleared=result.cleared,
+                        recipient=result.recipient_email,
+                    )
+                    mail_status = mail_result.status
+                except Exception as exc:
+                    mail_status = "failed"
+                    current_app.logger.exception(
+                        "returned_for_correction_mail_failed public_submission_id=%s error=%s",
+                        submission.submission_id,
+                        exc.__class__.__name__,
+                    )
+
+        if request.is_json:
+            return {
+                "ok": True,
+                "submission_id": submission.submission_id,
+                "previous_status": result.previous_status,
+                "process_status": result.new_status,
+                "cleared": result.cleared,
+                "superseded_files": result.superseded_files,
+                "mail_status": mail_status,
+            }
+        if send_email and mail_status not in {"sent", "queued"}:
+            flash("Zgłoszenie wysłano do poprawy, ale wiadomość e-mail nie została wysłana.", "warning")
+        flash("Zgłoszenie zostało wysłane do ponownego uzupełnienia.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+def _request_bool(payload, key: str, *, default: bool) -> bool:
+    if key not in payload:
+        return default if request.is_json else False
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "tak", "yes", "on"}
 
 
 def _send_stage_rollback_email(db, form, submission, reason: str, target_status: str):

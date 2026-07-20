@@ -228,3 +228,32 @@ def test_agreement_upload_records_dedicated_workflow_event():
     assert repository.events[0][0] == "public-uuid"
     assert repository.events[0][1]["source"] == "agreement_uploaded"
     assert repository.events[0][1]["actor_role"] == "participant"
+
+
+@pytest.mark.parametrize(
+    "status, expected_status, expected_action",
+    [
+        (ProcessStatus.AUTO_REJECTED.value, "Odrzucony automatycznie", "Dalsze kroki zablokowane"),
+        (ProcessStatus.RETURNED_FOR_CORRECTION.value, "Wysłany do poprawy", "ponowne uzupełnienie"),
+    ],
+)
+def test_admin_workflow_view_does_not_present_qualification_block_as_accepted(status, expected_status, expected_action):
+    submission = SimpleNamespace(
+        process_status=status,
+        officer_decision="",
+        declaration_required="Tak",
+        agreement_required="Tak",
+        declaration_signature_valid="",
+        declaration_generated="",
+        updated_at=None,
+    )
+
+    view = build_admin_workflow_view(submission)
+    application = next(section for section in view["sections"] if section["key"] == "application")
+    declaration = next(section for section in view["sections"] if section["key"] == "declaration")
+    agreement = next(section for section in view["sections"] if section["key"] == "agreement")
+
+    assert application["status"] == expected_status
+    assert expected_action in application["action"]
+    assert declaration["action"] == "Etap zablokowany"
+    assert agreement["action"] == "Etap zablokowany"

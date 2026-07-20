@@ -5,6 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 from form_loader import FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES
+from services.qualification_condition_service import QualificationConditionService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ class FormConfigService:
         config["documents"] = self.normalize_documents_config(config)
         config["notifications"] = self.normalize_notifications_config(config)
         config["rules"] = self.normalize_rules_config(config)
+        config["qualification_conditions"] = QualificationConditionService().normalize_config(
+            config.get("qualification_conditions"),
+            config["fields"],
+        )
         config = self.build_default_workflow_if_missing(config)
         config["workflow"] = self.normalize_workflow_config(config.get("workflow") or {})
         config["documents"] = self.ensure_required_document_configs(config["documents"], config["workflow"])

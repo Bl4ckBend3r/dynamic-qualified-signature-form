@@ -27,6 +27,57 @@
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
         </div>
+        {% set qualification = (form.definition_json or {}).get('qualification_conditions') or {} %}
+        <div class="admin-section" data-qualification-builder>
+            <div class="admin-section-heading">
+                <div><h3>Warunki kwalifikujące zgłoszenie</h3><p>Warunki są sprawdzane łącznie po zapisaniu zgłoszenia. Niespełnienie choć jednego aktywnego warunku powoduje automatyczne odrzucenie.</p></div>
+                <button class="admin-button-secondary" type="button" data-add-qualification-condition>Dodaj warunek</button>
+            </div>
+            <label class="admin-check"><input type="checkbox" name="qualification_conditions_enabled" {% if qualification.get('enabled') %}checked{% endif %}><span>Włącz automatyczną ocenę warunków</span></label>
+            <input type="hidden" name="qualification_conditions_json" data-qualification-json value="[]">
+            <div class="admin-condition-list" data-qualification-list>
+                {% for condition in qualification.get('conditions', []) %}
+                <section class="admin-card admin-condition-card" data-qualification-row>
+                    <input type="hidden" data-condition-id value="{{ condition.get('id', '') }}">
+                    <div class="admin-form-grid">
+                        <label><span>Pole formularza</span><select data-condition-field required>
+                            <option value="">Wybierz pole</option>
+                            {% for field in fields %}<option value="{{ field.name }}" {% if condition.get('field_name') == field.name %}selected{% endif %}>{{ field.label or field.name }}</option>{% endfor %}
+                        </select></label>
+                        <label><span>Operator</span><select data-condition-operator required>
+                            {% for value, label in [('equals','równa się'),('not_equals','nie równa się'),('contains','zawiera'),('not_contains','nie zawiera'),('is_empty','jest puste'),('is_not_empty','nie jest puste'),('greater_than','większe niż'),('greater_than_or_equal','większe lub równe'),('less_than','mniejsze niż'),('less_than_or_equal','mniejsze lub równe'),('in','należy do listy'),('not_in','nie należy do listy')] %}
+                            <option value="{{ value }}" {% if condition.get('operator') == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select></label>
+                        <label data-condition-value-wrap><span>Wartość oczekiwana</span><textarea rows="2" data-condition-value placeholder="Dla listy podaj wartości po przecinku lub w osobnych wierszach">{% if condition.get('expected_value') is iterable and condition.get('expected_value') is not string %}{{ condition.get('expected_value')|join('\n') }}{% else %}{{ condition.get('expected_value', '') }}{% endif %}</textarea></label>
+                        <label><span>Akcja przy niespełnieniu</span><select data-condition-action><option value="auto_reject" selected>Automatycznie odrzuć zgłoszenie</option></select></label>
+                        <label class="admin-form-wide"><span>Komunikat dla użytkownika</span><textarea rows="2" data-condition-user-message>{{ condition.get('user_message', '') }}</textarea></label>
+                        <label class="admin-form-wide"><span>Informacja dla urzędnika</span><textarea rows="2" data-condition-officer-message>{{ condition.get('officer_message', '') }}</textarea></label>
+                        <label class="admin-check"><input type="checkbox" data-condition-active {% if condition.get('is_active', true) %}checked{% endif %}><span>Warunek aktywny</span></label>
+                        <label class="admin-check"><input type="checkbox" data-condition-case-sensitive {% if condition.get('case_sensitive') %}checked{% endif %}><span>Rozróżniaj wielkość liter</span></label>
+                    </div>
+                    <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition>Usuń warunek</button>
+                </section>
+                {% endfor %}
+            </div>
+            <p class="admin-empty-state" data-qualification-empty {% if qualification.get('conditions') %}hidden{% endif %}>Nie skonfigurowano warunków.</p>
+        </div>
+        <template data-qualification-template>
+            <section class="admin-card admin-condition-card" data-qualification-row>
+                <input type="hidden" data-condition-id value="">
+                <div class="admin-form-grid">
+                    <label><span>Pole formularza</span><select data-condition-field required><option value="">Wybierz pole</option>{% for field in fields %}<option value="{{ field.name }}">{{ field.label or field.name }}</option>{% endfor %}</select></label>
+                    <label><span>Operator</span><select data-condition-operator required><option value="equals">równa się</option><option value="not_equals">nie równa się</option><option value="contains">zawiera</option><option value="not_contains">nie zawiera</option><option value="is_empty">jest puste</option><option value="is_not_empty">nie jest puste</option><option value="greater_than">większe niż</option><option value="greater_than_or_equal">większe lub równe</option><option value="less_than">mniejsze niż</option><option value="less_than_or_equal">mniejsze lub równe</option><option value="in">należy do listy</option><option value="not_in">nie należy do listy</option></select></label>
+                    <label data-condition-value-wrap><span>Wartość oczekiwana</span><textarea rows="2" data-condition-value></textarea></label>
+                    <label><span>Akcja przy niespełnieniu</span><select data-condition-action><option value="auto_reject">Automatycznie odrzuć zgłoszenie</option></select></label>
+                    <label class="admin-form-wide"><span>Komunikat dla użytkownika</span><textarea rows="2" data-condition-user-message></textarea></label>
+                    <label class="admin-form-wide"><span>Informacja dla urzędnika</span><textarea rows="2" data-condition-officer-message></textarea></label>
+                    <label class="admin-check"><input type="checkbox" data-condition-active checked><span>Warunek aktywny</span></label>
+                    <label class="admin-check"><input type="checkbox" data-condition-case-sensitive><span>Rozróżniaj wielkość liter</span></label>
+                </div>
+                <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition>Usuń warunek</button>
+            </section>
+        </template>
     </section>
 
     <section class="admin-form-tab-panel" id="form-tab-appearance" role="tabpanel" data-form-tab-panel="appearance" {% if active_tab != 'appearance' %}hidden{% endif %}>
@@ -700,6 +751,47 @@ const customSmtp = document.querySelector("[data-custom-smtp]");
 function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mailMode?.value !== "custom"; }
 mailMode?.addEventListener("change", syncMailSettingsVisibility);
 syncMailSettingsVisibility();
+
+const qualificationBuilder = document.querySelector("[data-qualification-builder]");
+const qualificationList = qualificationBuilder?.querySelector("[data-qualification-list]");
+const qualificationTemplate = document.querySelector("[data-qualification-template]");
+const qualificationJson = qualificationBuilder?.querySelector("[data-qualification-json]");
+
+function syncQualificationBuilder() {
+    const rows = qualificationList ? Array.from(qualificationList.querySelectorAll("[data-qualification-row]")) : [];
+    const conditions = rows.map((row, index) => {
+        const field = row.querySelector("[data-condition-field]");
+        const operator = row.querySelector("[data-condition-operator]")?.value || "equals";
+        const valueWrap = row.querySelector("[data-condition-value-wrap]");
+        if (valueWrap) valueWrap.hidden = ["is_empty", "is_not_empty"].includes(operator);
+        return {
+            id: row.querySelector("[data-condition-id]")?.value || `condition_${index + 1}`,
+            field_name: field?.value || "",
+            field_label: field?.selectedOptions?.[0]?.textContent?.trim() || "",
+            operator,
+            expected_value: row.querySelector("[data-condition-value]")?.value || "",
+            failure_action: row.querySelector("[data-condition-action]")?.value || "auto_reject",
+            user_message: row.querySelector("[data-condition-user-message]")?.value.trim() || "",
+            officer_message: row.querySelector("[data-condition-officer-message]")?.value.trim() || "",
+            is_active: Boolean(row.querySelector("[data-condition-active]")?.checked),
+            case_sensitive: Boolean(row.querySelector("[data-condition-case-sensitive]")?.checked),
+        };
+    });
+    if (qualificationJson) qualificationJson.value = JSON.stringify(conditions);
+    const empty = qualificationBuilder?.querySelector("[data-qualification-empty]");
+    if (empty) empty.hidden = rows.length > 0;
+}
+
+qualificationBuilder?.addEventListener("input", syncQualificationBuilder);
+qualificationBuilder?.addEventListener("change", syncQualificationBuilder);
+qualificationBuilder?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-add-qualification-condition]") && qualificationList && qualificationTemplate) {
+        qualificationList.appendChild(qualificationTemplate.content.cloneNode(true));
+    }
+    event.target.closest("[data-remove-qualification-condition]")?.closest("[data-qualification-row]")?.remove();
+    syncQualificationBuilder();
+});
+syncQualificationBuilder();
 
 const instructionEditor = document.querySelector("[data-instruction-editor]");
 const instructionStages = instructionEditor?.querySelector("[data-instruction-stages]");
@@ -1427,6 +1519,7 @@ document.querySelector("[data-collapse-all-trainings]")?.addEventListener("click
 
 document.querySelector("form.admin-form")?.addEventListener("submit", function () {
     formIsSubmitting = true;
+    syncQualificationBuilder();
     syncTrainingIndexes();
     syncInstructionEditor();
     syncLinkedInstructionValues();

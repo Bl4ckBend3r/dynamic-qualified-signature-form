@@ -8,7 +8,8 @@ from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
-from models import ContactPage, Form, FormField, FormRegulation, Logo, ServiceDocument
+from models import ContactPage, Form, FormField, FormRegulation, FormSubmission, Logo, ServiceDocument
+from services.process_service import ProcessStatus
 from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
 from services.nextcloud_storage import NextcloudStorageError
@@ -124,6 +125,93 @@ def submit(slug: str):
             errors={},
             values=request_data or request.form,
         ), 500
+
+
+@bp.route("/form/<slug>/correction/<submission_id>", methods=["GET", "POST"])
+def correct_submission(slug: str, submission_id: str):
+    """Allow a participant to refill only a submission explicitly returned by an administrator."""
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    services = get_services()
+    token = str(request.values.get("token") or request.args.get("token") or "").strip()
+    with session_factory() as db:
+        form = db.execute(
+            select(Form).where(
+                Form.slug == slug,
+                Form.is_active.is_(True),
+                Form.is_public.is_(True),
+            )
+        ).scalar_one_or_none()
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if not form or not submission or submission.form_slug != slug:
+            abort(404)
+        if not services.access_token_service.verify_token(
+            {"access_token": submission.access_token}, token
+        ):
+            abort(403)
+        if submission.process_status != ProcessStatus.RETURNED_FOR_CORRECTION.value:
+            abort(404)
+        fields = db.execute(
+            select(FormField)
+            .where(FormField.form_id == form.id, FormField.active.is_(True))
+            .order_by(FormField.sort_order, FormField.id)
+        ).scalars().all()
+        form_meta = form_to_public_meta(form)
+        form_config = form_to_definition(form, fields)
+        stored_values = {
+            key: value
+            for key, value in dict(submission.data_json or {}).items()
+            if not str(key).startswith("_")
+        }
+        correction_message = submission.correction_message
+
+    initial_form_config = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
+    form_action = url_for(
+        "public_forms.correct_submission",
+        slug=slug,
+        submission_id=submission_id,
+        token=token,
+    )
+    if request.method == "GET":
+        return render_template(
+            "form_page.html",
+            slug=slug,
+            form_meta=form_meta,
+            form_definition=initial_form_config,
+            errors={},
+            values=stored_values,
+            form_action=form_action,
+            correction_mode=True,
+            correction_message=correction_message,
+            access_token=token,
+        )
+
+    request_data = request.get_json(silent=True) if request.is_json else request.form
+    result = services.submission_service.submit_correction_form(
+        slug,
+        initial_form_config,
+        request_data or {},
+        submission_id=submission_id,
+        access_token=token,
+    )
+    if not result["ok"]:
+        flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
+        return render_template(
+            "form_page.html",
+            slug=slug,
+            form_meta=form_meta,
+            form_definition=initial_form_config,
+            errors=result["errors"],
+            values=result["values"],
+            form_action=form_action,
+            correction_mode=True,
+            correction_message=correction_message,
+            access_token=token,
+        ), 400
+    return render_template("result.html", result=result["result"])
 
 
 @bp.get("/kontakt")

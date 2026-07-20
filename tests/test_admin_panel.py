@@ -35,6 +35,7 @@ from models import (
     SystemMailSettings,
     User,
 )
+from services.admin_form_service import sync_form_fields
 
 
 class AdminTestConfig(Config):
@@ -352,6 +353,189 @@ def test_submission_detail_rejects_manual_process_status_bypass(admin_app, admin
     with session_factory() as db:
         assert db.get(FormSubmission, submission_pk).process_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
         assert db.query(SubmissionWorkflowEvent).count() == 0
+
+
+def test_return_for_correction_action_is_visible_and_uses_application_prefix(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form")
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}",
+        environ_overrides={"SCRIPT_NAME": "/aplikacja"},
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Wyślij do poprawy" in html
+    assert f'/aplikacja/admin/submissions/{submission_id}/return-for-correction' in html
+    assert 'name="clear_submission" checked' in html
+    assert 'name="send_email" checked' in html
+
+
+def test_return_for_correction_endpoint_clears_state_and_sends_email(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="rollback_form",
+        name="Rollback Form",
+        definition_json={"title": "Rollback Form", "fields": [{"name": "email"}]},
+    )
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(SubmissionFile(
+            submission_id=submission_pk,
+            public_submission_id=submission_id,
+            form_slug="rollback_form",
+            document_id="training_agreement",
+            document_type="training_agreement",
+            filename="agreement.pdf",
+            storage_path="output/rollback_form/pdf/agreement.pdf",
+            status="generated",
+        ))
+        db.commit()
+    login(admin_client)
+    captured = {}
+
+    def fake_correction_mail(public_id, **kwargs):
+        captured.update({"submission_id": public_id, **kwargs})
+        return SimpleNamespace(status="sent", error_message="")
+
+    monkeypatch.setattr(
+        admin_app.extensions["services"].mail_dispatch_service,
+        "dispatch_returned_for_correction",
+        fake_correction_mail,
+    )
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/return-for-correction",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "reason": "Dane wymagają ponownego podania",
+            "message_to_user": "Uzupełnij formularz ponownie.",
+            "clear_submission": "on",
+            "send_email": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.location.endswith(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert captured["submission_id"] == submission_id
+    assert captured["recipient"] == "participant@example.com"
+    assert captured["cleared"] is True
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "RETURNED_FOR_CORRECTION"
+        assert submission.email == ""
+        assert submission.agreement_filename == ""
+        assert db.query(SubmissionFile).one().status == "superseded"
+        event = db.query(SubmissionWorkflowEvent).filter_by(source="returned_for_correction").one()
+        assert event.previous_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+        assert event.new_status == "RETURNED_FOR_CORRECTION"
+
+
+def test_return_for_correction_requires_reason_and_is_forbidden_for_form_manager(admin_app, admin_client):
+    admin_id = create_user(admin_app, email="correction-admin@example.com", role="admin")
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form", user_id=admin_id)
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client, email="correction-admin@example.com")
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/return-for-correction",
+        data={"csrf_token": admin_csrf(admin_client), "reason": ""},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "Podaj powód" in response.get_data(as_text=True)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        assert db.get(FormSubmission, submission_pk).process_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+
+    manager_id = create_user(admin_app, email="correction-manager@example.com", role="form_manager")
+    with session_factory() as db:
+        db.add(FormPermission(user_id=manager_id, form_id=form_id, can_manage=True))
+        db.commit()
+    admin_client.get("/admin/logout")
+    login(admin_client, email="correction-manager@example.com")
+    forbidden = admin_client.post(
+        f"/admin/submissions/{submission_id}/return-for-correction",
+        data={"csrf_token": admin_csrf(admin_client), "reason": "Próba"},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_participant_can_refill_returned_submission_and_conditions_are_evaluated_again(
+    admin_app, admin_client, form_definition, valid_form_data, monkeypatch, tmp_path
+):
+    definition = dict(form_definition)
+    definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [{
+            "id": "age-rule",
+            "field_name": "wiek",
+            "field_label": "Wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "99",
+            "failure_action": "auto_reject",
+            "user_message": "Nie spełniasz warunku wieku.",
+            "officer_message": "Wiek poniżej wymaganego progu.",
+            "is_active": True,
+        }],
+    }
+    form_id = create_form(
+        admin_app,
+        slug="correction_form",
+        name="Correction Form",
+        definition_json=definition,
+        is_active=True,
+        is_public=True,
+    )
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        submission = FormSubmission(
+            submission_id="correction-public-uuid",
+            form_slug="correction_form",
+            form_name="Correction Form",
+            access_token="correction-secret",
+            process_status="RETURNED_FOR_CORRECTION",
+            workflow_step="returned_for_correction",
+            correction_required="Tak",
+            correction_message="Uzupełnij dane ponownie.",
+            data_json={
+                "_qualification": {"passed": False, "evaluated_at": "2026-01-01T00:00:00+00:00"},
+                "_qualification_history": [{"passed": False, "evaluated_at": "2026-01-01T00:00:00+00:00"}],
+                "_correction_history": [{"reason": "Ponowna próba"}],
+            },
+        )
+        db.add(submission)
+        db.commit()
+
+    def fake_generate_pdf(*, output_path, **_kwargs):
+        Path(output_path).write_bytes(b"%PDF-1.4\n% correction test\n")
+
+    monkeypatch.setattr("services.submission_service.generate_pdf", fake_generate_pdf)
+    path = "/form/correction_form/correction/correction-public-uuid?token=correction-secret"
+    get_response = admin_client.get(path, environ_overrides={"SCRIPT_NAME": "/aplikacja"})
+
+    assert get_response.status_code == 200
+    get_html = get_response.get_data(as_text=True)
+    assert "Zgłoszenie zostało wysłane do poprawy" in get_html
+    assert "/aplikacja/form/correction_form/correction/correction-public-uuid?token=correction-secret" in get_html
+
+    post_response = admin_client.post(path, data=valid_form_data)
+    assert post_response.status_code == 200
+    assert "nie spełnia" in post_response.get_data(as_text=True).lower()
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="correction-public-uuid").one()
+        assert submission.process_status == "AUTO_REJECTED"
+        assert submission.data_json["_qualification"]["passed"] is False
+        assert len(submission.data_json["_qualification_history"]) == 2
+        assert submission.data_json["_correction_history"][0]["reason"] == "Ponowna próba"
+        events = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id=submission.submission_id).all()
+        assert any(event.source == "auto_rejected_by_condition" for event in events)
 
 
 def test_admin_requires_login(admin_client):

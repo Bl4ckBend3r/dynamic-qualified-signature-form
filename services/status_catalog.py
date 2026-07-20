@@ -10,6 +10,8 @@ class ProcessStatusCode(StrEnum):
     WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
     REVIEW_ACCEPTED = "REVIEW_ACCEPTED"
     REVIEW_REJECTED = "REVIEW_REJECTED"
+    AUTO_REJECTED = "AUTO_REJECTED"
+    RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_CORRECTION = "WAITING_FOR_CORRECTION"
     CORRECTED = "CORRECTED"
     WAITING_FOR_DOCUMENT = "WAITING_FOR_DOCUMENT"
@@ -60,6 +62,19 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
         final=True,
         rejected=True,
     ),
+    ProcessStatusCode.AUTO_REJECTED: StatusDefinition(
+        ProcessStatusCode.AUTO_REJECTED,
+        "Odrzucony automatycznie",
+        rejected=True,
+        requires_officer_action=True,
+        allowed_transitions=(ProcessStatusCode.RETURNED_FOR_CORRECTION,),
+    ),
+    ProcessStatusCode.RETURNED_FOR_CORRECTION: StatusDefinition(
+        ProcessStatusCode.RETURNED_FOR_CORRECTION,
+        "Wysłany do poprawy",
+        requires_user_action=True,
+        allowed_transitions=(ProcessStatusCode.SUBMITTED, ProcessStatusCode.AUTO_REJECTED),
+    ),
     ProcessStatusCode.WAITING_FOR_CORRECTION: StatusDefinition(
         ProcessStatusCode.WAITING_FOR_CORRECTION,
         "Oczekuje na korektę",
@@ -97,6 +112,8 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
 
 LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
     "FORM_SUBMITTED": ProcessStatusCode.SUBMITTED,
+    "AUTO_REJECTED": ProcessStatusCode.AUTO_REJECTED,
+    "RETURNED_FOR_CORRECTION": ProcessStatusCode.RETURNED_FOR_CORRECTION,
     "WAITING_FOR_OFFICER_DECISION": ProcessStatusCode.WAITING_FOR_REVIEW,
     "OFFICER_ACCEPTED": ProcessStatusCode.REVIEW_ACCEPTED,
     "accepted_waiting_for_additional_fields": ProcessStatusCode.REVIEW_ACCEPTED,
@@ -129,6 +146,8 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
 
 LEGACY_STATUS_LABELS: dict[str, str] = {
     "FORM_SUBMITTED": "Wniosek złożony",
+    "AUTO_REJECTED": "Odrzucony automatycznie",
+    "RETURNED_FOR_CORRECTION": "Wysłany do poprawy",
     "WAITING_FOR_OFFICER_DECISION": "Oczekuje na decyzję urzędnika",
     "OFFICER_ACCEPTED": "Wniosek zaakceptowany",
     "OFFICER_REJECTED": "Wniosek odrzucony",

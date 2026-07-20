@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 class ProcessStatus(StrEnum):
     FORM_SUBMITTED = "FORM_SUBMITTED"
+    AUTO_REJECTED = "AUTO_REJECTED"
+    RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
     OFFICER_ACCEPTED = "OFFICER_ACCEPTED"
     OFFICER_REJECTED = "OFFICER_REJECTED"
@@ -236,8 +238,11 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
         status in {ProcessStatus.OFFICER_ACCEPTED, ProcessStatus.ADDITIONAL_FIELDS_COMPLETED}
         and is_declaration_required(row)
     )
-    can_sign_documents = decision == OfficerDecision.ACCEPTED
+    blocked_statuses = {ProcessStatus.AUTO_REJECTED, ProcessStatus.RETURNED_FOR_CORRECTION}
+    can_sign_documents = decision == OfficerDecision.ACCEPTED and status not in blocked_statuses
     can_generate_agreement = (
+        status not in blocked_statuses
+        and
         is_agreement_required(row)
         and (is_declaration_signature_valid(row) or not is_declaration_required(row))
         and not agreement_blocked

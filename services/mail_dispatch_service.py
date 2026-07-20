@@ -518,6 +518,151 @@ class MailDispatchService:
             db.commit()
             return result
 
+    def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
+        message = str(evaluation.get("user_message") or "").strip() or (
+            "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
+        )
+        return self._dispatch_special_submission_event(
+            submission_id,
+            event_type="auto_rejected_by_condition",
+            default_name="Automatyczne odrzucenie zgłoszenia",
+            default_subject="Zgłoszenie {{ submission_id }} nie spełnia warunków udziału",
+            default_html=(
+                "<p>Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.</p>"
+                "<p>{{ qualification_message_html }}</p>"
+            ),
+            default_text=(
+                "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.\n"
+                "{{ qualification_message }}"
+            ),
+            extra_context={
+                "qualification_message": message,
+                "qualification_message_html": escape(message),
+            },
+        )
+
+    def dispatch_returned_for_correction(
+        self,
+        submission_id: str,
+        *,
+        reason: str,
+        message_to_user: str,
+        cleared: bool,
+        recipient: str = "",
+    ) -> MailDispatchResult:
+        return self._dispatch_special_submission_event(
+            submission_id,
+            event_type="returned_for_correction",
+            default_name="Zgłoszenie wysłane do poprawy",
+            default_subject="Zgłoszenie {{ submission_id }} wymaga poprawy",
+            default_html=(
+                "<p>Zgłoszenie wymaga ponownego uzupełnienia.</p>"
+                "<p><strong>Powód:</strong> {{ correction_reason_html }}</p>"
+                "<p>{{ correction_message_html }}</p>"
+                "<p>{{ correction_clear_info_html }}</p>"
+                '<p><a href="{{ correction_url }}">Uzupełnij formularz ponownie</a></p>'
+            ),
+            default_text=(
+                "Zgłoszenie wymaga ponownego uzupełnienia.\n"
+                "Powód: {{ correction_reason }}\n{{ correction_message }}\n"
+                "{{ correction_clear_info }}\n{{ correction_url }}"
+            ),
+            extra_context={
+                "correction_reason": reason,
+                "correction_reason_html": escape(reason),
+                "correction_message": message_to_user,
+                "correction_message_html": escape(message_to_user),
+                "correction_clear_info": (
+                    "Poprzednie dane zostały wyczyszczone."
+                    if cleared
+                    else "Poprzednie dane pozostawiono do ponownej edycji."
+                ),
+                "correction_clear_info_html": escape(
+                    "Poprzednie dane zostały wyczyszczone."
+                    if cleared
+                    else "Poprzednie dane pozostawiono do ponownej edycji."
+                ),
+            },
+            recipient=recipient,
+            include_correction_url=True,
+        )
+
+    def _dispatch_special_submission_event(
+        self,
+        submission_id: str,
+        *,
+        event_type: str,
+        default_name: str,
+        default_subject: str,
+        default_html: str,
+        default_text: str,
+        extra_context: dict,
+        recipient: str = "",
+        include_correction_url: bool = False,
+    ) -> MailDispatchResult:
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from models import Form, FormSubmission, MailTemplate, PlatformMailTemplate
+        from sqlalchemy import select
+
+        with create_session_factory(database_url)() as db:
+            submission = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if submission is None:
+                return MailDispatchResult("skipped", error_message="Brak zgłoszenia.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            if form is None:
+                return MailDispatchResult("skipped", error_message="Brak formularza.")
+            template = db.execute(
+                select(MailTemplate)
+                .where(
+                    MailTemplate.form_id == form.id,
+                    MailTemplate.template_type == event_type,
+                    MailTemplate.is_active.is_(True),
+                )
+                .order_by(MailTemplate.id.desc())
+            ).scalars().first()
+            if template is None:
+                template = db.execute(
+                    select(PlatformMailTemplate).where(
+                        PlatformMailTemplate.template_type == event_type,
+                        PlatformMailTemplate.is_active.is_(True),
+                    )
+                ).scalar_one_or_none()
+            if template is None:
+                template = SimpleNamespace(
+                    name=default_name,
+                    subject=default_subject,
+                    html_body=default_html,
+                    text_body=default_text,
+                    is_active=True,
+                )
+            context = dict(extra_context)
+            if include_correction_url:
+                context["correction_url"] = url_for(
+                    "public_forms.correct_submission",
+                    slug=submission.form_slug,
+                    submission_id=submission.submission_id,
+                    token=submission.access_token,
+                    _external=True,
+                )
+            result = self.dispatch_to_submission(
+                db=db,
+                form=form,
+                submission=submission,
+                template=template,
+                to_email=recipient or submission.email,
+                subject_template=getattr(template, "subject", ""),
+                event_type=event_type,
+                files=self.submission_repository.list_submission_files(submission_id),
+                extra_context=context,
+            )
+            db.commit()
+            return result
+
     def log_email(
         self,
         db,

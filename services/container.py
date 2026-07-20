@@ -22,11 +22,13 @@ from services.mail_dispatch_service import MailDispatchService
 from services.mail_settings_service import MailSettingsService
 from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
+from services.qualification_condition_service import QualificationConditionService
 from services.rules_service import RulesService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 from services.workflow_service import WorkflowService
@@ -60,12 +62,16 @@ class ServiceContainer:
     access_token_service: AccessTokenService
     form_config_service: FormConfigService
     rules_service: RulesService
+    qualification_condition_service: QualificationConditionService
+    submission_correction_service: SubmissionCorrectionService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
     storage = storage_override or create_nextcloud_storage_from_env()
     form_config_service = FormConfigService()
     access_token_service = AccessTokenService()
+    qualification_condition_service = QualificationConditionService()
+    submission_correction_service = SubmissionCorrectionService()
 
     form_slugs = []
     try:
@@ -155,6 +161,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         audit_log_service=audit_log_service,
         access_token_service=access_token_service,
         submission_document_service=submission_document_service,
+        qualification_condition_service=qualification_condition_service,
     )
     document_signing_service = DocumentSigningService(
         storage=storage,
@@ -192,4 +199,6 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         access_token_service=access_token_service,
         form_config_service=form_config_service,
         rules_service=rules_service,
+        qualification_condition_service=qualification_condition_service,
+        submission_correction_service=submission_correction_service,
     )

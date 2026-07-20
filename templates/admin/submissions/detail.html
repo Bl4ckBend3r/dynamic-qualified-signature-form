@@ -34,6 +34,24 @@
         </form>
     </dialog>
 {% endif %}
+{% if g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
+    <button class="admin-button-secondary" type="button" data-correction-modal="return-for-correction-dialog">Wyślij do poprawy</button>
+    <dialog class="admin-confirm-dialog" id="return-for-correction-dialog">
+        <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-confirm-dialog__box admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <h2>Wyślij zgłoszenie do poprawy</h2>
+            <p class="admin-alert admin-alert-warning">Zgłoszenie pozostanie w historii, ale może wymagać ponownego uzupełnienia danych i wygenerowania dokumentów.</p>
+            <label><span>Powód <strong aria-hidden="true">*</strong></span><textarea name="reason" rows="3" required maxlength="5000"></textarea></label>
+            <label><span>Wiadomość dla użytkownika</span><textarea name="message_to_user" rows="4" maxlength="10000"></textarea></label>
+            <label class="admin-check"><input type="checkbox" name="clear_submission" checked><span>Wyczyść dane zgłoszenia <small>(odpowiedzi, załączniki i wygenerowane dokumenty)</small></span></label>
+            <label class="admin-check"><input type="checkbox" name="send_email" checked><span>Wyślij powiadomienie e-mail do użytkownika</span></label>
+            <div class="admin-form-actions">
+                <button class="admin-button-secondary" type="button" data-close-correction>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Wyślij do poprawy</button>
+            </div>
+        </form>
+    </dialog>
+{% endif %}
 <h2>Workflow zgłoszenia</h2>
 <div class="admin-workflow-grid">
     {% for section in workflow_view.sections %}
@@ -91,6 +109,29 @@
     {% endfor %}
 </div>
 <p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij e-mail</a></p>
+{% if detail_view.qualification %}
+<section class="admin-card">
+    <h2>Warunki kwalifikujące</h2>
+    <p class="admin-alert {{ 'admin-alert-success' if detail_view.qualification.passed else 'admin-alert-warning' }}">
+        {{ "Warunki zostały spełnione." if detail_view.qualification.passed else "Zgłoszenie zostało odrzucone automatycznie na podstawie warunków formularza." }}
+    </p>
+    <p><strong>Data oceny:</strong> {{ detail_view.qualification.evaluated_at or "-" }}</p>
+    {% if detail_view.qualification.user_message %}<p><strong>Komunikat dla użytkownika:</strong> {{ detail_view.qualification.user_message }}</p>{% endif %}
+    <table class="data-table">
+        <thead><tr><th>Pole</th><th>Operator</th><th>Wartość oczekiwana</th><th>Wartość zgłoszenia</th><th>Wynik</th><th>Informacja dla urzędnika</th></tr></thead>
+        <tbody>
+        {% for condition in detail_view.qualification.results %}
+            <tr>
+                <td>{{ condition.field_label }}</td><td>{{ condition.operator }}</td>
+                <td>{{ condition.expected_value }}</td><td>{{ condition.actual_value }}</td>
+                <td><span class="admin-badge">{{ "Spełniony" if condition.passed else "Niespełniony" }}</span></td>
+                <td>{{ condition.officer_message or "-" }}</td>
+            </tr>
+        {% else %}<tr><td colspan="6">Brak aktywnych warunków do oceny.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">
@@ -174,7 +215,7 @@
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
 </table>
-{% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
+{% if g.admin_user.role in ["admin", "super_admin"] %}
 <script>
 document.querySelectorAll("[data-rollback-modal]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -185,6 +226,12 @@ document.querySelectorAll("[data-rollback-modal]").forEach((button) => {
     });
 });
 document.querySelectorAll("[data-close-rollback]").forEach((button) => {
+    button.addEventListener("click", () => button.closest("dialog")?.close());
+});
+document.querySelectorAll("[data-correction-modal]").forEach((button) => {
+    button.addEventListener("click", () => document.getElementById(button.dataset.correctionModal)?.showModal());
+});
+document.querySelectorAll("[data-close-correction]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
 });
 </script>

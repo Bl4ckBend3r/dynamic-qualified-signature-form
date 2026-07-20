@@ -95,6 +95,8 @@ MAIL_TEMPLATE_TYPES = [
     "agreement_signed_by_office",
     "agreement_rejected_by_office",
     "stage_rollback",
+    "auto_rejected_by_condition",
+    "returned_for_correction",
     "custom",
 ]
 

@@ -6,6 +6,7 @@ pytest.importorskip("sqlalchemy")
 
 from services.admin_submission_service import (
     admin_status_label,
+    build_filter_fields,
     build_submission_detail_sections,
     filter_submissions,
     sort_submissions,
@@ -57,6 +58,16 @@ def test_submission_filter_and_sort_use_flat_and_json_values():
     assert filtered == [first]
     assert submission_value(first, "city") == "Lublin"
     assert sort_submissions([first, second], "nazwisko", "asc") == [first, second]
+
+
+def test_filter_fields_hide_internal_evaluation_metadata():
+    fields = [SimpleNamespace(name="wiek", label="Wiek")]
+    submissions = [SimpleNamespace(data_json={"custom": "value", "_qualification": {"passed": False}})]
+
+    result = build_filter_fields(fields, submissions)
+
+    assert ("custom", "custom") in result
+    assert all(name != "_qualification" for name, _label in result)
 
 
 def test_submission_detail_sections_use_labels_and_formatted_training_snapshot():

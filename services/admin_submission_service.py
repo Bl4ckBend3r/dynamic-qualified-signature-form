@@ -37,7 +37,7 @@ def build_filter_fields(fields: list[FormField], submissions: list[FormSubmissio
             seen.add(field.name)
     for submission in submissions:
         for key in (submission.data_json or {}).keys():
-            if key not in seen:
+            if not str(key).startswith("_") and key not in seen:
                 result.append((key, key))
                 seen.add(key)
     return result
@@ -169,7 +169,7 @@ def build_submission_detail_sections(form: Form, submission: FormSubmission) -> 
 
     dynamic_items = []
     for key, value in (submission.data_json or {}).items():
-        if key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
+        if str(key).startswith("_") or key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
             continue
         dynamic_items.append({"label": labels.get(key, key), "value": format_admin_value(value)})
         used_fields.add(key)
@@ -185,6 +185,34 @@ def build_submission_detail_sections(form: Form, submission: FormSubmission) -> 
         "sections": sections,
         "trainings": parse_training_snapshots(submission.selected_trainings),
         "technical_items": technical_items,
+        "qualification": build_qualification_detail(submission.data_json or {}),
+    }
+
+
+def build_qualification_detail(data_json: dict) -> dict | None:
+    evaluation = data_json.get("_qualification") if isinstance(data_json, dict) else None
+    if not isinstance(evaluation, dict):
+        return None
+    results = []
+    for item in evaluation.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        results.append(
+            {
+                "field_label": item.get("field_label") or item.get("field_name") or "Warunek",
+                "operator": item.get("operator") or "",
+                "expected_value": format_admin_value(item.get("expected_value")),
+                "actual_value": format_admin_value(item.get("actual_value")),
+                "passed": bool(item.get("passed")),
+                "officer_message": str(item.get("officer_message") or ""),
+            }
+        )
+    return {
+        "enabled": bool(evaluation.get("enabled")),
+        "passed": bool(evaluation.get("passed")),
+        "evaluated_at": evaluation.get("evaluated_at") or "",
+        "user_message": str(evaluation.get("user_message") or ""),
+        "results": results,
     }
 
 

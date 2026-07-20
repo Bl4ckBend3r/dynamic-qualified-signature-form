@@ -1205,6 +1205,8 @@
     gap: 1rem;
 }
 
+.workflow-stage-list { grid-template-columns: 1fr; }
+
 .workflow-stage-card,
 .workflow-option-card,
 .workflow-notification-row,
@@ -1213,6 +1215,26 @@
     padding: 1rem;
     border: 1px solid var(--admin-border, #d9dce3);
     border-radius: 12px;
+    background: var(--admin-surface-soft, #f8f9fb);
+}
+
+.workflow-stage-card {
+    padding: .85rem 1rem;
+    background: var(--admin-surface, #fff);
+    box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, .07));
+}
+
+.workflow-stage-summary {
+    margin: .45rem 0 0;
+    color: var(--admin-muted, #626975);
+    font-size: .88rem;
+}
+
+.workflow-stage-editor {
+    margin-top: .85rem;
+    padding: .85rem;
+    border-top: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 0 0 var(--admin-radius, 10px) var(--admin-radius, 10px);
     background: var(--admin-surface-soft, #f8f9fb);
 }
 
@@ -1280,6 +1302,7 @@
 }
 
 .workflow-linked-instruction { display: grid; gap: .85rem; }
+.workflow-linked-instruction.is-focused { border-color: var(--admin-primary, #24375b); box-shadow: 0 0 0 3px rgba(36, 55, 91, .13); }
 .workflow-linked-instruction label { display: grid; gap: .4rem; }
 .workflow-linked-instruction__heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .workflow-linked-instruction__heading h3 { margin: 0; }
@@ -1314,6 +1337,19 @@
 
 .instruction-format-button:hover,
 .instruction-format-button:focus-visible { border-color: #24375b; background: #eef2f8; }
+
+.mail-footer-example {
+    overflow: hidden;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: var(--admin-radius, 12px);
+    background: #fff;
+    box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, .07));
+}
+.mail-footer-example__subject { padding: .8rem 1rem; border-bottom: 1px solid var(--admin-border, #d9dce3); background: var(--admin-surface-soft, #f8f9fb); }
+.mail-footer-example__body { padding: 1rem; }
+.mail-footer-example__footer { display: grid; gap: .7rem; padding: 1rem; border-top: 1px solid var(--admin-border, #d9dce3); color: var(--admin-muted, #626975); background: #f8fafc; }
+.mail-footer-example__footer img { display: inline-block; max-width: 180px; max-height: 80px; width: auto; height: auto; }
+.mail-footer-example__footer [data-preview-footer-legal] { font-size: .8rem; }
 
 .admin-training-list-toolbar {
     display: flex;
@@ -1359,6 +1395,8 @@
     .admin-training-summary__facts, .admin-training-summary__badges { padding-left: 1.1rem; }
     .admin-training-summary__title strong { white-space: normal; }
     .admin-training-card__body { padding: .75rem; }
+    .workflow-stage-actions { align-items: stretch; width: 100%; }
+    .workflow-stage-actions > button { flex: 1 1 9rem; }
 }
 
 .workflow-stage-card__heading,

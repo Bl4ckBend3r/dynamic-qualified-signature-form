@@ -23,6 +23,7 @@
                         <a class="{% if request.endpoint and request.endpoint.startswith('admin.mail_template') %}is-active{% endif %}" href="{{ url_for('admin.mail_templates_index') }}">Szablony maili</a>
                         {% if g.admin_user.role == "super_admin" %}
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.system_mail_settings') %}is-active{% endif %}" href="{{ url_for('admin.system_mail_settings') }}">Poczta systemowa</a>
+                            <a class="{% if request.endpoint == 'admin.global_mail_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.global_mail_footer_edit') }}">Stopka ogólna</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.logo') %}is-active{% endif %}" href="{{ url_for('admin.logos_list') }}">Logo</a>
                             <a class="{% if request.endpoint == 'admin.contact_page_edit' %}is-active{% endif %}" href="{{ url_for('admin.contact_page_edit') }}">Strona kontaktowa</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.service_document') %}is-active{% endif %}" href="{{ url_for('admin.service_documents_edit') }}">Dokumenty serwisu</a>

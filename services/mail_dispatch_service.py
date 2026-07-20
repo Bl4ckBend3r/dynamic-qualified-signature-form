@@ -9,6 +9,8 @@ from typing import Any
 from flask import current_app, url_for
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
+from services.instruction_html_service import sanitize_instruction_html
+from services.mail_footer_resolver import MailFooterResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
 
 
@@ -45,12 +47,14 @@ class MailDispatchService:
         audit_log_service=None,
         smtp_sender=None,
         mail_settings_service=None,
+        mail_footer_resolver=None,
     ) -> None:
         self.notification_service = notification_service
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
         self.smtp_sender = smtp_sender
         self.mail_settings_service = mail_settings_service
+        self.mail_footer_resolver = mail_footer_resolver or MailFooterResolver()
 
     def render_template(self, template: str | None, context: dict[str, Any] | None = None) -> str:
         if not template:
@@ -76,18 +80,38 @@ class MailDispatchService:
         if not footer:
             return ""
         parts = []
+        alignment = str(getattr(footer, "logo_alignment", "left") or "left")
+        if alignment not in {"left", "center", "right"}:
+            alignment = "left"
         logo = getattr(footer, "logo", None)
         if logo and getattr(logo, "active", False) and logo_url_builder:
             logo_url = logo_url_builder(logo)
             parts.append(
-                '<div style="margin-bottom:16px;">'
+                f'<div style="margin-bottom:16px;text-align:{alignment};">'
                 f'<img src="{escape(str(logo_url))}" alt="{escape(str(getattr(logo, "name", "")))}" '
-                'style="display:block;max-width:180px;max-height:80px;width:auto;height:auto;">'
+                f'style="display:inline-block;max-width:180px;max-height:80px;width:auto;height:auto;">'
                 "</div>"
             )
-        html_body = getattr(footer, "html_body", "") or ""
+        html_body = sanitize_instruction_html(getattr(footer, "html_body", "") or "")
         if html_body:
             parts.append(html_body)
+        contact_html = sanitize_instruction_html(getattr(footer, "contact_html", "") or "")
+        if contact_html:
+            parts.append(f'<div class="mail-footer-contact">{contact_html}</div>')
+        links = getattr(footer, "links", None) or []
+        link_parts = []
+        for item in links:
+            if not isinstance(item, dict):
+                continue
+            label = escape(str(item.get("label") or ""))
+            url = str(item.get("url") or "")
+            if label and url.lower().startswith(("https://", "http://", "mailto:", "tel:")):
+                link_parts.append(f'<a href="{escape(url, quote=True)}" rel="noopener noreferrer">{label}</a>')
+        if link_parts:
+            parts.append('<div class="mail-footer-links">' + " · ".join(link_parts) + "</div>")
+        legal_text = sanitize_instruction_html(getattr(footer, "legal_text", "") or "")
+        if legal_text:
+            parts.append(f'<div class="mail-footer-legal">{legal_text}</div>')
         return "\n".join(parts)
 
     def select_template(self, templates: list[Any], submission=None, event_type: str | None = None):
@@ -290,6 +314,12 @@ class MailDispatchService:
         extra_context: dict[str, Any] | None = None,
         logo_url_builder=None,
     ) -> MailDispatchResult:
+        footer = self.mail_footer_resolver.resolve(
+            db,
+            mail_type=event_type,
+            form=form,
+            submission=submission,
+        )
         if template is None or getattr(template, "is_active", True) is False:
             current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
             log = self.log_email(
@@ -314,6 +344,8 @@ class MailDispatchService:
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         footer_html = self.build_footer(footer, logo_url_builder=logo_url_builder)
         layout = self._layout_for_db(db)
+        if footer:
+            layout = {**layout, "footer_html": ""}
         html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
         text_body = render_platform_mail_text(template, context)
         return self.dispatch_raw(
@@ -391,7 +423,24 @@ class MailDispatchService:
             )
             subject = self.render_subject(template.subject, context)
             layout = self._layout_for_db(db)
-            html_body = render_platform_mail_html(template, context, layout=layout)
+            footer = self.mail_footer_resolver.resolve(
+                db,
+                mail_type="submission_received",
+                form=form,
+                submission=submission,
+            )
+            footer_html = self.build_footer(
+                footer,
+                logo_url_builder=lambda logo: url_for(
+                    "public_forms.logo_asset",
+                    logo_id=logo.id,
+                    filename=logo.filename,
+                    _external=True,
+                ),
+            )
+            if footer:
+                layout = {**layout, "footer_html": ""}
+            html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
             text_body = render_platform_mail_text(template, context)
             result = self.dispatch_raw(
                 event_type="submission_received",
@@ -404,6 +453,7 @@ class MailDispatchService:
                 form=form,
                 submission=submission,
                 template=None,
+                footer=footer,
                 inline_images=self._inline_images_from_layout(layout),
             )
             db.commit()

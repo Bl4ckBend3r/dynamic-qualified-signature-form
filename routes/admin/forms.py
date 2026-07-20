@@ -460,6 +460,26 @@ def _workflow_editor_context(
 ) -> dict:
     normalizer = WorkflowConfigNormalizer()
     normalized = normalizer.normalize(workflow)
+    instruction_view = reconcile_instruction_config(instruction_config, normalized)
+    instructions_by_key = {
+        str(stage.get("key") or ""): stage
+        for stage in instruction_view.get("stages", [])
+        if stage.get("active", True)
+    }
+    instructions_by_status = {
+        str(status): stage
+        for stage in instruction_view.get("stages", [])
+        if stage.get("active", True)
+        for status in stage.get("status_codes", [])
+    }
+    for step in normalized.get("steps", []):
+        instruction = instructions_by_key.get(str(step.get("id") or "")) or instructions_by_status.get(
+            str(step.get("status") or "")
+        )
+        if instruction:
+            step["description"] = instruction.get("description") or ""
+            step["next_action"] = instruction.get("next_action") or ""
+    instruction_view = reconcile_instruction_config(instruction_view, normalized)
     existing_statuses = [step.get("status") for step in normalized.get("steps", [])]
     for decision in normalized.get("decision_settings", []):
         existing_statuses.extend((decision.get("yes_status"), decision.get("no_status")))
@@ -468,7 +488,7 @@ def _workflow_editor_context(
         "workflow_json": workflow_json if workflow_json is not None else format_json(normalized),
         "workflow_statuses": workflow_status_options(existing_statuses),
         "workflow_advanced_elements": normalizer.advanced_elements(normalized),
-        "instruction_config_view": reconcile_instruction_config(instruction_config, normalized),
+        "instruction_config_view": instruction_view,
     }
 
 

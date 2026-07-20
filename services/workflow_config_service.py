@@ -32,6 +32,7 @@ STATUS_LABELS: dict[str, str] = {
     "AGREEMENT_READY": "Umowa gotowa",
     "AGREEMENT_GENERATED": "Umowa wygenerowana",
     "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "WAITING_FOR_AGREEMENT_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
     "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
     "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
     "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
@@ -113,6 +114,29 @@ PREFERRED_WORKFLOW_STATUSES = (
     "PROCESS_CANCELLED",
 )
 
+# Only these agreement statuses are produced by the current process. Historical
+# statuses remain readable through STATUS_LABELS, but must never make a legacy
+# agreement branch look complete during admin validation.
+ACTIVE_AGREEMENT_STATUSES = frozenset(
+    {
+        "AGREEMENT_REQUIRED",
+        "AGREEMENT_READY",
+        "AGREEMENT_GENERATED",
+        "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+        "AGREEMENT_SIGNED_BY_OFFICE",
+        "AGREEMENT_REJECTED_BY_OFFICE",
+    }
+)
+ACTIVE_AGREEMENT_CONFIRMATION_STATUSES = frozenset(
+    {
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    }
+)
+AGREEMENT_DECISION_IDS = frozenset({"agreement_confirmation", "agreement_rejection"})
+
 
 def workflow_status_options(existing_codes: Any = None) -> list[dict[str, str]]:
     codes = list(PREFERRED_WORKFLOW_STATUSES)
@@ -136,7 +160,7 @@ class WorkflowConfigNormalizer:
         source["initial_step"] = str(source.get("initial_step") or (raw_steps[0].get("id") if raw_steps else "")).strip()
         source["requires_declaration"] = bool(source.get("requires_declaration", False))
         source["requires_contract"] = bool(source.get("requires_contract", False))
-        source["requires_agreement_confirmation"] = bool(
+        source["requires_agreement_confirmation"] = source["requires_contract"] and bool(
             source.get("requires_agreement_confirmation", source["requires_contract"])
         )
         source["send_email_notifications"] = bool(source.get("send_email_notifications", False))
@@ -261,17 +285,23 @@ class WorkflowConfigValidator:
             any(status.startswith("DECLARATION_") for status in statuses) or "declaration" in document_ids
         ):
             errors.append("Proces wymaga deklaracji, ale nie ma etapu deklaracji.")
-        if config["requires_contract"] and not (
-            any(status.startswith("AGREEMENT_") for status in statuses) or {"agreement", "training_agreement"} & document_ids
+        agreement_required = config["requires_contract"]
+        if agreement_required and not (
+            ACTIVE_AGREEMENT_STATUSES & statuses or {"agreement", "training_agreement"} & document_ids
         ):
-            errors.append("Proces wymaga umowy, ale nie ma etapu umowy.")
-        office_signature_statuses = {
-            "AGREEMENT_UPLOADED_BY_BENEFICIARY",
-            "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
-            "AGREEMENT_UPLOADED",
-        }
-        if config["requires_agreement_confirmation"] and not office_signature_statuses & statuses:
-            errors.append("Dodaj etap „Potwierdzenie podpisania umowy przez urząd”.")
+            errors.append(
+                "Proces wymaga umowy: formularz ma włączoną obsługę umów, ale brakuje aktywnego etapu umowy."
+            )
+        agreement_decisions_active = agreement_required and config["requires_agreement_confirmation"]
+        if (
+            agreement_decisions_active
+            and not ACTIVE_AGREEMENT_CONFIRMATION_STATUSES & statuses
+        ):
+            errors.append(
+                "Proces ma włączoną obsługę umów: dodaj etap „Potwierdzenie podpisania umowy przez urząd” "
+                "ze statusem „Podpisana umowa wgrana przez beneficjenta” albo "
+                "„Umowa oczekuje na podpis po stronie urzędu”."
+            )
         decision_rules = {
             "application_decision": {
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
@@ -280,10 +310,17 @@ class WorkflowConfigValidator:
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
             },
             "declaration_confirmation": {"DECLARATION_UPLOADED", "DECLARATION_SIGNED"},
-            "agreement_confirmation": office_signature_statuses,
-            "agreement_rejection": office_signature_statuses,
+            "agreement_confirmation": ACTIVE_AGREEMENT_CONFIRMATION_STATUSES,
+            "agreement_rejection": ACTIVE_AGREEMENT_CONFIRMATION_STATUSES,
         }
         for decision in config.get("decision_settings", []):
+            decision_id = str(decision.get("id") or "")
+            # Stale agreement decisions are inert when agreement handling or
+            # the optional office-confirmation branch is off.
+            # They can remain in imported JSON for round-trip compatibility, but
+            # they must not prevent the form from being saved.
+            if decision_id in AGREEMENT_DECISION_IDS and not agreement_decisions_active:
+                continue
             step_id = str(decision.get("step_id") or "").strip()
             if not step_id:
                 continue
@@ -291,10 +328,17 @@ class WorkflowConfigValidator:
             if step is None:
                 errors.append(f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap.")
                 continue
-            allowed = decision_rules.get(str(decision.get("id") or ""))
+            allowed = decision_rules.get(decision_id)
             if allowed and step["status"] not in allowed:
+                agreement_context = (
+                    " Obsługa umów jest włączona."
+                    if decision_id in AGREEMENT_DECISION_IDS
+                    else ""
+                )
                 errors.append(
-                    f"Decyzja „{decision.get('label') or decision.get('id')}” nie może być dostępna na wybranym etapie."
+                    f"Decyzja „{decision.get('label') or decision.get('id')}” jest przypisana do etapu "
+                    f"„{step['admin_label']}” ({workflow_status_label(step['status'])}), na którym nie może być wykonana."
+                    f"{agreement_context}"
                 )
             for target_key in ("yes_status", "no_status"):
                 target_status = str(decision.get(target_key) or "").strip()

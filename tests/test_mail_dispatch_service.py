@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from services.mail_dispatch_service import MailDispatchRequest, MailDispatchService
 
 
@@ -27,6 +29,24 @@ def test_build_footer_handles_missing_footer_and_logo():
     assert 'src="https://cdn/logo.png"' in html
     assert "<p>Stopka</p>" in html
     assert service.build_footer(None) == ""
+
+
+@pytest.mark.parametrize("alignment", ["left", "center", "right"])
+def test_build_footer_aligns_logo(alignment):
+    service = MailDispatchService()
+    logo = SimpleNamespace(active=True, name="Logo", filename="logo.png")
+    footer = SimpleNamespace(
+        logo=logo,
+        logo_alignment=alignment,
+        html_body="<p>Stopka</p>",
+    )
+
+    rendered = service.build_footer(
+        footer,
+        logo_url_builder=lambda item: f"https://cdn/{item.filename}",
+    )
+
+    assert f"text-align:{alignment}" in rendered
 
 
 def test_dispatch_is_safe_without_sender_and_calls_sender_when_provided():

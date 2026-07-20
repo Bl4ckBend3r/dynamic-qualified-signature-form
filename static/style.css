@@ -706,7 +706,7 @@ textarea:focus {
 
 .form-tile__logo {
     display: block;
-    max-width: 128px;
+    max-width: 258px;
     max-height: 48px;
     object-fit: contain;
     margin-bottom: 14px;

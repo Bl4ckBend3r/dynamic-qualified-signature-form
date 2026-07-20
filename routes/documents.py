@@ -4,12 +4,13 @@ from __future__ import annotations
 # Business logic lives in services/documents/*.
 # Keep as a single module until route-package split is proven safe.
 
+import json
 import logging
 import tempfile
 from io import BytesIO
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
 from sqlalchemy import select
 from database import create_session_factory
@@ -319,6 +320,80 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
         flash("Wystąpił błąd podczas wgrywania lub weryfikacji umowy.", "error")
 
     return redirect(documents_to_sign_url(submission_id))
+
+
+@bp.post("/agreements/<slug>/<submission_id>/upload-all")
+def upload_signed_training_agreements(slug: str, submission_id: str):
+    """Upload multiple signed training agreements while preserving per-file results."""
+    services = get_services()
+    submission = get_submission_context(submission_id)
+    if not submission or submission["form_slug"] != slug:
+        return jsonify({"ok": False, "error": "Nie znaleziono wniosku dla podpisanych umów."}), 404
+
+    files = request.files.getlist("signed_agreement_files")
+    agreement_ids = request.form.getlist("agreement_ids")
+    if not files or len(files) != len(agreement_ids):
+        return jsonify({"ok": False, "error": "Każdy plik musi być przypisany do jednej umowy."}), 400
+
+    raw_agreements = (submission.get("row") or {}).get("training_agreements", [])
+    if isinstance(raw_agreements, str):
+        try:
+            raw_agreements = json.loads(raw_agreements)
+        except json.JSONDecodeError:
+            raw_agreements = []
+    known_ids = {
+        str(item.get("id") or item.get("agreement_id") or "")
+        for item in raw_agreements
+        if isinstance(item, dict)
+    }
+    results = []
+    assigned_ids = set()
+    for agreement_id, uploaded_file in zip(agreement_ids, files, strict=True):
+        filename = Path(uploaded_file.filename or "").name
+        item = {"agreement_id": agreement_id, "filename": filename, "status": "error", "message": ""}
+        if not agreement_id or agreement_id not in known_ids:
+            item["message"] = "Nieprawidłowe przypisanie pliku do umowy."
+            results.append(item)
+            continue
+        if agreement_id in assigned_ids:
+            item["message"] = "Ta umowa została już przypisana do innego pliku."
+            results.append(item)
+            continue
+        assigned_ids.add(agreement_id)
+        try:
+            verification = services.document_signing_service.upload_signed_document(
+                submission=submission,
+                document_id=DocumentType.TRAINING_AGREEMENT,
+                uploaded_file=uploaded_file,
+                instance_id=agreement_id,
+            )
+            if not verification["is_signed"]:
+                item["message"] = "Plik nie zawiera podpisu PDF."
+            elif not verification["is_valid"]:
+                item["message"] = "Podpis umowy nie jest dopuszczalnym podpisem."
+            else:
+                item.update(status="uploaded", message="Wgrano i zweryfikowano.")
+        except ValueError as exc:
+            item["message"] = str(exc)
+        except Exception:
+            logger.exception(
+                "Batch agreement upload failed public_submission_id=%s agreement_id=%s filename=%s",
+                submission_id,
+                agreement_id,
+                filename,
+            )
+            item["message"] = "Wystąpił błąd podczas wgrywania lub weryfikacji."
+        results.append(item)
+
+    uploaded_count = sum(item["status"] == "uploaded" for item in results)
+    return jsonify(
+        {
+            "ok": uploaded_count == len(results),
+            "uploaded": uploaded_count,
+            "failed": len(results) - uploaded_count,
+            "results": results,
+        }
+    ), 200
 
 
 @bp.post("/agreement/<slug>/<submission_id>/upload")

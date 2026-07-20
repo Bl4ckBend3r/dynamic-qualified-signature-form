@@ -284,6 +284,36 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
+                            {% if training_agreements|length > 1 %}
+                                <form
+                                    method="post"
+                                    action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
+                                    enctype="multipart/form-data"
+                                    class="bulk-agreement-upload"
+                                    data-bulk-agreement-upload
+                                >
+                                    <div class="card-header">
+                                        <h4>Wgraj wszystkie podpisane umowy</h4>
+                                        <p>Wybierz kilka plików jednocześnie. System zaproponuje dopasowanie, które możesz zmienić przed wysłaniem.</p>
+                                    </div>
+                                    <label class="upload-dropzone" data-upload-dropzone>
+                                        <input type="file" name="signed_agreement_files" accept="application/pdf" multiple required class="upload-dropzone__input" data-bulk-agreement-files>
+                                        <span class="upload-dropzone__inner">
+                                            <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                            <span class="upload-dropzone__title">Wybierz wszystkie podpisane umowy</span>
+                                            <span class="upload-dropzone__description">Możesz wskazać wiele plików PDF w jednym oknie</span>
+                                            <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano plików</span>
+                                        </span>
+                                    </label>
+                                    <div class="bulk-agreement-matches" data-bulk-agreement-matches hidden>
+                                        <div class="bulk-agreement-row bulk-agreement-row--heading"><span>Plik</span><span>Umowa</span><span>Status</span></div>
+                                        <div data-bulk-agreement-rows></div>
+                                    </div>
+                                    <div class="bulk-agreement-summary" data-bulk-agreement-summary aria-live="polite"></div>
+                                    <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij wszystko</button></div>
+                                    <script type="application/json" data-bulk-agreements>{{ training_agreements|tojson }}</script>
+                                </form>
+                            {% endif %}
                             {% for agreement in training_agreements %}
                                 <div class="signing-document-card signing-document-card--spaced">
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>

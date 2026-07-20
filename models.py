@@ -628,6 +628,11 @@ class MailFooter(Base):
     html_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     logo_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
     logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), index=True, nullable=True)
+    logo_alignment: Mapped[str] = mapped_column(String(20), default="left", nullable=False)
+    contact_html: Mapped[str | None] = mapped_column(Text, default="", nullable=True)
+    links: Mapped[list | None] = mapped_column(JsonDict, default=list, nullable=True)
+    legal_text: Mapped[str | None] = mapped_column(Text, default="", nullable=True)
+    use_global: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

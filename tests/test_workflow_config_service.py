@@ -98,7 +98,7 @@ def test_validator_requires_agreement_and_confirmation_stages():
         }
     )
 
-    assert "Proces wymaga umowy, ale nie ma etapu umowy." in errors
+    assert any("włączoną obsługę umów" in error and "aktywnego etapu umowy" in error for error in errors)
     assert any("Potwierdzenie podpisania umowy przez urząd" in error for error in errors)
 
 
@@ -122,6 +122,114 @@ def test_officer_agreement_decision_is_allowed_only_after_upload():
         ],
     }
 
+    base["requires_contract"] = True
     errors = WorkflowConfigValidator().validate(base)
 
-    assert any("nie może być dostępna na wybranym etapie" in error for error in errors)
+    assert any(
+        "Potwierdzenie umowy" in error
+        and "Weryfikacja" in error
+        and "Obsługa umów jest włączona" in error
+        for error in errors
+    )
+
+
+def test_validator_ignores_stale_agreement_decisions_when_agreement_is_not_required():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "initial_step": "review",
+            "requires_contract": False,
+            "requires_agreement_confirmation": True,
+            "steps": [
+                {
+                    "id": "review",
+                    "admin_label": "Weryfikacja",
+                    "user_label": "Weryfikacja",
+                    "status": "OFFICER_REVIEW",
+                }
+            ],
+            "decision_settings": [
+                {
+                    "id": "agreement_confirmation",
+                    "label": "Historyczne potwierdzenie umowy",
+                    "step_id": "removed_agreement_stage",
+                }
+            ],
+        }
+    )
+
+    assert errors == []
+
+
+def test_validator_ignores_agreement_decisions_when_office_confirmation_is_disabled():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "initial_step": "agreement",
+            "requires_contract": True,
+            "requires_agreement_confirmation": False,
+            "steps": [
+                {
+                    "id": "agreement",
+                    "admin_label": "Umowa do podpisania",
+                    "user_label": "Podpisz umowę",
+                    "status": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+                }
+            ],
+            "decision_settings": [
+                {
+                    "id": "agreement_confirmation",
+                    "label": "Historyczne potwierdzenie umowy",
+                    "step_id": "removed_agreement_stage",
+                }
+            ],
+        }
+    )
+
+    assert errors == []
+
+
+def test_legacy_agreement_status_does_not_satisfy_current_agreement_validation():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "initial_step": "legacy",
+            "requires_contract": True,
+            "requires_agreement_confirmation": True,
+            "steps": [
+                {
+                    "id": "legacy",
+                    "admin_label": "Stary etap umowy",
+                    "user_label": "Stary etap umowy",
+                    "status": "AGREEMENT_UPLOADED",
+                }
+            ],
+        }
+    )
+
+    assert any("aktywnego etapu umowy" in error for error in errors)
+    assert any("Potwierdzenie podpisania umowy przez urząd" in error for error in errors)
+
+
+def test_current_agreement_confirmation_stage_passes_validation():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "initial_step": "office_signature",
+            "requires_contract": True,
+            "requires_agreement_confirmation": True,
+            "steps": [
+                {
+                    "id": "office_signature",
+                    "admin_label": "Potwierdzenie podpisania umowy przez urząd",
+                    "user_label": "Umowa oczekuje na urząd",
+                    "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+                }
+            ],
+            "decision_settings": [
+                {
+                    "id": "agreement_confirmation",
+                    "label": "Potwierdzenie podpisania umowy przez urząd",
+                    "step_id": "office_signature",
+                }
+            ],
+        }
+    )
+
+    assert errors == []

@@ -1,171 +1,95 @@
 {% extends "admin/base.html" %}
-{% block title %}Stopka maila{% endblock %}
+{% block title %}{{ 'Stopka ogólna' if is_global else 'Stopka formularza' }}{% endblock %}
 {% block content %}
 {% set selected_logo = footer.logo if footer.logo and footer.logo.active else none %}
+{% set cancel_url = url_for('admin.global_mail_footer_edit') if is_global else url_for('admin.mail_footers_list', form_id=form.id) %}
 <div class="admin-page-title">
     <div>
-        <p class="admin-eyebrow">Stopki maili</p>
-        <h1>Stopka maila</h1>
+        <p class="admin-eyebrow">Stopki e-mail</p>
+        <h1>{{ 'Stopka ogólna' if is_global else 'Stopka formularza: ' ~ form.name }}</h1>
+        <p>{{ footer_usage_label }}</p>
+        {% if not is_global %}<p class="admin-field-help">Mail początkowy po rejestracji wniosku zawsze używa stopki ogólnej.</p>{% endif %}
     </div>
-    <div class="admin-actions">
-        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
-    </div>
+    <div class="admin-actions"><a class="admin-button-secondary" href="{{ cancel_url }}">Anuluj</a></div>
 </div>
 
-<form method="post" class="admin-form-card admin-form">
+<form method="post" class="admin-form-card admin-form" data-footer-editor>
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Dane podstawowe</h2>
-        </div>
+        <div class="admin-form-section-header"><h2>Reguła użycia</h2></div>
         <div class="admin-form-grid">
-            <div class="admin-field">
-                <label class="admin-field-label" for="footer-name">Nazwa stopki</label>
-                <input id="footer-name" name="name" value="{{ footer.name }}" required>
-                <p class="admin-field-help">Nazwa widoczna tylko w panelu administracyjnym.</p>
-            </div>
-            <label class="admin-switch">
-                <input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}>
-                <span>
-                    <strong>Aktywna</strong>
-                    <small>Stopka może być używana w wiadomościach.</small>
-                </span>
-            </label>
-            <label class="admin-switch admin-form-wide">
-                <input type="checkbox" name="is_default" {% if footer.is_default %}checked{% endif %}>
-                <span>
-                    <strong>Domyślna</strong>
-                    <small>Ta stopka będzie wybierana automatycznie dla nowych szablonów maili tego formularza.</small>
-                </span>
-            </label>
+            <label><span>Nazwa stopki</span><input id="footer-name" name="name" value="{{ footer.name }}" required></label>
+            <label class="admin-switch"><input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}><span><strong>Aktywna</strong><small>{% if is_global %}Nieaktywna stopka nie będzie dodawana do maili globalnych.{% else %}Nieaktywna stopka formularza automatycznie użyje stopki ogólnej.{% endif %}</small></span></label>
+            {% if not is_global %}
+                <label class="admin-switch admin-form-wide"><input type="checkbox" name="use_global" {% if footer.use_global %}checked{% endif %}><span><strong>Używaj stopki ogólnej zamiast stopki formularza</strong><small>Maile procesowe formularza pominą tę stopkę.</small></span></label>
+            {% endif %}
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Logo w stopce</h2>
-        </div>
-        <div class="admin-logo-picker">
-            <div class="admin-field">
-                <label class="admin-field-label" for="footer-logo">Logo z biblioteki</label>
-                <select id="footer-logo" name="logo_id" data-logo-select>
-                    <option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>
-                    {% for logo in logos %}
-                        <option
-                            value="{{ logo.id }}"
-                            data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}"
-                            data-logo-name="{{ logo.name }}"
-                            {% if footer.logo_id == logo.id %}selected{% endif %}
-                        >{{ logo.name }}</option>
-                    {% endfor %}
-                </select>
-                <p class="admin-field-help">Logo można dodać tylko z poziomu konta super_admin.</p>
-            </div>
-            <div class="admin-logo-preview" data-logo-preview>
-                {% if selected_logo %}
-                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
-                    <span>{{ selected_logo.name }}</span>
-                {% else %}
-                    <span>Nie wybrano logo.</span>
-                {% endif %}
-            </div>
+        <div class="admin-form-section-header"><h2>Logo w stopce</h2><p>Wybierz logo i jego wyrównanie w układzie wiadomości.</p></div>
+        <div class="admin-form-grid">
+            <label><span>Logo z biblioteki</span><select id="footer-logo" name="logo_id" data-logo-select><option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>{% for logo in logos %}<option value="{{ logo.id }}" data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}" data-logo-name="{{ logo.name }}" {% if footer.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select><small>Logo można dodać tylko z poziomu konta super_admin.</small></label>
+            <label><span>Wyrównanie logo</span><select name="logo_alignment" data-logo-alignment><option value="left" {% if (footer.logo_alignment or 'left') == 'left' %}selected{% endif %}>Do lewej</option><option value="center" {% if footer.logo_alignment == 'center' %}selected{% endif %}>Do środka</option><option value="right" {% if footer.logo_alignment == 'right' %}selected{% endif %}>Do prawej</option></select></label>
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Treść HTML</h2>
-            <p>Treść zostanie doklejona na końcu wiadomości w domyślnym stylu platformy.</p>
-        </div>
-        <div class="admin-field">
-            <label class="admin-field-label" for="footer-html">Treść HTML</label>
-            <textarea id="footer-html" name="html_body" rows="16" data-footer-html>{{ footer.html_body }}</textarea>
+        <div class="admin-form-section-header"><h2>Treść stopki</h2><p>Dozwolone jest bezpieczne formatowanie: akapity, pogrubienie, kursywa, listy i linki.</p></div>
+        <div class="admin-form-grid">
+            <label class="admin-form-wide"><span>Treść HTML</span><textarea id="footer-html" name="html_body" rows="7" data-footer-rich data-preview-source="body">{{ footer.html_body or '' }}</textarea></label>
+            <label class="admin-form-wide"><span>Dane kontaktowe</span><textarea name="contact_html" rows="5" data-footer-rich data-preview-source="contact">{{ footer.contact_html or '' }}</textarea></label>
+            <label class="admin-form-wide"><span>Linki</span><textarea name="links_text" rows="4" data-footer-links placeholder="Polityka prywatności|https://example.pl/polityka">{% for link in footer.links or [] %}{{ link.get('label', '') }}|{{ link.get('url', '') }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea><small>Jeden link w wierszu: etykieta|adres.</small></label>
+            <label class="admin-form-wide"><span>Tekst prawny</span><textarea name="legal_text" rows="5" data-footer-rich data-preview-source="legal">{{ footer.legal_text or '' }}</textarea></label>
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Podgląd</h2>
-            <p>Finalny mail zostanie opakowany w domyślny layout platformy.</p>
-        </div>
-        <div class="admin-preview-card">
-            <div class="admin-preview-logo" data-preview-logo>
-                {% if selected_logo %}
-                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
-                {% else %}
-                    <span>Nie wybrano logo dla tej stopki.</span>
-                {% endif %}
-            </div>
-            <div class="admin-preview-content" data-preview-html>
-                {% if footer.html_body %}
-                    {{ footer.html_body|safe }}
-                {% else %}
-                    <p>Brak treści HTML stopki.</p>
-                {% endif %}
-            </div>
+        <div class="admin-form-section-header"><h2>Podgląd stopki e-mail</h2><p>Przykładowy mail pokazuje układ treści, logo, danych kontaktowych, linków i tekstu prawnego.</p></div>
+        <div class="mail-footer-example">
+            <div class="mail-footer-example__subject"><strong>Temat:</strong> Przykładowa wiadomość dotycząca zgłoszenia</div>
+            <div class="mail-footer-example__body"><p>Dzień dobry,</p><p>to jest przykładowa treść wiadomości wysyłanej przez aplikację.</p></div>
+            <footer class="mail-footer-example__footer">
+                <div class="admin-preview-logo" data-preview-logo style="text-align:{{ footer.logo_alignment or 'left' }}">{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">{% endif %}</div>
+                <div data-preview-footer-body>{% if footer.html_body %}{{ footer.html_body|safe }}{% else %}<p>Brak treści stopki.</p>{% endif %}</div>
+                <div data-preview-footer-contact>{{ (footer.contact_html or '')|safe }}</div>
+                <div data-preview-footer-links>{% for link in footer.links or [] %}<a href="{{ link.get('url') }}">{{ link.get('label') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+                <div data-preview-footer-legal>{{ (footer.legal_text or '')|safe }}</div>
+            </footer>
         </div>
     </section>
 
-    <div class="admin-form-actions">
-        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
-        <button class="admin-button" type="submit">Zapisz</button>
-    </div>
+    <div class="admin-form-actions"><a class="admin-button-secondary" href="{{ cancel_url }}">Anuluj</a><button class="admin-button" type="submit">Zapisz stopkę</button></div>
 </form>
 
 <script>
 (() => {
-    const select = document.querySelector("[data-logo-select]");
-    const pickerPreview = document.querySelector("[data-logo-preview]");
-    const previewLogo = document.querySelector("[data-preview-logo]");
-    const htmlInput = document.querySelector("[data-footer-html]");
-    const htmlPreview = document.querySelector("[data-preview-html]");
-
-    const setEmptyLogo = () => {
-        pickerPreview.replaceChildren();
-        const pickerText = document.createElement("span");
-        pickerText.textContent = "Nie wybrano logo.";
-        pickerPreview.append(pickerText);
-
-        previewLogo.replaceChildren();
-        const previewText = document.createElement("span");
-        previewText.textContent = "Nie wybrano logo dla tej stopki.";
-        previewLogo.append(previewText);
-    };
-
-    const renderLogo = () => {
-        if (!select || !pickerPreview || !previewLogo) {
-            return;
-        }
-        const selected = select.options[select.selectedIndex];
-        const url = selected?.dataset.previewUrl || "";
-        const name = selected?.dataset.logoName || "Brak logo";
-        if (url) {
-            const pickerImage = document.createElement("img");
-            pickerImage.src = url;
-            pickerImage.alt = name;
-            const pickerText = document.createElement("span");
-            pickerText.textContent = name;
-            pickerPreview.replaceChildren(pickerImage, pickerText);
-
-            const previewImage = document.createElement("img");
-            previewImage.src = url;
-            previewImage.alt = name;
-            previewLogo.replaceChildren(previewImage);
-        } else {
-            setEmptyLogo();
-        }
-    };
-
-    const renderHtml = () => {
-        if (!htmlInput || !htmlPreview) {
-            return;
-        }
-        htmlPreview.innerHTML = htmlInput.value.trim() || "<p>Brak treści HTML stopki.</p>";
-    };
-
-    select?.addEventListener("change", renderLogo);
-    htmlInput?.addEventListener("input", renderHtml);
+    const form = document.querySelector("[data-footer-editor]");
+    const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "A"]);
+    function safeHtml(value) {
+        const template = document.createElement("template"); template.innerHTML = String(value || "");
+        template.content.querySelectorAll("*").forEach((node) => {
+            if (!allowed.has(node.tagName)) { node.replaceWith(...node.childNodes); return; }
+            const href = node.tagName === "A" ? String(node.getAttribute("href") || "") : "";
+            [...node.attributes].forEach((attribute) => node.removeAttribute(attribute.name));
+            if (node.tagName === "A" && /^(https?:|mailto:|tel:)/i.test(href)) { node.href = href; node.rel = "noopener noreferrer"; }
+        });
+        return template.innerHTML;
+    }
+    function insert(textarea, tag, attrs = "") { const start = textarea.selectionStart || 0; const end = textarea.selectionEnd || start; const text = textarea.value.slice(start, end) || "tekst"; textarea.setRangeText(tag === "br" ? "<br>" : `<${tag}${attrs}>${text}</${tag}>`, start, end, "end"); textarea.dispatchEvent(new Event("input", {bubbles: true})); textarea.focus(); }
+    form.querySelectorAll("[data-footer-rich]").forEach((textarea) => {
+        const toolbar = document.createElement("div"); toolbar.className = "instruction-format-toolbar";
+        [["strong", "B"], ["em", "I"], ["ul", "• Lista"], ["ol", "1. Lista"], ["p", "Akapit"], ["br", "↵"]].forEach(([tag, label]) => { const button = document.createElement("button"); button.type = "button"; button.className = "instruction-format-button"; button.textContent = label; button.addEventListener("click", () => insert(textarea, tag)); toolbar.append(button); });
+        const link = document.createElement("button"); link.type = "button"; link.className = "instruction-format-button"; link.textContent = "Link"; link.addEventListener("click", () => { const href = prompt("Adres linku", "https://"); if (href) insert(textarea, "a", ` href="${href.replace(/[\"<>]/g, "")}"`); }); toolbar.append(link); textarea.before(toolbar);
+    });
+    function render() {
+        const mappings = {body: "[data-preview-footer-body]", contact: "[data-preview-footer-contact]", legal: "[data-preview-footer-legal]"};
+        form.querySelectorAll("[data-preview-source]").forEach((source) => { const target = form.querySelector(mappings[source.dataset.previewSource]); if (target) target.innerHTML = safeHtml(source.value); });
+        const links = form.querySelector("[data-preview-footer-links]"); if (links) { links.replaceChildren(); String(form.querySelector("[data-footer-links]")?.value || "").split(/\r?\n/).forEach((line) => { const [label, url] = line.split("|"); if (!label || !/^(https?:|mailto:|tel:)/i.test(url || "")) return; const anchor = document.createElement("a"); anchor.textContent = label.trim(); anchor.href = url.trim(); anchor.rel = "noopener noreferrer"; if (links.childNodes.length) links.append(" · "); links.append(anchor); }); }
+        const select = form.querySelector("[data-logo-select]"); const option = select?.selectedOptions?.[0]; const logo = form.querySelector("[data-preview-logo]"); if (logo) { logo.style.textAlign = form.querySelector("[data-logo-alignment]")?.value || "left"; logo.replaceChildren(); if (option?.dataset.previewUrl) { const image = document.createElement("img"); image.src = option.dataset.previewUrl; image.alt = option.dataset.logoName || "Logo"; logo.append(image); } }
+    }
+    form.addEventListener("input", render); form.addEventListener("change", render); render();
 })();
 </script>
 {% endblock %}

@@ -2730,6 +2730,59 @@ def test_mail_footer_uses_form_footer_then_global_fallback(admin_app, caplog):
     assert "scope=none" in caplog.text
 
 
+def test_mail_footer_resolver_enforces_global_initial_mail_and_form_process_footer(admin_app):
+    from services.mail_footer_resolver import MailFooterResolver
+
+    form_id = create_form(admin_app, slug="resolver_form", name="Resolver form")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        form_footer = MailFooter(form_id=form_id, name="Form", html_body="<p>Form</p>", is_active=True, is_default=True)
+        global_footer = MailFooter(form_id=None, name="Global", html_body="<p>Global</p>", is_active=True, is_default=True)
+        db.add_all([form_footer, global_footer])
+        db.flush()
+        resolver = MailFooterResolver()
+
+        assert resolver.resolve(db, mail_type="agreement_generated", form=form).name == "Form"
+        assert resolver.resolve(db, mail_type="submission_received", form=form).name == "Global"
+        form_footer.use_global = True
+        assert resolver.resolve(db, mail_type="agreement_uploaded", form=form).name == "Global"
+        form_footer.use_global = False
+        form_footer.is_active = False
+        assert resolver.resolve(db, mail_type="agreement_uploaded", form=form).name == "Global"
+
+
+def test_global_and_form_footer_editors_render_preview_and_sanitize_html(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="footer_preview", name="Footer preview")
+    login(admin_client)
+    global_html = admin_client.get("/admin/mail-footer").get_data(as_text=True)
+    assert "Podgląd stopki e-mail" in global_html
+    assert "Przykładowa wiadomość" in global_html
+    token = global_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        "/admin/mail-footer",
+        data={
+            "csrf_token": token,
+            "name": "Ogólna",
+            "html_body": '<p onclick="x"><strong>Kontakt</strong><img src=x></p><script>alert(1)</script>',
+            "contact_html": "<p>kontakt@example.com</p>",
+            "links_text": "Serwis|https://example.com",
+            "legal_text": "<p>Tekst prawny</p>",
+            "logo_alignment": "center",
+            "is_active": "on",
+        },
+    )
+    assert response.status_code == 302
+    form_html = admin_client.get(f"/admin/forms/{form_id}/mail-footers/new").get_data(as_text=True)
+    assert "Używana jest stopka formularza" in form_html
+    assert "Mail początkowy po rejestracji wniosku zawsze używa stopki ogólnej" in form_html
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        footer = db.query(MailFooter).filter(MailFooter.form_id.is_(None)).one()
+        assert footer.html_body == "<p><strong>Kontakt</strong></p>"
+        assert footer.logo_alignment == "center"
+        assert footer.links == [{"label": "Serwis", "url": "https://example.com"}]
+
+
 def test_form_manager_saves_custom_smtp_with_encrypted_hidden_password(admin_app, admin_client):
     manager_id = create_user(admin_app, email="manager@example.com", role="admin")
     form_id = create_form(admin_app, slug="mail_form", name="Mail form", user_id=manager_id)
@@ -3292,6 +3345,10 @@ def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app,
     assert "data-add-workflow-step" in html
     assert "data-remove-workflow-step" in html
     assert "data-workflow-step-up" in html
+    assert "data-edit-workflow-step" in html
+    assert "data-edit-step-instruction" in html
+    assert "data-workflow-step-editor hidden" in html
+    assert "Opis etapu</span><textarea data-step-description data-rich-text" not in html
     assert "Pokaż jak zobaczy to użytkownik" in html
     assert "data-workflow-preview-list" in html
     assert "function renderWorkflowPreview()" in html
@@ -3366,6 +3423,49 @@ def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app,
         assert form.definition_json["workflow"]["legacy_extension"] == {"preserve": True}
         assert form.user_instruction_config["stages"][0]["label"] == "Weryfikacja wniosku"
         assert form.user_instruction_config["stages"][0]["next_action"] == "Poczekaj na wynik weryfikacji."
+
+    reopened = admin_client.get(f"/admin/forms/{form_id}/edit?tab=instructions").get_data(as_text=True)
+    assert "Urzędnik sprawdza dane." in reopened
+    assert "Poczekaj na wynik weryfikacji." in reopened
+    assert "syncLinkedInstructionValues();" in reopened
+
+
+def test_existing_instruction_config_is_loaded_into_workflow_instruction_editors(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="existing_workflow_instruction",
+        definition_json=readable_workflow_definition(),
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        form.user_instruction_config = {
+            "title": "Co dalej?",
+            "description": "Instrukcja ogólna",
+            "stages": [
+                {
+                    "key": "review",
+                    "label": "Weryfikacja wniosku",
+                    "status_codes": ["OFFICER_REVIEW"],
+                    "description": "<p>Zażółć gęślą jaźń.</p>",
+                    "next_action": "<strong>Poczekaj na kontakt.</strong>",
+                }
+            ],
+        }
+        db.commit()
+    login(admin_client)
+
+    rendered = admin_client.get(
+        f"/admin/forms/{form_id}/edit?tab=instructions"
+    ).get_data(as_text=True)
+
+    assert "Zażółć gęślą jaźń." in rendered
+    assert "Poczekaj na kontakt." in rendered
+    assert "textarea.disabled = false" in rendered
+    assert "textarea.readOnly = false" in rendered
+    assert "isWorkflowInstructionEditorEvent" in rendered
+    assert "if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();" in rendered
+    assert "if (isWorkflowInstructionEditorEvent(event)) return;" in rendered
 
 
 def test_workflow_instruction_html_is_sanitized_before_save_and_returned_as_safe_html(admin_app, admin_client):

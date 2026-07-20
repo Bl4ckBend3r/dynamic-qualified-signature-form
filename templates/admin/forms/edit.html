@@ -254,19 +254,21 @@
                         <div class="workflow-stage-card__heading">
                             <div><span class="workflow-stage-number">Etap {{ loop.index }}</span><h3 data-step-heading>{{ step.get('admin_label') }}</h3></div>
                             <div class="workflow-stage-actions">
-                                <button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przenieś etap wyżej">↑</button>
-                                <button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przenieś etap niżej">↓</button>
+                                <button type="button" class="admin-button-secondary compact" data-edit-workflow-step>Edytuj etap</button>
+                                <button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button>
+                                <button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przenieś etap wyżej">Przesuń w górę</button>
+                                <button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przenieś etap niżej">Przesuń w dół</button>
                                 <button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button>
                             </div>
                         </div>
                         <div class="workflow-stage-badges" data-step-badges></div>
+                        <p class="workflow-stage-summary" data-step-summary></p>
+                        <div class="workflow-stage-editor" data-workflow-step-editor hidden>
                         <div class="workflow-stage-fields">
                             <label><span>Nazwa dla administratora</span><input data-step-admin-label value="{{ step.get('admin_label') }}" required></label>
                             <label><span>Nazwa dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required></label>
                             <label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
                             <label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label>
-                            <label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description data-rich-text rows="3">{{ step.get('description') }}</textarea></label>
-                            <label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action data-rich-text rows="3">{{ step.get('next_action') }}</textarea></label>
                         </div>
                         <div class="workflow-stage-options">
                             <label class="admin-check"><input type="checkbox" data-step-user-action {% if step.get('requires_user_action') %}checked{% endif %}><span>Wymaga akcji użytkownika</span></label>
@@ -274,6 +276,9 @@
                             <label class="admin-check"><input type="checkbox" data-step-final {% if step.get('final') %}checked{% endif %}><span>Etap końcowy</span></label>
                             <label class="admin-check"><input type="checkbox" data-step-rejected {% if step.get('rejected') %}checked{% endif %}><span>Odrzucenie</span></label>
                         </div>
+                        </div>
+                        <textarea data-step-description hidden>{{ step.get('description') }}</textarea>
+                        <textarea data-step-next-action hidden>{{ step.get('next_action') }}</textarea>
                     </article>
                 {% endfor %}
             </div>
@@ -443,10 +448,12 @@
     <template data-workflow-step-template>
         <article class="workflow-stage-card" data-workflow-step>
             <script type="application/json" data-workflow-step-source>{}</script><input type="hidden" data-step-id value="">
-            <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-workflow-step-up>↑</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down>↓</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
+            <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-edit-workflow-step>Edytuj etap</button><button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button><button type="button" class="admin-button-secondary compact" data-workflow-step-up>Przesuń w górę</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down>Przesuń w dół</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
             <div class="workflow-stage-badges" data-step-badges></div>
-            <div class="workflow-stage-fields"><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label><label class="workflow-field-wide"><span>Opis etapu</span><textarea data-step-description data-rich-text rows="3"></textarea></label><label class="workflow-field-wide"><span>Co użytkownik ma zrobić dalej?</span><textarea data-step-next-action data-rich-text rows="3"></textarea></label></div>
-            <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div>
+            <p class="workflow-stage-summary" data-step-summary></p>
+            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
+            <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div></div>
+            <textarea data-step-description hidden></textarea><textarea data-step-next-action hidden></textarea>
         </article>
     </template>
 
@@ -1017,28 +1024,75 @@ function renderWorkflowPreview() {
     const empty = preview.querySelector("[data-workflow-preview-empty]"); if (empty) empty.hidden = config.steps.length > 0;
 }
 
-function renderLinkedInstructionEditors() {
+function createLinkedInstructionEditor(workflowCard) {
+    const article = document.createElement("article");
+    article.className = "workflow-linked-instruction";
+    [["Opis etapu", "description"], ["Co użytkownik ma zrobić dalej?", "next-action"]].forEach(([labelText, key]) => {
+        const label = document.createElement("label");
+        const span = document.createElement("span");
+        span.textContent = labelText;
+        const textarea = document.createElement("textarea");
+        textarea.rows = 3;
+        textarea.dataset.richText = "";
+        textarea.dataset.linkedInstruction = key;
+        textarea.disabled = false;
+        textarea.readOnly = false;
+        label.append(span, textarea);
+        article.appendChild(label);
+    });
+    return article;
+}
+
+function renderLinkedInstructionEditors({forceValues = false} = {}) {
     const holder = document.querySelector("[data-workflow-instruction-list]");
     const empty = document.querySelector("[data-workflow-instruction-empty]");
     if (!holder) return;
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
-    holder.replaceChildren();
+    const activeIds = new Set();
     cards.forEach((workflowCard, index) => {
-        const article = document.createElement("article"); article.className = "workflow-linked-instruction"; article.dataset.instructionStepId = workflowCard.querySelector("[data-step-id]")?.value || "";
-        const heading = document.createElement("div"); heading.className = "workflow-linked-instruction__heading";
-        const title = document.createElement("h3"); title.textContent = `${index + 1}. ${workflowCard.querySelector("[data-step-user-label]")?.value || "Etap bez nazwy"}`;
-        const status = document.createElement("code"); status.textContent = workflowCard.querySelector("[data-step-status]")?.value || "Brak statusu";
-        heading.append(title, status); article.appendChild(heading);
-        [["Opis etapu", "description", "[data-step-description]"], ["Co użytkownik ma zrobić dalej?", "next-action", "[data-step-next-action]"]].forEach(([labelText, key, selector]) => {
-            const label = document.createElement("label"); const span = document.createElement("span"); span.textContent = labelText;
-            const textarea = document.createElement("textarea"); textarea.rows = 3; textarea.dataset.richText = ""; textarea.dataset.linkedInstruction = key; textarea.value = workflowCard.querySelector(selector)?.value || "";
-            label.append(span, textarea); article.appendChild(label);
+        const stepId = workflowCard.querySelector("[data-step-id]")?.value || `stage-${index + 1}`;
+        activeIds.add(stepId);
+        let article = Array.from(holder.querySelectorAll("[data-instruction-step-id]")).find(
+            (item) => item.dataset.instructionStepId === stepId
+        );
+        const isNew = !article;
+        if (!article) article = createLinkedInstructionEditor(workflowCard);
+        article.dataset.instructionStepId = stepId;
+        let heading = article.querySelector("[data-linked-instruction-heading]");
+        if (!heading) {
+            heading = document.createElement("div");
+            heading.className = "workflow-linked-instruction__heading";
+            heading.dataset.linkedInstructionHeading = "";
+            heading.append(document.createElement("h3"), document.createElement("code"));
+            article.prepend(heading);
+        }
+        heading.querySelector("h3").textContent = `${index + 1}. ${workflowCard.querySelector("[data-step-user-label]")?.value || "Etap bez nazwy"}`;
+        heading.querySelector("code").textContent = workflowCard.querySelector("[data-step-status]")?.value || "Brak statusu";
+        [["description", "[data-step-description]"], ["next-action", "[data-step-next-action]"]].forEach(([key, selector]) => {
+            const textarea = article.querySelector(`textarea[data-linked-instruction="${key}"]`);
+            if (textarea && (isNew || forceValues)) textarea.value = workflowCard.querySelector(selector)?.value || "";
         });
         holder.appendChild(article);
+    });
+    holder.querySelectorAll("[data-instruction-step-id]").forEach((article) => {
+        if (!activeIds.has(article.dataset.instructionStepId)) article.remove();
     });
     if (empty) empty.hidden = cards.length > 0;
     enhanceRichTextFields(holder);
     renderInstructionPreview();
+}
+
+function syncLinkedInstructionValues() {
+    document.querySelectorAll("[data-workflow-instruction-list] [data-instruction-step-id]").forEach((card) => {
+        const workflowCard = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).find(
+            (item) => item.querySelector("[data-step-id]")?.value === card.dataset.instructionStepId
+        );
+        [["description", "[data-step-description]"], ["next-action", "[data-step-next-action]"]].forEach(([key, selector]) => {
+            const source = workflowCard?.querySelector(selector);
+            const editor = card.querySelector(`textarea[data-linked-instruction="${key}"]`);
+            if (source && editor) source.value = editor.value;
+        });
+    });
 }
 
 function renderInstructionPreview() {
@@ -1055,7 +1109,7 @@ function renderInstructionPreview() {
     });
 }
 
-function syncWorkflowBuilder() {
+function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
     const options = cards.map((card) => ({
         value: card.querySelector("[data-step-id]")?.value || "",
@@ -1076,6 +1130,10 @@ function syncWorkflowBuilder() {
         card.dataset.selectedNext = next?.value || "";
         const heading = card.querySelector("[data-step-heading]");
         if (heading) heading.textContent = options[index].label;
+        const statusLabel = card.querySelector("[data-step-status]")?.selectedOptions?.[0]?.textContent || "Brak statusu";
+        const nextLabel = next?.selectedOptions?.[0]?.textContent || "Brak — koniec ścieżki";
+        const summary = card.querySelector("[data-step-summary]");
+        if (summary) summary.textContent = `Status: ${statusLabel} · Kolejny etap: ${nextLabel}`;
         const number = card.querySelector(".workflow-stage-number");
         if (number) number.textContent = `Etap ${index + 1}`;
         const up = card.querySelector("[data-workflow-step-up]");
@@ -1088,7 +1146,7 @@ function syncWorkflowBuilder() {
     if (empty) empty.hidden = cards.length > 0;
     if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
     renderWorkflowPreview();
-    renderLinkedInstructionEditors();
+    renderLinkedInstructionEditors({forceValues: forceInstructionValues});
 }
 
 function renderWorkflowFromJson(config) {
@@ -1102,14 +1160,26 @@ function renderWorkflowFromJson(config) {
     const name = workflowBuilder?.querySelector('[name="workflow_name"]');
     if (name) name.value = config.name || "Workflow";
     if (workflowInitialSelect) workflowInitialSelect.dataset.requestedValue = config.initial_step || "";
-    syncWorkflowBuilder();
+    syncWorkflowBuilder({forceInstructionValues: true});
     if (workflowInitialSelect && config.initial_step) workflowInitialSelect.value = config.initial_step;
     syncWorkflowBuilder();
 }
 
-workflowBuilder?.addEventListener("input", syncWorkflowBuilder);
-workflowBuilder?.addEventListener("change", syncWorkflowBuilder);
+function isWorkflowInstructionEditorEvent(event) {
+    return Boolean(event.target?.closest?.("[data-active-instruction-editor]"));
+}
+
+workflowBuilder?.addEventListener("input", (event) => {
+    if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
+});
+workflowBuilder?.addEventListener("change", (event) => {
+    if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
+});
 workflowBuilder?.addEventListener("click", (event) => {
+    // The rich-text toolbar dispatches its own input event. Rebuilding the
+    // workflow here would detach and reinsert the focused instruction card,
+    // which makes the textarea lose focus after the first typed character.
+    if (isWorkflowInstructionEditorEvent(event)) return;
     if (event.target.closest("[data-add-workflow-step]") && workflowStepTemplate && workflowStepList) {
         const fragment = workflowStepTemplate.content.cloneNode(true);
         const card = fragment.querySelector("[data-workflow-step]");
@@ -1117,6 +1187,24 @@ workflowBuilder?.addEventListener("click", (event) => {
     }
     const remove = event.target.closest("[data-remove-workflow-step]");
     if (remove) remove.closest("[data-workflow-step]")?.remove();
+    const edit = event.target.closest("[data-edit-workflow-step]");
+    if (edit) {
+        const panel = edit.closest("[data-workflow-step]")?.querySelector("[data-workflow-step-editor]");
+        if (panel) {
+            panel.hidden = !panel.hidden;
+            edit.textContent = panel.hidden ? "Edytuj etap" : "Zwiń edycję";
+        }
+    }
+    const instruction = event.target.closest("[data-edit-step-instruction]");
+    if (instruction) {
+        const stepId = instruction.closest("[data-workflow-step]")?.querySelector("[data-step-id]")?.value || "";
+        setActiveFormTab("instructions");
+        const instructionCard = document.querySelector(`[data-instruction-step-id="${CSS.escape(stepId)}"]`);
+        instructionCard?.classList.add("is-focused");
+        instructionCard?.scrollIntoView({behavior: "smooth", block: "center"});
+        instructionCard?.querySelector("textarea")?.focus({preventScroll: true});
+        window.setTimeout(() => instructionCard?.classList.remove("is-focused"), 1800);
+    }
     const up = event.target.closest("[data-workflow-step-up]")?.closest("[data-workflow-step]");
     if (up?.previousElementSibling) workflowStepList?.insertBefore(up, up.previousElementSibling);
     const down = event.target.closest("[data-workflow-step-down]")?.closest("[data-workflow-step]");
@@ -1341,6 +1429,7 @@ document.querySelector("form.admin-form")?.addEventListener("submit", function (
     formIsSubmitting = true;
     syncTrainingIndexes();
     syncInstructionEditor();
+    syncLinkedInstructionValues();
     syncWorkflowBuilder();
 });
 restoreTrainingExpansionState();

@@ -35,9 +35,11 @@
             </div>
             <label class="admin-check"><input type="checkbox" name="qualification_conditions_enabled" {% if qualification.get('enabled') %}checked{% endif %}><span>Włącz automatyczną ocenę warunków</span></label>
             <input type="hidden" name="qualification_conditions_json" data-qualification-json value="[]">
+            <script type="application/json" data-qualification-fields>[{% for field in fields %}{"name":{{ field.name|tojson }},"label":{{ (field.label or field.name)|tojson }},"type":{{ field.type|tojson }},"options":{{ (field.options or [])|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]</script>
             <div class="admin-condition-list" data-qualification-list>
                 {% for condition in qualification.get('conditions', []) %}
                 <section class="admin-card admin-condition-card" data-qualification-row>
+                    <script type="application/json" data-condition-source>{{ condition|tojson }}</script>
                     <input type="hidden" data-condition-id value="{{ condition.get('id', '') }}">
                     <div class="admin-form-grid">
                         <label><span>Pole formularza</span><select data-condition-field required>
@@ -49,14 +51,17 @@
                             <option value="{{ value }}" {% if condition.get('operator') == value %}selected{% endif %}>{{ label }}</option>
                             {% endfor %}
                         </select></label>
-                        <label data-condition-value-wrap><span>Wartość oczekiwana</span><textarea rows="2" data-condition-value placeholder="Dla listy podaj wartości po przecinku lub w osobnych wierszach">{% if condition.get('expected_value') is iterable and condition.get('expected_value') is not string %}{{ condition.get('expected_value')|join('\n') }}{% else %}{{ condition.get('expected_value', '') }}{% endif %}</textarea></label>
+                        <div class="admin-condition-value" data-condition-value-wrap>
+                            <label data-condition-value-label><span>Wartość oczekiwana</span><span data-condition-value-control><textarea rows="2" data-condition-value>{% if condition.get('expected_value') is iterable and condition.get('expected_value') is not string %}{{ condition.get('expected_value')|join('\n') }}{% else %}{{ condition.get('expected_value', '') }}{% endif %}</textarea></span></label>
+                            <small data-condition-value-help></small>
+                        </div>
                         <label><span>Akcja przy niespełnieniu</span><select data-condition-action><option value="auto_reject" selected>Automatycznie odrzuć zgłoszenie</option></select></label>
                         <label class="admin-form-wide"><span>Komunikat dla użytkownika</span><textarea rows="2" data-condition-user-message>{{ condition.get('user_message', '') }}</textarea></label>
                         <label class="admin-form-wide"><span>Informacja dla urzędnika</span><textarea rows="2" data-condition-officer-message>{{ condition.get('officer_message', '') }}</textarea></label>
                         <label class="admin-check"><input type="checkbox" data-condition-active {% if condition.get('is_active', true) %}checked{% endif %}><span>Warunek aktywny</span></label>
                         <label class="admin-check"><input type="checkbox" data-condition-case-sensitive {% if condition.get('case_sensitive') %}checked{% endif %}><span>Rozróżniaj wielkość liter</span></label>
                     </div>
-                    <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition>Usuń warunek</button>
+                    <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition data-admin-confirm-action data-admin-confirm-message="Usunąć ten warunek kwalifikujący?">Usuń warunek</button>
                 </section>
                 {% endfor %}
             </div>
@@ -64,18 +69,22 @@
         </div>
         <template data-qualification-template>
             <section class="admin-card admin-condition-card" data-qualification-row>
+                <script type="application/json" data-condition-source>{}</script>
                 <input type="hidden" data-condition-id value="">
                 <div class="admin-form-grid">
                     <label><span>Pole formularza</span><select data-condition-field required><option value="">Wybierz pole</option>{% for field in fields %}<option value="{{ field.name }}">{{ field.label or field.name }}</option>{% endfor %}</select></label>
                     <label><span>Operator</span><select data-condition-operator required><option value="equals">równa się</option><option value="not_equals">nie równa się</option><option value="contains">zawiera</option><option value="not_contains">nie zawiera</option><option value="is_empty">jest puste</option><option value="is_not_empty">nie jest puste</option><option value="greater_than">większe niż</option><option value="greater_than_or_equal">większe lub równe</option><option value="less_than">mniejsze niż</option><option value="less_than_or_equal">mniejsze lub równe</option><option value="in">należy do listy</option><option value="not_in">nie należy do listy</option></select></label>
-                    <label data-condition-value-wrap><span>Wartość oczekiwana</span><textarea rows="2" data-condition-value></textarea></label>
+                    <div class="admin-condition-value" data-condition-value-wrap>
+                        <label data-condition-value-label><span>Wartość oczekiwana</span><span data-condition-value-control><textarea rows="2" data-condition-value></textarea></span></label>
+                        <small data-condition-value-help></small>
+                    </div>
                     <label><span>Akcja przy niespełnieniu</span><select data-condition-action><option value="auto_reject">Automatycznie odrzuć zgłoszenie</option></select></label>
                     <label class="admin-form-wide"><span>Komunikat dla użytkownika</span><textarea rows="2" data-condition-user-message></textarea></label>
                     <label class="admin-form-wide"><span>Informacja dla urzędnika</span><textarea rows="2" data-condition-officer-message></textarea></label>
                     <label class="admin-check"><input type="checkbox" data-condition-active checked><span>Warunek aktywny</span></label>
                     <label class="admin-check"><input type="checkbox" data-condition-case-sensitive><span>Rozróżniaj wielkość liter</span></label>
                 </div>
-                <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition>Usuń warunek</button>
+                <button class="admin-link-button admin-link-danger" type="button" data-remove-qualification-condition data-admin-confirm-action data-admin-confirm-message="Usunąć ten warunek kwalifikujący?">Usuń warunek</button>
             </section>
         </template>
     </section>
@@ -285,7 +294,7 @@
                 </label>
                 <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
                 <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
-                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Wymaga potwierdzenia podpisania umowy przez urząd</span></label>
+                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" data-workflow-toggle="agreement-confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Wymaga potwierdzenia podpisania umowy przez urząd</span></label>
                 <label class="admin-check"><input type="checkbox" name="send_email_notifications" {% if workflow.get('send_email_notifications') %}checked{% endif %}><span>Wysyłaj powiadomienia e-mail</span></label>
                 <label class="admin-check"><input type="checkbox" name="allow_correction" {% if workflow.get('allow_correction') %}checked{% endif %}><span>Pozwól na korektę zgłoszenia</span></label>
             </div>
@@ -299,7 +308,7 @@
             </div>
             <div class="workflow-stage-list" data-workflow-step-list>
                 {% for step in workflow.get('steps', []) %}
-                    <article class="workflow-stage-card" data-workflow-step>
+                    <article class="workflow-stage-card" data-workflow-step {% if step.get('active') is false %}hidden{% endif %}>
                         <script type="application/json" data-workflow-step-source>{{ step|tojson }}</script>
                         <input type="hidden" data-step-id value="{{ step.get('id') }}">
                         <div class="workflow-stage-card__heading">
@@ -396,6 +405,7 @@
                 </div>
                 <div data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                     <label class="admin-form-wide admin-code-field"><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small></label>
+                    <p class="workflow-help">W każdej umowie <code>selected_trainings</code> zawiera jedno aktualne szkolenie. Cenę tej pozycji udostępniają <code>agreement_training_price</code> i <code>agreement_training_price_formatted</code>, a sumę całego zgłoszenia — <code>all_selected_trainings_total</code> i <code>all_selected_trainings_total_formatted</code>.</p>
                     <label><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
                 </div>
                 <div class="admin-form-grid" data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
@@ -549,7 +559,7 @@
             <label class="admin-form-wide admin-code-field" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                 <span>Szablon umowy HTML</span>
                 <textarea name="contract_template_html" spellcheck="false" placeholder="{{ '{{ first_name }}' }}&#10;{{ '{{ last_name }}' }}&#10;{{ '{{ generated_date }}' }}">{{ workflow.get('contract_template_html', '') }}</textarea>
-                <small>Dostępne są dane zgłoszenia i formularza oraz m.in. <code>training</code>, <code>selected_trainings</code>, <code>agreement_number</code> i <code>generated_date</code>. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small>
+                <small>Dostępne są dane zgłoszenia i formularza oraz m.in. <code>training</code>, <code>selected_trainings</code>, <code>agreement_training_price_formatted</code>, <code>all_selected_trainings_total_formatted</code>, <code>agreement_number</code> i <code>generated_date</code>. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small>
             </label>
             <div class="admin-form-grid" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                 <label>
@@ -697,8 +707,16 @@ let formIsSubmitting = false;
 
 function setActiveFormTab(tabName, updateAddress = true) {
     if (tabName === "fields") {
-        if (formIsDirty && !window.confirm("Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?")) return;
-        window.location.href = tabbedForm.dataset.fieldsUrl;
+        const navigateToFields = () => { window.location.href = tabbedForm.dataset.fieldsUrl; };
+        if (formIsDirty) {
+            window.AdminModal.confirm(
+                "Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?",
+                document.activeElement,
+                navigateToFields,
+            );
+            return;
+        }
+        navigateToFields();
         return;
     }
     const matchingPanels = Array.from(document.querySelectorAll("[data-form-tab-panel]")).filter((panel) =>
@@ -729,7 +747,14 @@ function setActiveFormTab(tabName, updateAddress = true) {
 tabButtons.forEach((button) => button.addEventListener("click", () => setActiveFormTab(button.dataset.formTabTarget)));
 tabSelect?.addEventListener("change", () => setActiveFormTab(tabSelect.value));
 document.querySelector("[data-form-external-tab]")?.addEventListener("click", (event) => {
-    if (formIsDirty && !window.confirm("Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?")) event.preventDefault();
+    if (!formIsDirty) return;
+    event.preventDefault();
+    const link = event.currentTarget;
+    window.AdminModal.confirm(
+        "Masz niezapisane zmiany. Przejść do edytora pól bez zapisywania?",
+        link,
+        () => { window.location.href = link.href; },
+    );
 });
 tabbedForm?.addEventListener("input", () => { formIsDirty = true; });
 tabbedForm?.addEventListener("change", () => { formIsDirty = true; });
@@ -756,20 +781,151 @@ const qualificationBuilder = document.querySelector("[data-qualification-builder
 const qualificationList = qualificationBuilder?.querySelector("[data-qualification-list]");
 const qualificationTemplate = document.querySelector("[data-qualification-template]");
 const qualificationJson = qualificationBuilder?.querySelector("[data-qualification-json]");
+const qualificationFieldsSource = qualificationBuilder?.querySelector("[data-qualification-fields]");
+let qualificationFields = [];
+try { qualificationFields = JSON.parse(qualificationFieldsSource?.textContent || "[]"); }
+catch (_) { qualificationFields = []; }
+const qualificationFieldsByName = new Map(qualificationFields.map((field) => [String(field.name || ""), field]));
+const qualificationEmptyOperators = new Set(["is_empty", "is_not_empty"]);
+const qualificationListOperators = new Set(["in", "not_in"]);
+const qualificationMultiTypes = new Set(["multi_select", "multiselect", "multiple_select", "checkbox_group", "checkbox-group", "training_selection"]);
+const qualificationBooleanTypes = new Set(["boolean", "bool", "checkbox"]);
+const qualificationNumberTypes = new Set(["number", "integer", "float", "decimal"]);
+
+function qualificationOptions(field) {
+    const source = field?.options || field?.choices || field?.catalog || [];
+    const values = Array.isArray(source) ? source : Object.values(source || {});
+    return values.map((option) => {
+        if (option && typeof option === "object") {
+            const value = option.value ?? option.id ?? option.name ?? option.label ?? "";
+            return {value: String(value), label: String(option.label ?? option.name ?? value)};
+        }
+        return {value: String(option ?? ""), label: String(option ?? "")};
+    }).filter((option) => option.value);
+}
+
+function qualificationInitialValue(row) {
+    if (row.dataset.conditionValueInitialized === "1") {
+        try { return JSON.parse(row.dataset.conditionExpectedValue || "null"); }
+        catch (_) { return ""; }
+    }
+    let source = {};
+    try { source = JSON.parse(row.querySelector("[data-condition-source]")?.textContent || "{}"); }
+    catch (_) { source = {}; }
+    row.dataset.conditionValueInitialized = "1";
+    row.dataset.conditionExpectedValue = JSON.stringify(source.expected_value ?? "");
+    return source.expected_value ?? "";
+}
+
+function readQualificationValue(row) {
+    const control = row.querySelector("[data-condition-value]");
+    if (!control) return qualificationInitialValue(row);
+    if (control.tagName === "SELECT" && control.multiple) {
+        return Array.from(control.selectedOptions).map((option) => option.value);
+    }
+    if (control.dataset.valueMode === "list") {
+        return String(control.value || "").replace(/\r/g, "\n").split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+    }
+    if (control.type === "number") return control.value === "" ? "" : Number(control.value);
+    return control.value || "";
+}
+
+function setQualificationControlValue(control, value) {
+    if (control.tagName === "SELECT" && control.multiple) {
+        const selected = new Set((Array.isArray(value) ? value : [value]).map(String));
+        Array.from(control.options).forEach((option) => { option.selected = selected.has(option.value); });
+        return;
+    }
+    if (control.dataset.valueMode === "list") {
+        control.value = (Array.isArray(value) ? value : [value]).filter((item) => item !== null && item !== "").join("\n");
+        return;
+    }
+    control.value = value === null || Array.isArray(value) ? (Array.isArray(value) ? value[0] || "" : "") : value;
+}
+
+function syncQualificationValueControl(row) {
+    const fieldName = row.querySelector("[data-condition-field]")?.value || "";
+    const operator = row.querySelector("[data-condition-operator]")?.value || "equals";
+    const field = qualificationFieldsByName.get(fieldName) || {};
+    const fieldType = String(field.type || "text").toLowerCase();
+    const valueLabel = row.querySelector("[data-condition-value-label]");
+    const holder = row.querySelector("[data-condition-value-control]");
+    const help = row.querySelector("[data-condition-value-help]");
+    if (!holder || !valueLabel || !help) return;
+
+    const currentValue = row.dataset.resetConditionValue === "1"
+        ? ""
+        : (row.dataset.valueControlReady === "1" ? readQualificationValue(row) : qualificationInitialValue(row));
+    delete row.dataset.resetConditionValue;
+    const emptyOperator = qualificationEmptyOperators.has(operator);
+    valueLabel.hidden = emptyOperator;
+    if (emptyOperator) {
+        help.textContent = "Ten operator nie wymaga wartości oczekiwanej.";
+        row.dataset.conditionExpectedValue = "null";
+        return;
+    }
+
+    let options = qualificationOptions(field);
+    const isBoolean = qualificationBooleanTypes.has(fieldType);
+    const isMultiple = qualificationMultiTypes.has(fieldType) || qualificationListOperators.has(operator);
+    if (isBoolean) options = [{value: "TAK", label: "TAK"}, {value: "NIE", label: "NIE"}];
+    let kind = "text";
+    if (options.length) kind = isMultiple ? "options-multiple" : "options-single";
+    else if (qualificationListOperators.has(operator)) kind = "text-list";
+    else if (qualificationNumberTypes.has(fieldType)) kind = "number";
+    else if (fieldType === "date") kind = "date";
+    const signature = `${fieldName}|${operator}|${kind}|${options.map((option) => option.value).join(";")}`;
+
+    if (row.dataset.valueControlSignature !== signature) {
+        let control;
+        if (kind.startsWith("options")) {
+            control = document.createElement("select");
+            control.multiple = kind === "options-multiple";
+            if (control.multiple) control.size = Math.min(Math.max(options.length, 2), 6);
+            if (!control.multiple) control.appendChild(new Option("Wybierz wartość", ""));
+            options.forEach((option) => control.appendChild(new Option(option.label, option.value)));
+        } else if (kind === "number" || kind === "date") {
+            control = document.createElement("input");
+            control.type = kind;
+            if (kind === "number") control.step = "any";
+        } else {
+            control = document.createElement("textarea");
+            control.rows = 2;
+            if (kind === "text-list") {
+                control.dataset.valueMode = "list";
+                control.placeholder = "Wpisz wartości po przecinku lub w osobnych wierszach";
+            }
+        }
+        control.dataset.conditionValue = "";
+        holder.replaceChildren(control);
+        setQualificationControlValue(control, currentValue);
+        row.dataset.valueControlSignature = signature;
+        row.dataset.valueControlReady = "1";
+    }
+
+    if (isBoolean) help.textContent = "To pole przyjmuje wartości: TAK albo NIE.";
+    else if (options.length && isMultiple) help.textContent = "Możesz wybrać jedną lub kilka wartości.";
+    else if (options.length) help.textContent = "Wybierz jedną z wartości zdefiniowanych w polu formularza.";
+    else if (qualificationListOperators.has(operator)) help.textContent = "Wpisz jedną lub kilka wartości, oddzielając je przecinkiem albo nowym wierszem.";
+    else if (qualificationNumberTypes.has(fieldType)) help.textContent = "Wpisz wartość liczbową, która ma zostać porównana z odpowiedzią użytkownika.";
+    else if (fieldType === "date") help.textContent = "Wybierz datę, która ma zostać porównana z odpowiedzią użytkownika.";
+    else help.textContent = "Wpisz wartość tekstową, która ma zostać porównana z odpowiedzią użytkownika.";
+}
 
 function syncQualificationBuilder() {
     const rows = qualificationList ? Array.from(qualificationList.querySelectorAll("[data-qualification-row]")) : [];
     const conditions = rows.map((row, index) => {
         const field = row.querySelector("[data-condition-field]");
         const operator = row.querySelector("[data-condition-operator]")?.value || "equals";
-        const valueWrap = row.querySelector("[data-condition-value-wrap]");
-        if (valueWrap) valueWrap.hidden = ["is_empty", "is_not_empty"].includes(operator);
+        syncQualificationValueControl(row);
+        const expectedValue = qualificationEmptyOperators.has(operator) ? null : readQualificationValue(row);
+        row.dataset.conditionExpectedValue = JSON.stringify(expectedValue);
         return {
             id: row.querySelector("[data-condition-id]")?.value || `condition_${index + 1}`,
             field_name: field?.value || "",
             field_label: field?.selectedOptions?.[0]?.textContent?.trim() || "",
             operator,
-            expected_value: row.querySelector("[data-condition-value]")?.value || "",
+            expected_value: expectedValue,
             failure_action: row.querySelector("[data-condition-action]")?.value || "auto_reject",
             user_message: row.querySelector("[data-condition-user-message]")?.value.trim() || "",
             officer_message: row.querySelector("[data-condition-officer-message]")?.value.trim() || "",
@@ -783,12 +939,23 @@ function syncQualificationBuilder() {
 }
 
 qualificationBuilder?.addEventListener("input", syncQualificationBuilder);
-qualificationBuilder?.addEventListener("change", syncQualificationBuilder);
+qualificationBuilder?.addEventListener("change", (event) => {
+    if (event.target.matches("[data-condition-field]")) {
+        const row = event.target.closest("[data-qualification-row]");
+        if (row) row.dataset.resetConditionValue = "1";
+    }
+    syncQualificationBuilder();
+});
 qualificationBuilder?.addEventListener("click", (event) => {
     if (event.target.closest("[data-add-qualification-condition]") && qualificationList && qualificationTemplate) {
         qualificationList.appendChild(qualificationTemplate.content.cloneNode(true));
     }
-    event.target.closest("[data-remove-qualification-condition]")?.closest("[data-qualification-row]")?.remove();
+    syncQualificationBuilder();
+});
+qualificationBuilder?.addEventListener("admin:confirmed", (event) => {
+    const removeButton = event.target.closest("[data-remove-qualification-condition]");
+    if (!removeButton) return;
+    removeButton.closest("[data-qualification-row]")?.remove();
     syncQualificationBuilder();
 });
 syncQualificationBuilder();
@@ -1004,6 +1171,66 @@ function workflowBadges(card) {
     }));
 }
 
+function workflowStepIsActive(card) {
+    const step = {
+        ...workflowStepSource(card),
+        id: card.querySelector("[data-step-id]")?.value || "",
+        status: card.querySelector("[data-step-status]")?.value || "",
+    };
+    const id = String(step.id || "");
+    const status = String(step.status || step.status_code || "");
+    const type = String(step.type || "");
+    const documentId = String(step.document_id || "");
+    const requiresDeclaration = Boolean(workflowBuilder?.querySelector('[name="requires_declaration"]')?.checked);
+    const requiresContract = Boolean(workflowBuilder?.querySelector('[name="requires_contract"]')?.checked);
+    const requiresConfirmation = requiresContract && Boolean(workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]')?.checked);
+    const allowCorrection = Boolean(workflowBuilder?.querySelector('[name="allow_correction"]')?.checked);
+    const officeStep = ["stage_10", "stage_11", "beneficiary_agreement_review", "office_agreement_signature"].includes(id)
+        || ["AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_SIGNED_BY_OFFICE"].includes(status);
+    if (officeStep) return requiresConfirmation;
+    const correctionStep = id.includes("correction") || type.includes("correction")
+        || ["WAITING_FOR_CORRECTION", "CORRECTION_REQUIRED", "RETURNED_FOR_CORRECTION"].includes(status);
+    const agreementStep = id.includes("agreement") || id.includes("contract")
+        || ["agreement", "training_agreement"].includes(documentId) || status.startsWith("AGREEMENT_");
+    if (correctionStep) return allowCorrection && (agreementStep ? requiresContract : true);
+    if (id.includes("declaration") || documentId === "declaration" || status.startsWith("DECLARATION_")) return requiresDeclaration;
+    if (agreementStep) return requiresContract;
+    return step.active !== false;
+}
+
+function setWorkflowNext(stepId, nextId) {
+    const card = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).find(
+        (item) => item.querySelector("[data-step-id]")?.value === stepId
+    );
+    if (!card) return false;
+    card.dataset.selectedNext = nextId;
+    const select = card.querySelector("[data-step-next]");
+    if (select && Array.from(select.options).some((option) => option.value === nextId)) select.value = nextId;
+    return true;
+}
+
+function syncAgreementConfirmationPath() {
+    const contract = workflowBuilder?.querySelector('[name="requires_contract"]');
+    const confirmation = workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]');
+    if (!confirmation) return;
+    if (!contract?.checked) confirmation.checked = false;
+    confirmation.disabled = !contract?.checked;
+    const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
+    const byId = new Map(cards.map((card) => [card.querySelector("[data-step-id]")?.value || "", card]));
+    const signature = byId.get("training_agreements_signature");
+    if (!signature) return;
+    const currentNext = signature.querySelector("[data-step-next]")?.value
+        || signature.dataset.selectedNext || workflowStepSource(signature).next || "";
+    if (confirmation.checked && currentNext === "completed"
+        && ["stage_10", "stage_11", "completed"].every((id) => byId.has(id))) {
+        setWorkflowNext("training_agreements_signature", "stage_10");
+        setWorkflowNext("stage_10", "stage_11");
+        setWorkflowNext("stage_11", "completed");
+    } else if (!confirmation.checked && ["stage_10", "stage_11"].includes(currentNext)) {
+        setWorkflowNext("training_agreements_signature", "completed");
+    }
+}
+
 function collectWorkflow() {
     const steps = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).map((card) => ({
         ...workflowStepSource(card),
@@ -1019,6 +1246,7 @@ function collectWorkflow() {
         requires_officer_action: Boolean(card.querySelector("[data-step-officer-action]")?.checked),
         final: Boolean(card.querySelector("[data-step-final]")?.checked),
         rejected: Boolean(card.querySelector("[data-step-rejected]")?.checked),
+        active: workflowStepIsActive(card),
     }));
     return {
         ...workflowSource,
@@ -1066,6 +1294,7 @@ function renderWorkflowPreview() {
     const list = preview?.querySelector("[data-workflow-preview-list]");
     if (!preview || !list) return;
     const config = collectWorkflow();
+    config.steps = config.steps.filter((step) => step.active !== false);
     const userMode = Boolean(preview.querySelector("[data-workflow-user-preview]")?.checked);
     preview.classList.toggle("is-user-mode", userMode);
     const ids = new Set(config.steps.map((step) => step.id));
@@ -1139,7 +1368,7 @@ function renderLinkedInstructionEditors({forceValues = false} = {}) {
     const holder = document.querySelector("[data-workflow-instruction-list]");
     const empty = document.querySelector("[data-workflow-instruction-empty]");
     if (!holder) return;
-    const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
+    const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).filter(workflowStepIsActive);
     const activeIds = new Set();
     cards.forEach((workflowCard, index) => {
         const stepId = workflowCard.querySelector("[data-step-id]")?.value || `stage-${index + 1}`;
@@ -1203,14 +1432,24 @@ function renderInstructionPreview() {
 
 function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
+    cards.forEach((card) => {
+        const active = workflowStepIsActive(card);
+        card.hidden = !active;
+        card.dataset.workflowActive = active ? "true" : "false";
+    });
+    const activeCards = cards.filter(workflowStepIsActive);
     const options = cards.map((card) => ({
         value: card.querySelector("[data-step-id]")?.value || "",
         label: card.querySelector("[data-step-admin-label]")?.value.trim() || "Etap bez nazwy",
     }));
     const previousInitial = workflowInitialSelect?.value || workflowSource.initial_step || "";
     if (workflowInitialSelect) {
-        workflowInitialSelect.replaceChildren(...options.map((item) => new Option(item.label, item.value, false, item.value === previousInitial)));
-        if (!workflowInitialSelect.value && options[0]) workflowInitialSelect.value = options[0].value;
+        const activeOptions = activeCards.map((card) => ({
+            value: card.querySelector("[data-step-id]")?.value || "",
+            label: card.querySelector("[data-step-admin-label]")?.value.trim() || "Etap bez nazwy",
+        }));
+        workflowInitialSelect.replaceChildren(...activeOptions.map((item) => new Option(item.label, item.value, false, item.value === previousInitial)));
+        if (!workflowInitialSelect.value && activeOptions[0]) workflowInitialSelect.value = activeOptions[0].value;
     }
     cards.forEach((card, index) => {
         const next = card.querySelector("[data-step-next]");
@@ -1235,7 +1474,7 @@ function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
         workflowBadges(card);
     });
     const empty = workflowBuilder?.querySelector("[data-workflow-empty]");
-    if (empty) empty.hidden = cards.length > 0;
+    if (empty) empty.hidden = activeCards.length > 0;
     if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
     renderWorkflowPreview();
     renderLinkedInstructionEditors({forceValues: forceInstructionValues});
@@ -1375,6 +1614,7 @@ document.querySelector("[data-export-form-json]")?.addEventListener("click", () 
     URL.revokeObjectURL(link.href);
 });
 
+syncAgreementConfirmationPath();
 syncWorkflowBuilder();
 
 function syncWorkflowTemplateVisibility() {
@@ -1390,6 +1630,8 @@ function syncWorkflowTemplateVisibility() {
     document.querySelectorAll('[data-workflow-template="contract"]').forEach((field) => {
         field.hidden = !contract?.checked;
     });
+    syncAgreementConfirmationPath();
+    syncWorkflowBuilder();
 }
 document.querySelectorAll("[data-workflow-toggle]").forEach((input) => {
     input.addEventListener("change", syncWorkflowTemplateVisibility);

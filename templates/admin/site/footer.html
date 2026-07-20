@@ -1,0 +1,105 @@
+{% extends "admin/base.html" %}
+{% from "partials/site_footer_layout.html" import render_site_footer %}
+{% block title %}Stopka strony{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div><p class="admin-eyebrow">Serwis publiczny</p><h1>Stopka strony</h1><p>Konfiguracja widoczna na publicznych stronach platformy.</p></div>
+</div>
+
+<form method="post" class="admin-form-card admin-form" data-site-footer-editor data-logo-path-url="{{ footer_preview.logo_url if not footer.logo_id else '' }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Treść i widoczność</h2></div>
+        <div class="admin-form-grid">
+            <label><span>Nazwa konfiguracji</span><input name="name" value="{{ footer.name }}" required></label>
+            <label class="admin-switch"><input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}><span><strong>Aktywna</strong><small>Nieaktywna konfiguracja nie wyświetla własnej treści ani logo.</small></span></label>
+            <label class="admin-form-wide"><span>Treść HTML</span><textarea name="html_body" rows="7" data-footer-body>{{ footer.html_body or '' }}</textarea><small>Dozwolone są akapity, pogrubienie, kursywa, listy i bezpieczne linki.</small></label>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Logo w stopce strony</h2><p>Źródłem logo jest wyłącznie ta konfiguracja.</p></div>
+        <p class="admin-help">Logo w stopce jest niezależne od logo formularza i logo platformy.</p>
+        <div class="admin-form-grid">
+            <label><span>Logo z biblioteki</span><select name="logo_id" data-logo-select><option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>{% for logo in logos %}<option value="{{ logo.id }}" data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}" data-logo-name="{{ logo.name }}" {% if footer.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select></label>
+            <label><span>Położenie logo</span><select name="logo_position" data-logo-position><option value="top" {% if (footer.logo_position or 'top') == 'top' %}selected{% endif %}>Nad treścią</option><option value="bottom" {% if footer.logo_position == 'bottom' %}selected{% endif %}>Pod treścią</option><option value="left" {% if footer.logo_position == 'left' %}selected{% endif %}>Po lewej</option><option value="right" {% if footer.logo_position == 'right' %}selected{% endif %}>Po prawej</option><option value="inline" {% if footer.logo_position == 'inline' %}selected{% endif %}>W miejscu znacznika</option></select></label>
+            <label><span>Wyrównanie logo</span><select name="logo_alignment" data-logo-alignment><option value="left" {% if (footer.logo_alignment or 'left') == 'left' %}selected{% endif %}>Do lewej</option><option value="center" {% if footer.logo_alignment == 'center' %}selected{% endif %}>Do środka</option><option value="right" {% if footer.logo_alignment == 'right' %}selected{% endif %}>Do prawej</option></select></label>
+            <label><span>Szerokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_width" min="20" max="800" value="{{ footer.logo_width if footer.logo_width is not none else '' }}" data-logo-width><small>px</small></span></label>
+            <label><span>Wysokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_height" min="20" max="400" value="{{ footer.logo_height if footer.logo_height is not none else '' }}" data-logo-height><small>px</small></span></label>
+            <p class="admin-form-wide admin-help" data-inline-help {% if footer.logo_position != 'inline' %}hidden{% endif %}>Dla położenia inline wstaw w treści znacznik <code>{% raw %}{{ footer_logo }}{% endraw %}</code>. Bez znacznika logo nie zostanie wyświetlone.</p>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Podgląd rzeczywistej stopki</h2><p>Ten sam układ i dane dodatkowe są używane w widoku publicznym.</p></div>
+        <div class="site-footer-admin-preview" data-site-footer-preview>
+            {{ render_site_footer(footer_preview, footer_contact, footer_service_documents, false) }}
+        </div>
+    </section>
+    <div class="admin-form-actions"><button class="admin-button" type="submit">Zapisz stopkę strony</button></div>
+</form>
+
+<script>
+(() => {
+    const editor = document.querySelector("[data-site-footer-editor]");
+    const preview = editor?.querySelector("[data-site-footer-preview]");
+    const logoSelect = editor?.querySelector("[data-logo-select]");
+    let logoSelectionChanged = false;
+    if (!editor || !preview) return;
+    const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "A"]);
+    const safeHtml = (value) => {
+        const template = document.createElement("template"); template.innerHTML = String(value || "");
+        template.content.querySelectorAll("*").forEach((node) => {
+            if (!allowed.has(node.tagName)) { node.replaceWith(...node.childNodes); return; }
+            const href = node.tagName === "A" ? String(node.getAttribute("href") || "") : "";
+            [...node.attributes].forEach((attribute) => node.removeAttribute(attribute.name));
+            if (node.tagName === "A" && /^(https?:|mailto:|tel:)/i.test(href)) { node.href = href; node.rel = "noopener noreferrer"; }
+        });
+        return template.innerHTML;
+    };
+    const render = () => {
+        const footer = preview.querySelector(".site-footer");
+        const inner = footer?.querySelector("[data-site-footer]");
+        const content = footer?.querySelector(".site-footer__content");
+        if (!footer || !inner || !content) return;
+        const position = editor.querySelector("[data-logo-position]").value || "top";
+        const alignment = editor.querySelector("[data-logo-alignment]").value || "left";
+        const width = Number.parseInt(editor.querySelector("[data-logo-width]").value || "", 10);
+        const height = Number.parseInt(editor.querySelector("[data-logo-height]").value || "", 10);
+        const option = logoSelect.selectedOptions[0];
+        const url = option?.dataset.previewUrl || (!logoSelectionChanged ? editor.dataset.logoPathUrl : "");
+        let configured = content.querySelector(".site-footer__configured-content");
+        if (!configured) { configured = document.createElement("div"); configured.className = "site-footer__configured-content"; content.prepend(configured); }
+        let bodyHtml = safeHtml(editor.querySelector("[data-footer-body]").value);
+        const placeholder = "\u007b\u007b footer_logo \u007d\u007d";
+        inner.querySelectorAll("[data-footer-logo]").forEach((node) => node.remove());
+        let logo = null;
+        if (url) {
+            logo = document.createElement(position === "inline" ? "span" : "div");
+            logo.className = "site-footer__logo"; logo.dataset.footerLogo = ""; logo.style.textAlign = alignment;
+            if (position === "inline") { logo.style.display = "inline-block"; logo.style.verticalAlign = "middle"; }
+            const image = document.createElement("img"); image.className = "site-footer__logo-image"; image.src = url; image.alt = option.dataset.logoName || "Logo stopki";
+            image.addEventListener("error", () => image.remove());
+            image.style.width = Number.isInteger(width) ? `${width}px` : (Number.isInteger(height) ? "auto" : "160px");
+            image.style.height = Number.isInteger(height) ? `${height}px` : "auto"; image.style.maxWidth = "100%"; image.style.objectFit = "contain";
+            logo.append(image);
+        }
+        if (position === "inline") {
+            bodyHtml = bodyHtml.split(placeholder).join(logo ? '<span data-inline-logo-slot></span>' : "");
+            configured.innerHTML = bodyHtml;
+            const slot = configured.querySelector("[data-inline-logo-slot]");
+            if (slot && logo) slot.replaceWith(logo);
+        } else {
+            configured.innerHTML = bodyHtml.split(placeholder).join("");
+            if (logo) position === "bottom" || position === "right" ? inner.append(logo) : inner.prepend(logo);
+        }
+        configured.hidden = !configured.innerHTML;
+        inner.className = `container site-footer__inner site-footer__inner--${position}`;
+        inner.dataset.logoPosition = position;
+        editor.querySelector("[data-inline-help]").hidden = position !== "inline";
+    };
+    logoSelect.addEventListener("change", () => { logoSelectionChanged = true; });
+    editor.addEventListener("input", render); editor.addEventListener("change", render); render();
+})();
+</script>
+{% endblock %}

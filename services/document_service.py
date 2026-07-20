@@ -12,6 +12,10 @@ from flask import Flask, current_app, request, url_for
 from form_loader import build_consents_view, build_submission_view
 from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
+from services.agreement_context_service import (
+    build_training_agreement_value_context,
+    upgrade_training_agreement_total_placeholder,
+)
 from services import document_naming_service as naming
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.document_view_service import DocumentViewService
@@ -295,9 +299,12 @@ class DocumentService:
 
         generated_date = (context_extra or {}).get("generated_date") or date.today().isoformat()
         template_html = self.resolve_document_template(document)
+        if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+            template_html = upgrade_training_agreement_total_placeholder(template_html)
         generated_documents = []
         prepared_documents = []
         for sequence, item in enumerate(items, start=1):
+            agreement_value_context = build_training_agreement_value_context(items, item)
             item_id = item.get("id") or item.get("value") or f"{item_alias}_{sequence}"
             agreement_number = self.build_document_number(
                 document,
@@ -321,6 +328,7 @@ class DocumentService:
                 collection_field: [item],
                 "selected_trainings": [item],
                 "selected_trainings_normalized": [item],
+                **agreement_value_context,
             }
             record = {
                 "id": str(item_id),

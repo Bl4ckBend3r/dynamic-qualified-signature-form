@@ -2,6 +2,7 @@
 {% block title %}{{ 'Stopka ogólna' if is_global else 'Stopka formularza' }}{% endblock %}
 {% block content %}
 {% set selected_logo = footer.logo if footer.logo and footer.logo.active else none %}
+{% set legacy_logo_url = footer.logo_path if footer.logo_path and (footer.logo_path.startswith('https://') or footer.logo_path.startswith('http://')) else '' %}
 {% set cancel_url = url_for('admin.global_mail_footer_edit') if is_global else url_for('admin.mail_footers_list', form_id=form.id) %}
 <div class="admin-page-title">
     <div>
@@ -13,7 +14,7 @@
     <div class="admin-actions"><a class="admin-button-secondary" href="{{ cancel_url }}">Anuluj</a></div>
 </div>
 
-<form method="post" class="admin-form-card admin-form" data-footer-editor>
+<form method="post" class="admin-form-card admin-form" data-footer-editor data-legacy-logo-url="{{ legacy_logo_url }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <section class="admin-form-section">
         <div class="admin-form-section-header"><h2>Reguła użycia</h2></div>
@@ -28,6 +29,7 @@
 
     <section class="admin-form-section">
         <div class="admin-form-section-header"><h2>Logo w stopce</h2><p>Wybierz logo, jego położenie, wyrównanie i opcjonalny rozmiar.</p></div>
+        <p class="admin-help">Logo w stopce jest niezależne od logo formularza i logo platformy.</p>
         <div class="admin-form-grid">
             <label><span>Logo z biblioteki</span><select id="footer-logo" name="logo_id" data-logo-select><option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>{% for logo in logos %}<option value="{{ logo.id }}" data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}" data-logo-name="{{ logo.name }}" {% if footer.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select><small>Logo można dodać tylko z poziomu konta super_admin.</small></label>
             <label><span>Położenie logo</span><select name="logo_position" data-logo-position>
@@ -61,7 +63,7 @@
             <div class="mail-footer-example__subject"><strong>Temat:</strong> Przykładowa wiadomość dotycząca zgłoszenia</div>
             <div class="mail-footer-example__body"><p>Dzień dobry,</p><p>to jest przykładowa treść wiadomości wysyłanej przez aplikację.</p></div>
             <footer class="mail-footer-example__footer" data-preview-footer-layout>
-                <div class="admin-preview-logo" data-preview-logo style="text-align:{{ footer.logo_alignment or 'left' }}">{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">{% endif %}</div>
+                <div class="admin-preview-logo" data-preview-logo style="text-align:{{ footer.logo_alignment or 'left' }}">{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}" onerror="this.remove()">{% endif %}</div>
                 <div data-preview-footer-content>
                     <div data-preview-footer-body>{% if footer.html_body %}{{ footer.html_body|safe }}{% else %}<p>Brak treści stopki.</p>{% endif %}</div>
                     <div data-preview-footer-contact>{{ (footer.contact_html or '')|safe }}</div>
@@ -78,6 +80,8 @@
 <script>
 (() => {
     const form = document.querySelector("[data-footer-editor]");
+    const logoSelect = form.querySelector("[data-logo-select]");
+    let logoSelectionChanged = false;
     const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "A"]);
     function safeHtml(value) {
         const template = document.createElement("template"); template.innerHTML = String(value || "");
@@ -133,13 +137,15 @@
             });
         }
 
-        const option = form.querySelector("[data-logo-select]")?.selectedOptions?.[0];
+        const option = logoSelect?.selectedOptions?.[0];
         if (logo) {
             logo.style.textAlign = alignment;
             logo.replaceChildren();
-            if (option?.dataset.previewUrl) {
+            const previewUrl = option?.dataset.previewUrl || (!logoSelectionChanged ? form.dataset.legacyLogoUrl : "");
+            if (previewUrl) {
                 const image = document.createElement("img");
-                image.src = option.dataset.previewUrl; image.alt = option.dataset.logoName || "Logo";
+                image.src = previewUrl; image.alt = option?.dataset.logoName || "Logo stopki";
+                image.addEventListener("error", () => image.remove());
                 image.style.width = Number.isInteger(width) ? `${width}px` : (Number.isInteger(height) ? "auto" : "160px");
                 image.style.height = Number.isInteger(height) ? `${height}px` : "auto";
                 image.style.maxWidth = "800px"; image.style.maxHeight = "400px";
@@ -165,6 +171,7 @@
         const inlineHelp = form.querySelector("[data-inline-logo-help]");
         if (inlineHelp) inlineHelp.hidden = position !== "inline";
     }
+    logoSelect?.addEventListener("change", () => { logoSelectionChanged = true; });
     form.addEventListener("input", render); form.addEventListener("change", render); render();
 })();
 </script>

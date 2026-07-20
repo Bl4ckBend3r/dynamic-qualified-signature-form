@@ -753,54 +753,135 @@
     color: var(--danger);
 }
 
-.admin-confirm-dialog {
-    border: 0;
-    border-radius: 8px;
-    padding: 0;
-    width: min(680px, calc(100% - 40px));
-    max-height: min(82vh, 560px);
-    overflow: visible;
-    box-shadow: 0 22px 70px rgba(29, 46, 91, 0.24);
-}
-
-.admin-confirm-dialog::backdrop {
-    background: rgba(29, 46, 91, 0.42);
-}
-
-.admin-confirm-dialog__box {
+.admin-condition-value {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-    margin: 0;
-    padding: 56px 72px;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
 }
 
-.admin-confirm-dialog__box h2,
-.admin-confirm-dialog__box p {
+.admin-condition-value > small {
     margin: 0;
-}
-
-.admin-confirm-dialog__box p {
     color: var(--muted);
-    font-size: 1.02rem;
-    line-height: 1.65;
-    max-width: 52ch;
+    line-height: 1.4;
 }
 
-.admin-confirm-dialog .admin-form-actions {
-    justify-content: flex-end;
+.admin-condition-value [data-condition-value-control] {
+    display: block;
+}
+
+.admin-condition-value select[multiple] {
+    min-height: 7.5rem;
+}
+
+body.admin-modal-open {
+    overflow: hidden;
+}
+
+.admin-modal {
+    z-index: 1001;
+    width: min(680px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: 90vh;
+    margin: auto;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 10px;
+    background: #fff;
+    color: var(--text);
+    box-shadow: 0 22px 70px rgba(29, 46, 91, 0.28);
+}
+
+.admin-modal[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+.admin-modal::backdrop {
+    z-index: 1000;
+    background: rgba(18, 29, 57, 0.58);
+}
+
+.admin-modal__surface {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 0;
+    width: 100%;
+    max-height: 90vh;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    background: #fff;
+}
+
+.admin-modal__header {
+    flex: 0 0 auto;
+    padding: 24px 28px 18px;
+    border-bottom: 1px solid var(--border);
+    background: #fff;
+}
+
+.admin-modal__header h2 {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.admin-modal__body {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 18px;
+    min-height: 0;
+    padding: 22px 28px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: #fff;
+}
+
+.admin-modal__body > p {
+    margin: 0;
+}
+
+.admin-modal__checks {
+    display: grid;
     gap: 12px;
-    padding-top: 18px;
-    padding-right: 0;
 }
 
-.admin-confirm-dialog__box .admin-alert-warning {
-    max-width: none;
+.admin-modal__check {
+    align-items: flex-start;
     padding: 12px 14px;
-    border-left: 4px solid #b7791f;
-    border-radius: 4px;
-    background: #fff8e6;
-    color: #68410b;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-alt, #f7f8fb);
+}
+
+.admin-modal__check input {
+    flex: 0 0 auto;
+    margin-top: 3px;
+}
+
+.admin-form .admin-modal__check > span {
+    min-width: 0;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.admin-form .admin-modal__check small {
+    margin-top: 3px;
+    font-weight: 400;
+    line-height: 1.4;
+}
+
+.admin-modal__footer {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 28px;
+    border-top: 1px solid var(--border);
+    background: #fff;
 }
 
 .admin-training-editor {
@@ -934,10 +1015,6 @@
         flex-direction: column;
     }
 
-    .admin-confirm-dialog__box {
-        padding: 40px 32px;
-    }
-
     .admin-training-item-heading {
         align-items: flex-start;
         flex-direction: column;
@@ -945,6 +1022,22 @@
 }
 
 @media (max-width: 620px) {
+    .admin-modal__header {
+        padding: 20px 18px 14px;
+    }
+
+    .admin-modal__body {
+        padding: 18px;
+    }
+
+    .admin-modal__footer {
+        padding: 14px 18px;
+    }
+
+    .admin-modal__footer button {
+        flex: 1 1 160px;
+    }
+
     .admin-training-fields,
     .admin-training-date {
         grid-template-columns: minmax(0, 1fr);
@@ -1354,6 +1447,16 @@
 .mail-footer-example__footer.is-logo-left { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
 .mail-footer-example__footer.is-logo-right { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
 .mail-footer-example__footer.is-logo-inline .admin-preview-logo { display: inline-block; margin: .25rem .5rem; vertical-align: middle; }
+
+.site-footer-admin-preview {
+    overflow: hidden;
+    border-radius: 8px;
+    box-shadow: 0 0 0 1px var(--admin-border, #d9dce3);
+}
+
+.site-footer-admin-preview .site-footer {
+    margin-top: 0;
+}
 .admin-input-with-unit { display: flex; align-items: center; gap: .5rem; }
 .admin-input-with-unit input { flex: 1 1 auto; min-width: 0; }
 .admin-input-with-unit small { flex: 0 0 auto; }

@@ -159,6 +159,39 @@ def test_build_form_definition_saves_multiple_qualification_conditions():
     assert qualification["conditions"][0]["officer_message"] == "Kandydat jest niepełnoletni."
 
 
+def test_build_form_definition_serializes_typed_qualification_values():
+    definition = build_form_definition_from_admin_form(
+        {
+            "title": "Form",
+            "fields": [
+                {"name": "wiek", "label": "Wiek", "type": "number"},
+                {
+                    "name": "tematy",
+                    "label": "Tematy",
+                    "type": "multi_select",
+                    "options": ["Excel", "Kadry"],
+                },
+                {"name": "uwagi", "label": "Uwagi", "type": "text"},
+            ],
+        },
+        {
+            "qualification_conditions_enabled": "on",
+            "qualification_conditions_json": json.dumps(
+                [
+                    {"field_name": "wiek", "operator": "equals", "expected_value": "18"},
+                    {"field_name": "tematy", "operator": "in", "expected_value": ["Excel", "Kadry"]},
+                    {"field_name": "uwagi", "operator": "is_not_empty", "expected_value": "ignored"},
+                ]
+            ),
+        },
+    )
+
+    conditions = definition["qualification_conditions"]["conditions"]
+    assert conditions[0]["expected_value"] == 18
+    assert conditions[1]["expected_value"] == ["Excel", "Kadry"]
+    assert conditions[2]["expected_value"] is None
+
+
 def test_build_form_definition_rejects_invalid_qualification_field():
     with pytest.raises(ValueError, match="istniejące pole"):
         build_form_definition_from_admin_form(

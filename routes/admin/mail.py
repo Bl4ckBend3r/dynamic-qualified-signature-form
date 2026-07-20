@@ -386,6 +386,7 @@ def mail_footer_edit(form_id: int, footer_id: int | None = None):
             if selected_logo_id and not can_select_active_logo(db, selected_logo_id):
                 abort(403)
             footer.logo_id = selected_logo_id
+            footer.logo_path = ""
             footer.is_default = True
             if footer.is_default:
                 for item in db.execute(select(MailFooter).where(MailFooter.form_id == form.id)).scalars().all():
@@ -439,6 +440,7 @@ def global_mail_footer_edit():
             if selected_logo_id and not can_select_active_logo(db, selected_logo_id):
                 abort(403)
             footer.logo_id = selected_logo_id
+            footer.logo_path = ""
             for item in db.execute(select(MailFooter).where(MailFooter.form_id.is_(None))).scalars().all():
                 item.is_default = False
             db.add(footer)

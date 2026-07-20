@@ -4,51 +4,59 @@
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
 {% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
-    <button class="admin-button-secondary" type="button" data-rollback-modal="rollback-stage-dialog">Cofnij etap</button>
-    <dialog class="admin-confirm-dialog" id="rollback-stage-dialog">
-        <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-confirm-dialog__box admin-form">
+    <button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>
+    <dialog class="admin-modal admin-modal-backdrop" id="rollback-stage-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-stage-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-            <h2>Cofnij etap zgłoszenia</h2>
-            <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
-            <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
-            <label>
-                <span>Docelowy etap/status</span>
-                <select name="target_status" required>
-                    {% for option in rollback_options %}
-                        <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>
-                <span>Powód cofnięcia</span>
-                <textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea>
-            </label>
-            <label class="admin-check">
-                <input type="checkbox" name="send_notification" checked>
-                <span>Wyślij powiadomienie do użytkownika</span>
-            </label>
-            <div class="admin-form-actions">
-                <button class="admin-button-secondary" type="button" data-close-rollback>Anuluj</button>
-                <button class="admin-button-danger" type="submit">Cofnij etap</button>
+            <header class="admin-modal__header"><h2 id="rollback-stage-title">Cofnij etap zgłoszenia</h2></header>
+            <div class="admin-modal__body">
+                <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
+                <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
+                <label>
+                    <span>Docelowy etap/status</span>
+                    <select name="target_status" required autofocus>
+                        {% for option in rollback_options %}
+                            <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label><span>Powód cofnięcia</span><textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea></label>
+                <label class="admin-check admin-modal__check"><input type="checkbox" name="send_notification" checked><span>Wyślij powiadomienie do użytkownika</span></label>
             </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Cofnij etap</button>
+            </footer>
         </form>
     </dialog>
 {% endif %}
 {% if g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
-    <button class="admin-button-secondary" type="button" data-correction-modal="return-for-correction-dialog">Wyślij do poprawy</button>
-    <dialog class="admin-confirm-dialog" id="return-for-correction-dialog">
-        <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-confirm-dialog__box admin-form">
+    <button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>
+    <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-            <h2>Wyślij zgłoszenie do poprawy</h2>
-            <p class="admin-alert admin-alert-warning">Zgłoszenie pozostanie w historii, ale może wymagać ponownego uzupełnienia danych i wygenerowania dokumentów.</p>
-            <label><span>Powód <strong aria-hidden="true">*</strong></span><textarea name="reason" rows="3" required maxlength="5000"></textarea></label>
-            <label><span>Wiadomość dla użytkownika</span><textarea name="message_to_user" rows="4" maxlength="10000"></textarea></label>
-            <label class="admin-check"><input type="checkbox" name="clear_submission" checked><span>Wyczyść dane zgłoszenia <small>(odpowiedzi, załączniki i wygenerowane dokumenty)</small></span></label>
-            <label class="admin-check"><input type="checkbox" name="send_email" checked><span>Wyślij powiadomienie e-mail do użytkownika</span></label>
-            <div class="admin-form-actions">
-                <button class="admin-button-secondary" type="button" data-close-correction>Anuluj</button>
-                <button class="admin-button-danger" type="submit">Wyślij do poprawy</button>
+            <header class="admin-modal__header">
+                <h2 id="return-for-correction-title">Wyślij zgłoszenie do poprawy</h2>
+            </header>
+            <div class="admin-modal__body">
+                <p class="admin-alert admin-alert-warning">Zgłoszenie pozostanie w historii, ale może wymagać ponownego uzupełnienia danych i wygenerowania dokumentów.</p>
+                <label><span>Powód <strong aria-hidden="true">*</strong></span><textarea name="reason" rows="3" required maxlength="5000" autofocus></textarea></label>
+                <label><span>Wiadomość dla użytkownika</span><textarea name="message_to_user" rows="4" maxlength="10000"></textarea></label>
+                <div class="admin-modal__checks">
+                    <label class="admin-check admin-modal__check">
+                        <input type="checkbox" name="clear_submission" checked>
+                        <span>Wyczyść dane zgłoszenia <small>(odpowiedzi, załączniki i wygenerowane dokumenty)</small></span>
+                    </label>
+                    <label class="admin-check admin-modal__check">
+                        <input type="checkbox" name="send_email" checked>
+                        <span>Wyślij powiadomienie e-mail do użytkownika</span>
+                    </label>
+                </div>
             </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Wyślij do poprawy</button>
+            </footer>
         </form>
     </dialog>
 {% endif %}
@@ -215,25 +223,4 @@
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
 </table>
-{% if g.admin_user.role in ["admin", "super_admin"] %}
-<script>
-document.querySelectorAll("[data-rollback-modal]").forEach((button) => {
-    button.addEventListener("click", () => {
-        const dialog = document.getElementById(button.dataset.rollbackModal);
-        if (dialog && typeof dialog.showModal === "function") {
-            dialog.showModal();
-        }
-    });
-});
-document.querySelectorAll("[data-close-rollback]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("dialog")?.close());
-});
-document.querySelectorAll("[data-correction-modal]").forEach((button) => {
-    button.addEventListener("click", () => document.getElementById(button.dataset.correctionModal)?.showModal());
-});
-document.querySelectorAll("[data-close-correction]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("dialog")?.close());
-});
-</script>
-{% endif %}
 {% endblock %}

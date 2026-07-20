@@ -46,7 +46,7 @@
 <form id="bulk-mail-form" method="post" action="{{ url_for('admin.submissions_mail_selected', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
 </form>
-<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}">
+<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-delete-selection></div>
@@ -174,9 +174,6 @@ document.addEventListener("DOMContentLoaded", function () {
             if (!selected.length) {
                 event.preventDefault();
                 return;
-            }
-            if (!window.confirm("Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.")) {
-                event.preventDefault();
             }
         });
     }

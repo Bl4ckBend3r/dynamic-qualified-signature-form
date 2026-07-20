@@ -311,6 +311,7 @@ class Logo(Base):
 
     forms: Mapped[list["Form"]] = relationship(back_populates="logo")
     mail_footers: Mapped[list["MailFooter"]] = relationship(back_populates="logo")
+    site_footers: Mapped[list["SiteFooter"]] = relationship(back_populates="logo")
 
 
 class Form(Base):
@@ -654,6 +655,38 @@ class MailFooter(Base):
 
     form: Mapped[Form] = relationship(back_populates="mail_footers")
     logo: Mapped[Logo | None] = relationship(back_populates="mail_footers")
+
+
+class SiteFooter(Base):
+    """Public-site footer configuration, independent from mail and form branding."""
+
+    __tablename__ = "site_footers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), default="Stopka strony", nullable=False)
+    html_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    logo_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+    logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), index=True, nullable=True)
+    logo_alignment: Mapped[str] = mapped_column(String(20), default="left", nullable=False)
+    logo_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    logo_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    logo_position: Mapped[str] = mapped_column(String(30), default="top", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    logo: Mapped[Logo | None] = relationship(back_populates="site_footers")
 
 
 class EmailLog(Base):

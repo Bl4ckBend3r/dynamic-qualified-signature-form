@@ -1,0 +1,47 @@
+{% macro render_site_footer(view, contact, documents, show_credit=true) %}
+<footer class="site-footer">
+    <div class="container site-footer__inner site-footer__inner--{{ view.logo_position }}" data-site-footer data-logo-position="{{ view.logo_position }}">
+        {% if view.logo_html and view.logo_position in ('top', 'left') %}
+            {{ view.logo_html }}
+        {% endif %}
+
+        <div class="site-footer__content">
+            {% if view.content_html %}
+                <div class="site-footer__configured-content">{{ view.content_html }}</div>
+            {% endif %}
+
+            {% if contact.address or contact.phones or contact.email or documents %}
+                <div class="site-footer__contact">
+                    {% if contact.address %}
+                        <p>{{ contact.address|replace("\n", "<br>")|trusted_html }}</p>
+                    {% endif %}
+                    {% if contact.phones %}
+                        <p>
+                            {% for phone in contact.phones %}
+                                {% if phone.label %}{{ phone.label }} {% endif %}{{ phone.number }}{% if not loop.last %}<br>{% endif %}
+                            {% endfor %}
+                        </p>
+                    {% endif %}
+                    {% if contact.email %}
+                        <p>e-mail: <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
+                    {% endif %}
+                    {% if documents %}
+                        <p>
+                            {% for document in documents %}
+                                <a href="{{ url_for('public_forms.service_document_page', document_type=document.type) }}">{{ document.title }}</a>
+                            {% endfor %}
+                        </p>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </div>
+
+        {% if view.logo_html and view.logo_position in ('bottom', 'right') %}
+            {{ view.logo_html }}
+        {% endif %}
+    </div>
+    {% if show_credit %}
+        <div class="container site-footer__bottom">Created by Witold Grzesiak</div>
+    {% endif %}
+</footer>
+{% endmacro %}

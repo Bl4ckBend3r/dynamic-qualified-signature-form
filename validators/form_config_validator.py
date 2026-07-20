@@ -6,6 +6,7 @@ from pathlib import Path
 from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
 from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
+from services.workflow_config_service import is_workflow_step_active
 
 
 ALLOWED_FILENAME_PLACEHOLDERS = {
@@ -104,8 +105,11 @@ class FormConfigValidator:
         if initial_step and initial_step not in step_ids:
             errors.append(f"workflow.initial_step references unknown step: {initial_step}")
 
+        active_steps = [step for step in steps if is_workflow_step_active(step, workflow)]
         known_triggers = set(TRIGGER_DESCRIPTIONS)
         for index, step in enumerate(steps):
+            if not is_workflow_step_active(step, workflow):
+                continue
             for key in ("next",):
                 target = step.get(key)
                 if target and target not in step_ids:
@@ -131,9 +135,32 @@ class FormConfigValidator:
             errors.append("workflow.declaration_template_html is required when declaration is required")
         if workflow.get("requires_contract") and not str(workflow.get("contract_template_html") or "").strip():
             errors.append("Brak szablonu umowy dla tego formularza.")
-        self._validate_reachable_steps(steps, step_ids, initial_step, errors)
+        signature_step = next(
+            (step for step in active_steps if step.get("id") == "training_agreements_signature"),
+            None,
+        )
+        if (
+            workflow.get("requires_contract")
+            and workflow.get("requires_agreement_confirmation")
+            and signature_step
+            and signature_step.get("next") == "completed"
+        ):
+            errors.append(
+                "Włączono potwierdzenie podpisania umowy przez urząd, ale etap "
+                "„Umowa oczekuje na podpis beneficjenta” prowadzi bezpośrednio do zakończenia procesu. "
+                "Ustaw kolejny etap na „Oczekuje na podpis urzędu” albo wyłącz wymaganie "
+                "potwierdzenia podpisu przez urząd."
+            )
+        self._validate_reachable_steps(workflow, steps, step_ids, initial_step, errors)
 
-    def _validate_reachable_steps(self, steps: list[dict], step_ids: set[str], initial_step: str, errors: list[str]) -> None:
+    def _validate_reachable_steps(
+        self,
+        workflow: dict,
+        steps: list[dict],
+        step_ids: set[str],
+        initial_step: str,
+        errors: list[str],
+    ) -> None:
         if not initial_step or initial_step not in step_ids:
             return
         by_id = {step.get("id"): step for step in steps}
@@ -149,8 +176,12 @@ class FormConfigValidator:
                 if target in step_ids and target not in reachable:
                     reachable.add(target)
                     pending.append(target)
-        for step_id in sorted(step_ids - reachable):
-            errors.append(f"workflow contains unreachable step: {step_id}")
+        for step in steps:
+            step_id = str(step.get("id") or "").strip()
+            if step_id in reachable or not is_workflow_step_active(step, workflow):
+                continue
+            label = str(step.get("admin_label") or step.get("label") or step_id).strip()
+            errors.append(f"Etap „{label}” nie jest połączony z główną ścieżką workflow.")
 
     def _validate_notifications(self, notifications: list[dict], errors: list[str]) -> None:
         if not isinstance(notifications, list):

@@ -372,6 +372,16 @@ def test_return_for_correction_action_is_visible_and_uses_application_prefix(adm
     assert f'/aplikacja/admin/submissions/{submission_id}/return-for-correction' in html
     assert 'name="clear_submission" checked' in html
     assert 'name="send_email" checked' in html
+    assert 'class="admin-modal admin-modal-backdrop"' in html
+    assert 'role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title"' in html
+    assert 'class="admin-modal__header"' in html
+    assert 'class="admin-modal__body"' in html
+    assert 'class="admin-modal__checks"' in html
+    assert 'class="admin-modal__footer"' in html
+    assert 'name="reason" rows="3" required maxlength="5000" autofocus' in html
+    assert 'document.body.classList.toggle("admin-modal-open"' in html
+    assert 'if (event.key === "Escape")' in html
+    assert 'dialog.returnFocusTarget?.focus()' in html
 
 
 def test_return_for_correction_endpoint_clears_state_and_sends_email(admin_app, admin_client, monkeypatch):
@@ -2894,6 +2904,21 @@ def test_footer_contains_creator_credit_but_mail_footer_does_not(admin_app, admi
     assert "Created by Witold Grzesiak" not in admin_app.extensions["services"].mail_dispatch_service.build_footer(None)
 
 
+def test_public_footer_has_no_hardcoded_or_form_logo_fallback(admin_app, admin_client):
+    form_id = create_form(admin_app, slug="footer-logo-separation", name="Footer logo separation")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        form.logo_id = None
+        db.commit()
+
+    html = admin_client.get("/").get_data(as_text=True)
+    footer_html = html.split('<footer class="site-footer">', 1)[1].split("</footer>", 1)[0]
+
+    assert "images/logo.png" not in footer_html
+    assert "site-brand__logo" not in footer_html
+    assert "form-logo" not in footer_html
+
+
 def test_mail_footer_uses_form_footer_then_global_fallback(admin_app, caplog):
     from routes.admin.mail import select_default_footer
 
@@ -2946,6 +2971,7 @@ def test_global_and_form_footer_editors_render_preview_and_sanitize_html(admin_a
     assert 'name="logo_height"' in global_html
     assert 'name="logo_position"' in global_html
     assert "{{ footer_logo }}" in global_html
+    assert "Logo w stopce jest niezależne od logo formularza i logo platformy." in global_html
     token = global_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     response = admin_client.post(
         "/admin/mail-footer",
@@ -3210,16 +3236,34 @@ def test_submission_received_uses_global_template_layout_and_logs_missing_recipi
     form_id = create_form(admin_app, slug="receipt_form", name="Receipt form", mail_mode="system")
     logo_path = Path(admin_app.config["TEMP_DIR"]) / "mail-logo.png"
     logo_path.write_bytes(b"inline-logo")
+    footer_logo_path = Path(admin_app.config["TEMP_DIR"]) / "configured-footer-logo.png"
+    footer_logo_path.write_bytes(b"footer-logo")
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         logo = Logo(
-            name="Mail logo",
+            name="Platform logo",
             filename="mail-logo.png",
             storage_path=str(logo_path),
             mime_type="image/png",
             active=True,
         )
-        db.add(logo)
+        footer_logo = Logo(
+            name="Configured footer logo",
+            filename="configured-footer-logo.png",
+            storage_path=str(footer_logo_path),
+            mime_type="image/png",
+            active=True,
+        )
+        db.add_all([logo, footer_logo])
         db.flush()
+        db.add(MailFooter(
+            form_id=None,
+            name="Global footer",
+            html_body="<p>Configured footer</p>",
+            logo_id=footer_logo.id,
+            logo_position="right",
+            is_active=True,
+            is_default=True,
+        ))
         db.add(
             SystemMailSettings(
                 smtp_config={
@@ -3290,12 +3334,14 @@ def test_submission_received_uses_global_template_layout_and_logs_missing_recipi
     assert sent[0]["subject"] == "Odebrano receipt-1"
     assert "Witaj Jan" in sent[0]["html_body"]
     assert "Global brand" in sent[0]["html_body"]
-    assert "Global footer" in sent[0]["html_body"]
+    assert "Configured footer" in sent[0]["html_body"]
     assert "#123456" in sent[0]["html_body"]
-    assert sent[0]["html_body"].count('src="cid:platform-logo-') == 1
-    assert 'data-logo-position="footer"' in sent[0]["html_body"]
-    assert sent[0]["inline_images"][0]["content"] == b"inline-logo"
-    assert sent[0]["inline_images"][0]["cid"].startswith("platform-logo-")
+    assert 'src="cid:platform-logo-' not in sent[0]["html_body"]
+    assert 'data-logo-position="footer"' not in sent[0]["html_body"]
+    assert "configured-footer-logo.png" in sent[0]["html_body"]
+    assert "mail-logo.png" not in sent[0]["html_body"]
+    assert sent[0]["html_body"].count("configured-footer-logo.png") == 1
+    assert sent[0]["inline_images"] == []
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         sent_log = db.query(EmailLog).filter_by(public_submission_id="receipt-1").one()
         missing_log = db.query(EmailLog).filter_by(public_submission_id="receipt-no-email").one()
@@ -3821,6 +3867,71 @@ def test_workflow_builder_rejects_missing_initial_stage(admin_app, admin_client)
     assert "Wybierz status początkowy workflow." in response.get_data(as_text=True)
 
 
+def test_workflow_builder_repairs_office_confirmation_path_before_save(admin_app, admin_client):
+    create_user(admin_app)
+    definition = readable_workflow_definition()
+    workflow = {
+        "name": "Umowy szkoleniowe",
+        "initial_step": "submission",
+        "requires_contract": True,
+        "requires_agreement_confirmation": True,
+        "steps": [
+            {"id": "submission", "status": "FORM_SUBMITTED", "next": "training_agreements_signature"},
+            {
+                "id": "training_agreements_signature",
+                "admin_label": "Umowa oczekuje na podpis beneficjenta",
+                "status": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+                "next": "completed",
+            },
+            {
+                "id": "stage_10",
+                "admin_label": "Oczekuje na podpis urzędu",
+                "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+                "next": "stage_11",
+            },
+            {
+                "id": "stage_11",
+                "admin_label": "Umowa podpisana przez urząd",
+                "status": "AGREEMENT_SIGNED_BY_OFFICE",
+                "next": "completed",
+            },
+            {"id": "completed", "status": "PROCESS_COMPLETED", "final": True},
+        ],
+    }
+    definition["workflow"] = workflow
+    form_id = create_form(admin_app, slug="repair_confirmation_path", definition_json=definition)
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "workflow",
+            "name": "Umowy szkoleniowe",
+            "slug": "repair_confirmation_path",
+            "title": "Umowy szkoleniowe",
+            "workflow_name": "Umowy szkoleniowe",
+            "workflow_initial_step": "submission",
+            "workflow_builder_json": json.dumps(workflow, ensure_ascii=False),
+            "requires_contract": "on",
+            "requires_agreement_confirmation": "on",
+            "contract_template_html": "<p>Umowa</p>",
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        saved = db.get(Form, form_id).definition_json["workflow"]
+        by_id = {step["id"]: step for step in saved["steps"]}
+        assert by_id["training_agreements_signature"]["next"] == "stage_10"
+        assert by_id["stage_10"]["next"] == "stage_11"
+        assert by_id["stage_11"]["next"] == "completed"
+
+
 def test_workflow_builder_action_respects_application_prefix(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="prefixed_workflow", definition_json=readable_workflow_definition())
@@ -3853,6 +3964,49 @@ def test_form_edit_renders_tabbed_configuration(admin_app, admin_client):
     assert 'data-form-tab-panel="basic"' in html
     assert 'data-form-tab-select' in html
     assert 'data-active-tab-input' in html
+
+
+def test_form_edit_exposes_typed_qualification_field_definitions(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {
+        "title": "Qualification form",
+        "fields": [
+            {"name": "consent", "label": "Zgoda", "type": "checkbox"},
+            {
+                "name": "region",
+                "label": "Region",
+                "type": "select",
+                "options": ["lubuskie", "wielkopolskie"],
+            },
+            {
+                "name": "topics",
+                "label": "Tematy",
+                "type": "multi_select",
+                "options": ["Excel", "Kadry"],
+            },
+            {"name": "age", "label": "Wiek", "type": "number"},
+            {"name": "start_date", "label": "Data", "type": "date"},
+        ],
+    }
+    form_id = create_form(admin_app, slug="qualification_ui", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
+    login(admin_client)
+
+    html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    fields_json = html.split("data-qualification-fields>", 1)[1].split("</script>", 1)[0]
+    fields = {field["name"]: field for field in json.loads(fields_json)}
+
+    assert fields["consent"]["type"] == "checkbox"
+    assert fields["region"]["options"] == ["lubuskie", "wielkopolskie"]
+    assert fields["topics"]["options"] == ["Excel", "Kadry"]
+    assert 'options = [{value: "TAK", label: "TAK"}, {value: "NIE", label: "NIE"}]' in html
+    assert 'control.multiple = kind === "options-multiple"' in html
+    assert 'control.type = kind;' in html
+    assert "qualificationEmptyOperators" in html
+    assert "Ten operator nie wymaga wartości oczekiwanej." in html
 
 
 def test_form_edit_marks_requested_tab_as_active(admin_app, admin_client):

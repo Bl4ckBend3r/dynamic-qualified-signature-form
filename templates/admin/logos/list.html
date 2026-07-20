@@ -62,7 +62,7 @@
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                             <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if logo.active else "Aktywuj" }}</button>
                         </form>
-                        <form method="post" action="{{ url_for('admin.logo_delete', logo_id=logo.id) }}" onsubmit="return confirm('Czy na pewno chcesz usunąć to logo? Tej operacji nie można cofnąć.');">
+                        <form method="post" action="{{ url_for('admin.logo_delete', logo_id=logo.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć to logo? Tej operacji nie można cofnąć.">
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                             <input type="hidden" name="detach" value="1">
                             <button class="admin-link-button admin-link-danger" type="submit">Usuń logo</button>

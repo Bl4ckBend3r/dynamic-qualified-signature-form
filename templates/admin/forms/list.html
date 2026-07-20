@@ -48,15 +48,15 @@
                                 <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
                             </form>
                             {% if g.admin_user.role == "super_admin" %}
-                                <button class="admin-link-button admin-link-danger" type="button" data-delete-modal="delete-form-{{ form.id }}">Usuń</button>
-                                <dialog class="admin-confirm-dialog" id="delete-form-{{ form.id }}">
-                                    <form method="dialog" class="admin-confirm-dialog__box">
-                                        <h2>Usunąć formularz?</h2>
-                                        <p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane. Formularz nie będzie widoczny na liście aktywnych formularzy.</p>
-                                        <div class="admin-form-actions">
-                                            <button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button>
+                                <button class="admin-link-button admin-link-danger" type="button" data-admin-modal-target="delete-form-{{ form.id }}">Usuń</button>
+                                <dialog class="admin-modal admin-modal-backdrop" id="delete-form-{{ form.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-form-title-{{ form.id }}" data-admin-modal>
+                                    <form method="dialog" class="admin-modal__surface">
+                                        <header class="admin-modal__header"><h2 id="delete-form-title-{{ form.id }}">Usunąć formularz?</h2></header>
+                                        <div class="admin-modal__body"><p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane. Formularz nie będzie widoczny na liście aktywnych formularzy.</p></div>
+                                        <footer class="admin-modal__footer">
+                                            <button class="admin-button-secondary" value="cancel" type="submit" autofocus>Anuluj</button>
                                             <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button>
-                                        </div>
+                                        </footer>
                                     </form>
                                 </dialog>
                                 <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden>
@@ -78,14 +78,6 @@
     </div>
 {% endif %}
 <script>
-document.querySelectorAll("[data-delete-modal]").forEach((button) => {
-    button.addEventListener("click", () => {
-        const dialog = document.getElementById(button.dataset.deleteModal);
-        if (dialog && typeof dialog.showModal === "function") {
-            dialog.showModal();
-        }
-    });
-});
 document.querySelectorAll("[data-submit-delete]").forEach((button) => {
     button.addEventListener("click", () => {
         const form = document.getElementById(button.dataset.submitDelete);

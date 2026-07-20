@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, current_app, has_request_context, request
+from flask import Flask, current_app, has_request_context, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config, normalize_app_base_path
@@ -197,7 +197,37 @@ def inject_globals():
         "APP_BASE_PATH": app_base_path,
         "footer_service_documents": footer_service_documents(),
         "footer_contact": footer_contact(),
+        "site_footer": site_footer_context(),
     }
+
+
+def site_footer_context() -> dict:
+    from services.footer_logo_service import build_site_footer_view
+
+    if not current_app.config.get("DATABASE_URL"):
+        return build_site_footer_view(None)
+    try:
+        from database import create_session_factory
+        from models import SiteFooter
+        from sqlalchemy import select
+
+        with create_session_factory(current_app.config["DATABASE_URL"])() as db:
+            footer = db.execute(
+                select(SiteFooter)
+                .where(SiteFooter.is_active.is_(True))
+                .order_by(SiteFooter.id)
+            ).scalars().first()
+            return build_site_footer_view(
+                footer,
+                logo_url_builder=lambda logo: url_for(
+                    "public_forms.logo_asset",
+                    logo_id=logo.id,
+                    filename=Path(logo.filename).name,
+                ),
+            )
+    except Exception:
+        current_app.logger.exception("Nie udało się pobrać konfiguracji stopki strony.")
+        return build_site_footer_view(None)
 
 
 def footer_contact() -> dict:

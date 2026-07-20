@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 import pytest
 from flask import Flask
@@ -85,7 +86,13 @@ def build_service(tmp_path, selected_trainings):
     return service, repository, session_factory, storage, renderer, submission
 
 
-def agreement_config(template_html="<main class=\"document\">ADMIN TEMPLATE {{ training.name }}</main>"):
+def agreement_config(
+    template_html=(
+        "<main class=\"document\"><table>{% for item in selected_trainings %}"
+        "<tr><td>{{ item.name }}</td><td>{{ item.price_formatted }}</td></tr>"
+        "{% endfor %}</table><strong>{{ selected_trainings_total_formatted }}</strong></main>"
+    ),
+):
     return {
         "title": "Sample",
         "fields": [],
@@ -144,6 +151,7 @@ def test_training_agreement_generation_persists_every_pdf(tmp_path, training_cou
     ]
     assert all(call["template_html"].startswith("<main") for call in renderer.calls)
     assert len(renderer.calls) == training_count
+    expected_total = sum((Decimal(training["price"]) for training in trainings), Decimal("0"))
     for index, call in enumerate(renderer.calls):
         context = call["context"]
         expected_training = context["training"]
@@ -155,15 +163,23 @@ def test_training_agreement_generation_persists_every_pdf(tmp_path, training_cou
         assert context["agreement"] == context["training_agreement"]
         assert context["agreement_number"] == agreements[index]["number"]
         assert context["selected_trainings_total_formatted"] == expected_training["price_formatted"]
+        assert context["agreement_training_price"] == Decimal(str(expected_training["price"]))
+        assert context["agreement_training_price_formatted"] == expected_training["price_formatted"]
+        assert [item["id"] for item in context["all_selected_trainings"]] == [
+            item["id"] for item in trainings
+        ]
+        assert context["all_selected_trainings_total"] == expected_total
+        assert "{{ all_selected_trainings_total_formatted|default(selected_trainings_total_formatted, true) }}" in call["template_html"]
 
         rendered_table = app.jinja_env.from_string(
             "<table>{% for item in selected_trainings %}<tr><td>{{ item.name }}</td>"
             "<td>{{ item.price_formatted }}</td></tr>{% endfor %}</table>"
-            "<strong>{{ selected_trainings_total_formatted }}</strong>"
+            "<strong>{{ all_selected_trainings_total_formatted }}</strong>"
         ).render(**context)
         assert rendered_table.count("<tr>") == 1
         assert expected_training["name"] in rendered_table
         assert expected_training["price_formatted"] in rendered_table
+        assert context["all_selected_trainings_total_formatted"] in rendered_table
 
 
 def test_duplicate_training_names_get_unique_filenames_and_numbers(tmp_path):

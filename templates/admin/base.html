@@ -26,6 +26,7 @@
                             <a class="{% if request.endpoint == 'admin.global_mail_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.global_mail_footer_edit') }}">Stopka ogólna</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.logo') %}is-active{% endif %}" href="{{ url_for('admin.logos_list') }}">Logo</a>
                             <a class="{% if request.endpoint == 'admin.contact_page_edit' %}is-active{% endif %}" href="{{ url_for('admin.contact_page_edit') }}">Strona kontaktowa</a>
+                            <a class="{% if request.endpoint == 'admin.site_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.site_footer_edit') }}">Stopka strony</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.service_document') %}is-active{% endif %}" href="{{ url_for('admin.service_documents_edit') }}">Dokumenty serwisu</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
                         {% endif %}
@@ -49,8 +50,105 @@
             </div>
         </main>
     </div>
+    {% if g.admin_user %}
+    <dialog class="admin-modal admin-modal-backdrop" id="admin-global-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-global-confirm-title" data-admin-modal>
+        <div class="admin-modal__surface">
+            <header class="admin-modal__header"><h2 id="admin-global-confirm-title">Potwierdź operację</h2></header>
+            <div class="admin-modal__body"><p data-admin-confirm-message></p></div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="button" data-admin-confirm-accept>Potwierdź</button>
+            </footer>
+        </div>
+    </dialog>
+    {% endif %}
     <script>
         window.APP_BASE_PATH = {{ app_base_path|tojson }};
+        (() => {
+            const focusableSelector = "button:not([disabled]), [href], input:not([type='hidden']):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+            const syncModalScrollLock = () => {
+                document.body.classList.toggle("admin-modal-open", Boolean(document.querySelector("[data-admin-modal][open]")));
+            };
+            const openAdminModal = (dialog, trigger) => {
+                if (!dialog || typeof dialog.showModal !== "function" || dialog.open) return;
+                dialog.returnFocusTarget = trigger || document.activeElement;
+                dialog.showModal();
+                syncModalScrollLock();
+                window.requestAnimationFrame(() => {
+                    dialog.querySelector("[autofocus], input:not([type='hidden']), textarea, select, button")?.focus();
+                });
+            };
+            document.querySelectorAll("[data-admin-modal]").forEach((dialog) => {
+                dialog.addEventListener("keydown", (event) => {
+                    if (event.key === "Escape") {
+                        event.preventDefault();
+                        dialog.close();
+                        return;
+                    }
+                    if (event.key !== "Tab") return;
+                    const focusable = Array.from(dialog.querySelectorAll(focusableSelector)).filter((item) => !item.hidden && item.getClientRects().length);
+                    if (!focusable.length) return;
+                    const first = focusable[0];
+                    const last = focusable[focusable.length - 1];
+                    if (event.shiftKey && document.activeElement === first) {
+                        event.preventDefault();
+                        last.focus();
+                    } else if (!event.shiftKey && document.activeElement === last) {
+                        event.preventDefault();
+                        first.focus();
+                    }
+                });
+                dialog.addEventListener("close", () => {
+                    syncModalScrollLock();
+                    dialog.returnFocusTarget?.focus();
+                    dialog.returnFocusTarget = null;
+                });
+            });
+            document.addEventListener("click", (event) => {
+                const trigger = event.target.closest("[data-admin-modal-target]");
+                if (trigger) openAdminModal(document.getElementById(trigger.dataset.adminModalTarget), trigger);
+                const closer = event.target.closest("[data-admin-modal-close]");
+                if (closer) closer.closest("dialog")?.close();
+            });
+
+            const confirmDialog = document.getElementById("admin-global-confirm-dialog");
+            let pendingConfirmation = null;
+            const requestConfirmation = (message, trigger, callback) => {
+                if (!confirmDialog) return callback();
+                const messageHolder = confirmDialog.querySelector("[data-admin-confirm-message]");
+                if (messageHolder) messageHolder.textContent = message;
+                pendingConfirmation = callback;
+                openAdminModal(confirmDialog, trigger);
+            };
+            document.addEventListener("submit", (event) => {
+                const form = event.target.closest("form[data-admin-confirm-message]");
+                if (!form || form.dataset.adminConfirmed === "1") return;
+                event.preventDefault();
+                const submitter = event.submitter;
+                requestConfirmation(form.dataset.adminConfirmMessage, submitter || form, () => {
+                    form.dataset.adminConfirmed = "1";
+                    if (submitter) form.requestSubmit(submitter);
+                    else form.requestSubmit();
+                    window.setTimeout(() => { delete form.dataset.adminConfirmed; }, 0);
+                });
+            });
+            document.addEventListener("click", (event) => {
+                const trigger = event.target.closest("[data-admin-confirm-action]");
+                if (!trigger) return;
+                event.preventDefault();
+                requestConfirmation(trigger.dataset.adminConfirmMessage || "Czy kontynuować?", trigger, () => {
+                    trigger.dispatchEvent(new CustomEvent("admin:confirmed", {bubbles: true}));
+                });
+            });
+            confirmDialog?.querySelector("[data-admin-confirm-accept]")?.addEventListener("click", () => {
+                const callback = pendingConfirmation;
+                pendingConfirmation = null;
+                confirmDialog.close();
+                callback?.();
+            });
+            confirmDialog?.addEventListener("close", () => { pendingConfirmation = null; });
+            window.AdminModal = {open: openAdminModal, confirm: requestConfirmation};
+        })();
     </script>
 </body>
 </html>

@@ -46,7 +46,6 @@
             <label><span>Położenie logo w mailu</span><select name="layout_logo_position">
                 <option value="none" {% if layout.logo_position == "none" %}selected{% endif %}>Brak logo</option>
                 <option value="header" {% if layout.logo_position == "header" %}selected{% endif %}>Nagłówek</option>
-                <option value="footer" {% if layout.logo_position == "footer" %}selected{% endif %}>Stopka</option>
                 <option value="before_content" {% if layout.logo_position == "before_content" %}selected{% endif %}>Przed treścią</option>
                 <option value="after_content" {% if layout.logo_position == "after_content" %}selected{% endif %}>Po treści</option>
             </select></label>
@@ -57,7 +56,7 @@
             </select></label>
             <label><span>Wysokość logo</span><input type="number" min="16" max="200" name="layout_logo_height_px" value="{{ layout.logo_height_px }}"> <small>px</small></label>
             <input type="hidden" name="layout_footer_html" value="{{ layout.footer_html }}">
-            <p class="admin-form-wide admin-help">Stopka wiadomości nie jest częścią układu. Skonfiguruj ją w sekcji „Stopka ogólna”.</p>
+            <p class="admin-form-wide admin-help">Logo układu platformy nie jest renderowane w stopce wiadomości. Logo stopki skonfiguruj niezależnie w sekcji „Stopka ogólna”.</p>
         </div>
     </div>
     <div class="admin-form-actions"><button class="admin-button" type="submit">Zapisz konfigurację</button></div>

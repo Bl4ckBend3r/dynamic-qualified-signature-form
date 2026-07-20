@@ -37,7 +37,7 @@ MAIL_LAYOUT = {
     "panel_shadow_or_secondary": "#606b88",
     "secondary_blue": "#5c6989",
     "secondary_blue_dark": "#303e65",
-    "logo_position": "footer",
+    "logo_position": "none",
     "logo_alignment": "center",
     "logo_height_px": 64,
 }
@@ -625,9 +625,9 @@ def render_platform_mail_html(
     footer_html = render_template_text(footer_html or "", context)
     footer_html = "\n".join(part for part in [layout_footer, footer_html] if part)
     platform_name = html.escape(str(mail_layout.get("platform_name") or ""))
-    logo_position = str(mail_layout.get("logo_position") or "footer")
-    if logo_position not in {"none", "header", "footer", "before_content", "after_content"}:
-        logo_position = "footer"
+    logo_position = str(mail_layout.get("logo_position") or "none")
+    if logo_position not in {"none", "header", "before_content", "after_content"}:
+        logo_position = "none"
     logo_alignment = str(mail_layout.get("logo_alignment") or "center")
     if logo_alignment not in {"left", "center", "right"}:
         logo_alignment = "center"
@@ -666,7 +666,9 @@ def render_platform_mail_html(
         if platform_name
         else ""
     )
-    footer_parts = [logo_block if logo_position == "footer" else "", platform_name_html, footer_html]
+    # The platform layout never owns the mail-footer logo. A footer logo is
+    # rendered exclusively by MailDispatchService.build_footer().
+    footer_parts = [platform_name_html, footer_html]
     footer_content = "\n".join(part for part in footer_parts if part)
     footer_section = (
         f'<tr><td class="platform-layout-footer" style="padding:0 24px 16px;">{footer_content}</td></tr>'

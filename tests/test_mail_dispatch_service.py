@@ -31,6 +31,49 @@ def test_build_footer_handles_missing_footer_and_logo():
     assert service.build_footer(None) == ""
 
 
+def test_footer_logo_source_prefers_logo_id_then_logo_path_then_none():
+    service = MailDispatchService()
+    library_logo = SimpleNamespace(active=True, name="Logo stopki", filename="footer.png")
+    own_logo = SimpleNamespace(
+        logo=library_logo,
+        logo_path="https://legacy.example/legacy.png",
+        html_body="<p>Stopka</p>",
+    )
+    legacy_logo = SimpleNamespace(
+        logo=None,
+        logo_path="https://legacy.example/footer.png",
+        html_body="<p>Stopka</p>",
+    )
+    no_logo = SimpleNamespace(
+        logo=None,
+        logo_path=r"C:\private\lubuskie.png",
+        html_body="<p>Stopka</p>",
+    )
+
+    from_library = service.build_footer(
+        own_logo,
+        logo_url_builder=lambda logo: f"https://cdn.example/{logo.filename}",
+    )
+    from_path = service.build_footer(legacy_logo)
+    without_logo = service.build_footer(no_logo)
+
+    assert 'src="https://cdn.example/footer.png"' in from_library
+    assert "legacy.png" not in from_library
+    assert 'src="https://legacy.example/footer.png"' in from_path
+    assert "<img" not in without_logo
+    assert "Lubuskie" not in without_logo
+
+
+def test_footer_does_not_fall_back_to_form_or_platform_logo():
+    footer = SimpleNamespace(logo=None, logo_path="", html_body="<p>Stopka bez logo</p>")
+
+    rendered = MailDispatchService().build_footer(footer)
+
+    assert rendered == "<p>Stopka bez logo</p>"
+    assert "<img" not in rendered
+    assert "platform-logo" not in rendered
+
+
 @pytest.mark.parametrize("alignment", ["left", "center", "right"])
 def test_build_footer_aligns_logo(alignment):
     service = MailDispatchService()

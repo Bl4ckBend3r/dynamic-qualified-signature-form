@@ -36,7 +36,7 @@
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button" type="submit">{{ "Odblokuj" if user.is_blocked else "Zablokuj" }}</button>
                             </form>
-                            <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" onsubmit="return confirm('Usunac uzytkownika {{ user.email }}?');">
+                            <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" data-admin-confirm-message="Usunąć użytkownika {{ user.email }}?">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button admin-link-danger" type="submit">Usun</button>
                             </form>

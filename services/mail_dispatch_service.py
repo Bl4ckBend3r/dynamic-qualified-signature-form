@@ -10,6 +10,12 @@ from typing import Any
 from flask import current_app, url_for
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
+from services.footer_logo_service import (
+    normalize_footer_logo_alignment,
+    normalize_footer_logo_dimension,
+    normalize_footer_logo_position,
+    resolve_footer_logo_url,
+)
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
@@ -83,26 +89,22 @@ class MailDispatchService:
     def build_footer(self, footer=None, logo_url_builder=None) -> str:
         if not footer:
             return ""
-        alignment = str(getattr(footer, "logo_alignment", "left") or "left")
-        if alignment not in {"left", "center", "right"}:
-            alignment = "left"
-        position = str(getattr(footer, "logo_position", "top") or "top")
-        if position not in {"top", "bottom", "left", "right", "inline"}:
-            position = "top"
-        width = self._footer_logo_dimension(getattr(footer, "logo_width", None), 20, 800)
-        height = self._footer_logo_dimension(getattr(footer, "logo_height", None), 20, 400)
+        alignment = normalize_footer_logo_alignment(getattr(footer, "logo_alignment", "left"))
+        position = normalize_footer_logo_position(getattr(footer, "logo_position", "top"))
+        width = normalize_footer_logo_dimension(getattr(footer, "logo_width", None), 20, 800)
+        height = normalize_footer_logo_dimension(getattr(footer, "logo_height", None), 20, 400)
 
         logo = getattr(footer, "logo", None)
         logo_html = ""
         inline_logo_html = ""
-        if logo and getattr(logo, "active", False) and logo_url_builder:
-            logo_url = logo_url_builder(logo)
+        logo_url = self._footer_logo_url(footer, logo_url_builder)
+        if logo_url:
             image_width = width if width is not None else (None if height is not None else 160)
             image_styles = ["display:inline-block", "max-width:800px", "max-height:400px"]
             image_styles.append(f"width:{image_width}px" if image_width is not None else "width:auto")
             image_styles.append(f"height:{height}px" if height is not None else "height:auto")
             image_html = (
-                f'<img src="{escape(str(logo_url))}" alt="{escape(str(getattr(logo, "name", "")))}" '
+                f'<img src="{escape(logo_url, quote=True)}" alt="{escape(str(getattr(logo, "name", "")))}" '
                 f'style="{";".join(image_styles)};">'
             )
             logo_html = f'<div class="mail-footer-logo" style="text-align:{alignment};">{image_html}</div>'
@@ -166,12 +168,13 @@ class MailDispatchService:
         return f'<div style="margin-bottom:16px;">{logo_html}</div>' + separator + content_html
 
     @staticmethod
+    def _footer_logo_url(footer, logo_url_builder=None) -> str:
+        """Resolve only the logo configured on the footer: logo_id, logo_path, or none."""
+        return resolve_footer_logo_url(footer, logo_url_builder)
+
+    @staticmethod
     def _footer_logo_dimension(value, minimum: int, maximum: int) -> int | None:
-        try:
-            parsed = int(value) if value not in (None, "") else None
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed is not None and minimum <= parsed <= maximum else None
+        return normalize_footer_logo_dimension(value, minimum, maximum)
 
     def select_template(self, templates: list[Any], submission=None, event_type: str | None = None):
         if not templates:

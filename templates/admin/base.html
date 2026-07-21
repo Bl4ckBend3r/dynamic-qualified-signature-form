@@ -30,6 +30,9 @@
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.service_document') %}is-active{% endif %}" href="{{ url_for('admin.service_documents_edit') }}">Dokumenty serwisu</a>
                             <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
                         {% endif %}
+                        {% if g.admin_user.role == "admin" %}
+                            <a class="{% if request.endpoint == 'admin.site_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.site_footer_edit') }}">Stopka strony</a>
+                        {% endif %}
                         <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
                     </nav>
                 {% endif %}

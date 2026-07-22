@@ -10,6 +10,8 @@ class ProcessStatusCode(StrEnum):
     WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
     REVIEW_ACCEPTED = "REVIEW_ACCEPTED"
     REVIEW_REJECTED = "REVIEW_REJECTED"
+    AUTO_REJECTED = "AUTO_REJECTED"
+    RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_CORRECTION = "WAITING_FOR_CORRECTION"
     CORRECTED = "CORRECTED"
     WAITING_FOR_DOCUMENT = "WAITING_FOR_DOCUMENT"
@@ -60,6 +62,19 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
         final=True,
         rejected=True,
     ),
+    ProcessStatusCode.AUTO_REJECTED: StatusDefinition(
+        ProcessStatusCode.AUTO_REJECTED,
+        "Odrzucony automatycznie",
+        rejected=True,
+        requires_officer_action=True,
+        allowed_transitions=(ProcessStatusCode.RETURNED_FOR_CORRECTION,),
+    ),
+    ProcessStatusCode.RETURNED_FOR_CORRECTION: StatusDefinition(
+        ProcessStatusCode.RETURNED_FOR_CORRECTION,
+        "Wysłany do poprawy",
+        requires_user_action=True,
+        allowed_transitions=(ProcessStatusCode.SUBMITTED, ProcessStatusCode.AUTO_REJECTED),
+    ),
     ProcessStatusCode.WAITING_FOR_CORRECTION: StatusDefinition(
         ProcessStatusCode.WAITING_FOR_CORRECTION,
         "Oczekuje na korektę",
@@ -97,6 +112,8 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
 
 LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
     "FORM_SUBMITTED": ProcessStatusCode.SUBMITTED,
+    "AUTO_REJECTED": ProcessStatusCode.AUTO_REJECTED,
+    "RETURNED_FOR_CORRECTION": ProcessStatusCode.RETURNED_FOR_CORRECTION,
     "WAITING_FOR_OFFICER_DECISION": ProcessStatusCode.WAITING_FOR_REVIEW,
     "OFFICER_ACCEPTED": ProcessStatusCode.REVIEW_ACCEPTED,
     "accepted_waiting_for_additional_fields": ProcessStatusCode.REVIEW_ACCEPTED,
@@ -111,6 +128,11 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
     "AGREEMENT_NOT_REQUIRED": ProcessStatusCode.COMPLETED,
     "AGREEMENT_BLOCKED": ProcessStatusCode.WAITING_FOR_DOCUMENT,
     "AGREEMENT_READY": ProcessStatusCode.WAITING_FOR_DOCUMENT,
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": ProcessStatusCode.WAITING_FOR_REVIEW,
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": ProcessStatusCode.WAITING_FOR_REVIEW,
+    "AGREEMENT_SIGNED_BY_OFFICE": ProcessStatusCode.COMPLETED,
+    "AGREEMENT_REJECTED_BY_OFFICE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
     "AGREEMENT_WAITING_FOR_SIGNATURE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
     "AGREEMENT_UPLOADED": ProcessStatusCode.WAITING_FOR_REVIEW,
     "BENEFICIARY_AGREEMENT_CONFIRMED": ProcessStatusCode.COMPLETED,
@@ -124,6 +146,8 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
 
 LEGACY_STATUS_LABELS: dict[str, str] = {
     "FORM_SUBMITTED": "Wniosek złożony",
+    "AUTO_REJECTED": "Odrzucony automatycznie",
+    "RETURNED_FOR_CORRECTION": "Wysłany do poprawy",
     "WAITING_FOR_OFFICER_DECISION": "Oczekuje na decyzję urzędnika",
     "OFFICER_ACCEPTED": "Wniosek zaakceptowany",
     "OFFICER_REJECTED": "Wniosek odrzucony",
@@ -137,10 +161,15 @@ LEGACY_STATUS_LABELS: dict[str, str] = {
     "AGREEMENT_NOT_REQUIRED": "Umowa niewymagana",
     "AGREEMENT_BLOCKED": "Umowa zablokowana",
     "AGREEMENT_READY": "Umowa gotowa do wygenerowania",
-    "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis",
-    "AGREEMENT_UPLOADED": "Umowa podpisana przez beneficjenta - do potwierdzenia",
-    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez beneficjenta - potwierdzona",
-    "BENEFICIARY_AGREEMENT_REJECTED": "Podpisana umowa wymaga poprawy",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
+    "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
+    "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
     "AGREEMENT_SIGNED": "Umowa podpisana",
     "AGREEMENT_SIGNATURE_INVALID": "Podpis umowy wymaga poprawy",
     "PARTICIPANT_ACCEPTED": "Proces zaakceptowany",
@@ -151,6 +180,11 @@ LEGACY_STATUS_LABELS: dict[str, str] = {
 
 DECLARATION_COMPLETED_RAW_STATUSES = {
     "AGREEMENT_READY",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "AGREEMENT_SIGNED_BY_OFFICE",
+    "AGREEMENT_REJECTED_BY_OFFICE",
     "AGREEMENT_WAITING_FOR_SIGNATURE",
     "AGREEMENT_UPLOADED",
     "BENEFICIARY_AGREEMENT_CONFIRMED",
@@ -163,6 +197,7 @@ DECLARATION_COMPLETED_RAW_STATUSES = {
 }
 
 AGREEMENT_COMPLETED_RAW_STATUSES = {
+    "AGREEMENT_SIGNED_BY_OFFICE",
     "AGREEMENT_SIGNED",
     "BENEFICIARY_AGREEMENT_CONFIRMED",
     "PARTICIPANT_ACCEPTED",
@@ -188,9 +223,14 @@ WORKFLOW_STATUS_LABELS: dict[str, str] = {
     "AGREEMENT_REQUIRED": "Umowa wymagana",
     "contract_required": "Umowa wymagana",
     "AGREEMENT_GENERATED": "Umowa wygenerowana",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
     "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
-    "AGREEMENT_UPLOADED": "Podpisana umowa wgrana przez beneficjenta",
-    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
     "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
     "CORRECTION_REQUIRED": "Wymagana korekta",
     "PROCESS_COMPLETED": "Proces zakończony",

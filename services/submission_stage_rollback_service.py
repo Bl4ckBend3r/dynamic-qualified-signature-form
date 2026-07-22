@@ -52,7 +52,7 @@ class SubmissionStageRollbackService:
         (40, "additional_fields_completed"),
         (50, "DECLARATION_WAITING_FOR_SIGNATURE"),
         (60, "DECLARATION_SIGNED"),
-        (70, "AGREEMENT_WAITING_FOR_SIGNATURE"),
+        (70, "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"),
     )
 
     _STATUS_RANK = {
@@ -79,11 +79,16 @@ class SubmissionStageRollbackService:
         "DECLARATION_SIGNED": 60,
         "AGREEMENT_BLOCKED": 65,
         "AGREEMENT_READY": 65,
+        "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": 70,
         "AGREEMENT_WAITING_FOR_SIGNATURE": 70,
         "WAITING_FOR_SIGNATURE": 70,
         "AGREEMENT_SIGNATURE_INVALID": 75,
         "BENEFICIARY_AGREEMENT_REJECTED": 75,
+        "AGREEMENT_REJECTED_BY_OFFICE": 75,
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY": 76,
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": 78,
         "AGREEMENT_UPLOADED": 78,
+        "AGREEMENT_SIGNED_BY_OFFICE": 80,
         "BENEFICIARY_AGREEMENT_CONFIRMED": 80,
         "AGREEMENT_SIGNED": 80,
         "AGREEMENT_NOT_REQUIRED": 80,
@@ -98,6 +103,7 @@ class SubmissionStageRollbackService:
         "REVIEW_REJECTED",
         "PARTICIPANT_REJECTED",
         "AGREEMENT_SIGNED",
+        "AGREEMENT_SIGNED_BY_OFFICE",
         "BENEFICIARY_AGREEMENT_CONFIRMED",
         "AGREEMENT_NOT_REQUIRED",
         "PARTICIPANT_ACCEPTED",
@@ -114,6 +120,10 @@ class SubmissionStageRollbackService:
         "AGREEMENT_SIGNATURE_INVALID",
         "SIGNATURE_INVALID",
         "AGREEMENT_SIGNED",
+        "AGREEMENT_SIGNED_BY_OFFICE",
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+        "AGREEMENT_REJECTED_BY_OFFICE",
         "AGREEMENT_UPLOADED",
         "BENEFICIARY_AGREEMENT_CONFIRMED",
         "BENEFICIARY_AGREEMENT_REJECTED",
@@ -282,7 +292,7 @@ class SubmissionStageRollbackService:
                 continue
             if status in {"DECLARATION_WAITING_FOR_SIGNATURE", "DECLARATION_SIGNED"} and not declaration_required:
                 continue
-            if status == "AGREEMENT_WAITING_FOR_SIGNATURE" and not agreement_required:
+            if status in {"AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE", "AGREEMENT_WAITING_FOR_SIGNATURE"} and not agreement_required:
                 continue
             statuses.append(status)
         return list(reversed(statuses))
@@ -333,7 +343,7 @@ class SubmissionStageRollbackService:
             return "DECLARATION_SIGNED" if self._is_yes(submission.declaration_required) else "OFFICER_ACCEPTED"
         if status == "WAITING_FOR_SIGNATURE":
             current_rank = self._STATUS_RANK.get(current_status, 0)
-            return "AGREEMENT_WAITING_FOR_SIGNATURE" if current_rank > 70 else "DECLARATION_WAITING_FOR_SIGNATURE"
+            return "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE" if current_rank > 70 else "DECLARATION_WAITING_FOR_SIGNATURE"
         return status
 
     def _workflow_step_for(
@@ -369,7 +379,7 @@ class SubmissionStageRollbackService:
             preferred = "declaration_signature"
         elif status == "DECLARATION_SIGNED":
             preferred = self._first_existing_step(available_steps, "agreement", "training_agreements", "declaration_signature")
-        elif status == "AGREEMENT_WAITING_FOR_SIGNATURE":
+        elif status in {"AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE", "AGREEMENT_WAITING_FOR_SIGNATURE"}:
             preferred = self._first_existing_step(available_steps, "training_agreements_signature", "agreement_signature")
         else:
             preferred = status

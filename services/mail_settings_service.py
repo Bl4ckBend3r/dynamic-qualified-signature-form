@@ -14,7 +14,7 @@ from services.mail_template_service import sanitize_content_html
 
 
 MAIL_MODES = {"system", "custom", "disabled"}
-LOGO_POSITIONS = {"none", "header", "footer", "before_content", "after_content"}
+LOGO_POSITIONS = {"none", "header", "before_content", "after_content"}
 LOGO_ALIGNMENTS = {"left", "center", "right"}
 DEFAULT_LAYOUT = {
     "platform_name": "Platforma formularzy",
@@ -22,7 +22,7 @@ DEFAULT_LAYOUT = {
     "accent_color": "#c8a35d",
     "footer_html": "",
     "logo_id": None,
-    "logo_position": "footer",
+    "logo_position": "none",
     "logo_alignment": "center",
     "logo_height_px": 64,
 }

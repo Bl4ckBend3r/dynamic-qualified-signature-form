@@ -15,6 +15,10 @@ from services.document_service import (
     build_unique_collection_filenames,
     build_unique_collection_numbers,
 )
+from services.agreement_context_service import (
+    build_training_agreement_value_context,
+    upgrade_training_agreement_total_placeholder,
+)
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.pdf_render_service import PdfRenderService
 from services.process_service import ProcessStatus
@@ -156,6 +160,10 @@ def generate_training_agreements_for_submission(
         template_html = resolve_template_html(agreement_config.get("template", "")) or ""
     if not template_html:
         raise RuntimeError("Brak szablonu umowy dla tego formularza.")
+    template_html = upgrade_training_agreement_total_placeholder(
+        template_html,
+        show_all_trainings_total=bool(agreement_config.get("show_all_trainings_total", True)),
+    )
     renderer = pdf_render_service or PdfRenderService()
     storage_service = document_storage_service or DocumentStorageService()
     metadata_service = submission_document_service or SubmissionDocumentService(
@@ -189,6 +197,10 @@ def generate_training_agreements_for_submission(
         zip(selected_trainings, filenames, agreement_numbers, strict=True),
         start=1,
     ):
+        agreement_value_context = build_training_agreement_value_context(
+            selected_trainings,
+            training,
+        )
         filename = build_available_storage_filename(
             storage_service=storage_service,
             storage=storage,
@@ -220,6 +232,7 @@ def generate_training_agreements_for_submission(
             "training_agreement": agreement_record,
             "agreement": agreement_record,
             "training_agreements": [agreement_record],
+            **agreement_value_context,
         }
         context = build_document_pdf_context(
             form_definition=form_definition,
@@ -242,6 +255,7 @@ def generate_training_agreements_for_submission(
                 "agreement_number": agreement_number,
                 "agreement_generated_at": resolved_date,
                 "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
+                **agreement_value_context,
             }
         )
         agreement_bytes = renderer.render_document_pdf_bytes(
@@ -290,7 +304,7 @@ def generate_training_agreements_for_submission(
         "agreement_filename": agreements[0]["filename"] if agreements else "",
         "agreement_generated_at": resolved_date,
         "training_agreements": serialize_json_list(agreements),
-        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
     }
     storage.update_csv_row_by_submission_id(slug, submission_id, updates)
     row.update(updates)

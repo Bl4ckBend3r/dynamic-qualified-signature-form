@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from services.instruction_html_service import sanitize_instruction_html
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
@@ -30,9 +31,15 @@ STATUS_LABELS: dict[str, str] = {
     "contract_required": "Umowa wymagana",
     "AGREEMENT_READY": "Umowa gotowa",
     "AGREEMENT_GENERATED": "Umowa wygenerowana",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "WAITING_FOR_AGREEMENT_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
     "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
-    "AGREEMENT_UPLOADED": "Podpisana umowa wgrana przez beneficjenta",
-    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
     "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
     "WAITING_FOR_CORRECTION": "Wymagana korekta",
     "CORRECTION_REQUIRED": "Wymagana korekta",
@@ -53,10 +60,11 @@ DEFAULT_STEP_STATUS = {
     "declaration_signature": "DECLARATION_WAITING_FOR_SIGNATURE",
     "agreement": "AGREEMENT_READY",
     "training_agreements": "AGREEMENT_READY",
-    "agreement_signature": "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "training_agreements_signature": "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "beneficiary_agreement_review": "AGREEMENT_UPLOADED",
-    "agreement_correction": "BENEFICIARY_AGREEMENT_REJECTED",
+    "agreement_signature": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "training_agreements_signature": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "beneficiary_agreement_review": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "office_agreement_signature": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "agreement_correction": "AGREEMENT_REJECTED_BY_OFFICE",
     "end_rejected": "OFFICER_REJECTED",
     "completed": "PROCESS_COMPLETED",
 }
@@ -81,6 +89,7 @@ KNOWN_STEP_FIELDS = {
     "repeat_over",
     "repeat_item_alias",
     "triggers",
+    "active",
 }
 
 
@@ -89,6 +98,8 @@ PREFERRED_WORKFLOW_STATUSES = (
     "WAITING_FOR_OFFICER_DECISION",
     "OFFICER_ACCEPTED",
     "OFFICER_REJECTED",
+    "AUTO_REJECTED",
+    "RETURNED_FOR_CORRECTION",
     "DECLARATION_REQUIRED",
     "DECLARATION_GENERATED",
     "DECLARATION_WAITING_FOR_SIGNATURE",
@@ -96,14 +107,123 @@ PREFERRED_WORKFLOW_STATUSES = (
     "DECLARATION_SIGNED",
     "AGREEMENT_REQUIRED",
     "AGREEMENT_GENERATED",
-    "AGREEMENT_WAITING_FOR_SIGNATURE",
-    "AGREEMENT_UPLOADED",
-    "BENEFICIARY_AGREEMENT_CONFIRMED",
-    "BENEFICIARY_AGREEMENT_REJECTED",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "AGREEMENT_SIGNED_BY_OFFICE",
+    "AGREEMENT_REJECTED_BY_OFFICE",
     "CORRECTION_REQUIRED",
     "PROCESS_COMPLETED",
     "PROCESS_CANCELLED",
 )
+
+# Only these agreement statuses are produced by the current process. Historical
+# statuses remain readable through STATUS_LABELS, but must never make a legacy
+# agreement branch look complete during admin validation.
+ACTIVE_AGREEMENT_STATUSES = frozenset(
+    {
+        "AGREEMENT_REQUIRED",
+        "AGREEMENT_READY",
+        "AGREEMENT_GENERATED",
+        "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+        "AGREEMENT_SIGNED_BY_OFFICE",
+        "AGREEMENT_REJECTED_BY_OFFICE",
+    }
+)
+ACTIVE_AGREEMENT_CONFIRMATION_STATUSES = frozenset(
+    {
+        "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    }
+)
+AGREEMENT_DECISION_IDS = frozenset({"agreement_confirmation", "agreement_rejection"})
+OFFICE_CONFIRMATION_STEP_IDS = frozenset(
+    {"stage_10", "stage_11", "beneficiary_agreement_review", "office_agreement_signature"}
+)
+OFFICE_CONFIRMATION_STATUSES = frozenset(
+    {"AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_SIGNED_BY_OFFICE"}
+)
+
+
+def repair_agreement_confirmation_path(workflow: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
+    """Repair only the known legacy shortcut which bypasses office confirmation."""
+    source = dict(workflow or {})
+    steps = [dict(step) for step in source.get("steps") or [] if isinstance(step, Mapping)]
+    by_id = {str(step.get("id") or "").strip(): step for step in steps}
+    signature = by_id.get("training_agreements_signature")
+    required_ids = {"training_agreements_signature", "stage_10", "stage_11", "completed"}
+    changed = False
+    confirmation_required = bool(source.get("requires_contract")) and bool(
+        source.get("requires_agreement_confirmation")
+    )
+    if signature and required_ids.issubset(by_id):
+        if confirmation_required and str(signature.get("next") or "").strip() == "completed":
+            signature["next"] = "stage_10"
+            by_id["stage_10"]["next"] = "stage_11"
+            by_id["stage_11"]["next"] = "completed"
+            changed = True
+        elif not confirmation_required and str(signature.get("next") or "").strip() in {"stage_10", "stage_11"}:
+            signature["next"] = "completed"
+            changed = True
+    source["steps"] = steps
+    return source, changed
+
+
+def repair_form_definition_agreement_confirmation(
+    form_definition: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Return a form definition with only the known office-confirmation shortcut repaired."""
+    definition = dict(form_definition or {})
+    repaired_workflow, changed = repair_agreement_confirmation_path(definition.get("workflow"))
+    if changed:
+        definition["workflow"] = repaired_workflow
+    return definition, changed
+
+
+def is_workflow_step_active(step: Mapping[str, Any], workflow: Mapping[str, Any]) -> bool:
+    step_id = str(step.get("id") or "").strip()
+    status = str(step.get("status") or step.get("status_code") or "").strip()
+    step_type = str(step.get("type") or "").strip()
+    document_id = str(step.get("document_id") or "").strip()
+    requires_declaration = bool(workflow.get("requires_declaration"))
+    requires_contract = bool(workflow.get("requires_contract"))
+    requires_confirmation = requires_contract and bool(workflow.get("requires_agreement_confirmation"))
+    allow_correction = bool(workflow.get("allow_correction", True))
+
+    if step_id in OFFICE_CONFIRMATION_STEP_IDS or status in OFFICE_CONFIRMATION_STATUSES:
+        return requires_confirmation
+    is_correction = (
+        "correction" in step_id
+        or "correction" in step_type
+        or status in {"WAITING_FOR_CORRECTION", "CORRECTION_REQUIRED", "RETURNED_FOR_CORRECTION"}
+    )
+    is_agreement = (
+        "agreement" in step_id
+        or "contract" in step_id
+        or document_id in {"agreement", "training_agreement"}
+        or status.startswith("AGREEMENT_")
+    )
+    if is_correction:
+        return allow_correction and (requires_contract if is_agreement else True)
+    if (
+        "declaration" in step_id
+        or document_id == "declaration"
+        or status.startswith("DECLARATION_")
+    ):
+        return requires_declaration
+    if is_agreement:
+        return requires_contract
+    return bool(step.get("active", True))
+
+
+def active_workflow_steps(workflow: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(step)
+        for step in workflow.get("steps") or []
+        if isinstance(step, Mapping) and is_workflow_step_active(step, workflow)
+    ]
 
 
 def workflow_status_options(existing_codes: Any = None) -> list[dict[str, str]]:
@@ -128,7 +248,7 @@ class WorkflowConfigNormalizer:
         source["initial_step"] = str(source.get("initial_step") or (raw_steps[0].get("id") if raw_steps else "")).strip()
         source["requires_declaration"] = bool(source.get("requires_declaration", False))
         source["requires_contract"] = bool(source.get("requires_contract", False))
-        source["requires_agreement_confirmation"] = bool(
+        source["requires_agreement_confirmation"] = source["requires_contract"] and bool(
             source.get("requires_agreement_confirmation", source["requires_contract"])
         )
         source["send_email_notifications"] = bool(source.get("send_email_notifications", False))
@@ -136,34 +256,41 @@ class WorkflowConfigNormalizer:
         source["electronic_signature_required"] = bool(source.get("electronic_signature_required", True))
         source["signed_document_uploader"] = str(source.get("signed_document_uploader") or "beneficiary")
         source["decision_settings"] = self._mapping_list(source.get("decision_settings"))
+        for decision in source["decision_settings"]:
+            if decision.get("label"):
+                decision["label"] = _modern_workflow_label(str(decision["label"]).strip())
         source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
         source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
+        source, _repaired = repair_agreement_confirmation_path(source)
+        for step in source["steps"]:
+            step["active"] = is_workflow_step_active(step, source)
         return source
 
     def normalize_step(self, step: Mapping[str, Any], index: int) -> dict[str, Any]:
         item = dict(step)
         step_id = self._step_id(item.get("id"), index)
         status = str(item.get("status") or item.get("status_code") or DEFAULT_STEP_STATUS.get(step_id) or "").strip()
-        label = str(
+        label = _modern_workflow_label(str(
             item.get("admin_label")
             or item.get("label")
             or item.get("name")
             or workflow_status_label(status)
             or f"Etap {index + 1}"
-        ).strip()
+        ).strip())
         item.update(
             {
                 "id": step_id,
                 "admin_label": label,
-                "user_label": str(item.get("user_label") or label).strip(),
+                "user_label": _modern_workflow_label(str(item.get("user_label") or label).strip()),
                 "status": status,
-                "description": str(item.get("description") or "").strip(),
-                "next_action": str(item.get("next_action") or "").strip(),
+                "description": sanitize_instruction_html(item.get("description")),
+                "next_action": sanitize_instruction_html(item.get("next_action")),
                 "next": str(item.get("next") or "").strip(),
                 "final": bool(item.get("final", item.get("type") == "end" and step_id == "completed")),
                 "rejected": bool(item.get("rejected", "reject" in step_id)),
                 "requires_user_action": bool(item.get("requires_user_action", self._user_action(step_id))),
                 "requires_officer_action": bool(item.get("requires_officer_action", item.get("type") == "manual_decision")),
+                "active": bool(item.get("active", True)),
             }
         )
         if not item.get("label"):
@@ -182,7 +309,9 @@ class WorkflowConfigNormalizer:
             "requires_agreement_confirmation", "send_email_notifications", "allow_correction",
             "electronic_signature_required", "signed_document_uploader", "decision_settings",
             "email_notifications", "declaration_template_html", "contract_template_html",
-            "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern", "managed_documents",
+            "declaration_filename_pattern", "declaration_generation_mode",
+            "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern",
+            "contract_show_all_trainings_total", "managed_documents",
         }
         result.extend(str(key) for key in normalized if key not in known_workflow)
         for step in normalized["steps"]:
@@ -214,7 +343,8 @@ class WorkflowConfigValidator:
     def validate(self, workflow: Mapping[str, Any] | None) -> list[str]:
         raw_workflow = dict(workflow or {})
         config = WorkflowConfigNormalizer().normalize(workflow)
-        steps = config["steps"]
+        all_steps = config["steps"]
+        steps = active_workflow_steps(config)
         errors: list[str] = []
         if not str(raw_workflow.get("initial_step") or "").strip():
             errors.append("Wybierz status początkowy workflow.")
@@ -232,29 +362,66 @@ class WorkflowConfigValidator:
             if step["id"] in ids:
                 errors.append(f"Identyfikator etapu „{step['id']}” występuje więcej niż raz.")
             ids.add(step["id"])
-        if config["initial_step"] and config["initial_step"] not in ids:
+        all_ids = {step["id"] for step in all_steps}
+        if config["initial_step"] and config["initial_step"] not in all_ids:
             errors.append("Status początkowy wskazuje nieistniejący etap.")
+            errors.append(
+                f"Nie istnieje etap o ID „{config['initial_step']}”. Wybierz istniejący etap z listy „Etap początkowy”."
+            )
         for step in steps:
-            if step.get("next") and step["next"] not in ids:
-                errors.append(f"Etap „{step['admin_label']}” prowadzi do nieistniejącego etapu.")
+            if step.get("next") and step["next"] not in all_ids:
+                errors.append(
+                    f"Etap „{step['admin_label']}” prowadzi do nieistniejącego etapu „{step['next']}”. "
+                    "Wybierz istniejący kolejny etap albo oznacz ten etap jako końcowy."
+                )
             for decision, target in step.get("decisions", {}).items():
                 if not str(decision).strip() or not str(target).strip():
                     errors.append(f"Etap „{step['admin_label']}” zawiera pustą decyzję.")
-                elif target not in ids:
-                    errors.append(f"Decyzja „{decision}” prowadzi do nieistniejącego etapu „{target}”.")
+                elif target not in all_ids:
+                    errors.append(
+                        f"Decyzja „{decision}” w etapie „{step['admin_label']}” prowadzi do nieistniejącego "
+                        f"etapu „{target}”. Wskaż istniejący etap docelowy w karcie tej decyzji."
+                    )
         statuses = {step["status"] for step in steps}
         steps_by_id = {step["id"]: step for step in steps}
+        all_steps_by_id = {step["id"]: step for step in all_steps}
         document_ids = {str(step.get("document_id") or "") for step in steps}
         if config["requires_declaration"] and not (
             any(status.startswith("DECLARATION_") for status in statuses) or "declaration" in document_ids
         ):
             errors.append("Proces wymaga deklaracji, ale nie ma etapu deklaracji.")
-        if config["requires_contract"] and not (
-            any(status.startswith("AGREEMENT_") for status in statuses) or {"agreement", "training_agreement"} & document_ids
+        agreement_required = config["requires_contract"]
+        if agreement_required and not (
+            ACTIVE_AGREEMENT_STATUSES & statuses or {"agreement", "training_agreement"} & document_ids
         ):
-            errors.append("Proces wymaga umowy, ale nie ma etapu umowy.")
-        if config["requires_agreement_confirmation"] and "AGREEMENT_UPLOADED" not in statuses:
-            errors.append("Dodaj etap „Umowa podpisana przez beneficjenta — potwierdzenie urzędnika”.")
+            errors.append(
+                "Proces wymaga umowy: formularz ma włączoną obsługę umów, ale brakuje aktywnego etapu umowy."
+            )
+        agreement_decisions_active = agreement_required and config["requires_agreement_confirmation"]
+        signature_step = next(
+            (step for step in steps if step.get("id") == "training_agreements_signature"),
+            None,
+        )
+        if (
+            agreement_decisions_active
+            and signature_step
+            and signature_step.get("next") == "completed"
+        ):
+            errors.append(
+                "Włączono potwierdzenie podpisania umowy przez urząd, ale etap "
+                "„Umowa oczekuje na podpis beneficjenta” prowadzi bezpośrednio do zakończenia procesu. "
+                "Ustaw kolejny etap na „Oczekuje na podpis urzędu” albo wyłącz wymaganie "
+                "potwierdzenia podpisu przez urząd."
+            )
+        if (
+            agreement_decisions_active
+            and not ACTIVE_AGREEMENT_CONFIRMATION_STATUSES & statuses
+        ):
+            errors.append(
+                "Proces ma włączoną obsługę umów: dodaj etap „Potwierdzenie podpisania umowy przez urząd” "
+                "ze statusem „Podpisana umowa wgrana przez beneficjenta” albo "
+                "„Umowa oczekuje na podpis po stronie urzędu”."
+            )
         decision_rules = {
             "application_decision": {
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
@@ -263,21 +430,44 @@ class WorkflowConfigValidator:
                 "WAITING_FOR_OFFICER_DECISION", "WAITING_FOR_REVIEW", "OFFICER_REVIEW"
             },
             "declaration_confirmation": {"DECLARATION_UPLOADED", "DECLARATION_SIGNED"},
-            "agreement_confirmation": {"AGREEMENT_UPLOADED"},
-            "agreement_rejection": {"AGREEMENT_UPLOADED"},
+            "agreement_confirmation": ACTIVE_AGREEMENT_CONFIRMATION_STATUSES,
+            "agreement_rejection": ACTIVE_AGREEMENT_CONFIRMATION_STATUSES,
         }
         for decision in config.get("decision_settings", []):
+            decision_id = str(decision.get("id") or "")
+            # Stale agreement decisions are inert when agreement handling or
+            # the optional office-confirmation branch is off.
+            # They can remain in imported JSON for round-trip compatibility, but
+            # they must not prevent the form from being saved.
+            if decision_id in AGREEMENT_DECISION_IDS and not agreement_decisions_active:
+                continue
+            if decision_id == "declaration_confirmation" and not config["requires_declaration"]:
+                continue
+            if decision_id == "correction_required" and not config["allow_correction"]:
+                continue
             step_id = str(decision.get("step_id") or "").strip()
             if not step_id:
                 continue
             step = steps_by_id.get(step_id)
             if step is None:
-                errors.append(f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap.")
-                continue
-            allowed = decision_rules.get(str(decision.get("id") or ""))
-            if allowed and step["status"] not in allowed:
+                if step_id in all_steps_by_id:
+                    continue
                 errors.append(
-                    f"Decyzja „{decision.get('label') or decision.get('id')}” nie może być dostępna na wybranym etapie."
+                    f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap "
+                    f"„{step_id}”. Wybierz etap z listy dostępnych etapów albo wyłącz tę decyzję."
+                )
+                continue
+            allowed = decision_rules.get(decision_id)
+            if allowed and step["status"] not in allowed:
+                agreement_context = (
+                    " Obsługa umów jest włączona."
+                    if decision_id in AGREEMENT_DECISION_IDS
+                    else ""
+                )
+                errors.append(
+                    f"Decyzja „{decision.get('label') or decision.get('id')}” jest przypisana do etapu "
+                    f"„{step['admin_label']}” ({workflow_status_label(step['status'])}), na którym nie może być wykonana."
+                    f"{agreement_context}"
                 )
             for target_key in ("yes_status", "no_status"):
                 target_status = str(decision.get(target_key) or "").strip()
@@ -293,3 +483,16 @@ class WorkflowConfigValidator:
                     f"Powiadomienie „{notification.get('label') or notification.get('id')}” nie może być jednocześnie ręczne i automatyczne."
                 )
         return errors
+
+
+LEGACY_VISIBLE_LABELS = {
+    "Umowa podpisana przez beneficjenta": "Umowa podpisana przez urząd",
+    "Potwierdzenie podpisanej umowy przez beneficjenta": "Potwierdzenie podpisania umowy przez urząd",
+    "Umowa wgrana przez beneficjenta — do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+    "Umowa podpisana przez beneficjenta — do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+    "Umowa podpisana przez beneficjenta - do potwierdzenia": "Umowa oczekuje na podpis po stronie urzędu",
+}
+
+
+def _modern_workflow_label(value: str) -> str:
+    return LEGACY_VISIBLE_LABELS.get(value, value)

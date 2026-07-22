@@ -35,6 +35,8 @@ class Config:
     )
     APPLICATION_ROOT = APP_BASE_PATH or "/"
     PROXY_FIX = _env_bool("PROXY_FIX", "false")
+    PUBLIC_CSRF_ENABLED = _env_bool("PUBLIC_CSRF_ENABLED", "true")
+    APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Warsaw").strip() or "Europe/Warsaw"
 
     BASE_DIR = Path(__file__).resolve().parent
     TEMPLATE_DIR = BASE_DIR / "templates"

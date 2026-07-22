@@ -50,6 +50,17 @@ def test_acceptance_status_url_for_respects_script_name(app):
     assert acceptance_url == "/aplikacja/api/submissions/abc/acceptance-status"
 
 
+def test_bulk_agreement_upload_url_respects_script_name(app):
+    with app.test_request_context("/", environ_overrides={"SCRIPT_NAME": "/aplikacja"}):
+        upload_url = url_for(
+            "documents.upload_signed_training_agreements",
+            slug="sample",
+            submission_id="abc",
+        )
+
+    assert upload_url == "/aplikacja/agreements/sample/abc/upload-all"
+
+
 def test_base_template_renders_app_base_path_for_frontend(app):
     with app.test_request_context("/"):
         rendered = render_template_string(

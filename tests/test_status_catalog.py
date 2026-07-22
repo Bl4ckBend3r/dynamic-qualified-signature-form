@@ -14,6 +14,8 @@ def test_normalize_status_returns_catalog_code_for_legacy_status():
     assert normalize_status("AGREEMENT_SIGNED") == ProcessStatusCode.COMPLETED
     assert normalize_status("AGREEMENT_UPLOADED") == ProcessStatusCode.WAITING_FOR_REVIEW
     assert normalize_status("BENEFICIARY_AGREEMENT_CONFIRMED") == ProcessStatusCode.COMPLETED
+    assert normalize_status("AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE") == ProcessStatusCode.WAITING_FOR_REVIEW
+    assert normalize_status("AGREEMENT_SIGNED_BY_OFFICE") == ProcessStatusCode.COMPLETED
 
 
 def test_status_flags_and_labels_are_shared():
@@ -21,7 +23,9 @@ def test_status_flags_and_labels_are_shared():
     assert is_rejected_status("OFFICER_REJECTED")
     assert is_final_status("AGREEMENT_SIGNED")
     assert not is_final_status("AGREEMENT_UPLOADED")
-    assert get_status_label("BENEFICIARY_AGREEMENT_REJECTED") == "Podpisana umowa wymaga poprawy"
+    assert get_status_label("BENEFICIARY_AGREEMENT_REJECTED") == "Umowa wymaga poprawy"
+    assert get_status_label("BENEFICIARY_AGREEMENT_CONFIRMED") == "Umowa podpisana przez urząd"
+    assert get_status_label("AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE") == "Umowa oczekuje na podpis po stronie urzędu"
 
 
 def test_transition_matrix_for_target_statuses():

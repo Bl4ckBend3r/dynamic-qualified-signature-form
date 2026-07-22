@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 class ProcessStatus(StrEnum):
     FORM_SUBMITTED = "FORM_SUBMITTED"
+    AUTO_REJECTED = "AUTO_REJECTED"
+    RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
     OFFICER_ACCEPTED = "OFFICER_ACCEPTED"
     OFFICER_REJECTED = "OFFICER_REJECTED"
@@ -20,6 +22,12 @@ class ProcessStatus(StrEnum):
     AGREEMENT_NOT_REQUIRED = "AGREEMENT_NOT_REQUIRED"
     AGREEMENT_BLOCKED = "AGREEMENT_BLOCKED"
     AGREEMENT_READY = "AGREEMENT_READY"
+    AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE = "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    AGREEMENT_UPLOADED_BY_BENEFICIARY = "AGREEMENT_UPLOADED_BY_BENEFICIARY"
+    AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE = "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE"
+    AGREEMENT_SIGNED_BY_OFFICE = "AGREEMENT_SIGNED_BY_OFFICE"
+    AGREEMENT_REJECTED_BY_OFFICE = "AGREEMENT_REJECTED_BY_OFFICE"
+    # Historyczne kody pozostają obsługiwane przy odczycie istniejących zgłoszeń.
     AGREEMENT_WAITING_FOR_SIGNATURE = "AGREEMENT_WAITING_FOR_SIGNATURE"
     AGREEMENT_UPLOADED = "AGREEMENT_UPLOADED"
     BENEFICIARY_AGREEMENT_CONFIRMED = "BENEFICIARY_AGREEMENT_CONFIRMED"
@@ -177,14 +185,14 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
             pass
 
     if is_agreement_signature_valid(row):
-        return ProcessStatus.AGREEMENT_SIGNED
+        return ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE
 
     if is_yes(row.get("agreement_signed")) and not is_agreement_signature_valid(row):
         return ProcessStatus.AGREEMENT_SIGNATURE_INVALID
 
     if is_declaration_signature_valid(row):
         if is_yes(row.get("agreement_generated")):
-            return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
+            return ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE
 
         if not is_agreement_required(row):
             return ProcessStatus.AGREEMENT_NOT_REQUIRED
@@ -209,7 +217,7 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
         return ProcessStatus.DECLARATION_NOT_REQUIRED
 
     if is_yes(row.get("agreement_generated")):
-        return ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE
+        return ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE
 
     if is_agreement_blocked(row):
         return ProcessStatus.AGREEMENT_BLOCKED
@@ -230,8 +238,11 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
         status in {ProcessStatus.OFFICER_ACCEPTED, ProcessStatus.ADDITIONAL_FIELDS_COMPLETED}
         and is_declaration_required(row)
     )
-    can_sign_documents = decision == OfficerDecision.ACCEPTED
+    blocked_statuses = {ProcessStatus.AUTO_REJECTED, ProcessStatus.RETURNED_FOR_CORRECTION}
+    can_sign_documents = decision == OfficerDecision.ACCEPTED and status not in blocked_statuses
     can_generate_agreement = (
+        status not in blocked_statuses
+        and
         is_agreement_required(row)
         and (is_declaration_signature_valid(row) or not is_declaration_required(row))
         and not agreement_blocked

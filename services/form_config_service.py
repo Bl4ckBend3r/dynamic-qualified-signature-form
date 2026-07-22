@@ -5,6 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 from form_loader import FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES
+from services.qualification_condition_service import QualificationConditionService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ class FormConfigService:
         config["documents"] = self.normalize_documents_config(config)
         config["notifications"] = self.normalize_notifications_config(config)
         config["rules"] = self.normalize_rules_config(config)
+        config["qualification_conditions"] = QualificationConditionService().normalize_config(
+            config.get("qualification_conditions"),
+            config["fields"],
+        )
         config = self.build_default_workflow_if_missing(config)
         config["workflow"] = self.normalize_workflow_config(config.get("workflow") or {})
         config["documents"] = self.ensure_required_document_configs(config["documents"], config["workflow"])
@@ -219,7 +224,7 @@ class FormConfigService:
                         "id": "agreement_signature",
                         "type": "signature_upload",
                         "document_id": "agreement",
-                        "next": "beneficiary_agreement_review",
+                        "next": "office_agreement_signature",
                     },
                 ]
             )
@@ -239,7 +244,7 @@ class FormConfigService:
                         "type": "signature_upload_many",
                         "document_id": "training_agreement",
                         "repeat_over": "selected_trainings",
-                        "next": "beneficiary_agreement_review",
+                        "next": "office_agreement_signature",
                     },
                 ]
             )
@@ -247,9 +252,9 @@ class FormConfigService:
         if {"agreement", "training_agreement"} & document_ids:
             steps.append(
                 {
-                    "id": "beneficiary_agreement_review",
+                    "id": "office_agreement_signature",
                     "type": "manual_decision",
-                    "label": "Umowa podpisana przez beneficjenta",
+                    "label": "Umowa podpisana przez urząd",
                     "decisions": {
                         "accepted": "completed",
                         "rejected": "agreement_correction",
@@ -262,7 +267,7 @@ class FormConfigService:
                     "id": "agreement_correction",
                     "type": "signature_upload",
                     "document_id": "agreement",
-                    "next": "beneficiary_agreement_review",
+                    "next": "office_agreement_signature",
                 }
             )
 
@@ -284,6 +289,9 @@ class FormConfigService:
         normalized.setdefault("declaration_template_html", "")
         normalized.setdefault("contract_template_html", "")
         normalized["contract_generation_mode"] = "per_training"
+        normalized["contract_show_all_trainings_total"] = bool(
+            normalized.get("contract_show_all_trainings_total", True)
+        )
         normalized.setdefault("contract_filename_pattern", "")
         normalized.setdefault("contract_number_pattern", "")
         normalized.setdefault("managed_documents", False)
@@ -326,6 +334,9 @@ class FormConfigService:
                     documents_by_id[document_id].pop("template_html", None)
                 if document_id == "agreement":
                     documents_by_id[document_id]["generation_mode"] = "per_training"
+                    documents_by_id[document_id]["show_all_trainings_total"] = bool(
+                        workflow.get("contract_show_all_trainings_total", True)
+                    )
                     filename_pattern = str(workflow.get("contract_filename_pattern") or "").strip()
                     if filename_pattern:
                         documents_by_id[document_id]["filename_pattern"] = filename_pattern

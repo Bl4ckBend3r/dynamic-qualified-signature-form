@@ -117,6 +117,94 @@ def test_build_form_definition_from_admin_form_updates_workflow():
     assert definition["workflow"]["declaration_template_html"] == "<p>Deklaracja</p>"
 
 
+def test_build_form_definition_saves_multiple_qualification_conditions():
+    conditions = [
+        {
+            "id": "age",
+            "field_name": "wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "18",
+            "failure_action": "auto_reject",
+            "user_message": "Wymagany wiek to 18 lat.",
+            "officer_message": "Kandydat jest niepełnoletni.",
+            "is_active": True,
+        },
+        {
+            "id": "region",
+            "field_name": "wojewodztwo",
+            "operator": "equals",
+            "expected_value": "lubuskie",
+            "failure_action": "auto_reject",
+            "is_active": True,
+        },
+    ]
+    definition = build_form_definition_from_admin_form(
+        {
+            "title": "Form",
+            "fields": [
+                {"name": "wiek", "label": "Wiek", "type": "number"},
+                {"name": "wojewodztwo", "label": "Województwo", "type": "text"},
+            ],
+        },
+        {
+            "qualification_conditions_enabled": "on",
+            "qualification_conditions_json": json.dumps(conditions),
+        },
+    )
+
+    qualification = definition["qualification_conditions"]
+    assert qualification["enabled"] is True
+    assert [item["id"] for item in qualification["conditions"]] == ["age", "region"]
+    assert qualification["conditions"][0]["field_label"] == "Wiek"
+    assert qualification["conditions"][0]["officer_message"] == "Kandydat jest niepełnoletni."
+
+
+def test_build_form_definition_serializes_typed_qualification_values():
+    definition = build_form_definition_from_admin_form(
+        {
+            "title": "Form",
+            "fields": [
+                {"name": "wiek", "label": "Wiek", "type": "number"},
+                {
+                    "name": "tematy",
+                    "label": "Tematy",
+                    "type": "multi_select",
+                    "options": ["Excel", "Kadry"],
+                },
+                {"name": "uwagi", "label": "Uwagi", "type": "text"},
+            ],
+        },
+        {
+            "qualification_conditions_enabled": "on",
+            "qualification_conditions_json": json.dumps(
+                [
+                    {"field_name": "wiek", "operator": "equals", "expected_value": "18"},
+                    {"field_name": "tematy", "operator": "in", "expected_value": ["Excel", "Kadry"]},
+                    {"field_name": "uwagi", "operator": "is_not_empty", "expected_value": "ignored"},
+                ]
+            ),
+        },
+    )
+
+    conditions = definition["qualification_conditions"]["conditions"]
+    assert conditions[0]["expected_value"] == 18
+    assert conditions[1]["expected_value"] == ["Excel", "Kadry"]
+    assert conditions[2]["expected_value"] is None
+
+
+def test_build_form_definition_rejects_invalid_qualification_field():
+    with pytest.raises(ValueError, match="istniejące pole"):
+        build_form_definition_from_admin_form(
+            {"title": "Form", "fields": [{"name": "wiek", "type": "number"}]},
+            {
+                "qualification_conditions_enabled": "on",
+                "qualification_conditions_json": json.dumps([
+                    {"field_name": "unknown", "operator": "equals", "expected_value": "x"}
+                ]),
+            },
+        )
+
+
 def test_admin_contract_settings_create_generated_agreement_config():
     definition = build_form_definition_from_admin_form(
         {"title": "Form", "fields": []},

@@ -60,7 +60,7 @@
 
         <div class="form-actions sign-actions">
             <button type="submit" class="btn-primary" id="generate-button" disabled>
-                Wygeneruj deklarację do podpisu
+                Kontynuuj ->
             </button>
         </div>
     </form>
@@ -77,7 +77,7 @@
         </div>
         <div class="instruction-window__body">
             <section id="form-instruction-section" class="instruction-window__section is-hidden">
-                <p id="form-instruction-content" class="instruction-window__general"></p>
+                <div id="form-instruction-content" class="instruction-window__general"></div>
             </section>
             <section id="instruction-stages-section" class="instruction-window__section is-hidden">
                 <h4>Etapy</h4>
@@ -85,11 +85,11 @@
             </section>
             <section id="current-stage-description-section" class="instruction-window__section is-hidden">
                 <h4>Opis aktualnego etapu</h4>
-                <p id="current-stage-description" class="instruction-window__general"></p>
+                <div id="current-stage-description" class="instruction-window__general"></div>
             </section>
             <section id="next-action-section" class="instruction-window__section is-hidden">
                 <h4>Co dalej?</h4>
-                <p id="next-action-content" class="instruction-window__next-action"></p>
+                <div id="next-action-content" class="instruction-window__next-action"></div>
             </section>
         </div>
     </aside>
@@ -161,19 +161,19 @@
                                         <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
                                             <option value="">-- wybierz --</option>
                                             {% for option in field.options %}
-                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                                <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
                                             {% endfor %}
                                         </select>
                                     {% elif field.type == "radio" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% endif %}
@@ -284,6 +284,36 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
+                            {% if training_agreements|length > 1 %}
+                                <form
+                                    method="post"
+                                    action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
+                                    enctype="multipart/form-data"
+                                    class="bulk-agreement-upload"
+                                    data-bulk-agreement-upload
+                                >
+                                    <div class="card-header">
+                                        <h4>Wgraj wszystkie podpisane umowy</h4>
+                                        <p>Wybierz kilka plików jednocześnie. System zaproponuje dopasowanie, które możesz zmienić przed wysłaniem.</p>
+                                    </div>
+                                    <label class="upload-dropzone" data-upload-dropzone>
+                                        <input type="file" name="signed_agreement_files" accept="application/pdf" multiple required class="upload-dropzone__input" data-bulk-agreement-files>
+                                        <span class="upload-dropzone__inner">
+                                            <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                            <span class="upload-dropzone__title">Wybierz wszystkie podpisane umowy</span>
+                                            <span class="upload-dropzone__description">Możesz wskazać wiele plików PDF w jednym oknie</span>
+                                            <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano plików</span>
+                                        </span>
+                                    </label>
+                                    <div class="bulk-agreement-matches" data-bulk-agreement-matches hidden>
+                                        <div class="bulk-agreement-row bulk-agreement-row--heading"><span>Plik</span><span>Umowa</span><span>Status</span></div>
+                                        <div data-bulk-agreement-rows></div>
+                                    </div>
+                                    <div class="bulk-agreement-summary" data-bulk-agreement-summary aria-live="polite"></div>
+                                    <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij wszystko</button></div>
+                                    <script type="application/json" data-bulk-agreements>{{ training_agreements|tojson }}</script>
+                                </form>
+                            {% endif %}
                             {% for agreement in training_agreements %}
                                 <div class="signing-document-card signing-document-card--spaced">
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>

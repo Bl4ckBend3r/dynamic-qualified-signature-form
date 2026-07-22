@@ -15,6 +15,8 @@ APPLICATION_TARGETS = {
     "WAITING_FOR_CORRECTION",
 }
 AGREEMENT_TARGETS = {
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
+    ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
     ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value,
     ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
 }
@@ -22,7 +24,13 @@ COMPLETED_STATUSES = {
     ProcessStatus.PROCESS_COMPLETED.value,
     ProcessStatus.PARTICIPANT_ACCEPTED.value,
     ProcessStatus.AGREEMENT_NOT_REQUIRED.value,
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
     ProcessStatus.AGREEMENT_SIGNED.value,
+    ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value,
+}
+BLOCKED_QUALIFICATION_STATUSES = {
+    ProcessStatus.AUTO_REJECTED.value,
+    ProcessStatus.RETURNED_FOR_CORRECTION.value,
 }
 
 
@@ -38,16 +46,21 @@ def build_admin_workflow_view(
     agreement_decision = _latest_for_targets(decisions, AGREEMENT_TARGETS)
     declaration_required = _yes(getattr(submission, "declaration_required", ""))
     agreement_required = _yes(getattr(submission, "agreement_required", ""))
+    application_action, application_state = _application_action_and_state(submission)
 
     sections = [
         {
             "key": "application",
             "title": "1. Wniosek",
             "status": _application_status(submission),
-            "decision": _decision_label(application_decision, getattr(submission, "officer_decision", "")),
+            "decision": (
+                "Odrzucone automatycznie"
+                if status == ProcessStatus.AUTO_REJECTED.value
+                else _decision_label(application_decision, getattr(submission, "officer_decision", ""))
+            ),
             "updated_at": _decision_date(application_decision, getattr(submission, "updated_at", None)),
-            "action": "Wniosek oczekuje na decyzję" if can_edit_application_decision(submission) else "Etap zakończony",
-            "state": "current" if can_edit_application_decision(submission) else "completed",
+            "action": application_action,
+            "state": application_state,
         },
         {
             "key": "declaration",
@@ -70,10 +83,14 @@ def build_admin_workflow_view(
         {
             "key": "completion",
             "title": "4. Zakonczenie",
-            "status": "Proces zakończony" if status in COMPLETED_STATUSES else "Oczekuje",
+            "status": (
+                "Proces zakończony" if status in COMPLETED_STATUSES
+                else "Proces zatrzymany" if status in BLOCKED_QUALIFICATION_STATUSES
+                else "Oczekuje"
+            ),
             "decision": "-",
             "updated_at": getattr(submission, "updated_at", None),
-            "action": "Brak dalszych czynności" if status in COMPLETED_STATUSES else "Etap przyszły",
+            "action": "Brak dalszych czynności" if status in COMPLETED_STATUSES | BLOCKED_QUALIFICATION_STATUSES else "Etap przyszły",
             "state": "completed" if status in COMPLETED_STATUSES else "future",
         },
     ]
@@ -107,10 +124,26 @@ def _decision_date(decision: Mapping[str, Any] | None, fallback: datetime | None
 
 
 def _application_status(submission) -> str:
+    status = str(getattr(submission, "process_status", "") or "")
+    if status == ProcessStatus.AUTO_REJECTED.value:
+        return "Odrzucony automatycznie"
+    if status == ProcessStatus.RETURNED_FOR_CORRECTION.value:
+        return "Wysłany do poprawy"
     if can_edit_application_decision(submission):
         return "Wniosek oczekuje na decyzję"
     decision = str(getattr(submission, "officer_decision", "") or "").lower()
     return "Wniosek odrzucony" if decision in {"rejected", "nie"} else "Wniosek zaakceptowany"
+
+
+def _application_action_and_state(submission) -> tuple[str, str]:
+    status = str(getattr(submission, "process_status", "") or "")
+    if status == ProcessStatus.AUTO_REJECTED.value:
+        return "Dalsze kroki zablokowane; administrator może wysłać zgłoszenie do poprawy", "completed"
+    if status == ProcessStatus.RETURNED_FOR_CORRECTION.value:
+        return "Oczekiwanie na ponowne uzupełnienie przez użytkownika", "current"
+    if can_edit_application_decision(submission):
+        return "Wniosek oczekuje na decyzję", "current"
+    return "Etap zakończony", "completed"
 
 
 def _declaration_status(submission, required: bool) -> str:
@@ -124,12 +157,16 @@ def _declaration_status(submission, required: bool) -> str:
 
 
 def _declaration_action(submission, required: bool) -> str:
+    if str(getattr(submission, "process_status", "") or "") in BLOCKED_QUALIFICATION_STATUSES:
+        return "Etap zablokowany"
     if not required or _yes(getattr(submission, "declaration_signature_valid", "")):
         return "Etap zakończony"
     return "Oczekiwanie na beneficjenta"
 
 
 def _declaration_state(submission, required: bool) -> str:
+    if str(getattr(submission, "process_status", "") or "") in BLOCKED_QUALIFICATION_STATUSES:
+        return "future"
     if not required or _yes(getattr(submission, "declaration_signature_valid", "")):
         return "completed"
     if can_edit_application_decision(submission):
@@ -144,11 +181,16 @@ def _agreement_status(submission, required: bool) -> str:
 
 
 def _agreement_action(status: str, required: bool, can_review: bool) -> str:
+    if status in BLOCKED_QUALIFICATION_STATUSES:
+        return "Etap zablokowany"
     if not required:
         return "Etap pominięty"
     if can_review:
-        return "Potwierdź podpisanie umowy przez beneficjenta"
-    if status == ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value:
+        return "Potwierdź podpisanie umowy przez urząd"
+    if status in {
+        ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
+        ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
+    }:
         return "Oczekiwanie na ponowne wgranie poprawnej umowy"
     if status in COMPLETED_STATUSES:
         return "Etap zakończony"
@@ -156,9 +198,14 @@ def _agreement_action(status: str, required: bool, can_review: bool) -> str:
 
 
 def _agreement_state(status: str, required: bool, can_review: bool) -> str:
+    if status in BLOCKED_QUALIFICATION_STATUSES:
+        return "future"
     if not required or status in COMPLETED_STATUSES:
         return "completed"
-    if can_review or status == ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value:
+    if can_review or status in {
+        ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
+        ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
+    }:
         return "current"
     return "future"
 

@@ -65,10 +65,10 @@ def test_mail_layout_logo_defaults_and_bounds_are_safe():
         "layout_logo_height_px": "999",
     })
 
-    assert defaults["logo_position"] == "footer"
+    assert defaults["logo_position"] == "none"
     assert defaults["logo_alignment"] == "center"
     assert defaults["logo_height_px"] == 64
-    assert bounded["logo_position"] == "footer"
+    assert bounded["logo_position"] == "none"
     assert bounded["logo_alignment"] == "center"
     assert bounded["logo_height_px"] == 200
 

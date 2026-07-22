@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 
 from flask import url_for
@@ -393,6 +394,7 @@ def test_document_endpoint_names_stay_registered(app):
             url_for("documents.upload_signed_training_agreement", slug="sample", submission_id="abc", agreement_id="excel")
             == "/agreements/sample/abc/excel/upload"
         )
+        assert url_for("documents.upload_signed_training_agreements", slug="sample", submission_id="abc") == "/agreements/sample/abc/upload-all"
         assert url_for("documents.download_pdf", slug="sample", filename="file.pdf") == "/downloads/pdfs/sample/file.pdf"
         assert url_for("documents.download_signed_pdf", slug="sample", filename="file.pdf") == "/downloads/signed/sample/file.pdf"
 
@@ -758,6 +760,54 @@ def test_upload_participant_signed_training_agreement_notifies_with_default_next
     assert response.status_code == 302
     assert response.location.endswith("/do-podpisania?submission_id=abc")
     assert notified == []
+
+
+def test_upload_all_training_agreements_supports_manual_mapping_and_partial_success(client, app, monkeypatch):
+    row = {
+        "submission_id": "batch-abc",
+        "form_slug": "formularz_zgloszeniowy",
+        "form_name": "Formularz zgłoszeniowy",
+        "email": "jan@example.com",
+        "access_token": "secret-token",
+        "officer_decision": "TAK",
+        "acceptance_required": "TAK",
+        "agreement_generated": "Tak",
+        "training_agreements": json.dumps(
+            [
+                {"id": "excel", "training_name": "Excel", "number": "1/2026", "filename": "excel-umowa.pdf"},
+                {"id": "kadry", "training_name": "Kadry", "number": "2/2026", "filename": "kadry-umowa.pdf"},
+            ]
+        ),
+    }
+    app.testing_storage.csv_rows = [row]
+    calls = []
+
+    def fake_upload(*, submission, document_id, uploaded_file, instance_id=None):
+        calls.append((instance_id, uploaded_file.filename))
+        if instance_id == "kadry":
+            raise ValueError("Niepoprawny podpis")
+        return {"is_signed": True, "is_valid": True}
+
+    monkeypatch.setattr(app.extensions["services"].document_signing_service, "upload_signed_document", fake_upload)
+    response = client.post(
+        "/agreements/formularz_zgloszeniowy/batch-abc/upload-all",
+        data={
+            "agreement_ids": ["kadry", "excel"],
+            "signed_agreement_files": [
+                (io.BytesIO(b"%PDF-1.4 kadry"), "podpis-kadry.pdf"),
+                (io.BytesIO(b"%PDF-1.4 excel"), "podpis-excel.pdf"),
+            ],
+        },
+        content_type="multipart/form-data",
+        headers={"Accept": "application/json"},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert calls == [("kadry", "podpis-kadry.pdf"), ("excel", "podpis-excel.pdf")]
+    assert payload["uploaded"] == 1
+    assert payload["failed"] == 1
+    assert [item["status"] for item in payload["results"]] == ["error", "uploaded"]
 
 
 def test_acceptance_status_missing_submission(client):

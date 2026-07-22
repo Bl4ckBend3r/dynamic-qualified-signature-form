@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import smtplib
+
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from models import PlatformMailTemplate, SystemMailSettings
+from models import EmailLog, PlatformMailTemplate, SystemMailSettings
 from services.mail_template_service import sanitize_content_html
 
 from . import (
@@ -81,7 +83,9 @@ def system_mail_settings_test():
             flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
             current_app.logger.warning("smtp_connection_test_failed error=%s", exc.__class__.__name__)
-            flash(f"Nie udało się połączyć z SMTP: {exc}", "error")
+            _log_smtp_failure(db, form=None, exc=exc)
+            db.commit()
+            flash(_smtp_error_message(exc), "error")
     return redirect(url_for("admin.system_mail_settings"))
 
 
@@ -97,5 +101,28 @@ def form_mail_settings_test(form_id: int):
             flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
             current_app.logger.warning("form_smtp_connection_test_failed form_id=%s error=%s", form.id, exc.__class__.__name__)
-            flash(f"Nie udało się połączyć z SMTP: {exc}", "error")
-    return redirect(url_for("admin.form_edit", form_id=form_id))
+            _log_smtp_failure(db, form=form, exc=exc)
+            db.commit()
+            flash(_smtp_error_message(exc), "error")
+    return redirect(url_for("admin.form_edit", form_id=form_id, tab="emails"))
+
+
+def _smtp_error_message(exc: Exception) -> str:
+    details = f"{type(exc).__name__}: {exc}".lower()
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or "auth" in details or "uwierzyteln" in details:
+        return "Nie udało się zalogować do serwera SMTP. Sprawdź użytkownika, hasło i metodę szyfrowania."
+    return "Nie udało się połączyć z serwerem SMTP. Sprawdź adres serwera, port i metodę szyfrowania."
+
+
+def _log_smtp_failure(db, *, form, exc: Exception) -> None:
+    db.add(
+        EmailLog(
+            form_id=getattr(form, "id", None),
+            public_submission_id="",
+            to_email="",
+            subject="Test połączenia SMTP",
+            status="failed",
+            error_message=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
+            sent_by_id=g.admin_user.id,
+        )
+    )

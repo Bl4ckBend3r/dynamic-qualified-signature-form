@@ -1,36 +1,63 @@
 {% extends "admin/base.html" %}
 {% block title %}Zgloszenie{% endblock %}
 {% block content %}
+{% if g.admin_user.role == "form_manager" %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać dane i dokumenty zgłoszenia, ale nie możesz zmieniać decyzji ani wysyłać wiadomości.</div>{% endif %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
 {% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
-    <button class="admin-button-secondary" type="button" data-rollback-modal="rollback-stage-dialog">Cofnij etap</button>
-    <dialog class="admin-confirm-dialog" id="rollback-stage-dialog">
-        <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-confirm-dialog__box admin-form">
+    <button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>
+    <dialog class="admin-modal admin-modal-backdrop" id="rollback-stage-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-stage-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-            <h2>Cofnij etap zgłoszenia</h2>
-            <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
-            <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
-            <label>
-                <span>Docelowy etap/status</span>
-                <select name="target_status" required>
-                    {% for option in rollback_options %}
-                        <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>
-                <span>Powód cofnięcia</span>
-                <textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea>
-            </label>
-            <label class="admin-check">
-                <input type="checkbox" name="send_notification" checked>
-                <span>Wyślij powiadomienie do użytkownika</span>
-            </label>
-            <div class="admin-form-actions">
-                <button class="admin-button-secondary" type="button" data-close-rollback>Anuluj</button>
-                <button class="admin-button-danger" type="submit">Cofnij etap</button>
+            <header class="admin-modal__header"><h2 id="rollback-stage-title">Cofnij etap zgłoszenia</h2></header>
+            <div class="admin-modal__body">
+                <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
+                <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
+                <label>
+                    <span>Docelowy etap/status</span>
+                    <select name="target_status" required autofocus>
+                        {% for option in rollback_options %}
+                            <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label><span>Powód cofnięcia</span><textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea></label>
+                <label class="admin-check admin-modal__check"><input type="checkbox" name="send_notification" checked><span>Wyślij powiadomienie do użytkownika</span></label>
             </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Cofnij etap</button>
+            </footer>
+        </form>
+    </dialog>
+{% endif %}
+{% if g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
+    <button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>
+    <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <header class="admin-modal__header">
+                <h2 id="return-for-correction-title">Wyślij zgłoszenie do poprawy</h2>
+            </header>
+            <div class="admin-modal__body">
+                <p class="admin-alert admin-alert-warning">Zgłoszenie pozostanie w historii, ale może wymagać ponownego uzupełnienia danych i wygenerowania dokumentów.</p>
+                <label><span>Powód <strong aria-hidden="true">*</strong></span><textarea name="reason" rows="3" required maxlength="5000" autofocus></textarea></label>
+                <label><span>Wiadomość dla użytkownika</span><textarea name="message_to_user" rows="4" maxlength="10000"></textarea></label>
+                <div class="admin-modal__checks">
+                    <label class="admin-check admin-modal__check">
+                        <input type="checkbox" name="clear_submission" checked>
+                        <span>Wyczyść dane zgłoszenia <small>(odpowiedzi, załączniki i wygenerowane dokumenty)</small></span>
+                    </label>
+                    <label class="admin-check admin-modal__check">
+                        <input type="checkbox" name="send_email" checked>
+                        <span>Wyślij powiadomienie e-mail do użytkownika</span>
+                    </label>
+                </div>
+            </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Wyślij do poprawy</button>
+            </footer>
         </form>
     </dialog>
 {% endif %}
@@ -46,7 +73,7 @@
                 <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
             </dl>
 
-            {% if section.key == "application" and workflow_view.can_edit_application_decision %}
+            {% if section.key == "application" and workflow_view.can_edit_application_decision and g.admin_user.role in ["admin", "super_admin"] %}
                 <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="next" value="{{ request.path }}">
@@ -65,16 +92,17 @@
                 </form>
             {% endif %}
 
-            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin", "form_manager"] %}
+            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin"] %}
                 <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                    <label><span>Umowa podpisana przez beneficjenta</span>
+                    <label><span>Umowa podpisana przez urząd</span>
                         <select name="agreement_decision" required>
                             <option value="">Wybierz decyzję</option>
                             <option value="accepted">Tak</option>
                             <option value="rejected">Nie</option>
                             <option value="correction">Do poprawy</option>
                         </select>
+                        <small>Zaznacz, czy umowa została podpisana po stronie urzędu i może zakończyć proces.</small>
                     </label>
                     <label><span>Uzasadnienie decyzji negatywnej</span>
                         <textarea name="agreement_decision_reason" rows="3"></textarea>
@@ -89,7 +117,30 @@
         </section>
     {% endfor %}
 </div>
-<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij e-mail</a></p>
+{% if g.admin_user.role in ["admin", "super_admin"] %}<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></p>{% endif %}
+{% if detail_view.qualification %}
+<section class="admin-card">
+    <h2>Warunki kwalifikujące</h2>
+    <p class="admin-alert {{ 'admin-alert-success' if detail_view.qualification.passed else 'admin-alert-warning' }}">
+        {{ "Warunki zostały spełnione." if detail_view.qualification.passed else "Zgłoszenie zostało odrzucone automatycznie na podstawie warunków formularza." }}
+    </p>
+    <p><strong>Data oceny:</strong> {{ detail_view.qualification.evaluated_at or "-" }}</p>
+    {% if detail_view.qualification.user_message %}<p><strong>Komunikat dla użytkownika:</strong> {{ detail_view.qualification.user_message }}</p>{% endif %}
+    <table class="data-table">
+        <thead><tr><th>Pole</th><th>Operator</th><th>Wartość oczekiwana</th><th>Wartość zgłoszenia</th><th>Wynik</th><th>Informacja dla urzędnika</th></tr></thead>
+        <tbody>
+        {% for condition in detail_view.qualification.results %}
+            <tr>
+                <td>{{ condition.field_label }}</td><td>{{ condition.operator }}</td>
+                <td>{{ condition.expected_value }}</td><td>{{ condition.actual_value }}</td>
+                <td><span class="admin-badge">{{ "Spełniony" if condition.passed else "Niespełniony" }}</span></td>
+                <td>{{ condition.officer_message or "-" }}</td>
+            </tr>
+        {% else %}<tr><td colspan="6">Brak aktywnych warunków do oceny.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">
@@ -173,19 +224,4 @@
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
 </table>
-{% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
-<script>
-document.querySelectorAll("[data-rollback-modal]").forEach((button) => {
-    button.addEventListener("click", () => {
-        const dialog = document.getElementById(button.dataset.rollbackModal);
-        if (dialog && typeof dialog.showModal === "function") {
-            dialog.showModal();
-        }
-    });
-});
-document.querySelectorAll("[data-close-rollback]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("dialog")?.close());
-});
-</script>
-{% endif %}
 {% endblock %}

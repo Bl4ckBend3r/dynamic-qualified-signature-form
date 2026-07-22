@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,7 +10,18 @@ from typing import Any
 from flask import current_app, url_for
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
+from services.footer_logo_service import (
+    normalize_footer_logo_alignment,
+    normalize_footer_logo_dimension,
+    normalize_footer_logo_position,
+    resolve_footer_logo_url,
+)
+from services.instruction_html_service import sanitize_instruction_html
+from services.mail_footer_resolver import MailFooterResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -45,12 +57,14 @@ class MailDispatchService:
         audit_log_service=None,
         smtp_sender=None,
         mail_settings_service=None,
+        mail_footer_resolver=None,
     ) -> None:
         self.notification_service = notification_service
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
         self.smtp_sender = smtp_sender
         self.mail_settings_service = mail_settings_service
+        self.mail_footer_resolver = mail_footer_resolver or MailFooterResolver()
 
     def render_template(self, template: str | None, context: dict[str, Any] | None = None) -> str:
         if not template:
@@ -75,20 +89,92 @@ class MailDispatchService:
     def build_footer(self, footer=None, logo_url_builder=None) -> str:
         if not footer:
             return ""
-        parts = []
+        alignment = normalize_footer_logo_alignment(getattr(footer, "logo_alignment", "left"))
+        position = normalize_footer_logo_position(getattr(footer, "logo_position", "top"))
+        width = normalize_footer_logo_dimension(getattr(footer, "logo_width", None), 20, 800)
+        height = normalize_footer_logo_dimension(getattr(footer, "logo_height", None), 20, 400)
+
         logo = getattr(footer, "logo", None)
-        if logo and getattr(logo, "active", False) and logo_url_builder:
-            logo_url = logo_url_builder(logo)
-            parts.append(
-                '<div style="margin-bottom:16px;">'
-                f'<img src="{escape(str(logo_url))}" alt="{escape(str(getattr(logo, "name", "")))}" '
-                'style="display:block;max-width:180px;max-height:80px;width:auto;height:auto;">'
-                "</div>"
+        logo_html = ""
+        inline_logo_html = ""
+        logo_url = self._footer_logo_url(footer, logo_url_builder)
+        if logo_url:
+            image_width = width if width is not None else (None if height is not None else 160)
+            image_styles = ["display:inline-block", "max-width:800px", "max-height:400px"]
+            image_styles.append(f"width:{image_width}px" if image_width is not None else "width:auto")
+            image_styles.append(f"height:{height}px" if height is not None else "height:auto")
+            image_html = (
+                f'<img src="{escape(logo_url, quote=True)}" alt="{escape(str(getattr(logo, "name", "")))}" '
+                f'style="{";".join(image_styles)};">'
             )
-        html_body = getattr(footer, "html_body", "") or ""
+            logo_html = f'<div class="mail-footer-logo" style="text-align:{alignment};">{image_html}</div>'
+            inline_logo_html = (
+                f'<span class="mail-footer-logo" style="display:inline-block;text-align:{alignment};">'
+                f"{image_html}</span>"
+            )
+
+        html_body = sanitize_instruction_html(getattr(footer, "html_body", "") or "")
+        content_parts = []
+        contact_html = sanitize_instruction_html(getattr(footer, "contact_html", "") or "")
+        if contact_html:
+            content_parts.append(f'<div class="mail-footer-contact">{contact_html}</div>')
+        links = getattr(footer, "links", None) or []
+        link_parts = []
+        for item in links:
+            if not isinstance(item, dict):
+                continue
+            label = escape(str(item.get("label") or ""))
+            url = str(item.get("url") or "")
+            if label and url.lower().startswith(("https://", "http://", "mailto:", "tel:")):
+                link_parts.append(f'<a href="{escape(url, quote=True)}" rel="noopener noreferrer">{label}</a>')
+        if link_parts:
+            content_parts.append('<div class="mail-footer-links">' + " · ".join(link_parts) + "</div>")
+        legal_text = sanitize_instruction_html(getattr(footer, "legal_text", "") or "")
+        if legal_text:
+            content_parts.append(f'<div class="mail-footer-legal">{legal_text}</div>')
+
+        placeholder = "{{ footer_logo }}"
+        if position == "inline":
+            if placeholder in html_body:
+                html_body = html_body.replace(placeholder, inline_logo_html)
+                logo_html = ""
+            elif logo_html:
+                logger.warning(
+                    "mail_footer_inline_logo_placeholder_missing footer_id=%s",
+                    getattr(footer, "id", None),
+                )
+                position = "bottom"
+        elif placeholder in html_body:
+            html_body = html_body.replace(placeholder, "")
         if html_body:
-            parts.append(html_body)
-        return "\n".join(parts)
+            content_parts.insert(0, html_body)
+        content_html = "\n".join(content_parts)
+
+        if not logo_html:
+            return content_html
+        if position == "bottom":
+            separator = "\n" if content_html else ""
+            return content_html + separator + f'<div style="margin-top:16px;">{logo_html}</div>'
+        if position in {"left", "right"}:
+            padding = "0 16px 0 0" if position == "left" else "0 0 0 16px"
+            logo_cell = f'<td style="vertical-align:top;padding:{padding};">{logo_html}</td>'
+            content_cell = f'<td style="vertical-align:top;width:100%;">{content_html}</td>'
+            cells = logo_cell + content_cell if position == "left" else content_cell + logo_cell
+            return (
+                '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+                f'style="width:100%;border-collapse:collapse;"><tr>{cells}</tr></table>'
+            )
+        separator = "\n" if content_html else ""
+        return f'<div style="margin-bottom:16px;">{logo_html}</div>' + separator + content_html
+
+    @staticmethod
+    def _footer_logo_url(footer, logo_url_builder=None) -> str:
+        """Resolve only the logo configured on the footer: logo_id, logo_path, or none."""
+        return resolve_footer_logo_url(footer, logo_url_builder)
+
+    @staticmethod
+    def _footer_logo_dimension(value, minimum: int, maximum: int) -> int | None:
+        return normalize_footer_logo_dimension(value, minimum, maximum)
 
     def select_template(self, templates: list[Any], submission=None, event_type: str | None = None):
         if not templates:
@@ -290,6 +376,12 @@ class MailDispatchService:
         extra_context: dict[str, Any] | None = None,
         logo_url_builder=None,
     ) -> MailDispatchResult:
+        footer = self.mail_footer_resolver.resolve(
+            db,
+            mail_type=event_type,
+            form=form,
+            submission=submission,
+        )
         if template is None or getattr(template, "is_active", True) is False:
             current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
             log = self.log_email(
@@ -314,6 +406,8 @@ class MailDispatchService:
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         footer_html = self.build_footer(footer, logo_url_builder=logo_url_builder)
         layout = self._layout_for_db(db)
+        if footer:
+            layout = {**layout, "footer_html": ""}
         html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
         text_body = render_platform_mail_text(template, context)
         return self.dispatch_raw(
@@ -391,7 +485,24 @@ class MailDispatchService:
             )
             subject = self.render_subject(template.subject, context)
             layout = self._layout_for_db(db)
-            html_body = render_platform_mail_html(template, context, layout=layout)
+            footer = self.mail_footer_resolver.resolve(
+                db,
+                mail_type="submission_received",
+                form=form,
+                submission=submission,
+            )
+            footer_html = self.build_footer(
+                footer,
+                logo_url_builder=lambda logo: url_for(
+                    "public_forms.logo_asset",
+                    logo_id=logo.id,
+                    filename=logo.filename,
+                    _external=True,
+                ),
+            )
+            if footer:
+                layout = {**layout, "footer_html": ""}
+            html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
             text_body = render_platform_mail_text(template, context)
             result = self.dispatch_raw(
                 event_type="submission_received",
@@ -404,7 +515,153 @@ class MailDispatchService:
                 form=form,
                 submission=submission,
                 template=None,
+                footer=footer,
                 inline_images=self._inline_images_from_layout(layout),
+            )
+            db.commit()
+            return result
+
+    def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
+        message = str(evaluation.get("user_message") or "").strip() or (
+            "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
+        )
+        return self._dispatch_special_submission_event(
+            submission_id,
+            event_type="auto_rejected_by_condition",
+            default_name="Automatyczne odrzucenie zgłoszenia",
+            default_subject="Zgłoszenie {{ submission_id }} nie spełnia warunków udziału",
+            default_html=(
+                "<p>Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.</p>"
+                "<p>{{ qualification_message_html }}</p>"
+            ),
+            default_text=(
+                "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.\n"
+                "{{ qualification_message }}"
+            ),
+            extra_context={
+                "qualification_message": message,
+                "qualification_message_html": escape(message),
+            },
+        )
+
+    def dispatch_returned_for_correction(
+        self,
+        submission_id: str,
+        *,
+        reason: str,
+        message_to_user: str,
+        cleared: bool,
+        recipient: str = "",
+    ) -> MailDispatchResult:
+        return self._dispatch_special_submission_event(
+            submission_id,
+            event_type="returned_for_correction",
+            default_name="Zgłoszenie wysłane do poprawy",
+            default_subject="Zgłoszenie {{ submission_id }} wymaga poprawy",
+            default_html=(
+                "<p>Zgłoszenie wymaga ponownego uzupełnienia.</p>"
+                "<p><strong>Powód:</strong> {{ correction_reason_html }}</p>"
+                "<p>{{ correction_message_html }}</p>"
+                "<p>{{ correction_clear_info_html }}</p>"
+                '<p><a href="{{ correction_url }}">Uzupełnij formularz ponownie</a></p>'
+            ),
+            default_text=(
+                "Zgłoszenie wymaga ponownego uzupełnienia.\n"
+                "Powód: {{ correction_reason }}\n{{ correction_message }}\n"
+                "{{ correction_clear_info }}\n{{ correction_url }}"
+            ),
+            extra_context={
+                "correction_reason": reason,
+                "correction_reason_html": escape(reason),
+                "correction_message": message_to_user,
+                "correction_message_html": escape(message_to_user),
+                "correction_clear_info": (
+                    "Poprzednie dane zostały wyczyszczone."
+                    if cleared
+                    else "Poprzednie dane pozostawiono do ponownej edycji."
+                ),
+                "correction_clear_info_html": escape(
+                    "Poprzednie dane zostały wyczyszczone."
+                    if cleared
+                    else "Poprzednie dane pozostawiono do ponownej edycji."
+                ),
+            },
+            recipient=recipient,
+            include_correction_url=True,
+        )
+
+    def _dispatch_special_submission_event(
+        self,
+        submission_id: str,
+        *,
+        event_type: str,
+        default_name: str,
+        default_subject: str,
+        default_html: str,
+        default_text: str,
+        extra_context: dict,
+        recipient: str = "",
+        include_correction_url: bool = False,
+    ) -> MailDispatchResult:
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from models import Form, FormSubmission, MailTemplate, PlatformMailTemplate
+        from sqlalchemy import select
+
+        with create_session_factory(database_url)() as db:
+            submission = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if submission is None:
+                return MailDispatchResult("skipped", error_message="Brak zgłoszenia.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            if form is None:
+                return MailDispatchResult("skipped", error_message="Brak formularza.")
+            template = db.execute(
+                select(MailTemplate)
+                .where(
+                    MailTemplate.form_id == form.id,
+                    MailTemplate.template_type == event_type,
+                    MailTemplate.is_active.is_(True),
+                )
+                .order_by(MailTemplate.id.desc())
+            ).scalars().first()
+            if template is None:
+                template = db.execute(
+                    select(PlatformMailTemplate).where(
+                        PlatformMailTemplate.template_type == event_type,
+                        PlatformMailTemplate.is_active.is_(True),
+                    )
+                ).scalar_one_or_none()
+            if template is None:
+                template = SimpleNamespace(
+                    name=default_name,
+                    subject=default_subject,
+                    html_body=default_html,
+                    text_body=default_text,
+                    is_active=True,
+                )
+            context = dict(extra_context)
+            if include_correction_url:
+                context["correction_url"] = url_for(
+                    "public_forms.correct_submission",
+                    slug=submission.form_slug,
+                    submission_id=submission.submission_id,
+                    token=submission.access_token,
+                    _external=True,
+                )
+            result = self.dispatch_to_submission(
+                db=db,
+                form=form,
+                submission=submission,
+                template=template,
+                to_email=recipient or submission.email,
+                subject_template=getattr(template, "subject", ""),
+                event_type=event_type,
+                files=self.submission_repository.list_submission_files(submission_id),
+                extra_context=context,
             )
             db.commit()
             return result

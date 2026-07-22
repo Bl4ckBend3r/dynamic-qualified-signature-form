@@ -5,7 +5,15 @@ from pathlib import Path
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
 
-from models import ContactPage, ServiceDocument
+from models import ContactPage, ServiceDocument, SiteFooter
+from services.footer_logo_service import (
+    FOOTER_LAYOUTS,
+    FOOTER_SOCIAL_ICON_STYLES,
+    FOOTER_SOCIAL_POSITIONS,
+    build_site_footer_view,
+    normalize_social_links,
+)
+from services.instruction_html_service import sanitize_instruction_html
 from services.contact_page_service import default_contact_page, ensure_contact_defaults, phones_from_form
 from services.site_document_service import (
     SERVICE_DOCUMENT_TYPES,
@@ -14,7 +22,123 @@ from services.site_document_service import (
 )
 from services.upload_validation import UploadValidationError
 
-from . import ROLE_SUPER_ADMIN, bp, db_session_factory, login_required
+from . import (
+    ROLE_SUPER_ADMIN,
+    bp,
+    can_select_active_logo,
+    db_session_factory,
+    list_active_logos,
+    login_required,
+    parse_optional_int,
+)
+
+
+@bp.route("/site/footer", methods=["GET", "POST"])
+@login_required
+def site_footer_edit():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        return "Nie masz uprawnień do edycji stopki strony.", 403
+    with db_session_factory()() as db:
+        footer = db.execute(select(SiteFooter).order_by(SiteFooter.id)).scalars().first()
+        footer = footer or SiteFooter(name="Stopka strony", html_body="", is_active=True)
+        logos = list_active_logos(db)
+        if request.method == "POST":
+            try:
+                _update_site_footer_from_form(footer)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return _render_site_footer_editor(footer, logos), 400
+            selected_logo_id = parse_optional_int(request.form.get("logo_id"))
+            if selected_logo_id and not can_select_active_logo(db, selected_logo_id):
+                abort(403)
+            footer.logo_id = selected_logo_id
+            footer.logo_path = ""
+            db.add(footer)
+            db.commit()
+            flash("Stopka strony została zapisana.", "success")
+            return redirect(url_for("admin.site_footer_edit"))
+        return _render_site_footer_editor(footer, logos)
+
+
+def _render_site_footer_editor(footer: SiteFooter, logos: list) -> str:
+    preview = build_site_footer_view(
+        footer,
+        logo_url_builder=lambda logo: url_for(
+            "public_forms.logo_asset",
+            logo_id=logo.id,
+            filename=Path(logo.filename).name,
+        ),
+    )
+    return render_template(
+        "admin/site/footer.html",
+        footer=footer,
+        logos=logos,
+        footer_preview=preview,
+        social_links=normalize_social_links(footer.social_links),
+    )
+
+
+def _update_site_footer_from_form(footer: SiteFooter) -> None:
+    alignment = str(request.form.get("logo_alignment") or "left").strip()
+    if alignment not in {"left", "center", "right"}:
+        raise ValueError("Wybierz prawidłowe wyrównanie logo.")
+    position = str(request.form.get("logo_position") or "top").strip()
+    if position not in {"top", "bottom", "left", "right", "inline"}:
+        raise ValueError("Wybierz prawidłowe położenie logo.")
+    layout = str(request.form.get("layout") or "two_columns").strip()
+    if layout not in FOOTER_LAYOUTS:
+        raise ValueError("Wybierz prawidłowy układ stopki.")
+    social_position = str(request.form.get("social_position") or "left").strip()
+    if social_position not in FOOTER_SOCIAL_POSITIONS:
+        raise ValueError("Wybierz prawidłowe położenie ikon społecznościowych.")
+    social_icon_style = str(request.form.get("social_icon_style") or "gold").strip()
+    if social_icon_style not in FOOTER_SOCIAL_ICON_STYLES:
+        raise ValueError("Wybierz prawidłowy styl ikon społecznościowych.")
+    footer.name = request.form.get("name", "").strip() or "Stopka strony"
+    footer.html_body = sanitize_instruction_html(request.form.get("html_body", ""))
+    footer.left_html = sanitize_instruction_html(request.form.get("left_html", ""))
+    footer.right_html = sanitize_instruction_html(request.form.get("right_html", ""))
+    footer.layout = layout
+    footer.social_position = social_position
+    footer.social_icon_style = social_icon_style
+    footer.social_show_labels = request.form.get("social_show_labels") == "on"
+    footer.social_links = normalize_social_links(_social_links_from_form(), strict=True)
+    footer.logo_alignment = alignment
+    footer.logo_position = position
+    footer.logo_width = _site_footer_dimension(request.form.get("logo_width"), 20, 800, "Szerokość logo")
+    footer.logo_height = _site_footer_dimension(request.form.get("logo_height"), 20, 400, "Wysokość logo")
+    footer.is_active = request.form.get("is_active") == "on"
+
+
+def _social_links_from_form() -> list[dict[str, object]]:
+    platforms = request.form.getlist("social_platform")
+    urls = request.form.getlist("social_url")
+    labels = request.form.getlist("social_label")
+    orders = request.form.getlist("social_sort_order")
+    active_indices = set(request.form.getlist("social_active_index"))
+    rows = []
+    for index in range(max(len(platforms), len(urls), len(labels), len(orders), 0)):
+        rows.append({
+            "platform": platforms[index] if index < len(platforms) else "",
+            "url": urls[index] if index < len(urls) else "",
+            "label": labels[index] if index < len(labels) else "",
+            "sort_order": orders[index] if index < len(orders) else index + 1,
+            "is_active": str(index) in active_indices,
+        })
+    return rows
+
+
+def _site_footer_dimension(value: str | None, minimum: int, maximum: int, label: str) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label} musi być liczbą całkowitą od {minimum} do {maximum} px.") from exc
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"{label} musi mieć wartość od {minimum} do {maximum} px.")
+    return parsed
 
 
 @bp.route("/site/contact", methods=["GET", "POST"])

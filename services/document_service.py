@@ -12,6 +12,10 @@ from flask import Flask, current_app, request, url_for
 from form_loader import build_consents_view, build_submission_view
 from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
+from services.agreement_context_service import (
+    build_training_agreement_value_context,
+    upgrade_training_agreement_total_placeholder,
+)
 from services import document_naming_service as naming
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.document_view_service import DocumentViewService
@@ -295,9 +299,15 @@ class DocumentService:
 
         generated_date = (context_extra or {}).get("generated_date") or date.today().isoformat()
         template_html = self.resolve_document_template(document)
+        if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+            template_html = upgrade_training_agreement_total_placeholder(
+                template_html,
+                show_all_trainings_total=bool(document.get("show_all_trainings_total", True)),
+            )
         generated_documents = []
         prepared_documents = []
         for sequence, item in enumerate(items, start=1):
+            agreement_value_context = build_training_agreement_value_context(items, item)
             item_id = item.get("id") or item.get("value") or f"{item_alias}_{sequence}"
             agreement_number = self.build_document_number(
                 document,
@@ -321,6 +331,7 @@ class DocumentService:
                 collection_field: [item],
                 "selected_trainings": [item],
                 "selected_trainings_normalized": [item],
+                **agreement_value_context,
             }
             record = {
                 "id": str(item_id),
@@ -434,7 +445,7 @@ class DocumentService:
             "agreement_filename": generated_documents[0]["filename"] if generated_documents else "",
             "agreement_generated_at": generated_date,
             "training_agreements": serialize_json_list(generated_documents),
-            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+            "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
         }
         self._update_submission(submission, updates)
         self._audit(
@@ -853,7 +864,7 @@ class DocumentService:
                 "agreement_required": "Tak",
                 "agreement_generated": "Tak",
                 "agreement_filename": filename,
-                "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+                "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
             }
         return {
             f"{document_id}_generated": "Tak",

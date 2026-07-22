@@ -1,10 +1,10 @@
 {% extends "admin/base.html" %}
-{% block title %}Wyslij mail{% endblock %}
+{% block title %}Wyślij wiadomość{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">{{ form.name }} / {{ submission.submission_id }}</p>
-        <h1>Wyslij mail</h1>
+        <h1>Wyślij wiadomość</h1>
     </div>
     <a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Powrot</a>
 </div>
@@ -24,22 +24,18 @@
                 {% endif %}
             </select>
         </label>
-        <label class="admin-form-wide"><span>Temat</span><input name="subject" value=""></label>
-        <label class="admin-form-wide"><span>Tresc HTML</span><textarea name="html_body" rows="12"></textarea></label>
-        <label class="admin-form-wide"><span>Tresc TXT</span><textarea name="text_body" rows="6"></textarea></label>
-        <label>
-            <span>Stopka</span>
-            <select name="footer_id">
-                <option value="">Bez stopki</option>
-                {% for footer in footers %}
-                    <option value="{{ footer.id }}" {% if footer.is_default %}selected{% endif %}>{{ footer.name }}</option>
-                {% endfor %}
-            </select>
-        </label>
+        <label class="admin-form-wide"><span>Temat</span><input name="subject" value="" data-mail-subject></label>
+        <label class="admin-form-wide"><span>Treść HTML</span><textarea name="html_body" rows="12" data-mail-html></textarea></label>
+        <label class="admin-form-wide"><span>Treść TXT</span><textarea name="text_body" rows="6" data-mail-text></textarea></label>
+        <div class="admin-form-wide admin-validation-info"><strong>Stopka:</strong> {{ footer_usage_label }}</div>
     </div>
+    <section class="admin-variable-panel" data-variable-panel><h2>Dostępne zmienne</h2><p>Kliknij zmienną, aby wstawić ją do ostatnio edytowanego pola.</p>
+        {% for category, variables in dynamic_variables.items() %}<div><strong>{{ category }}:</strong> {% for variable in variables %}<button type="button" class="admin-variable" data-insert-variable="{{ '{{ ' ~ variable ~ ' }}' }}"><code>{{ '{{ ' ~ variable ~ ' }}' }}</code></button>{% endfor %}</div>{% endfor %}
+    </section>
+    <section class="admin-section"><h2>Podgląd</h2><div class="admin-card admin-mail-preview" data-mail-preview></div></section>
     <div class="admin-form-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Anuluj</a>
-        <button class="admin-button" type="submit">Wyslij</button>
+        <button class="admin-button" type="submit">Wyślij</button>
     </div>
 </form>
 <script>
@@ -50,6 +46,11 @@ document.addEventListener("DOMContentLoaded", function () {
     const subject = document.querySelector('input[name="subject"]');
     const htmlBody = document.querySelector('textarea[name="html_body"]');
     const textBody = document.querySelector('textarea[name="text_body"]');
+    const preview = document.querySelector("[data-mail-preview]");
+    let variableTarget = htmlBody;
+
+    [subject, htmlBody, textBody].forEach((field) => field?.addEventListener("focus", () => { variableTarget = field; }));
+    function refreshPreview() { if (preview) preview.innerHTML = htmlBody?.value || "<p>Podgląd pojawi się tutaj.</p>"; }
 
     function fillFromTemplate() {
         const template = byId.get(String(select.value));
@@ -57,12 +58,23 @@ document.addEventListener("DOMContentLoaded", function () {
         subject.value = template.subject || "";
         htmlBody.value = template.html_body || "";
         textBody.value = template.text_body || "";
+        refreshPreview();
     }
 
     if (select && templates.length) {
         fillFromTemplate();
         select.addEventListener("change", fillFromTemplate);
     }
+    document.querySelector("[data-variable-panel]")?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-insert-variable]");
+        if (!button || !variableTarget) return;
+        const start = variableTarget.selectionStart ?? variableTarget.value.length;
+        const end = variableTarget.selectionEnd ?? start;
+        variableTarget.setRangeText(button.dataset.insertVariable, start, end, "end");
+        variableTarget.focus(); refreshPreview();
+    });
+    htmlBody?.addEventListener("input", refreshPreview);
+    refreshPreview();
 });
 </script>
 {% endblock %}

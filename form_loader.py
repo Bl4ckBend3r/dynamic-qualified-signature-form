@@ -380,8 +380,12 @@ def validate_submission(
             except ValueError:
                 errors[field_name] = "Podaj poprawną datę w formacie RRRR-MM-DD."
 
-        if field_type in {"select", "radio"} and value not in field.get("options", []):
-            errors[field_name] = "Wybrano nieprawidłową wartość."
+        if field_type in {"select", "radio"}:
+            from services.form_option_service import option_value
+
+            allowed_values = {option_value(option) for option in field.get("options", [])}
+            if value not in allowed_values:
+                errors[field_name] = "Wybrano nieprawidłową wartość."
 
     signature_errors = validate_signature_submission(form_definition, submission_data)
     errors.update(signature_errors)

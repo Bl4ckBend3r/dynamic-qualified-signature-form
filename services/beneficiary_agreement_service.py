@@ -17,7 +17,12 @@ APPLICATION_REVIEW_STATUSES = {
     "CORRECTED",
 }
 AGREEMENT_DECISIONS = {"accepted", "rejected", "correction"}
-AGREEMENT_DECISION_ROLES = {"admin", "super_admin", "form_manager"}
+AGREEMENT_DECISION_ROLES = {"admin", "super_admin"}
+OFFICE_SIGNATURE_REVIEW_STATUSES = {
+    ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY.value,
+    ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value,
+    ProcessStatus.AGREEMENT_UPLOADED.value,
+}
 SIGNED_AGREEMENT_TYPES = {
     SubmissionDocumentType.SIGNED_AGREEMENT,
     SubmissionDocumentType.SIGNED_TRAINING_AGREEMENT,
@@ -41,8 +46,6 @@ def can_edit_application_decision(submission) -> bool:
 
 
 def has_uploaded_signed_agreement(db, submission) -> bool:
-    if str(getattr(submission, "agreement_signature_valid", "") or "").strip().lower() != "tak":
-        return False
     return (
         db.query(SubmissionFile.id)
         .filter(
@@ -58,7 +61,7 @@ def has_uploaded_signed_agreement(db, submission) -> bool:
 class BeneficiaryAgreementService:
     def can_review(self, db, submission) -> bool:
         return (
-            str(getattr(submission, "process_status", "") or "") == ProcessStatus.AGREEMENT_UPLOADED.value
+            str(getattr(submission, "process_status", "") or "") in OFFICE_SIGNATURE_REVIEW_STATUSES
             and has_uploaded_signed_agreement(db, submission)
         )
 
@@ -84,7 +87,7 @@ class BeneficiaryAgreementService:
             raise BeneficiaryAgreementDecisionError("Podaj powód odrzucenia albo skierowania umowy do poprawy.")
         if str(getattr(submission, "agreement_required", "") or "").strip().lower() != "tak":
             raise BeneficiaryAgreementDecisionError("Ten formularz nie wymaga umowy.")
-        if str(getattr(submission, "process_status", "") or "") != ProcessStatus.AGREEMENT_UPLOADED.value:
+        if str(getattr(submission, "process_status", "") or "") not in OFFICE_SIGNATURE_REVIEW_STATUSES:
             raise BeneficiaryAgreementDecisionError("Decyzja jest dostępna dopiero po wgraniu podpisanej umowy.")
         if not has_uploaded_signed_agreement(db, submission):
             raise BeneficiaryAgreementDecisionError("Nie znaleziono wgranej podpisanej umowy.")
@@ -93,9 +96,9 @@ class BeneficiaryAgreementService:
         previous_status = str(submission.process_status or "")
         accepted = normalized_decision == "accepted"
         decision_status = (
-            ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value
+            ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
             if accepted
-            else ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value
+            else ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value
         )
         final_status = ProcessStatus.PROCESS_COMPLETED.value if accepted else decision_status
 
@@ -107,9 +110,9 @@ class BeneficiaryAgreementService:
             actor=actor,
             reason=normalized_reason,
             source=(
-                "beneficiary_agreement_confirmed"
+                "agreement_signed_by_office"
                 if accepted
-                else "beneficiary_agreement_rejected"
+                else "agreement_rejected_by_office"
             ),
             created_at=now,
         )
@@ -120,7 +123,7 @@ class BeneficiaryAgreementService:
                 previous_status=decision_status,
                 new_status=final_status,
                 actor=actor,
-                reason="beneficiary_agreement_confirmed",
+                reason="agreement_signed_by_office",
                 source="process_completed",
                 created_at=now,
             )
@@ -134,7 +137,7 @@ class BeneficiaryAgreementService:
             submission_id=submission.id,
             public_submission_id=submission.submission_id,
             form_slug=submission.form_slug,
-            decision=f"beneficiary_agreement_{normalized_decision}",
+            decision=f"office_agreement_{normalized_decision}",
             justification=normalized_reason,
             officer_id=getattr(actor, "id", None),
             officer_email=str(getattr(actor, "email", "") or ""),

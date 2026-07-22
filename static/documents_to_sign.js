@@ -236,7 +236,7 @@ function showUserInstruction(data, submissionId) {
     }
 
     if (formInstructionContent) {
-        formInstructionContent.textContent = instruction;
+        formInstructionContent.innerHTML = instruction;
     }
     if (instructionTitle) {
         instructionTitle.textContent = String(nested?.title || "Instrukcja dalszego postępowania");
@@ -253,7 +253,7 @@ function showUserInstruction(data, submissionId) {
         hideElement(instructionStagesSection);
     }
     if (currentStageDescription) {
-        currentStageDescription.textContent = stageDescription;
+        currentStageDescription.innerHTML = stageDescription;
     }
     if (stageDescription) {
         showElement(currentStageDescriptionSection);
@@ -261,7 +261,7 @@ function showUserInstruction(data, submissionId) {
         hideElement(currentStageDescriptionSection);
     }
     if (nextActionContent) {
-        nextActionContent.textContent = nextAction;
+        nextActionContent.innerHTML = nextAction;
     }
     if (nextAction) {
         showElement(nextActionSection);
@@ -602,8 +602,105 @@ if (instructionRestoreButton) {
     instructionRestoreButton.addEventListener("click", restoreInstruction);
 }
 
+function normalizeAgreementMatchText(value) {
+    return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/\.[^.]+$/, "")
+        .replace(/[^a-z0-9]+/g, "");
+}
+
+function bindBulkAgreementUpload() {
+    const form = document.querySelector("[data-bulk-agreement-upload]");
+    if (!form) return;
+    const input = form.querySelector("[data-bulk-agreement-files]");
+    const rowsHolder = form.querySelector("[data-bulk-agreement-rows]");
+    const matches = form.querySelector("[data-bulk-agreement-matches]");
+    const submit = form.querySelector("[data-bulk-agreement-submit]");
+    const summary = form.querySelector("[data-bulk-agreement-summary]");
+    const filename = form.querySelector("[data-upload-filename]");
+    let agreements = [];
+    let selectedFiles = [];
+    try { agreements = JSON.parse(form.querySelector("[data-bulk-agreements]")?.textContent || "[]"); } catch (_) { agreements = []; }
+    const availableAgreements = agreements.filter((agreement) => !agreement.signature_valid);
+
+    function suggestedAgreement(file, index, used) {
+        const normalizedFile = normalizeAgreementMatchText(file.name);
+        let match = availableAgreements.find((agreement) => {
+            if (used.has(String(agreement.id))) return false;
+            const candidates = [agreement.filename, agreement.number, agreement.training_name].map(normalizeAgreementMatchText).filter(Boolean);
+            return candidates.some((candidate) => normalizedFile.includes(candidate) || candidate.includes(normalizedFile));
+        });
+        if (!match) match = availableAgreements.find((agreement) => !used.has(String(agreement.id))) || availableAgreements[index];
+        if (match) used.add(String(match.id));
+        return match;
+    }
+
+    function renderRows() {
+        rowsHolder.replaceChildren();
+        const used = new Set();
+        selectedFiles.forEach((file, index) => {
+            const suggested = suggestedAgreement(file, index, used);
+            const row = document.createElement("div"); row.className = "bulk-agreement-row"; row.dataset.bulkAgreementRow = String(index);
+            const fileName = document.createElement("span"); fileName.textContent = file.name;
+            const select = document.createElement("select"); select.setAttribute("aria-label", `Umowa dla pliku ${file.name}`); select.dataset.bulkAgreementSelect = "";
+            select.append(new Option("Wybierz umowę", ""), ...availableAgreements.map((agreement) => new Option(`${agreement.training_name || "Umowa"} — ${agreement.number || agreement.filename}`, String(agreement.id), false, String(agreement.id) === String(suggested?.id || ""))));
+            const status = document.createElement("span"); status.className = "bulk-upload-status is-pending"; status.dataset.bulkAgreementStatus = ""; status.textContent = suggested ? "Oczekuje" : "Wymaga przypisania";
+            select.addEventListener("change", () => {
+                status.textContent = select.value ? "Oczekuje" : "Wymaga przypisania";
+                status.className = "bulk-upload-status is-pending";
+            });
+            row.append(fileName, select, status); rowsHolder.appendChild(row);
+        });
+        matches.hidden = !selectedFiles.length;
+        submit.disabled = !selectedFiles.length || !availableAgreements.length;
+        if (filename) filename.textContent = selectedFiles.length ? `Wybrano ${selectedFiles.length} plików` : "Nie wybrano plików";
+        if (summary) summary.textContent = "";
+    }
+
+    input?.addEventListener("change", () => { selectedFiles = Array.from(input.files || []); renderRows(); });
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const rows = Array.from(rowsHolder.querySelectorAll("[data-bulk-agreement-row]"));
+        if (!rows.length || rows.some((row) => !row.querySelector("[data-bulk-agreement-select]")?.value)) {
+            if (summary) summary.textContent = "Przypisz każdy plik do umowy przed wysłaniem.";
+            return;
+        }
+        const selectedAgreementIds = rows.map((row) => row.querySelector("[data-bulk-agreement-select]").value);
+        if (new Set(selectedAgreementIds).size !== selectedAgreementIds.length) {
+            if (summary) summary.textContent = "Każdą umowę można przypisać tylko do jednego pliku.";
+            return;
+        }
+        submit.disabled = true;
+        const payload = new FormData();
+        rows.forEach((row, index) => {
+            payload.append("signed_agreement_files", selectedFiles[index], selectedFiles[index].name);
+            payload.append("agreement_ids", row.querySelector("[data-bulk-agreement-select]").value);
+            const status = row.querySelector("[data-bulk-agreement-status]"); status.textContent = "Wysyłanie"; status.className = "bulk-upload-status is-uploading";
+        });
+        try {
+            const response = await fetch(form.action, {method: "POST", body: payload, headers: {Accept: "application/json"}});
+            const data = await response.json();
+            (data.results || []).forEach((result, index) => {
+                const status = rows[index]?.querySelector("[data-bulk-agreement-status]");
+                if (!status) return;
+                status.textContent = result.status === "uploaded" ? "Wgrano" : `Błąd: ${result.message || "Nie udało się wgrać"}`;
+                status.className = `bulk-upload-status ${result.status === "uploaded" ? "is-uploaded" : "is-error"}`;
+            });
+            if (summary) summary.textContent = `Wgrano: ${data.uploaded || 0}. Wymaga poprawy: ${data.failed || 0}.`;
+        } catch (_) {
+            rows.forEach((row) => { const status = row.querySelector("[data-bulk-agreement-status]"); status.textContent = "Błąd wysyłania"; status.className = "bulk-upload-status is-error"; });
+            if (summary) summary.textContent = "Nie udało się przesłać plików. Spróbuj ponownie.";
+        } finally {
+            submit.disabled = false;
+        }
+    });
+}
+
 bindDownloadReplacementCards();
 bindUploadDropzones();
+bindBulkAgreementUpload();
 
 if (submissionInput && submissionInput.value.trim()) {
     checkAcceptanceStatus();

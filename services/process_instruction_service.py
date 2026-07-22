@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from services.instruction_html_service import sanitize_instruction_html
 from services.process_service import ProcessStatus
 from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_status_label
 
@@ -11,22 +12,52 @@ from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_st
 DEFAULT_INSTRUCTION_TITLE = "Instrukcja dalszego postępowania"
 MAX_STAGES = 100
 DEFAULT_STATUS_INSTRUCTIONS = {
-    ProcessStatus.AGREEMENT_UPLOADED.value: {
-        "key": "agreement-officer-review",
-        "label": "Umowa podpisana przez beneficjenta - do potwierdzenia",
-        "description": "Podpisana umowa została wgrana i oczekuje na potwierdzenie przez urzędnika.",
-        "next_action": "Nie musisz teraz nic robić. Poczekaj na decyzję urzędnika.",
+    ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY.value: {
+        "key": "agreement-uploaded-by-beneficiary",
+        "label": "Podpisana umowa wgrana przez beneficjenta",
+        "description": "Podpisana umowa została wgrana. Oczekuje na podpis i potwierdzenie po stronie urzędu.",
+        "next_action": "Nie musisz teraz wykonywać dodatkowych czynności.",
         "final": False,
         "rejected": False,
     },
-    ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value: {
+    ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value: {
+        "key": "agreement-waiting-for-office-signature",
+        "label": "Umowa oczekuje na podpis po stronie urzędu",
+        "description": "Umowa oczekuje na podpis po stronie urzędu. Nie musisz teraz wykonywać dodatkowych czynności.",
+        "next_action": "Poczekaj na zakończenie etapu po stronie urzędu.",
+        "final": False,
+        "rejected": False,
+    },
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value: {
+        "key": "agreement-signed-by-office",
+        "label": "Umowa podpisana przez urząd",
+        "description": "Umowa została podpisana przez urząd. Proces został zakończony.",
+        "next_action": "Nie musisz wykonywać dodatkowych czynności.",
+        "final": True,
+        "rejected": False,
+    },
+    ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value: {
         "key": "agreement-correction",
-        "label": "Podpisana umowa wymaga poprawy",
-        "description": "Urzędnik odrzucił wgraną umowę albo skierował ją do poprawy.",
-        "next_action": "Popraw umowę, podpisz ją i wgraj ponownie.",
+        "label": "Umowa wymaga poprawy",
+        "description": "Umowa wymaga poprawy. Wgraj poprawny podpisany dokument zgodnie z uwagami urzędu.",
+        "next_action": "Popraw umowę, podpisz ją i wgraj ponownie zgodnie z uwagami urzędu.",
         "final": False,
         "rejected": True,
     },
+}
+
+# Historyczne statusy otrzymują aktualne komunikaty, bez zmiany zapisanych danych.
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_UPLOADED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value],
+    "key": "legacy-agreement-waiting-for-office-signature",
+}
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value],
+    "key": "legacy-agreement-signed-by-office",
+}
+DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value] = {
+    **DEFAULT_STATUS_INSTRUCTIONS[ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value],
+    "key": "legacy-agreement-rejected-by-office",
 }
 
 
@@ -47,12 +78,12 @@ def normalize_instruction_config(
     *,
     legacy_description: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize untrusted JSON to the plain-text instruction schema."""
+    """Normalize untrusted JSON to the safe instruction schema."""
     source = value if isinstance(value, Mapping) else {}
     title = _plain_text(source.get("title"), limit=255)
-    description = _plain_text(source.get("description"), limit=50_000)
+    description = sanitize_instruction_html(source.get("description"))
     if not description:
-        description = _plain_text(legacy_description, limit=50_000)
+        description = sanitize_instruction_html(legacy_description)
 
     raw_stages = source.get("stages")
     if not isinstance(raw_stages, list):
@@ -80,11 +111,13 @@ def normalize_instruction_config(
             {
                 "key": key,
                 "label": label,
-                "description": _plain_text(raw_stage.get("description"), limit=50_000),
-                "next_action": _plain_text(raw_stage.get("next_action"), limit=50_000),
+                "description": sanitize_instruction_html(raw_stage.get("description")),
+                "next_action": sanitize_instruction_html(raw_stage.get("next_action")),
                 "status_codes": status_codes,
                 "final": _as_bool(raw_stage.get("final")),
                 "rejected": _as_bool(raw_stage.get("rejected")),
+                "active": _as_bool(raw_stage.get("active", True)),
+                "inactive_reason": _plain_text(raw_stage.get("inactive_reason"), limit=500),
                 "sort_order": len(stages) + 1,
             }
         )
@@ -107,7 +140,7 @@ def build_process_instruction_view(
     """Build the public instruction exclusively from the form configuration."""
     raw_status = _plain_text(process_status, limit=128)
     config = normalize_instruction_config(instruction_config, legacy_description=legacy_description)
-    configured_stages = config["stages"]
+    configured_stages = [stage for stage in config["stages"] if stage.get("active", True)]
     default_stage = DEFAULT_STATUS_INSTRUCTIONS.get(raw_status)
     current_index = _find_current_stage(configured_stages, raw_status)
     if current_index is None and default_stage:
@@ -169,6 +202,46 @@ def build_process_instruction_view(
         "next_action_label": "Co dalej?",
         "instruction_steps": instruction["stages"],
     }
+
+
+def reconcile_instruction_config(
+    value: Mapping[str, Any] | None,
+    workflow: Mapping[str, Any] | None,
+    *,
+    active_stages: list[Mapping[str, Any]] | None = None,
+    title: object | None = None,
+    description: object | None = None,
+) -> dict[str, Any]:
+    """Mark removed workflow instructions inactive and optionally replace active stages."""
+    current = normalize_instruction_config(value)
+    steps = [step for step in (workflow or {}).get("steps", []) if isinstance(step, Mapping)]
+    active_keys = {str(step.get("id") or "").strip() for step in steps}
+    active_statuses = {str(step.get("status") or step.get("status_code") or "").strip() for step in steps}
+
+    def belongs_to_workflow(stage: Mapping[str, Any]) -> bool:
+        key = str(stage.get("key") or "").strip()
+        statuses = {str(code or "").strip() for code in stage.get("status_codes", [])}
+        return bool((key and key in active_keys) or (statuses - {""}) & active_statuses)
+
+    if active_stages is None:
+        stages = current["stages"]
+    else:
+        stages = [dict(stage) for stage in active_stages]
+        stages.extend(stage for stage in current["stages"] if not belongs_to_workflow(stage))
+
+    classified = []
+    for stage in stages:
+        item = dict(stage)
+        item["active"] = belongs_to_workflow(item)
+        item["inactive_reason"] = "" if item["active"] else "Ten etap nie występuje już w workflow."
+        classified.append(item)
+    return normalize_instruction_config(
+        {
+            "title": current["title"] if title is None else title,
+            "description": current["description"] if description is None else description,
+            "stages": classified,
+        }
+    )
 
 
 def _find_current_stage(stages: list[dict[str, Any]], raw_status: str) -> int | None:

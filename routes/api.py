@@ -203,6 +203,7 @@ def api_workflow_status(submission_id: str):
     services = get_services()
     form_config = services.form_config_service.get_form_config(services.storage, submission["form_slug"]) or {}
     row = submission["row"]
+    qualification = row.get("data_json", {}).get("_qualification") if isinstance(row.get("data_json"), dict) else None
     return {
         "exists": True,
         "submission_id": submission_id,
@@ -211,4 +212,5 @@ def api_workflow_status(submission_id: str):
         **status_payload(submission["process_status"]),
         "current_step": services.workflow_service.get_current_step(row, form_config),
         "available_actions": services.workflow_service.get_available_actions(row, form_config),
+        "qualification_evaluation": qualification,
     }, 200

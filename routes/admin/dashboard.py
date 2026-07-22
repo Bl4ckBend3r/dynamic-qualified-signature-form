@@ -46,7 +46,22 @@ def dashboard():
                 exc_info=True,
             )
             documents_count = 0
-        email_errors_count = db.execute(select(func.count(EmailLog.id)).where(EmailLog.status == "failed")).scalar() or 0
+        email_scope = []
+        if user.role != ROLE_SUPER_ADMIN:
+            email_scope.append(EmailLog.form_id.in_(form_ids or [-1]))
+        sent_query = select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *email_scope)
+        failed_query = select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *email_scope)
+        last_attempt_query = select(func.max(EmailLog.created_at)).where(*email_scope)
+        last_errors_query = (
+            select(EmailLog)
+            .where(EmailLog.status == "failed", *email_scope)
+            .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
+            .limit(5)
+        )
+        email_sent_count = db.execute(sent_query).scalar() or 0
+        email_errors_count = db.execute(failed_query).scalar() or 0
+        last_email_attempt_at = db.execute(last_attempt_query).scalar()
+        last_email_errors = db.execute(last_errors_query).scalars().all()
     return render_template(
         "admin/dashboard.html",
         forms_count=forms_count,
@@ -54,4 +69,7 @@ def dashboard():
         pending_count=pending_count,
         documents_count=documents_count,
         email_errors_count=email_errors_count,
+        email_sent_count=email_sent_count,
+        last_email_attempt_at=last_email_attempt_at,
+        last_email_errors=last_email_errors,
     )

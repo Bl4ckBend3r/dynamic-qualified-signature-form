@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -19,6 +20,7 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.qualification_condition_service import QualificationConditionService
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 from services.training_service import decimal_price_to_storage, normalize_trainings_config
 from validators.form_config_validator import FormConfigValidator
@@ -81,6 +83,13 @@ def build_form_definition_from_admin_form(
     allow_advanced_json: bool = False,
 ) -> dict:
     definition = normalize_admin_form_definition(current_definition or {})
+    full_definition_value = str(form_data.get("form_definition_json", "") or "").strip()
+    use_full_definition = allow_advanced_json and form_data.get("use_form_definition_json") == "on"
+    if use_full_definition:
+        parsed_definition = json.loads(full_definition_value)
+        if not isinstance(parsed_definition, dict):
+            raise ValueError("Pełna konfiguracja JSON musi być obiektem.")
+        definition = normalize_admin_form_definition(parsed_definition)
     normalizer = WorkflowConfigNormalizer()
     builder_value = str(form_data.get("workflow_builder_json", "") or "").strip()
     advanced_value = str(form_data.get("workflow_json", "") or "").strip()
@@ -106,8 +115,14 @@ def build_form_definition_from_admin_form(
     workflow["electronic_signature_required"] = form_data.get("electronic_signature_required") == "on"
     workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
+    workflow["declaration_filename_pattern"] = (
+        form_data.get("declaration_filename_pattern", workflow.get("declaration_filename_pattern", "")).strip()
+        or "{first_name}_{last_name}-deklaracja.pdf"
+    )
+    workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     workflow["contract_generation_mode"] = "per_training"
+    workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
     workflow["contract_filename_pattern"] = (
         form_data.get("contract_filename_pattern", workflow.get("contract_filename_pattern", "")).strip()
         or "{first_name}_{last_name}-{training_id}-umowa.pdf"
@@ -133,6 +148,26 @@ def build_form_definition_from_admin_form(
         if workflow_errors:
             raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
+    if "qualification_conditions_json" in form_data:
+        raw_conditions = str(form_data.get("qualification_conditions_json") or "").strip() or "[]"
+        parsed_conditions = json.loads(raw_conditions)
+        if not isinstance(parsed_conditions, list):
+            raise ValueError("Konfiguracja warunków kwalifikujących musi być listą.")
+        qualification_service = QualificationConditionService()
+        qualification_config = qualification_service.normalize_config(
+            {
+                "enabled": form_data.get("qualification_conditions_enabled") == "on",
+                "conditions": parsed_conditions,
+            },
+            definition.get("fields") or [],
+        )
+        qualification_errors = qualification_service.validate_config(
+            qualification_config,
+            definition.get("fields") or [],
+        )
+        if qualification_errors:
+            raise ValueError(" ".join(qualification_errors))
+        definition["qualification_conditions"] = qualification_config
     definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)
 
@@ -142,10 +177,10 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
     definitions = (
         ("application_decision", "Decyzja o akceptacji wniosku", ""),
         ("declaration_confirmation", "Potwierdzenie podpisanej deklaracji", ""),
-        ("agreement_confirmation", "Potwierdzenie podpisanej umowy przez beneficjenta", ""),
+        ("agreement_confirmation", "Potwierdzenie podpisania umowy przez urząd", ""),
         ("correction_required", "Wymagana korekta", ""),
         ("application_rejection", "Odrzucenie wniosku", ""),
-        ("agreement_rejection", "Odrzucenie podpisanej umowy", ""),
+        ("agreement_rejection", "Skierowanie umowy do poprawy", ""),
     )
     result = []
     for decision_id, label, default_step in definitions:
@@ -154,7 +189,9 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
             {
                 **current,
                 "id": decision_id,
-                "label": form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label,
+                "label": _modern_decision_label(
+                    form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label
+                ),
                 "step_id": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
                 "values": ["accepted", "rejected", "correction"],
                 "yes_status": form_data.get(
@@ -177,8 +214,8 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
         ("application_rejected", "Po odrzuceniu wniosku"),
         ("correction_required", "Po wymaganiu korekty"),
         ("declaration_uploaded", "Po wgraniu deklaracji"),
-        ("beneficiary_agreement_confirmed", "Po potwierdzeniu umowy"),
-        ("beneficiary_agreement_rejected", "Po odrzuceniu umowy"),
+        ("beneficiary_agreement_confirmed", "Po podpisaniu umowy przez urząd"),
+        ("beneficiary_agreement_rejected", "Po skierowaniu umowy do poprawy"),
     )
     result = []
     for event_id, label in events:
@@ -198,6 +235,14 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
             }
         )
     return result
+
+
+def _modern_decision_label(value: str) -> str:
+    return {
+        "Potwierdzenie podpisanej umowy przez beneficjenta": "Potwierdzenie podpisania umowy przez urząd",
+        "Umowa podpisana przez beneficjenta": "Umowa podpisana przez urząd",
+        "Odrzucenie podpisanej umowy": "Skierowanie umowy do poprawy",
+    }.get(value, value)
 
 
 def apply_training_selection_from_admin_form(definition: dict, form_data) -> dict:
@@ -463,19 +508,80 @@ def build_definition_from_html(html: str, filename: str) -> dict:
 
 
 def build_definition_from_docx(content: bytes, filename: str) -> dict:
-    with zipfile.ZipFile(BytesIO(content)) as archive:
-        xml = archive.read("word/document.xml")
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError("Plik DOCX jest uszkodzony albo nie zawiera dokumentu Word.") from exc
+
     root = ElementTree.fromstring(xml)
-    texts = [item.text or "" for item in root.iter() if item.tag.endswith("}t") and item.text]
-    raw = "\n".join(texts)
-    candidates = re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw)
-    fields = [
-        {"type": "text", "name": name, "label": humanize_field_name(name), "required": False}
-        for name in dict.fromkeys(candidates)
-    ]
+    paragraphs: list[str] = []
+    for paragraph in (item for item in root.iter() if item.tag.endswith("}p")):
+        text = "".join(
+            child.text or ""
+            for child in paragraph.iter()
+            if child.tag.endswith("}t") or child.tag.endswith("}tab")
+        ).strip()
+        if text:
+            paragraphs.append(text)
+    raw = "\n".join(paragraphs)
+    fields_by_name: dict[str, dict] = {}
+
+    def add_field(label: str, *, field_type: str = "text", options: list[dict] | None = None) -> None:
+        clean_label = re.sub(r"\s+", " ", label).strip(" :-_\t")
+        if not clean_label:
+            return
+        name = _docx_field_name(clean_label)
+        if not name or name in fields_by_name:
+            return
+        field = {"type": field_type, "name": name, "label": clean_label, "required": False}
+        if options:
+            field["options"] = options
+        fields_by_name[name] = field
+
+    for name in re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw):
+        fields_by_name.setdefault(
+            name,
+            {"type": "text", "name": name, "label": humanize_field_name(name), "required": False},
+        )
+
+    checkbox_group: list[str] = []
+    for line in paragraphs:
+        without_placeholders = re.sub(r"\{\{\s*[a-zA-Z0-9_]+\s*\}\}", "", line).strip()
+        checkbox_match = re.match(r"^(?:☐|□|\[\s*[ xX]?\s*\])\s*(.+)$", without_placeholders)
+        if checkbox_match:
+            checkbox_group.append(checkbox_match.group(1).strip())
+            continue
+        if checkbox_group:
+            label = "Wybór"
+            options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+            add_field(label, field_type="checkbox", options=options)
+            checkbox_group = []
+
+        label_match = re.match(
+            r"^(.{2,120}?)(?::\s*(?:_{3,}|\.{3,}|$)|\s+(?:_{3,}|\.{3,})$)",
+            without_placeholders,
+        )
+        if label_match:
+            add_field(label_match.group(1))
+    if checkbox_group:
+        options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+        add_field("Wybór", field_type="checkbox", options=options)
+
+    fields = list(fields_by_name.values())
     if not fields:
-        raise ValueError("no fields")
+        raise ValueError(
+            "Nie wykryto pól w DOCX. Oznacz pola jako {{ nazwa_pola }} albo użyj etykiety "
+            "z dwukropkiem i miejscem do wpisania, np. „Imię: ______”."
+        )
     return {"title": Path(filename).stem, "fields": fields}
+
+
+def _docx_field_name(label: str) -> str:
+    ascii_label = "".join(
+        char for char in unicodedata.normalize("NFKD", str(label).casefold()) if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "_", ascii_label).strip("_")[:80]
 
 
 def html_attr(attrs: str, name: str) -> str:

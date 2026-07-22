@@ -76,7 +76,7 @@ def test_super_admin_can_choose_any_earlier_stage_and_final_is_super_admin_only(
     assert service.get_allowed_targets(db, submission, actor_role=ROLE_ADMIN) == []
     targets = service.get_allowed_targets(db, submission, actor_role=ROLE_SUPER_ADMIN)
 
-    assert targets[0].status == "AGREEMENT_WAITING_FOR_SIGNATURE"
+    assert targets[0].status == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
     assert "OFFICER_ACCEPTED" in {target.status for target in targets}
     assert "FORM_SUBMITTED" in {target.status for target in targets}
 

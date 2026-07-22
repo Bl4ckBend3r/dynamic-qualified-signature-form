@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, current_app, has_request_context, request
+from flask import Flask, current_app, has_request_context, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config, normalize_app_base_path
@@ -183,8 +183,11 @@ def register_context_processors(app: Flask) -> None:
 
 def register_template_filters(app: Flask) -> None:
     from services.html_safety import sanitize_trusted_html
+    from services.form_option_service import option_label, option_value
 
     app.jinja_env.filters["trusted_html"] = sanitize_trusted_html
+    app.jinja_env.filters["option_label"] = option_label
+    app.jinja_env.filters["option_value"] = option_value
 
 
 def inject_globals():
@@ -197,7 +200,37 @@ def inject_globals():
         "APP_BASE_PATH": app_base_path,
         "footer_service_documents": footer_service_documents(),
         "footer_contact": footer_contact(),
+        "site_footer": site_footer_context(),
     }
+
+
+def site_footer_context() -> dict:
+    from services.footer_logo_service import build_site_footer_view
+
+    if not current_app.config.get("DATABASE_URL"):
+        return build_site_footer_view(None)
+    try:
+        from database import create_session_factory
+        from models import SiteFooter
+        from sqlalchemy import select
+
+        with create_session_factory(current_app.config["DATABASE_URL"])() as db:
+            footer = db.execute(
+                select(SiteFooter)
+                .where(SiteFooter.is_active.is_(True))
+                .order_by(SiteFooter.id)
+            ).scalars().first()
+            return build_site_footer_view(
+                footer,
+                logo_url_builder=lambda logo: url_for(
+                    "public_forms.logo_asset",
+                    logo_id=logo.id,
+                    filename=Path(logo.filename).name,
+                ),
+            )
+    except Exception:
+        current_app.logger.exception("Nie udało się pobrać konfiguracji stopki strony.")
+        return build_site_footer_view(None)
 
 
 def footer_contact() -> dict:

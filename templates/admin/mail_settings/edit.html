@@ -23,6 +23,10 @@
     <div class="admin-section">
         <h2>Potwierdzenie otrzymania zgłoszenia</h2>
         <p>Jedyny automatyczny trigger: <code>submission_received</code>.</p>
+        <p class="admin-help">
+            Ten mail zawsze używa <strong>stopki ogólnej</strong>.
+            <a href="{{ url_for('admin.global_mail_footer_edit') }}">Edytuj stopkę ogólną</a>.
+        </p>
         <label class="admin-check"><input type="checkbox" name="template_is_active" {% if template.is_active %}checked{% endif %}><span>Szablon aktywny</span></label>
         <label class="admin-form-wide"><span>Temat</span><input name="template_subject" value="{{ template.subject }}"></label>
         <label class="admin-form-wide"><span>Treść HTML</span><textarea name="template_html_body" rows="12">{{ template.html_body }}</textarea></label>
@@ -42,7 +46,6 @@
             <label><span>Położenie logo w mailu</span><select name="layout_logo_position">
                 <option value="none" {% if layout.logo_position == "none" %}selected{% endif %}>Brak logo</option>
                 <option value="header" {% if layout.logo_position == "header" %}selected{% endif %}>Nagłówek</option>
-                <option value="footer" {% if layout.logo_position == "footer" %}selected{% endif %}>Stopka</option>
                 <option value="before_content" {% if layout.logo_position == "before_content" %}selected{% endif %}>Przed treścią</option>
                 <option value="after_content" {% if layout.logo_position == "after_content" %}selected{% endif %}>Po treści</option>
             </select></label>
@@ -52,7 +55,8 @@
                 <option value="right" {% if layout.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
             </select></label>
             <label><span>Wysokość logo</span><input type="number" min="16" max="200" name="layout_logo_height_px" value="{{ layout.logo_height_px }}"> <small>px</small></label>
-            <label class="admin-form-wide"><span>Stopka HTML</span><textarea name="layout_footer_html" rows="5">{{ layout.footer_html }}</textarea></label>
+            <input type="hidden" name="layout_footer_html" value="{{ layout.footer_html }}">
+            <p class="admin-form-wide admin-help">Logo układu platformy nie jest renderowane w stopce wiadomości. Logo stopki skonfiguruj niezależnie w sekcji „Stopka ogólna”.</p>
         </div>
     </div>
     <div class="admin-form-actions"><button class="admin-button" type="submit">Zapisz konfigurację</button></div>

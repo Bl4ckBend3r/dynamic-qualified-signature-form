@@ -144,3 +144,69 @@ def test_validator_reports_bad_field_stage():
     )
 
     assert "fields[0].stage is unsupported: bad_stage" in errors
+
+
+def _workflow_reachability_form(*, confirmation: bool, signature_next: str) -> dict:
+    return {
+        "title": "Formularz szkoleniowy",
+        "fields": [],
+        "documents": [],
+        "workflow": {
+            "initial_step": "submission",
+            "requires_contract": True,
+            "requires_agreement_confirmation": confirmation,
+            "contract_template_html": "<p>Umowa</p>",
+            "steps": [
+                {"id": "submission", "label": "Wniosek", "next": "training_agreements_signature"},
+                {
+                    "id": "training_agreements_signature",
+                    "label": "Umowa oczekuje na podpis beneficjenta",
+                    "status": "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+                    "next": signature_next,
+                },
+                {
+                    "id": "stage_10",
+                    "label": "Oczekuje na podpis urzędu",
+                    "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+                    "next": "stage_11",
+                },
+                {
+                    "id": "stage_11",
+                    "label": "Umowa podpisana przez urząd",
+                    "status": "AGREEMENT_SIGNED_BY_OFFICE",
+                    "next": "completed",
+                },
+                {"id": "completed", "label": "Zakończenie", "final": True},
+            ],
+        },
+    }
+
+
+def test_validator_reports_polish_unreachable_labels_and_confirmation_mismatch():
+    errors = FormConfigValidator(skip_template_check=True).validate(
+        _workflow_reachability_form(confirmation=True, signature_next="completed")
+    )
+
+    assert (
+        "Etap „Oczekuje na podpis urzędu” nie jest połączony z główną ścieżką workflow."
+        in errors
+    )
+    assert (
+        "Etap „Umowa podpisana przez urząd” nie jest połączony z główną ścieżką workflow."
+        in errors
+    )
+    assert any(
+        error.startswith("Włączono potwierdzenie podpisania umowy przez urząd")
+        for error in errors
+    )
+    assert not any("workflow contains unreachable step" in error for error in errors)
+
+
+def test_validator_ignores_unreachable_office_steps_when_confirmation_is_disabled():
+    errors = FormConfigValidator(skip_template_check=True).validate(
+        _workflow_reachability_form(confirmation=False, signature_next="completed")
+    )
+
+    assert not any("Oczekuje na podpis urzędu" in error for error in errors)
+    assert not any("Umowa podpisana przez urząd" in error for error in errors)
+    assert not any("unreachable" in error for error in errors)

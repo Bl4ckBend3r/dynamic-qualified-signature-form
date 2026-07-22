@@ -13,6 +13,15 @@
         <p>Formularz został przetworzony.</p>
     </div>
 
+    {% if result.auto_rejected|default(false) %}
+    <div class="result-box result-box--error" role="alert">
+        <p><strong>Zgłoszenie zostało odrzucone automatycznie.</strong></p>
+        <p>{{ result.qualification_message }}</p>
+    </div>
+    {% elif result.qualification_message|default('') %}
+    <div class="result-box result-box--completed" role="status"><p>{{ result.qualification_message }}</p></div>
+    {% endif %}
+
     <div class="result-grid">
         <div class="result-item">
             <span class="result-label">Nazwa formularza</span>
@@ -61,12 +70,12 @@
     <div class="download-links">
         <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
 
-        <a
+        {% if result.can_continue|default(true) %}<a
             class="btn-primary"
             href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id) }}"
         >
             Przejdź do dokumentów do podpisania
-        </a>
+        </a>{% endif %}
 
         {% if has_signature_flow and result.signed_pdf_url %}
             <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>

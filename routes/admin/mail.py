@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import or_, select
 
 from models import FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
+from services.instruction_html_service import sanitize_instruction_html
 from services.mail_template_service import (
     MAIL_LAYOUT,
     MailImportError,
@@ -13,13 +15,16 @@ from services.mail_template_service import (
     import_mail_template_zip,
     parse_mail_content,
     render_platform_mail_html,
+    sanitize_content_html,
 )
 
 from . import (
     MAIL_TEMPLATE_TYPES,
     OFFICER_DECISIONS,
+    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     bp,
+    can_manage_form,
     db_session_factory,
     ensure_form_access,
     list_accessible_forms,
@@ -28,11 +33,37 @@ from . import (
     parse_optional_int,
     preview_mail_context,
     read_uploaded_template_file,
+    role_required,
 )
+
+
+MAIL_DYNAMIC_VARIABLES = {
+    "Zgłoszenie": ["submission_id", "created_at", "process_status", "status_label"],
+    "Formularz": ["form_name", "form_slug"],
+    "Użytkownik": ["imiona", "nazwisko", "email", "telefon"],
+    "Szkolenia": ["selected_trainings", "all_selected_trainings_total_formatted"],
+    "Linki": ["status_url", "podpisz_url", "document_url"],
+}
+MAIL_TEMPLATE_LABELS = {
+    "confirmation": "Złożenie wniosku",
+    "accepted": "Akceptacja",
+    "rejected": "Odrzucenie",
+    "auto_rejected_by_condition": "Automatyczne odrzucenie",
+    "correction_required": "Wysłanie do poprawy",
+    "returned_for_correction": "Wysłanie do poprawy",
+    "declaration_ready": "Deklaracja gotowa",
+    "declaration_signed": "Deklaracja podpisana",
+    "agreement_ready": "Umowa gotowa",
+    "agreement_signed_by_user": "Umowa podpisana przez beneficjenta",
+    "agreement_signed_by_office": "Umowa podpisana przez urząd",
+    "stage_rollback": "Cofnięcie etapu",
+    "custom": "Wiadomość własna",
+}
 
 
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/mail", methods=["GET", "POST"])
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_mail(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
@@ -52,6 +83,12 @@ def submission_mail(form_id: int, submission_pk: int):
             db.commit()
             flash(*mail_flash(result))
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        resolved_footer = current_app.extensions["services"].mail_dispatch_service.mail_footer_resolver.resolve(
+            db,
+            mail_type="manual",
+            form=form,
+            submission=submission,
+        )
         return render_template(
             "admin/submissions/mail.html",
             form=form,
@@ -59,11 +96,20 @@ def submission_mail(form_id: int, submission_pk: int):
             templates=templates,
             template_payload=mail_template_payload(templates),
             footers=footers,
+            footer_usage_label=(
+                "Używana jest stopka formularza"
+                if resolved_footer and resolved_footer.form_id == form.id
+                else "Używana jest stopka ogólna"
+                if resolved_footer
+                else "Brak aktywnej stopki e-mail"
+            ),
+            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
         )
 
 
 @bp.post("/forms/<int:form_id>/submissions/mail-selected")
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submissions_mail_selected(form_id: int):
     selected_ids = request.form.getlist("submission_ids") or request.form.getlist("selected_submission_ids")
     selected_ids = [str(item).strip() for item in selected_ids if str(item).strip()]
@@ -89,7 +135,19 @@ def submissions_mail_selected(form_id: int):
             .where(or_(MailFooter.form_id == form.id, MailFooter.form_id.is_(None)), MailFooter.is_active.is_(True))
             .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
+        if request.form.get("compose") == "1" and request.form.get("send_now") != "1":
+            return render_template(
+                "admin/submissions/mail_bulk.html",
+                form=form,
+                submissions=submissions,
+                templates=templates,
+                template_payload=mail_template_payload(templates),
+                dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+                missing_email_submissions=[item for item in submissions if not str(item.email or "").strip()],
+            )
+        manual_template = _manual_template_from_request()
         summary = {"sent": 0, "failed": 0, "skipped": 0}
+        skipped_ids = []
         for submission in submissions:
             result = send_selected_submission_mail(
                 db,
@@ -98,11 +156,15 @@ def submissions_mail_selected(form_id: int):
                 templates,
                 footers,
                 trigger_event=request.form.get("trigger_event", "manual_bulk").strip() or "manual_bulk",
+                manual_template=manual_template,
             )
             summary[result.status] = summary.get(result.status, 0) + 1
+            if result.status == "skipped":
+                skipped_ids.append(submission.submission_id)
         db.commit()
     flash(
-        f"Maile: wyslane {summary.get('sent', 0)}, pominiete {summary.get('skipped', 0)}, bledy {summary.get('failed', 0)}.",
+        f"Wiadomości: wysłane {summary.get('sent', 0)}, pominięte {summary.get('skipped', 0)}, błędy {summary.get('failed', 0)}."
+        + (f" Pominięte zgłoszenia: {', '.join(skipped_ids)}." if skipped_ids else ""),
         "success" if summary.get("sent", 0) else "error",
     )
     return redirect(url_for("admin.submissions_list", form_id=form_id))
@@ -112,9 +174,15 @@ def submissions_mail_selected(form_id: int):
 @login_required
 def mail_templates_list(form_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, manage=True)
+        form = ensure_form_access(db, form_id)
         templates = db.execute(select(MailTemplate).where(MailTemplate.form_id == form.id).order_by(MailTemplate.name)).scalars().all()
-        return render_template("admin/mail_templates/list.html", form=form, templates=templates)
+        return render_template(
+            "admin/mail_templates/list.html",
+            form=form,
+            templates=templates,
+            read_only=not can_manage_form(db, g.admin_user, form.id),
+            template_labels=MAIL_TEMPLATE_LABELS,
+        )
 
 
 @bp.get("/mail-templates")
@@ -198,6 +266,8 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             sample_submissions=sample_submissions,
             preview_submission_id=sample_submission.id if sample_submission else "",
             mail_layout=MAIL_LAYOUT,
+            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+            template_labels=MAIL_TEMPLATE_LABELS,
         )
 
 
@@ -344,21 +414,35 @@ def mail_footers_list(form_id: int):
 def mail_footer_edit(form_id: int, footer_id: int | None = None):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
-        footer = db.get(MailFooter, footer_id) if footer_id else MailFooter(form_id=form.id, name="", html_body="")
+        footer = db.get(MailFooter, footer_id) if footer_id else db.execute(
+            select(MailFooter).where(MailFooter.form_id == form.id).order_by(MailFooter.is_default.desc(), MailFooter.id)
+        ).scalars().first()
+        footer = footer or MailFooter(form_id=form.id, name="Stopka formularza", html_body="")
         if not footer or footer.form_id != form.id:
             abort(404)
         logos = list_active_logos(db)
         if request.method == "POST":
-            footer.name = request.form.get("name", "").strip() or "Stopka"
-            footer.html_body = request.form.get("html_body", "").strip()
+            try:
+                _update_mail_footer_from_form(footer)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return render_template(
+                    "admin/mail_footers/edit.html",
+                    form=form,
+                    footer=footer,
+                    logos=logos,
+                    is_global=False,
+                    global_footer=_global_mail_footer(db),
+                    footer_usage_label="Używana jest stopka formularza",
+                ), 400
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             from . import can_select_active_logo
 
             if selected_logo_id and not can_select_active_logo(db, selected_logo_id):
                 abort(403)
             footer.logo_id = selected_logo_id
-            footer.is_active = request.form.get("is_active") == "on"
-            footer.is_default = request.form.get("is_default") == "on"
+            footer.logo_path = ""
+            footer.is_default = True
             if footer.is_default:
                 for item in db.execute(select(MailFooter).where(MailFooter.form_id == form.id)).scalars().all():
                     item.is_default = False
@@ -366,13 +450,136 @@ def mail_footer_edit(form_id: int, footer_id: int | None = None):
             db.commit()
             flash("Stopka maila zostala zapisana.", "success")
             return redirect(url_for("admin.mail_footers_list", form_id=form.id))
-        return render_template("admin/mail_footers/edit.html", form=form, footer=footer, logos=logos)
+        global_footer = _global_mail_footer(db)
+        return render_template(
+            "admin/mail_footers/edit.html",
+            form=form,
+            footer=footer,
+            logos=logos,
+            is_global=False,
+            global_footer=global_footer,
+            footer_usage_label=(
+                "Używana jest stopka ogólna"
+                if footer.use_global or (footer.id is not None and not footer.is_active)
+                else "Używana jest stopka formularza"
+            ),
+        )
+
+
+@bp.route("/mail-footer", methods=["GET", "POST"])
+@role_required(ROLE_SUPER_ADMIN)
+def global_mail_footer_edit():
+    with db_session_factory()() as db:
+        footer = _global_mail_footer(db) or MailFooter(form_id=None, name="Stopka ogólna", html_body="", is_default=True)
+        logos = list_active_logos(db)
+        if request.method == "POST":
+            try:
+                _update_mail_footer_from_form(footer)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return render_template(
+                    "admin/mail_footers/edit.html",
+                    form=None,
+                    footer=footer,
+                    logos=logos,
+                    is_global=True,
+                    global_footer=footer,
+                    footer_usage_label="Używana jest stopka ogólna",
+                ), 400
+            footer.form_id = None
+            footer.is_default = True
+            footer.use_global = False
+            selected_logo_id = parse_optional_int(request.form.get("logo_id"))
+            from . import can_select_active_logo
+
+            if selected_logo_id and not can_select_active_logo(db, selected_logo_id):
+                abort(403)
+            footer.logo_id = selected_logo_id
+            footer.logo_path = ""
+            for item in db.execute(select(MailFooter).where(MailFooter.form_id.is_(None))).scalars().all():
+                item.is_default = False
+            db.add(footer)
+            db.commit()
+            flash("Stopka ogólna została zapisana.", "success")
+            return redirect(url_for("admin.global_mail_footer_edit"))
+        return render_template(
+            "admin/mail_footers/edit.html",
+            form=None,
+            footer=footer,
+            logos=logos,
+            is_global=True,
+            global_footer=footer,
+            footer_usage_label="Używana jest stopka ogólna",
+        )
+
+
+def _global_mail_footer(db) -> MailFooter | None:
+    return db.execute(
+        select(MailFooter).where(MailFooter.form_id.is_(None)).order_by(MailFooter.is_default.desc(), MailFooter.id)
+    ).scalars().first()
+
+
+def _update_mail_footer_from_form(footer: MailFooter) -> None:
+    alignment = str(request.form.get("logo_alignment") or "left").strip()
+    if alignment not in {"left", "center", "right"}:
+        raise ValueError("Wybierz prawidłowe wyrównanie logo.")
+    position = str(request.form.get("logo_position") or "top").strip()
+    if position not in {"top", "bottom", "left", "right", "inline"}:
+        raise ValueError("Wybierz prawidłowe położenie logo.")
+    width = _parse_footer_logo_dimension(
+        request.form.get("logo_width"),
+        minimum=20,
+        maximum=800,
+        label="Szerokość logo",
+    )
+    height = _parse_footer_logo_dimension(
+        request.form.get("logo_height"),
+        minimum=20,
+        maximum=400,
+        label="Wysokość logo",
+    )
+
+    footer.name = request.form.get("name", "").strip() or ("Stopka ogólna" if footer.form_id is None else "Stopka formularza")
+    footer.html_body = sanitize_instruction_html(request.form.get("html_body", ""))
+    footer.contact_html = sanitize_instruction_html(request.form.get("contact_html", ""))
+    footer.legal_text = sanitize_instruction_html(request.form.get("legal_text", ""))
+    footer.logo_alignment = alignment
+    footer.logo_position = position
+    footer.logo_width = width
+    footer.logo_height = height
+    footer.links = _parse_footer_links(request.form.get("links_text", ""))
+    footer.is_active = request.form.get("is_active") == "on"
+    footer.use_global = request.form.get("use_global") == "on"
+
+
+def _parse_footer_logo_dimension(value: str | None, *, minimum: int, maximum: int, label: str) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label} musi być liczbą całkowitą od {minimum} do {maximum} px.") from exc
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"{label} musi mieć wartość od {minimum} do {maximum} px.")
+    return parsed
+
+
+def _parse_footer_links(value: str) -> list[dict[str, str]]:
+    links = []
+    for raw_line in str(value or "").splitlines()[:20]:
+        label, separator, url = raw_line.partition("|")
+        url = url.strip()
+        if not separator or not label.strip() or not url.lower().startswith(("https://", "http://", "mailto:", "tel:")):
+            continue
+        links.append({"label": label.strip()[:120], "url": url[:1000]})
+    return links
 
 
 def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter]):
     template_id = int(request.form.get("template_id") or 0)
     footer_id = int(request.form.get("footer_id") or 0)
-    template = next((item for item in templates if item.id == template_id), None)
+    template = _manual_template_from_request() or next((item for item in templates if item.id == template_id), None)
     if templates and template is None:
         template = templates[0]
     footer = next((item for item in footers if item.id == footer_id), None) if footer_id else select_default_footer(footers, form_id=form.id)
@@ -389,8 +596,17 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
     )
 
 
-def send_selected_submission_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter], *, trigger_event: str):
-    template = select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
+def send_selected_submission_mail(
+    db,
+    form,
+    submission,
+    templates: list[MailTemplate],
+    footers: list[MailFooter],
+    *,
+    trigger_event: str,
+    manual_template=None,
+):
+    template = manual_template or select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
     footer = select_default_footer(footers, form_id=form.id)
     return send_mail_for_submission(
         db,
@@ -410,16 +626,41 @@ def select_mail_template(templates: list[MailTemplate], submission: FormSubmissi
 
 
 def select_default_footer(footers: list[MailFooter], *, form_id: int) -> MailFooter | None:
-    form_footer = next((item for item in footers if item.form_id == form_id and item.is_default), None)
+    form_footer = next(
+        (item for item in footers if item.form_id == form_id and item.is_default and item.is_active and not item.use_global),
+        None,
+    )
     if form_footer:
         current_app.logger.info("mail_footer_selected scope=form footer_id=%s form_id=%s", form_footer.id, form_id)
         return form_footer
-    global_footer = next((item for item in footers if item.form_id is None and item.is_default), None)
+    global_footer = next((item for item in footers if item.form_id is None and item.is_default and item.is_active), None)
     if global_footer:
         current_app.logger.info("mail_footer_selected scope=global footer_id=%s form_id=%s", global_footer.id, form_id)
         return global_footer
     current_app.logger.info("mail_footer_selected scope=none form_id=%s", form_id)
     return None
+
+
+def _manual_template_from_request():
+    subject = str(request.form.get("subject") or "").strip()
+    html_body = str(request.form.get("html_body") or "").strip()
+    text_body = str(request.form.get("text_body") or "").strip()
+    if not any((subject, html_body, text_body)):
+        return None
+    return SimpleNamespace(
+        id=None,
+        subject=subject,
+        content_title="Wiadomość",
+        content_html=sanitize_content_html(html_body),
+        content_text=text_body,
+        html_body=sanitize_content_html(html_body),
+        text_body=text_body,
+        instruction_html="",
+        instruction_text="",
+        footer_note="",
+        use_platform_layout=True,
+        is_active=True,
+    )
 
 
 def mail_template_payload(templates: list[MailTemplate]) -> list[dict]:

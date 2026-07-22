@@ -7,3 +7,4 @@ __pycache__/
 .env
 .coverage
 tmp/
+MANUAL_ADMIN_FUNCTIONALITY_CHECKLIST.md

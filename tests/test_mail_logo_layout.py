@@ -35,7 +35,6 @@ def render_logo(position: str, *, alignment: str = "center", height: int = 64, l
         ("header", 'data-logo-position="header"', '<tr><td class="platform-title"'),
         ("before_content", 'data-logo-position="before_content"', "BODY-CONTENT"),
         ("after_content", "BODY-CONTENT", 'data-logo-position="after_content"'),
-        ("footer", "BODY-CONTENT", 'data-logo-position="footer"'),
     ],
 )
 def test_logo_is_rendered_once_in_selected_position(position, before_marker, after_marker):
@@ -46,16 +45,14 @@ def test_logo_is_rendered_once_in_selected_position(position, before_marker, aft
     assert html.index(before_marker) < html.index(after_marker)
 
 
-def test_footer_logo_is_grouped_with_html_footer_and_keeps_footer_content():
+def test_platform_logo_is_never_rendered_as_mail_footer_logo():
     html = render_logo("footer", alignment="right", height=88)
 
     footer = html.split('class="platform-layout-footer"', 1)[1]
-    assert 'data-logo-position="footer"' in footer
     assert "FOOTER-CONTENT" in footer
-    assert 'height="88"' in footer
-    assert "height:88px;width:auto;max-width:100%;display:block;border:0" in footer
-    assert "text-align:right" in footer
-    assert footer.index('data-logo-position="footer"') < footer.index("FOOTER-CONTENT")
+    assert 'data-logo-position="footer"' not in footer
+    assert "cid:mail-logo" not in html
+    assert "platform-logo" not in html
 
 
 def test_none_or_unusable_logo_source_renders_no_image_or_empty_logo_container():

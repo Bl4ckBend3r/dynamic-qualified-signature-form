@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 
-from models import Form, Logo, MailFooter, SystemMailSettings
+from models import Form, Logo, MailFooter, SiteFooter, SystemMailSettings
 from services.logo_service import (
     create_logo_from_upload,
     list_logos_for_admin,
@@ -103,14 +103,17 @@ def logo_delete(logo_id: int):
         logo = db.get(Logo, logo_id) or abort(404)
         forms_count = db.query(Form).filter(Form.logo_id == logo.id).count()
         footers_count = db.query(MailFooter).filter(MailFooter.logo_id == logo.id).count()
-        if (forms_count or footers_count) and request.form.get("detach") != "1":
+        site_footers_count = db.query(SiteFooter).filter(SiteFooter.logo_id == logo.id).count()
+        if (forms_count or footers_count or site_footers_count) and request.form.get("detach") != "1":
             flash(
-                f"Logo jest przypisane do {forms_count} formularzy i {footers_count} stopek. Potwierdź bezpieczne odpięcie.",
+                f"Logo jest przypisane do {forms_count} formularzy, {footers_count} stopek mailowych "
+                f"i {site_footers_count} stopek strony. Potwierdź bezpieczne odpięcie.",
                 "warning",
             )
             return redirect(url_for("admin.logos_list"))
         db.query(Form).filter(Form.logo_id == logo.id).update({Form.logo_id: None}, synchronize_session=False)
         db.query(MailFooter).filter(MailFooter.logo_id == logo.id).update({MailFooter.logo_id: None}, synchronize_session=False)
+        db.query(SiteFooter).filter(SiteFooter.logo_id == logo.id).update({SiteFooter.logo_id: None}, synchronize_session=False)
         for settings in db.query(SystemMailSettings).all():
             layout = dict(settings.layout_config or {})
             if layout.get("logo_id") == logo.id:
@@ -118,5 +121,9 @@ def logo_delete(logo_id: int):
                 settings.layout_config = layout
         db.delete(logo)
         db.commit()
-    flash(f"Logo zostało usunięte i odpięte od {forms_count} formularzy.", "success")
+    flash(
+        f"Logo zostało usunięte i odpięte od {forms_count} formularzy, "
+        f"{footers_count} stopek mailowych i {site_footers_count} stopek strony.",
+        "success",
+    )
     return redirect(url_for("admin.logos_list"))

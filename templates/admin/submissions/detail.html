@@ -1,6 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}Zgloszenie{% endblock %}
 {% block content %}
+{% if g.admin_user.role == "form_manager" %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać dane i dokumenty zgłoszenia, ale nie możesz zmieniać decyzji ani wysyłać wiadomości.</div>{% endif %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
 {% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
@@ -72,7 +73,7 @@
                 <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
             </dl>
 
-            {% if section.key == "application" and workflow_view.can_edit_application_decision %}
+            {% if section.key == "application" and workflow_view.can_edit_application_decision and g.admin_user.role in ["admin", "super_admin"] %}
                 <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="next" value="{{ request.path }}">
@@ -91,7 +92,7 @@
                 </form>
             {% endif %}
 
-            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin", "form_manager"] %}
+            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin"] %}
                 <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <label><span>Umowa podpisana przez urząd</span>
@@ -116,7 +117,7 @@
         </section>
     {% endfor %}
 </div>
-<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij e-mail</a></p>
+{% if g.admin_user.role in ["admin", "super_admin"] %}<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></p>{% endif %}
 {% if detail_view.qualification %}
 <section class="admin-card">
     <h2>Warunki kwalifikujące</h2>

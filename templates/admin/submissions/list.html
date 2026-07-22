@@ -8,6 +8,7 @@
     </div>
     <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
 </div>
+{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać zgłoszenia, ale nie możesz zmieniać decyzji, usuwać danych ani wysyłać wiadomości.</div>{% endif %}
 <form method="get" class="admin-card admin-filters">
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
@@ -16,6 +17,8 @@
             <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
     </select>
+    <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
+    <label><span>Data do</span><input type="date" name="date_to" value="{{ filters.get('date_to', '') }}"></label>
     <select name="field">
         <option value="">Pole do filtrowania</option>
         {% for field_name, field_label in filter_fields %}
@@ -45,13 +48,14 @@
 </form>
 <form id="bulk-mail-form" method="post" action="{{ url_for('admin.submissions_mail_selected', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="compose" value="1">
 </form>
 <form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-delete-selection></div>
 </form>
-<div class="admin-bulk-actions">
+{% if not read_only %}<div class="admin-bulk-actions">
     <label class="admin-check">
         <input type="checkbox" id="select-all-submissions">
         <span>Zaznacz wszystkie na stronie</span>
@@ -61,7 +65,7 @@
         <button class="admin-button-secondary" type="submit" form="bulk-delete-form" data-delete-button hidden disabled>Usuń</button>
         <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
     </div>
-</div>
+</div>{% endif %}
 <form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
@@ -69,7 +73,7 @@
         <table class="admin-table">
             <thead>
                 <tr>
-                    <th>Wybierz</th>
+                    {% if not read_only %}<th>Wybierz</th>{% endif %}
                     <th>ID</th>
                     <th>Data</th>
                     <th>Nazwisko</th>
@@ -96,8 +100,8 @@
                         <td>{{ submission_value(submission, field.name) or "-" }}</td>
                     {% endfor %}
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
-                    <td>
-                        {% if can_edit_application_decision(submission) %}
+                    {% if not read_only %}<td>
+                        {% if not read_only and can_edit_application_decision(submission) %}
                             <div class="admin-decision-controls">
                                 <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
                                     {% for value, label in officer_decisions %}
@@ -116,11 +120,11 @@
                         {% else %}
                             <span>Etap zakończony</span>
                         {% endif %}
-                    </td>
+                    </td>{% endif %}
                     <td>
                         <div class="admin-actions">
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
-                            <a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+                            {% if not read_only %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                         </div>
                     </td>
                 </tr>
@@ -129,10 +133,10 @@
             {% endfor %}</tbody>
         </table>
     </div>
-    <div class="admin-bulk-actions admin-bulk-actions-bottom">
+    {% if not read_only %}<div class="admin-bulk-actions admin-bulk-actions-bottom">
         <span></span>
         <button class="admin-button" type="submit">Zapisz decyzje</button>
-    </div>
+    </div>{% endif %}
 </form>
 <script>
 document.addEventListener("DOMContentLoaded", function () {

@@ -6,7 +6,7 @@
         <p class="admin-eyebrow">Konfiguracja</p>
         <h1>Formularze</h1>
     </div>
-    <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj formularz</a>
+    {% if g.admin_user.role == "super_admin" %}<a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj formularz</a>{% endif %}
 </div>
 {% if forms %}
     <div class="admin-card admin-table-wrap">
@@ -38,15 +38,17 @@
                     <td>
                         <div class="admin-actions">
                             <a href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgloszenia</a>
+                            {% if g.admin_user.role in ["super_admin", "admin"] %}
                             <a href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
                             <a href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
                             <a href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
                             <a href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
-                            <a href="{{ url_for('admin.form_edit', form_id=form.id) }}">Uprawnienia</a>
                             <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
                             </form>
+                            {% endif %}
+                            {% if g.admin_user.role == "super_admin" %}<a href="{{ url_for('admin.form_edit', form_id=form.id, tab='permissions') }}">Uprawnienia</a>{% endif %}
                             {% if g.admin_user.role == "super_admin" %}
                                 <button class="admin-link-button admin-link-danger" type="button" data-admin-modal-target="delete-form-{{ form.id }}">Usuń</button>
                                 <dialog class="admin-modal admin-modal-backdrop" id="delete-form-{{ form.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-form-title-{{ form.id }}" data-admin-modal>
@@ -73,8 +75,10 @@
 {% else %}
     <div class="admin-empty-state">
         <h2>Nie dodano jeszcze zadnego formularza.</h2>
-        <p>Uzyj przycisku ponizej, aby wgrac formularz. System automatycznie wykryje pola i zapisze konfiguracje.</p>
-        <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj pierwszy formularz</a>
+        {% if g.admin_user.role == "super_admin" %}
+            <p>Użyj przycisku poniżej, aby wgrać formularz. System automatycznie wykryje pola i zapisze konfigurację.</p>
+            <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj pierwszy formularz</a>
+        {% else %}<p>Nie przypisano Ci jeszcze żadnego formularza.</p>{% endif %}
     </div>
 {% endif %}
 <script>

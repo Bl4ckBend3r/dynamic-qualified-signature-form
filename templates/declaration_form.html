@@ -76,7 +76,7 @@
                             >
                                 <option value="">-- wybierz --</option>
                                 {% for option in field.options %}
-                                    <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                    <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
                                 {% endfor %}
                             </select>
 
@@ -91,12 +91,12 @@
                                         <input
                                             type="radio"
                                             name="{{ field.name }}"
-                                            value="{{ option }}"
-                                            {% if value == option %}checked{% endif %}
+                                            value="{{ option|option_value }}"
+                                            {% if value == (option|option_value) %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
-                                        <span>{{ option }}</span>
+                                        <span>{{ option|option_label }}</span>
                                     </label>
                                 {% endfor %}
                             </div>
@@ -109,13 +109,13 @@
                                             type="checkbox"
                                             id="{{ field.name }}_{{ loop.index }}"
                                             name="{{ field.name }}"
-                                            value="{{ option.value }}"
-                                            {% if value == option.value %}checked{% endif %}
+                                            value="{{ option|option_value }}"
+                                            {% if value == (option|option_value) %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>
-                                            {{ option.label }}
+                                            {{ option|option_label }}
                                             {% if field.required %}
                                                 <span class="required">*</span>
                                             {% endif %}

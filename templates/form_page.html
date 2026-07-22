@@ -36,7 +36,11 @@
                 <p>Uzupełnij formularz i wyślij go ponownie. Warunki kwalifikujące zostaną sprawdzone ponownie.</p>
             </div>
         {% endif %}
+        {% if form_error %}
+            <div class="alert alert-error form-validation-summary" role="alert">{{ form_error }}</div>
+        {% endif %}
         <form method="post" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
             {% if correction_mode %}<input type="hidden" name="token" value="{{ access_token }}">{% endif %}
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
@@ -72,6 +76,7 @@
 
                         {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
                             <input
+                                class="{% if has_error %}has-error{% endif %}"
                                 type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
@@ -81,10 +86,12 @@
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
                                 {% if field.required %}required{% endif %}
+                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >
 
                         {% elif field.type == "textarea" %}
                             <textarea
+                                class="{% if has_error %}has-error{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
                                 data-field-name="{{ field.name }}"
@@ -92,20 +99,23 @@
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
                                 {% if field.required %}required{% endif %}
+                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >{{ value }}</textarea>
 
                         {% elif field.type == "select" %}
                             <select
+                                class="{% if has_error %}has-error{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
                                 data-field-name="{{ field.name }}"
                                 data-field-type="{{ field.type }}"
                                 {% if field.required %}required{% endif %}
                                 {% if field.readonly %}disabled{% endif %}
+                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >
                                 <option value="">-- wybierz --</option>
                                 {% for option in field.options %}
-                                    <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                    <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
                                 {% endfor %}
                             </select>
 
@@ -118,16 +128,18 @@
                                 {% for option in field.options %}
                                     <label class="option-item">
                                         <input
+                                            class="{% if has_error %}has-error{% endif %}"
                                             type="radio"
                                             name="{{ field.name }}"
                                             data-field-name="{{ field.name }}"
                                             data-field-type="{{ field.type }}"
-                                            value="{{ option }}"
-                                            {% if value == option %}checked{% endif %}
+                                            value="{{ option|option_value }}"
+                                            {% if value == (option|option_value) %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
+                                            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                                         >
-                                        <span>{{ option|trusted_html }}</span>
+                                        <span>{{ option|option_label|trusted_html }}</span>
                                     </label>
                                 {% endfor %}
                             </div>
@@ -137,21 +149,23 @@
                                 {% for option in field.options %}
                                     <label class="checkbox-item">
                                         <input
+                                            class="{% if has_error %}has-error{% endif %}"
                                             type="checkbox"
                                             id="{{ field.name }}_{{ loop.index }}"
                                             name="{{ field.name }}"
                                             data-field-name="{{ field.name }}"
                                             data-field-type="{{ field.type }}"
-                                            value="{{ option.value }}"
-                                            {% if value == option.value %}checked{% endif %}
+                                            value="{{ option|option_value }}"
+                                            {% if value == (option|option_value) %}checked{% endif %}
                                             {% if field.required %}required{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
+                                            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                                         >
                                         <span>
                                             {% if form_definition.regulation_url and "regulamin" in (field.name|string|lower) %}
                                                 Akceptuję <a href="{{ form_definition.regulation_url }}" target="_blank" rel="noopener noreferrer">regulamin</a>
                                             {% else %}
-                                                {{ option.label|trusted_html }}
+                                                {{ option|option_label|trusted_html }}
                                             {% endif %}
                                             {% if field.required %}
                                                 <span class="required">*</span>
@@ -167,7 +181,7 @@
                         {% endif %}
 
                         {% if has_error %}
-                            <div class="error-text">{{ has_error }}</div>
+                            <div class="error-text" id="{{ field.name }}-error" role="alert">{{ has_error }}</div>
                         {% endif %}
                     </div>
                 {% endif %}

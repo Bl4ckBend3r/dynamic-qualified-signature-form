@@ -17,7 +17,7 @@ APPLICATION_REVIEW_STATUSES = {
     "CORRECTED",
 }
 AGREEMENT_DECISIONS = {"accepted", "rejected", "correction"}
-AGREEMENT_DECISION_ROLES = {"admin", "super_admin", "form_manager"}
+AGREEMENT_DECISION_ROLES = {"admin", "super_admin"}
 OFFICE_SIGNATURE_REVIEW_STATUSES = {
     ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY.value,
     ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value,

@@ -114,6 +114,7 @@ def form_delete(form_id: int):
 
 @bp.route("/forms/upload", methods=["GET", "POST"])
 @login_required
+@role_required(ROLE_SUPER_ADMIN)
 def forms_upload():
     if request.method == "GET":
         return render_template("admin/forms/upload.html")
@@ -134,7 +135,13 @@ def forms_upload():
             raise ValueError("; ".join(validation_errors))
     except Exception as exc:
         current_app.logger.warning("Niepoprawna definicja formularza: %s", exc)
-        flash("Niepoprawny plik definicji formularza albo brak wykrytych pól.", "error")
+        message = str(exc).strip()
+        if suffix == ".docx" and "Nie wykryto" not in message:
+            message = (
+                "Nie udało się odczytać pól z DOCX. Użyj etykiet zakończonych dwukropkiem, "
+                "pustych linii do wypełnienia albo znaczników {{ nazwa_pola }}."
+            )
+        flash(message or "Plik nie zawiera poprawnej definicji formularza.", "error")
         return render_template("admin/forms/upload.html"), 400
 
     slug = request.form.get("slug", "").strip() or Path(uploaded_file.filename).stem
@@ -184,6 +191,9 @@ def forms_upload():
 def form_edit(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
+        form.workflow_ids_locked = bool(
+            db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)).scalar()
+        )
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
         instruction_statuses = instruction_status_options()

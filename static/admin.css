@@ -1655,3 +1655,44 @@ body.admin-modal-open {
         flex-direction: column;
     }
 }
+.admin-stat-date {
+    font-size: 1rem;
+    line-height: 1.35;
+}
+
+.admin-variable-panel {
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    margin: 16px 0;
+    border: 1px solid #d9dde5;
+    border-radius: 10px;
+    background: #f8f9fb;
+}
+
+.admin-variable {
+    margin: 3px;
+    padding: 5px 8px;
+    border: 1px solid #c8ced9;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.admin-variable:hover,
+.admin-variable:focus-visible {
+    border-color: #8c6b2f;
+    background: #fffaf0;
+}
+
+.workflow-stage-decisions {
+    display: grid;
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #d9dde5;
+}
+
+.workflow-stage-decisions h4 {
+    margin: 0;
+}

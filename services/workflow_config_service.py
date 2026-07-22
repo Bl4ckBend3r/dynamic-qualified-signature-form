@@ -310,7 +310,8 @@ class WorkflowConfigNormalizer:
             "electronic_signature_required", "signed_document_uploader", "decision_settings",
             "email_notifications", "declaration_template_html", "contract_template_html",
             "declaration_filename_pattern", "declaration_generation_mode",
-            "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern", "managed_documents",
+            "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern",
+            "contract_show_all_trainings_total", "managed_documents",
         }
         result.extend(str(key) for key in normalized if key not in known_workflow)
         for step in normalized["steps"]:
@@ -364,14 +365,23 @@ class WorkflowConfigValidator:
         all_ids = {step["id"] for step in all_steps}
         if config["initial_step"] and config["initial_step"] not in all_ids:
             errors.append("Status początkowy wskazuje nieistniejący etap.")
+            errors.append(
+                f"Nie istnieje etap o ID „{config['initial_step']}”. Wybierz istniejący etap z listy „Etap początkowy”."
+            )
         for step in steps:
             if step.get("next") and step["next"] not in all_ids:
-                errors.append(f"Etap „{step['admin_label']}” prowadzi do nieistniejącego etapu.")
+                errors.append(
+                    f"Etap „{step['admin_label']}” prowadzi do nieistniejącego etapu „{step['next']}”. "
+                    "Wybierz istniejący kolejny etap albo oznacz ten etap jako końcowy."
+                )
             for decision, target in step.get("decisions", {}).items():
                 if not str(decision).strip() or not str(target).strip():
                     errors.append(f"Etap „{step['admin_label']}” zawiera pustą decyzję.")
                 elif target not in all_ids:
-                    errors.append(f"Decyzja „{decision}” prowadzi do nieistniejącego etapu „{target}”.")
+                    errors.append(
+                        f"Decyzja „{decision}” w etapie „{step['admin_label']}” prowadzi do nieistniejącego "
+                        f"etapu „{target}”. Wskaż istniejący etap docelowy w karcie tej decyzji."
+                    )
         statuses = {step["status"] for step in steps}
         steps_by_id = {step["id"]: step for step in steps}
         all_steps_by_id = {step["id"]: step for step in all_steps}
@@ -442,7 +452,10 @@ class WorkflowConfigValidator:
             if step is None:
                 if step_id in all_steps_by_id:
                     continue
-                errors.append(f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap.")
+                errors.append(
+                    f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap "
+                    f"„{step_id}”. Wybierz etap z listy dostępnych etapów albo wyłącz tę decyzję."
+                )
                 continue
             allowed = decision_rules.get(decision_id)
             if allowed and step["status"] not in allowed:

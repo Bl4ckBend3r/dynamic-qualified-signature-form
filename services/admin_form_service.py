@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -121,6 +122,7 @@ def build_form_definition_from_admin_form(
     workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     workflow["contract_generation_mode"] = "per_training"
+    workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
     workflow["contract_filename_pattern"] = (
         form_data.get("contract_filename_pattern", workflow.get("contract_filename_pattern", "")).strip()
         or "{first_name}_{last_name}-{training_id}-umowa.pdf"
@@ -506,19 +508,80 @@ def build_definition_from_html(html: str, filename: str) -> dict:
 
 
 def build_definition_from_docx(content: bytes, filename: str) -> dict:
-    with zipfile.ZipFile(BytesIO(content)) as archive:
-        xml = archive.read("word/document.xml")
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError("Plik DOCX jest uszkodzony albo nie zawiera dokumentu Word.") from exc
+
     root = ElementTree.fromstring(xml)
-    texts = [item.text or "" for item in root.iter() if item.tag.endswith("}t") and item.text]
-    raw = "\n".join(texts)
-    candidates = re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw)
-    fields = [
-        {"type": "text", "name": name, "label": humanize_field_name(name), "required": False}
-        for name in dict.fromkeys(candidates)
-    ]
+    paragraphs: list[str] = []
+    for paragraph in (item for item in root.iter() if item.tag.endswith("}p")):
+        text = "".join(
+            child.text or ""
+            for child in paragraph.iter()
+            if child.tag.endswith("}t") or child.tag.endswith("}tab")
+        ).strip()
+        if text:
+            paragraphs.append(text)
+    raw = "\n".join(paragraphs)
+    fields_by_name: dict[str, dict] = {}
+
+    def add_field(label: str, *, field_type: str = "text", options: list[dict] | None = None) -> None:
+        clean_label = re.sub(r"\s+", " ", label).strip(" :-_\t")
+        if not clean_label:
+            return
+        name = _docx_field_name(clean_label)
+        if not name or name in fields_by_name:
+            return
+        field = {"type": field_type, "name": name, "label": clean_label, "required": False}
+        if options:
+            field["options"] = options
+        fields_by_name[name] = field
+
+    for name in re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw):
+        fields_by_name.setdefault(
+            name,
+            {"type": "text", "name": name, "label": humanize_field_name(name), "required": False},
+        )
+
+    checkbox_group: list[str] = []
+    for line in paragraphs:
+        without_placeholders = re.sub(r"\{\{\s*[a-zA-Z0-9_]+\s*\}\}", "", line).strip()
+        checkbox_match = re.match(r"^(?:☐|□|\[\s*[ xX]?\s*\])\s*(.+)$", without_placeholders)
+        if checkbox_match:
+            checkbox_group.append(checkbox_match.group(1).strip())
+            continue
+        if checkbox_group:
+            label = "Wybór"
+            options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+            add_field(label, field_type="checkbox", options=options)
+            checkbox_group = []
+
+        label_match = re.match(
+            r"^(.{2,120}?)(?::\s*(?:_{3,}|\.{3,}|$)|\s+(?:_{3,}|\.{3,})$)",
+            without_placeholders,
+        )
+        if label_match:
+            add_field(label_match.group(1))
+    if checkbox_group:
+        options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+        add_field("Wybór", field_type="checkbox", options=options)
+
+    fields = list(fields_by_name.values())
     if not fields:
-        raise ValueError("no fields")
+        raise ValueError(
+            "Nie wykryto pól w DOCX. Oznacz pola jako {{ nazwa_pola }} albo użyj etykiety "
+            "z dwukropkiem i miejscem do wpisania, np. „Imię: ______”."
+        )
     return {"title": Path(filename).stem, "fields": fields}
+
+
+def _docx_field_name(label: str) -> str:
+    ascii_label = "".join(
+        char for char in unicodedata.normalize("NFKD", str(label).casefold()) if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "_", ascii_label).strip("_")[:80]
 
 
 def html_attr(attrs: str, name: str) -> str:

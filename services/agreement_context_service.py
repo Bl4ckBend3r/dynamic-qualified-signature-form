@@ -39,8 +39,14 @@ def build_training_agreement_value_context(
     }
 
 
-def upgrade_training_agreement_total_placeholder(template_html: str) -> str:
+def upgrade_training_agreement_total_placeholder(
+    template_html: str,
+    *,
+    show_all_trainings_total: bool = True,
+) -> str:
     """Make legacy admin templates use the whole-submission total without changing their table loop."""
+    if not show_all_trainings_total:
+        return template_html
     if "all_selected_trainings_total_formatted" in template_html:
         return template_html
     return LEGACY_TOTAL_PLACEHOLDER.sub(ALL_TRAININGS_TOTAL_PLACEHOLDER, template_html)

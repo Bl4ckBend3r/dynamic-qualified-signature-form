@@ -23,7 +23,6 @@ from services.site_document_service import (
 from services.upload_validation import UploadValidationError
 
 from . import (
-    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     bp,
     can_select_active_logo,
@@ -37,7 +36,7 @@ from . import (
 @bp.route("/site/footer", methods=["GET", "POST"])
 @login_required
 def site_footer_edit():
-    if g.admin_user.role not in {ROLE_ADMIN, ROLE_SUPER_ADMIN}:
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
         return "Nie masz uprawnień do edycji stopki strony.", 403
     with db_session_factory()() as db:
         footer = db.execute(select(SiteFooter).order_by(SiteFooter.id)).scalars().first()

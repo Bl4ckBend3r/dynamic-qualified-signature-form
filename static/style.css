@@ -826,23 +826,12 @@ textarea:focus {
 }
 
 .site-footer__columns {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: clamp(28px, 6vw, 84px);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: clamp(32px, 6vw, 84px);
+    width: 100%;
     min-width: 0;
-}
-
-.site-footer__inner--layout-single .site-footer__columns {
-    grid-template-columns: minmax(0, 1fr);
-}
-
-.site-footer__inner--layout-left_logo_right_content .site-footer__columns,
-.site-footer__inner--layout-left_content_right_logo .site-footer__columns {
-    grid-template-columns: minmax(160px, auto) minmax(0, 1fr);
-}
-
-.site-footer__inner--layout-left_content_right_logo .site-footer__columns {
-    grid-template-columns: minmax(0, 1fr) minmax(160px, auto);
 }
 
 .site-footer__column {
@@ -850,6 +839,28 @@ textarea:focus {
     align-content: start;
     gap: 20px;
     min-width: 0;
+}
+
+.site-footer__column--left {
+    flex: 0 1 48%;
+    max-width: 48%;
+}
+
+.site-footer__column--right {
+    flex: 0 1 auto;
+    max-width: 48%;
+    margin-left: auto;
+    text-align: left;
+}
+
+.site-footer__inner--layout-single .site-footer__column--left {
+    flex: 1 1 100%;
+    max-width: none;
+}
+
+.site-footer__inner--layout-left_logo_right_content .site-footer__column--left,
+.site-footer__inner--layout-left_content_right_logo .site-footer__column--right {
+    flex: 0 1 auto;
 }
 
 .site-footer__content {
@@ -1109,11 +1120,18 @@ textarea:focus {
     }
 }
 
-@media (max-width: 700px) {
-    .site-footer__columns,
-    .site-footer__inner--layout-left_logo_right_content .site-footer__columns,
-    .site-footer__inner--layout-left_content_right_logo .site-footer__columns {
-        grid-template-columns: 1fr;
+@media (max-width: 768px) {
+    .site-footer__columns {
+        flex-direction: column;
+        gap: 32px;
+    }
+
+    .site-footer__column--left,
+    .site-footer__column--right {
+        flex: 1 1 auto;
+        width: 100%;
+        max-width: none;
+        margin-left: 0;
     }
 
     .site-footer__social-slot--right .site-footer__social,

@@ -20,10 +20,10 @@
         <div class="admin-form-grid">
         <label><span>Nazwa</span><input name="name" value="{{ form.name }}" required></label>
         <label><span>Slug</span><input name="slug" value="{{ form.slug }}" required></label>
-        <label><span>Tytuł</span><input name="title" value="{{ form.title }}"></label>
+        <label><span>Tytuł</span><input name="title" value="{{ form.title }}" data-header-title-input></label>
         <label><span>Kolejność sortowania</span><input type="number" name="sort_order" value="{{ form.sort_order }}"></label>
         <label class="admin-form-wide"><span>Opis</span><textarea name="description">{{ form.description }}</textarea></label>
-        <label><span>Etykieta formularza</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08"></label>
+        <label><span>Etykieta formularza</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08" data-header-label-input></label>
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
         </div>
@@ -93,20 +93,20 @@
         <div class="admin-section-heading"><div><h2>Logo i wygląd</h2><p>Dostosuj oznaczenie i nagłówek publicznego formularza.</p></div></div>
         <div class="admin-form-grid">
         <label><span>Wariant etykiety</span><input name="label_variant" value="{{ form.label_variant }}"></label>
-        <label><span>Kolor tekstu etykiety</span><input name="label_color" value="{{ form.label_color }}"></label>
-        <label><span>Tło etykiety</span><input name="label_background" value="{{ form.label_background }}"></label>
+        <label><span>Kolor tekstu etykiety</span><input type="color" name="label_color" value="{{ form.label_color }}" data-header-label-color></label>
+        <label><span>Tło etykiety</span><input type="color" name="label_background" value="{{ form.label_background }}" data-header-label-background></label>
         <label>
             <span>Logo</span>
             <select name="logo_id">
                 <option value="">Bez logo</option>
                 {% for logo in logos %}
-                    <option value="{{ logo.id }}" {% if form.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}{% if not logo.active %} (nieaktywne){% endif %}</option>
+                    <option value="{{ logo.id }}" data-logo-url="{{ url_for('admin.logo_asset', logo_id=logo.id) }}" {% if form.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}{% if not logo.active %} (nieaktywne){% endif %}</option>
                 {% endfor %}
             </select>
         </label>
         <label>
             <span>Wyrównanie logo</span>
-            <select name="logo_alignment">
+            <select name="logo_alignment" data-header-logo-alignment>
                 <option value="left" {% if form.logo_alignment == "left" or not form.logo_alignment %}selected{% endif %}>Do lewej</option>
                 <option value="center" {% if form.logo_alignment == "center" %}selected{% endif %}>Do środka</option>
                 <option value="right" {% if form.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
@@ -114,8 +114,9 @@
         </label>
         </div>
         <div class="admin-form-header-preview" data-form-header-preview>
-            <span class="admin-form-header-preview__label" style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
-            <h3>{{ form.title or form.name }}</h3>
+            <div data-header-logo-wrap style="text-align: {{ form.logo_alignment or 'left' }};">{% if form.logo_id %}<img src="{{ url_for('admin.logo_asset', logo_id=form.logo_id) }}" alt="Podgląd logo" data-header-logo style="max-width: 180px; max-height: 80px;">{% else %}<img alt="Podgląd logo" data-header-logo hidden style="max-width: 180px; max-height: 80px;">{% endif %}</div>
+            <span class="admin-form-header-preview__label" data-header-label style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
+            <h3 data-header-title>{{ form.title or form.name }}</h3>
             <p>Podgląd nagłówka formularza publicznego</p>
         </div>
     </section>
@@ -291,6 +292,7 @@
                     <select name="workflow_initial_step" data-workflow-initial required>
                         {% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if workflow.get('initial_step') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}
                     </select>
+                    <small>Ten status określa, od którego etapu rozpoczyna się proces.</small>
                 </label>
                 <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
                 <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
@@ -310,7 +312,6 @@
                 {% for step in workflow.get('steps', []) %}
                     <article class="workflow-stage-card" data-workflow-step {% if step.get('active') is false %}hidden{% endif %}>
                         <script type="application/json" data-workflow-step-source>{{ step|tojson }}</script>
-                        <input type="hidden" data-step-id value="{{ step.get('id') }}">
                         <div class="workflow-stage-card__heading">
                             <div><span class="workflow-stage-number">Etap {{ loop.index }}</span><h3 data-step-heading>{{ step.get('admin_label') }}</h3></div>
                             <div class="workflow-stage-actions">
@@ -325,6 +326,7 @@
                         <p class="workflow-stage-summary" data-step-summary></p>
                         <div class="workflow-stage-editor" data-workflow-step-editor hidden>
                         <div class="workflow-stage-fields">
+                            <label><span>ID etapu</span><input data-step-id value="{{ step.get('id') }}" {% if form.workflow_ids_locked %}readonly title="ID jest zablokowane, ponieważ etap mógł zostać użyty w zgłoszeniach."{% endif %}><small>Techniczny identyfikator używany w przejściach workflow.{% if form.workflow_ids_locked %} Zmiana jest zablokowana, ponieważ formularz ma już zgłoszenia.{% endif %}</small></label>
                             <label><span>Nazwa dla administratora</span><input data-step-admin-label value="{{ step.get('admin_label') }}" required></label>
                             <label><span>Nazwa dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required></label>
                             <label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
@@ -367,14 +369,15 @@
             ('agreement_rejection', 'Skierowanie umowy do poprawy')
         ] %}
         <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
-            <div class="admin-section-heading"><div><h2>Decyzje urzędnika</h2><p>Wskaż etap, na którym decyzja jest dostępna, oraz jej skutki.</p></div></div>
-            <div class="workflow-decision-grid">
+            <div class="admin-section-heading"><div><h2>Decyzje urzędnika przypisane do etapów</h2><p>Edytor decyzji jest wyświetlany bezpośrednio w karcie wybranego etapu. Nieprzypisane decyzje pozostają poniżej jako nieaktywne.</p></div></div>
+            <div class="workflow-decision-grid" data-workflow-decision-pool>
+                <h3 data-decision-pool-heading>Decyzje nieprzypisane</h3>
                 {% for decision_id, default_label in decision_definitions %}
                     {% set decision = (workflow.get('decision_settings', [])|selectattr('id', 'equalto', decision_id)|list|first)|default({}, true) %}
-                    <article class="workflow-option-card">
+                    <article class="workflow-option-card" data-workflow-decision-card>
                         <h3>{{ default_label }}</h3>
                         <label><span>Nazwa decyzji</span><input name="decision_{{ decision_id }}_label" value="{{ decision.get('label', default_label) }}"></label>
-                        <label><span>Dostępna na etapie</span><select name="decision_{{ decision_id }}_step"><option value="">Nieaktywna</option>{% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if decision.get('step_id') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}</select></label>
+                        <label><span>Przypisana do etapu</span><select name="decision_{{ decision_id }}_step" data-decision-step><option value="">Nieaktywna</option>{% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if decision.get('step_id') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}</select></label>
                         <p class="workflow-help">Możliwe wartości: Tak, Nie, Do poprawy</p>
                         <div class="admin-form-grid">
                             <label><span>Status po „Tak”</span><select name="decision_{{ decision_id }}_yes_status"><option value="">Bez zmiany</option>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if decision.get('yes_status') == status.value %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
@@ -388,31 +391,33 @@
         </section>
 
         <section class="admin-section workflow-section admin-form-tab-panel" role="tabpanel" data-form-tab-panel="declaration agreement" {% if active_tab not in ['declaration', 'agreement'] %}hidden{% endif %}>
-            <div class="admin-section-heading" data-form-tab-only="declaration"><div><h2>Deklaracja</h2><p>Skonfiguruj wymagalność, szablon, generowanie i podpis deklaracji.</p></div></div>
-            <div class="admin-section-heading" data-form-tab-only="agreement"><div><h2>Umowa</h2><p>Skonfiguruj szablon, numerację, pliki i podpisy umów szkoleniowych.</p></div></div>
+            <div class="admin-section-heading" data-form-tab-only="declaration"><div><h2>Deklaracja</h2><p>Włącz deklarację, dodaj jej treść, ustaw nazwę pliku i zdecyduj, czy użytkownik ma ją podpisać.</p></div></div>
+            <div class="admin-section-heading" data-form-tab-only="agreement"><div><h2>Umowa — konfiguracja krok po kroku</h2><ol><li>Włącz obowiązek umowy.</li><li>Dodaj szablon umowy.</li><li>System wygeneruje osobną umowę dla każdego szkolenia.</li><li>Ustaw nazwę pliku.</li><li>Ustaw numer umowy.</li><li>Określ podpis beneficjenta i urzędu.</li></ol></div></div>
             <div class="admin-check-grid">
                 <label class="admin-check" data-form-tab-only="declaration"><input type="checkbox" data-document-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymagana deklaracja</span></label>
                 <label class="admin-check" data-form-tab-only="agreement"><input type="checkbox" data-document-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymagana umowa</span></label>
-                <label class="admin-check" data-form-tab-only="agreement"><input type="checkbox" checked disabled><span>Jedna umowa na jedno szkolenie</span></label>
-                <label class="admin-check"><input type="checkbox" name="electronic_signature_required" {% if workflow.get('electronic_signature_required') %}checked{% endif %}><span>Wymagany podpis elektroniczny</span></label>
+                <label class="admin-check" data-form-tab-only="agreement"><input type="checkbox" checked disabled><span>Jedna umowa na jedno szkolenie</span><small>Decyzja funkcjonalna: aplikacja generuje i podpisuje umowy osobno dla każdego szkolenia. Zbiorcza umowa obejmująca wiele szkoleń nie jest obsługiwana.</small></label>
+                <label class="admin-check" data-signature-requirement><input type="checkbox" name="electronic_signature_required" {% if workflow.get('electronic_signature_required') %}checked{% endif %}><span>Wymagany podpis elektroniczny</span><small>Opcja jest dostępna tylko wtedy, gdy deklaracja albo umowa jest włączona.</small></label>
             </div>
             <div class="workflow-document-fields">
                 <div data-form-tab-only="declaration" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
-                    <label class="admin-form-wide admin-code-field"><span>Szablon deklaracji HTML</span><textarea name="declaration_template_html" data-template-content="declaration" rows="8" spellcheck="false">{{ workflow.get('declaration_template_html', '') }}</textarea><small>Brak szablonu uniemożliwi zapis procesu wymagającego deklaracji.</small></label>
+                    <label class="admin-form-wide admin-code-field"><span>Szablon deklaracji HTML</span><textarea name="declaration_template_html" data-template-content="declaration" rows="8" spellcheck="false">{{ workflow.get('declaration_template_html', '') }}</textarea><small>Treść dokumentu generowanego dla zgłoszenia. Brak szablonu uniemożliwi zapis procesu wymagającego deklaracji.</small></label>
                     <label><span>Wgraj szablon deklaracji HTML</span><input type="file" accept="text/html,.html" data-template-file="declaration"></label>
-                    <label><span>Nazwa pliku deklaracji</span><input name="declaration_filename_pattern" value="{{ workflow.get('declaration_filename_pattern', '') }}" placeholder="Imię_Nazwisko-deklaracja.pdf"></label>
+                    <label><span>Nazwa pliku deklaracji</span><input name="declaration_filename_pattern" value="{{ workflow.get('declaration_filename_pattern', '') }}" placeholder="{first_name}_{last_name}-deklaracja.pdf"><small>Przykład: <code>{first_name}_{last_name}-deklaracja.pdf</code></small></label>
+                    <div class="admin-variable-panel"><strong>Dostępne zmienne deklaracji:</strong> <code>{first_name}</code>, <code>{last_name}</code>, <code>{submission_id}</code>, <code>{{ '{{ generated_date }}' }}</code>, a także pola zgłoszenia.</div>
                     <p class="workflow-help">Deklaracja jest generowana jako jeden dokument dla zgłoszenia.</p>
                 </div>
                 <div data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                     <label class="admin-form-wide admin-code-field"><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie.</small></label>
                     <p class="workflow-help">W każdej umowie <code>selected_trainings</code> zawiera jedno aktualne szkolenie. Cenę tej pozycji udostępniają <code>agreement_training_price</code> i <code>agreement_training_price_formatted</code>, a sumę całego zgłoszenia — <code>all_selected_trainings_total</code> i <code>all_selected_trainings_total_formatted</code>.</p>
+                    <label class="admin-check"><input type="checkbox" name="contract_show_all_trainings_total" {% if workflow.get('contract_show_all_trainings_total', true) %}checked{% endif %}><span>Pokazuj w umowie łączną wartość wszystkich wybranych szkoleń</span><small>Włączone: tabela nadal zawiera jedno aktualne szkolenie, lecz pole łącznej wartości pokazuje sumę całego zgłoszenia. Wyłączone: pokazuje cenę aktualnego szkolenia.</small></label>
                     <label><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
                 </div>
                 <div class="admin-form-grid" data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                     <input type="hidden" name="contract_generation_mode" value="per_training">
                     <label><span>Kto wgrywa podpisany dokument</span><select name="signed_document_uploader"><option value="beneficiary" {% if workflow.get('signed_document_uploader') == 'beneficiary' %}selected{% endif %}>Beneficjent</option><option value="officer" {% if workflow.get('signed_document_uploader') == 'officer' %}selected{% endif %}>Urzędnik</option></select></label>
-                    <label><span>Nazwa pliku PDF</span><input name="contract_filename_pattern" value="{{ workflow.get('contract_filename_pattern', '') }}" placeholder="Imię_Nazwisko-szkolenie-umowa.pdf"></label>
-                    <label><span>Wzór numeru umowy</span><input name="contract_number_pattern" value="{{ workflow.get('contract_number_pattern', '') }}"></label>
+                    <label><span>Nazwa pliku PDF</span><input name="contract_filename_pattern" value="{{ workflow.get('contract_filename_pattern', '') }}" placeholder="{first_name}_{last_name}-{training_id}-umowa.pdf"><small>Przykład używa danych osoby i technicznego ID szkolenia.</small></label>
+                    <label><span>Wzór numeru umowy</span><input name="contract_number_pattern" value="{{ workflow.get('contract_number_pattern', '') }}" placeholder="{submission_id}/{agreement_sequence}/{generated_date}"><small>Dostępne: <code>{submission_id}</code>, <code>{agreement_sequence}</code>, <code>{generated_date}</code>.</small></label>
                 </div>
             </div>
         </section>
@@ -508,11 +513,11 @@
 
     <template data-workflow-step-template>
         <article class="workflow-stage-card" data-workflow-step>
-            <script type="application/json" data-workflow-step-source>{}</script><input type="hidden" data-step-id value="">
+            <script type="application/json" data-workflow-step-source>{}</script>
             <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-edit-workflow-step>Edytuj etap</button><button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button><button type="button" class="admin-button-secondary compact" data-workflow-step-up>Przesuń w górę</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down>Przesuń w dół</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
             <div class="workflow-stage-badges" data-step-badges></div>
             <p class="workflow-stage-summary" data-step-summary></p>
-            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
+            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>ID etapu</span><input data-step-id data-auto-step-id value="nowy_etap" required><small>Podpowiadany automatycznie z nazwy; możesz go zmienić przed pierwszym użyciem etapu.</small></label><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
             <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div></div>
             <textarea data-step-description hidden></textarea><textarea data-step-next-action hidden></textarea>
         </article>
@@ -777,6 +782,32 @@ function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mail
 mailMode?.addEventListener("change", syncMailSettingsVisibility);
 syncMailSettingsVisibility();
 
+const headerPreview = document.querySelector("[data-form-header-preview]");
+function refreshHeaderPreview() {
+    if (!headerPreview) return;
+    const label = headerPreview.querySelector("[data-header-label]");
+    const title = headerPreview.querySelector("[data-header-title]");
+    const logo = headerPreview.querySelector("[data-header-logo]");
+    const logoWrap = headerPreview.querySelector("[data-header-logo-wrap]");
+    const logoSelect = document.querySelector('[name="logo_id"]');
+    if (label) {
+        label.textContent = document.querySelector("[data-header-label-input]")?.value || "Etykieta formularza";
+        label.style.color = document.querySelector("[data-header-label-color]")?.value || "#b38d45";
+        label.style.background = document.querySelector("[data-header-label-background]")?.value || "#f7f3ec";
+    }
+    if (title) title.textContent = document.querySelector("[data-header-title-input]")?.value || document.querySelector('[name="name"]')?.value || "Tytuł formularza";
+    const logoUrl = logoSelect?.selectedOptions[0]?.dataset.logoUrl || "";
+    if (logo) { logo.src = logoUrl; logo.hidden = !logoUrl; }
+    if (logoWrap) logoWrap.style.textAlign = document.querySelector("[data-header-logo-alignment]")?.value || "left";
+}
+[
+    "[data-header-label-input]", "[data-header-label-color]", "[data-header-label-background]",
+    "[data-header-title-input]", '[name="name"]', '[name="logo_id"]', "[data-header-logo-alignment]",
+].forEach((selector) => document.querySelector(selector)?.addEventListener("input", refreshHeaderPreview));
+document.querySelector('[name="logo_id"]')?.addEventListener("change", refreshHeaderPreview);
+document.querySelector("[data-header-logo-alignment]")?.addEventListener("change", refreshHeaderPreview);
+refreshHeaderPreview();
+
 const qualificationBuilder = document.querySelector("[data-qualification-builder]");
 const qualificationList = qualificationBuilder?.querySelector("[data-qualification-list]");
 const qualificationTemplate = document.querySelector("[data-qualification-template]");
@@ -800,7 +831,11 @@ function qualificationOptions(field) {
             const value = option.value ?? option.id ?? option.name ?? option.label ?? "";
             return {value: String(value), label: String(option.label ?? option.name ?? value)};
         }
-        return {value: String(option ?? ""), label: String(option ?? "")};
+        const raw = String(option ?? "");
+        const separator = raw.indexOf("|");
+        return separator >= 0
+            ? {value: raw.slice(0, separator).trim(), label: raw.slice(separator + 1).trim() || raw.slice(0, separator).trim()}
+            : {value: raw, label: raw};
     }).filter((option) => option.value);
 }
 
@@ -1430,6 +1465,33 @@ function renderInstructionPreview() {
     });
 }
 
+function syncDecisionEditorsToStages() {
+    const pool = document.querySelector("[data-workflow-decision-pool]");
+    if (!pool || !workflowStepList) return;
+    workflowStepList.querySelectorAll("[data-workflow-step]").forEach((stage) => {
+        let holder = stage.querySelector(":scope > [data-stage-decisions]");
+        if (!holder) {
+            holder = document.createElement("section");
+            holder.dataset.stageDecisions = "";
+            holder.className = "workflow-stage-decisions";
+            holder.innerHTML = "<h4>Decyzje dostępne na tym etapie</h4>";
+            stage.appendChild(holder);
+        }
+    });
+    document.querySelectorAll("[data-workflow-decision-card]").forEach((decisionCard) => {
+        const stepId = decisionCard.querySelector("[data-decision-step]")?.value || "";
+        const stage = Array.from(workflowStepList.querySelectorAll("[data-workflow-step]")).find(
+            (item) => item.querySelector("[data-step-id]")?.value === stepId
+        );
+        (stage?.querySelector("[data-stage-decisions]") || pool).appendChild(decisionCard);
+    });
+    workflowStepList.querySelectorAll("[data-stage-decisions]").forEach((holder) => {
+        holder.hidden = !holder.querySelector("[data-workflow-decision-card]");
+    });
+    const heading = pool.querySelector("[data-decision-pool-heading]");
+    if (heading) heading.hidden = !pool.querySelector(":scope > [data-workflow-decision-card]");
+}
+
 function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
     cards.forEach((card) => {
@@ -1478,10 +1540,13 @@ function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
     renderWorkflowPreview();
     renderLinkedInstructionEditors({forceValues: forceInstructionValues});
+    syncDecisionEditorsToStages();
 }
 
 function renderWorkflowFromJson(config) {
     workflowSource = config;
+    const decisionPool = document.querySelector("[data-workflow-decision-pool]");
+    document.querySelectorAll("[data-workflow-decision-card]").forEach((card) => decisionPool?.appendChild(card));
     workflowStepList?.replaceChildren();
     (Array.isArray(config.steps) ? config.steps : []).forEach((step) => {
         const fragment = workflowStepTemplate?.content.cloneNode(true);
@@ -1501,10 +1566,22 @@ function isWorkflowInstructionEditorEvent(event) {
 }
 
 workflowBuilder?.addEventListener("input", (event) => {
+    const card = event.target.closest?.("[data-workflow-step]");
+    const stepId = card?.querySelector("[data-step-id]");
+    if (event.target.matches?.("[data-step-id]")) stepId?.removeAttribute("data-auto-step-id");
+    if (event.target.matches?.("[data-step-admin-label]") && stepId?.hasAttribute("data-auto-step-id")) {
+        const base = event.target.value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "etap";
+        const used = new Set(Array.from(workflowStepList?.querySelectorAll("[data-step-id]") || []).filter((item) => item !== stepId).map((item) => item.value));
+        let candidate = base; let suffix = 2; while (used.has(candidate)) candidate = `${base}_${suffix++}`;
+        stepId.value = candidate;
+    }
     if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
 });
 workflowBuilder?.addEventListener("change", (event) => {
     if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
+});
+document.addEventListener("change", (event) => {
+    if (event.target.matches?.("[data-decision-step]")) syncDecisionEditorsToStages();
 });
 workflowBuilder?.addEventListener("click", (event) => {
     // The rich-text toolbar dispatches its own input event. Rebuilding the
@@ -1517,7 +1594,16 @@ workflowBuilder?.addEventListener("click", (event) => {
         if (card) { setWorkflowStep(card, {id: uniqueWorkflowStepId(), admin_label: "Nowy etap", user_label: "Nowy etap"}); workflowStepList.appendChild(card); }
     }
     const remove = event.target.closest("[data-remove-workflow-step]");
-    if (remove) remove.closest("[data-workflow-step]")?.remove();
+    if (remove) {
+        const stage = remove.closest("[data-workflow-step]");
+        const pool = document.querySelector("[data-workflow-decision-pool]");
+        stage?.querySelectorAll("[data-workflow-decision-card]").forEach((card) => {
+            const select = card.querySelector("[data-decision-step]");
+            if (select) select.value = "";
+            pool?.appendChild(card);
+        });
+        stage?.remove();
+    }
     const edit = event.target.closest("[data-edit-workflow-step]");
     if (edit) {
         const panel = edit.closest("[data-workflow-step]")?.querySelector("[data-workflow-step-editor]");
@@ -1630,6 +1716,11 @@ function syncWorkflowTemplateVisibility() {
     document.querySelectorAll('[data-workflow-template="contract"]').forEach((field) => {
         field.hidden = !contract?.checked;
     });
+    const signatureRequirement = document.querySelector("[data-signature-requirement]");
+    if (signatureRequirement) {
+        signatureRequirement.hidden = !declaration?.checked && !contract?.checked;
+        if (signatureRequirement.hidden) signatureRequirement.querySelector("input").checked = false;
+    }
     syncAgreementConfirmationPath();
     syncWorkflowBuilder();
 }

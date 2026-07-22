@@ -1,0 +1,58 @@
+{% extends "admin/base.html" %}
+{% block title %}Wyślij wiadomość{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div><p class="admin-eyebrow">{{ form.name }}</p><h1>Wyślij wiadomość</h1><p>Wiadomość zostanie spersonalizowana osobno dla każdego wybranego zgłoszenia.</p></div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Anuluj</a>
+</div>
+{% if missing_email_submissions %}
+<div class="admin-alert admin-alert-warning"><strong>Bez adresu e-mail — te zgłoszenia zostaną pominięte:</strong>
+    {{ missing_email_submissions|map(attribute='submission_id')|join(', ') }}
+</div>
+{% endif %}
+<form method="post" class="admin-card admin-form" data-mail-composer>
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="send_now" value="1">
+    {% for submission in submissions %}<input type="hidden" name="submission_ids" value="{{ submission.submission_id }}">{% endfor %}
+    <div class="admin-form-grid">
+        <label><span>Szablon (opcjonalnie)</span><select name="template_id" data-mail-template>
+            <option value="">Własna wiadomość</option>
+            {% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+        </select></label>
+        <label class="admin-form-wide"><span>Temat</span><input name="subject" required data-mail-subject></label>
+        <label class="admin-form-wide"><span>Treść HTML</span><textarea name="html_body" rows="12" required data-mail-html></textarea></label>
+        <label class="admin-form-wide"><span>Treść tekstowa (opcjonalnie)</span><textarea name="text_body" rows="6" data-mail-text></textarea></label>
+    </div>
+    <section class="admin-variable-panel" data-variable-panel>
+        <h2>Dostępne zmienne</h2><p>Kliknij zmienną, aby wstawić ją do ostatnio edytowanego pola.</p>
+        {% for category, variables in dynamic_variables.items() %}<div><strong>{{ category }}:</strong>
+            {% for variable in variables %}<button type="button" class="admin-variable" data-insert-variable="{{ '{{ ' ~ variable ~ ' }}' }}"><code>{{ '{{ ' ~ variable ~ ' }}' }}</code></button>{% endfor %}
+        </div>{% endfor %}
+    </section>
+    <section class="admin-section"><h2>Podgląd</h2><div class="admin-card admin-mail-preview" data-mail-preview></div></section>
+    <div class="admin-form-actions"><button class="admin-button" type="submit">Wyślij do {{ submissions|length }} zgłoszeń</button></div>
+</form>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const templates = {{ template_payload|tojson }};
+    const byId = new Map(templates.map((item) => [String(item.id), item]));
+    const subject = document.querySelector("[data-mail-subject]");
+    const html = document.querySelector("[data-mail-html]");
+    const text = document.querySelector("[data-mail-text]");
+    const preview = document.querySelector("[data-mail-preview]");
+    let target = html;
+    [subject, html, text].forEach((field) => field?.addEventListener("focus", () => { target = field; }));
+    function refresh() { if (preview) preview.innerHTML = html?.value || "<p>Podgląd pojawi się tutaj.</p>"; }
+    document.querySelector("[data-mail-template]")?.addEventListener("change", (event) => {
+        const template = byId.get(event.target.value); if (!template) return;
+        subject.value = template.subject || ""; html.value = template.html_body || ""; text.value = template.text_body || ""; refresh();
+    });
+    document.querySelector("[data-variable-panel]")?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-insert-variable]"); if (!button || !target) return;
+        const start = target.selectionStart ?? target.value.length; const end = target.selectionEnd ?? start;
+        target.setRangeText(button.dataset.insertVariable, start, end, "end"); target.focus(); refresh();
+    });
+    html?.addEventListener("input", refresh); refresh();
+});
+</script>
+{% endblock %}

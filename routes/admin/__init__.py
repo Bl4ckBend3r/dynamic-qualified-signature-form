@@ -256,9 +256,21 @@ def ensure_form_access(db, form_id: int, manage: bool = False) -> Form:
     permission = db.execute(
         select(FormPermission).where(FormPermission.form_id == form_id, FormPermission.user_id == user.id)
     ).scalar_one_or_none()
-    if not permission or (manage and not permission.can_manage):
+    if not permission or (manage and (user.role != ROLE_ADMIN or not permission.can_manage)):
         abort(403)
     return form
+
+
+def can_manage_form(db, user: User, form_id: int) -> bool:
+    """Return the effective write permission, including the role policy."""
+    if user.role == ROLE_SUPER_ADMIN:
+        return True
+    if user.role != ROLE_ADMIN:
+        return False
+    permission = db.execute(
+        select(FormPermission).where(FormPermission.form_id == form_id, FormPermission.user_id == user.id)
+    ).scalar_one_or_none()
+    return bool(permission and permission.can_manage)
 
 
 def build_mail_context(form: Form, submission: FormSubmission | None, files: list[SubmissionFile]) -> dict:

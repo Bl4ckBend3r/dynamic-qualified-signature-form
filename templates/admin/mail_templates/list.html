@@ -7,10 +7,14 @@
         <h1>Szablony maili</h1>
     </div>
     <div class="admin-actions">
+        {% if not read_only %}
         <a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_html', form_id=form.id) }}">Importuj HTML</a>
+        {% if g.admin_user.role == 'super_admin' %}<a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_zip', form_id=form.id) }}" title="Techniczny import kompletnej paczki HTML/TXT i zasobów">Import ZIP (zaawansowane)</a>{% endif %}
         <a class="admin-button" href="{{ url_for('admin.mail_template_edit', form_id=form.id) }}">Dodaj szablon</a>
+        {% endif %}
     </div>
 </div>
+{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać szablony, ale nie możesz ich zapisywać, importować ani usuwać.</div>{% endif %}
 <div class="admin-card admin-table-wrap">
     <table class="admin-table">
         <thead>
@@ -29,7 +33,7 @@
         {% for template in templates %}
             <tr>
                 <td>{{ template.name }}</td>
-                <td>{{ template.mail_type }}</td>
+                <td>{{ template_labels.get(template.template_type, template.template_type or template.mail_type) }}</td>
                 <td>{{ template.content_title or "-" }}</td>
                 <td>{{ template.subject }}</td>
                 <td>{{ template.trigger_event or "-" }}</td>
@@ -37,6 +41,7 @@
                 <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if template.is_active else "Nie" }}</span></td>
                 <td>
                     <div class="admin-actions">
+                        {% if read_only %}<span>Tylko do odczytu</span>{% else %}
                         <a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a>
                         <button class="admin-link-button admin-link-danger" type="button" data-admin-modal-target="delete-mail-template-{{ template.id }}">Usuń</button>
                         <dialog class="admin-modal admin-modal-backdrop" id="delete-mail-template-{{ template.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-mail-template-title-{{ template.id }}" data-admin-modal>
@@ -52,6 +57,7 @@
                         <form id="delete-mail-template-post-{{ template.id }}" method="post" action="{{ url_for('admin.mail_template_delete', form_id=form.id, template_id=template.id) }}" hidden>
                             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                         </form>
+                        {% endif %}
                     </div>
                 </td>
             </tr>

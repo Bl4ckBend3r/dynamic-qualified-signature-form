@@ -183,8 +183,11 @@ def register_context_processors(app: Flask) -> None:
 
 def register_template_filters(app: Flask) -> None:
     from services.html_safety import sanitize_trusted_html
+    from services.form_option_service import option_label, option_value
 
     app.jinja_env.filters["trusted_html"] = sanitize_trusted_html
+    app.jinja_env.filters["option_label"] = option_label
+    app.jinja_env.filters["option_value"] = option_value
 
 
 def inject_globals():

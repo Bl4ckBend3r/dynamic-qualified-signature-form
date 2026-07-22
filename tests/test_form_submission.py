@@ -6,6 +6,107 @@ def _prepare(data):
     return data
 
 
+def _public_csrf(client):
+    html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+    return html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+
+def _simple_form_definition():
+    return {
+        "title": "Prosty formularz JSON",
+        "fields": [
+            {"type": "text", "name": "imie", "label": "Imię", "required": True},
+            {"type": "text", "name": "nazwisko", "label": "Nazwisko", "required": True},
+            {"type": "email", "name": "email", "label": "E-mail", "required": False},
+            {"type": "tel", "name": "telefon", "label": "Telefon", "required": True},
+            {"type": "select", "name": "wybrane_szkolenie", "label": "Wybrane szkolenie", "required": True, "options": ["Kompetencje cyfrowe", "Kompetencje osobiste/społeczne", "Język angielski"]},
+            {"type": "radio", "name": "oswiadczenie_18_lat", "label": "Mam 18 lat", "required": True, "options": ["TAK", "NIE"]},
+            {"type": "textarea", "name": "uwagi", "label": "Uwagi", "required": False},
+        ],
+        "documents": {"declaration": {"enabled": False}, "agreement": {"enabled": False}},
+    }
+
+
+def _simple_form_data():
+    return {
+        "imie": "Jan",
+        "nazwisko": "Kowalski",
+        "email": "jan@example.com",
+        "telefon": "600700800",
+        "wybrane_szkolenie": "Kompetencje cyfrowe",
+        "oswiadczenie_18_lat": "TAK",
+        "uwagi": "",
+    }
+
+
+def test_public_form_renders_csrf_inside_form(client):
+    html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+    form_html = html.split('<form method="post"', 1)[1].split("</form>", 1)[0]
+
+    assert 'type="hidden" name="csrf_token"' in form_html
+    assert _public_csrf(client)
+
+
+def test_missing_public_csrf_returns_readable_error_and_logs_reason(app, client, caplog):
+    app.config["WTF_CSRF_ENABLED"] = True
+    _public_csrf(client)
+
+    response = client.post(FORM_URL, data=_simple_form_data())
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert "tokenu bezpieczeństwa" in html
+    assert "csrf_invalid" in caplog.text
+    assert "slug=formularz_zgloszeniowy" in caplog.text
+    assert "csrf_missing=True" in caplog.text
+
+
+def test_required_field_error_is_rendered_next_to_field(app, client):
+    app.config["WTF_CSRF_ENABLED"] = True
+    token = _public_csrf(client)
+    payload = _prepare(_simple_form_data())
+    payload.update({"csrf_token": token, "imie": ""})
+
+    response = client.post(FORM_URL, data=payload)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert 'name="imie"' in html
+    assert 'aria-invalid="true"' in html
+    assert 'aria-describedby="imie-error"' in html
+    assert 'id="imie-error" role="alert"' in html
+    assert "Pole „Imię” jest wymagane." in html
+
+
+def test_simple_dynamic_form_accepts_displayed_training_value_and_saves(app, client):
+    app.testing_storage.form_definition = _simple_form_definition()
+    app.config["WTF_CSRF_ENABLED"] = True
+    payload = {**_simple_form_data(), "csrf_token": _public_csrf(client)}
+
+    response = client.post(FORM_URL, data=payload)
+
+    assert response.status_code == 200
+    assert len(app.testing_storage.csv_rows) == 1
+    assert app.testing_storage.csv_rows[0]["data_json"]["wybrane_szkolenie"] == "Kompetencje cyfrowe"
+
+
+def test_invalid_training_value_is_shown_at_select(app, client, caplog):
+    app.testing_storage.form_definition = _simple_form_definition()
+    app.config["WTF_CSRF_ENABLED"] = True
+    payload = {**_simple_form_data(), "wybrane_szkolenie": "nieznany_kod", "csrf_token": _public_csrf(client)}
+
+    response = client.post(FORM_URL, data=payload)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert 'name="wybrane_szkolenie"' in html
+    assert 'aria-describedby="wybrane_szkolenie-error"' in html
+    assert "Wybrano nieprawidłową wartość." in html
+    assert "reason=validation" in caplog.text
+    assert "invalid_fields=wybrane_szkolenie" in caplog.text
+    assert "csrf_missing=False" in caplog.text
+
+
 def test_submit_empty_form_shows_validation_errors(client):
     response = client.post(FORM_URL, data={}, follow_redirects=True)
     body = response.get_data(as_text=True)

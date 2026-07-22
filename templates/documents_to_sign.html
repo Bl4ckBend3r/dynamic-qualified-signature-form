@@ -60,7 +60,7 @@
 
         <div class="form-actions sign-actions">
             <button type="submit" class="btn-primary" id="generate-button" disabled>
-                Wygeneruj deklarację do podpisu
+                Kontynuuj ->
             </button>
         </div>
     </form>
@@ -161,19 +161,19 @@
                                         <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
                                             <option value="">-- wybierz --</option>
                                             {% for option in field.options %}
-                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                                <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
                                             {% endfor %}
                                         </select>
                                     {% elif field.type == "radio" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% endif %}

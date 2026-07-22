@@ -160,7 +160,10 @@ def generate_training_agreements_for_submission(
         template_html = resolve_template_html(agreement_config.get("template", "")) or ""
     if not template_html:
         raise RuntimeError("Brak szablonu umowy dla tego formularza.")
-    template_html = upgrade_training_agreement_total_placeholder(template_html)
+    template_html = upgrade_training_agreement_total_placeholder(
+        template_html,
+        show_all_trainings_total=bool(agreement_config.get("show_all_trainings_total", True)),
+    )
     renderer = pdf_render_service or PdfRenderService()
     storage_service = document_storage_service or DocumentStorageService()
     metadata_service = submission_document_service or SubmissionDocumentService(

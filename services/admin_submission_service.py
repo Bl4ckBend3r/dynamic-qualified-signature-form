@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from models import Form, FormField, FormSubmission
 from services.admin_form_service import normalize_admin_form_definition
+from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
 from services.workflow_service import workflow_status_label
 
@@ -152,6 +154,7 @@ DEFAULT_LABELS = {
 def build_submission_detail_sections(form: Form, submission: FormSubmission) -> dict:
     form_config = normalize_admin_form_definition(form.definition_json or {})
     labels = build_field_labels(form_config)
+    options_by_field = build_field_options(form_config)
     row = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
     row.update(submission.data_json or {})
     used_fields: set[str] = set()
@@ -162,7 +165,8 @@ def build_submission_detail_sections(form: Form, submission: FormSubmission) -> 
             value = row.get(field_name)
             if is_empty_admin_value(value):
                 continue
-            items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": format_admin_value(value)})
+            display_value = option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value)
+            items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": display_value})
             used_fields.add(field_name)
         if items:
             sections.append({"title": title, "items": items})
@@ -171,7 +175,8 @@ def build_submission_detail_sections(form: Form, submission: FormSubmission) -> 
     for key, value in (submission.data_json or {}).items():
         if str(key).startswith("_") or key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
             continue
-        dynamic_items.append({"label": labels.get(key, key), "value": format_admin_value(value)})
+        display_value = option_label_for_value(options_by_field.get(key), value) if key in options_by_field else format_admin_value(value)
+        dynamic_items.append({"label": labels.get(key, key), "value": display_value})
         used_fields.add(key)
     if dynamic_items:
         sections.append({"title": "Dodatkowe dane formularza", "items": dynamic_items})
@@ -185,15 +190,16 @@ def build_submission_detail_sections(form: Form, submission: FormSubmission) -> 
         "sections": sections,
         "trainings": parse_training_snapshots(submission.selected_trainings),
         "technical_items": technical_items,
-        "qualification": build_qualification_detail(submission.data_json or {}),
+        "qualification": build_qualification_detail(submission.data_json or {}, form_config),
     }
 
 
-def build_qualification_detail(data_json: dict) -> dict | None:
+def build_qualification_detail(data_json: dict, form_config: dict | None = None) -> dict | None:
     evaluation = data_json.get("_qualification") if isinstance(data_json, dict) else None
     if not isinstance(evaluation, dict):
         return None
     results = []
+    options_by_field = build_field_options(form_config or {})
     for item in evaluation.get("results") or []:
         if not isinstance(item, dict):
             continue
@@ -201,8 +207,8 @@ def build_qualification_detail(data_json: dict) -> dict | None:
             {
                 "field_label": item.get("field_label") or item.get("field_name") or "Warunek",
                 "operator": item.get("operator") or "",
-                "expected_value": format_admin_value(item.get("expected_value")),
-                "actual_value": format_admin_value(item.get("actual_value")),
+                "expected_value": option_label_for_value(options_by_field.get(item.get("field_name")), item.get("expected_value")) if item.get("field_name") in options_by_field else format_admin_value(item.get("expected_value")),
+                "actual_value": option_label_for_value(options_by_field.get(item.get("field_name")), item.get("actual_value")) if item.get("field_name") in options_by_field else format_admin_value(item.get("actual_value")),
                 "passed": bool(item.get("passed")),
                 "officer_message": str(item.get("officer_message") or ""),
             }
@@ -233,6 +239,21 @@ def build_field_labels(form_config: dict) -> dict[str, str]:
     return labels
 
 
+def build_field_options(form_config: dict) -> dict[str, list]:
+    result: dict[str, list] = {}
+    fields = list(form_config.get("fields") or [])
+    documents = form_config.get("documents") or []
+    if isinstance(documents, dict):
+        documents = documents.values()
+    for document in documents:
+        if isinstance(document, dict):
+            fields.extend(document.get("fields") or [])
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") and field.get("options"):
+            result[str(field["name"])] = list(field.get("options") or [])
+    return result
+
+
 def is_empty_admin_value(value: Any) -> bool:
     if value is None:
         return True
@@ -243,16 +264,30 @@ def is_empty_admin_value(value: Any) -> bool:
     return False
 
 
-def filter_submissions(submissions: list[FormSubmission], args) -> list[FormSubmission]:
+def filter_submissions(
+    submissions: list[FormSubmission],
+    args,
+    *,
+    timezone_name: str = "Europe/Warsaw",
+) -> list[FormSubmission]:
     q = str(args.get("q") or "").strip().lower()
     status = str(args.get("status") or "").strip()
     field = str(args.get("field") or "").strip()
     operator = str(args.get("operator") or "contains").strip()
     value = str(args.get("value") or "").strip()
     value_to = str(args.get("value_to") or "").strip()
+    date_from = parse_date_value(args.get("date_from"))
+    date_to = parse_date_value(args.get("date_to"))
 
     def matches(submission: FormSubmission) -> bool:
         if status and submission.process_status != status:
+            return False
+        if (date_from or date_to) and not matches_created_at_range(
+            submission.created_at,
+            date_from,
+            date_to,
+            timezone_name=timezone_name,
+        ):
             return False
         if field and not matches_field_filter(submission_value(submission, field), operator, value, value_to):
             return False
@@ -269,6 +304,28 @@ def filter_submissions(submissions: list[FormSubmission], args) -> list[FormSubm
         return any(q in str(item).lower() for item in haystack)
 
     return [submission for submission in submissions if matches(submission)]
+
+
+def matches_created_at_range(raw_value, date_from, date_to, *, timezone_name: str = "Europe/Warsaw") -> bool:
+    if not raw_value:
+        return False
+    try:
+        local_zone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        local_zone = timezone.utc
+    value = raw_value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    local_value = value.astimezone(local_zone)
+    if date_from:
+        start = datetime.combine(date_from, time.min, tzinfo=local_zone)
+        if local_value < start:
+            return False
+    if date_to:
+        end = datetime.combine(date_to, time.max, tzinfo=local_zone)
+        if local_value > end:
+            return False
+    return True
 
 
 def matches_field_filter(raw_value: Any, operator: str, expected: str, expected_to: str = "") -> bool:

@@ -278,17 +278,26 @@ def test_social_links_render_in_configured_slot(position, slot):
         assert not view[other]
 
 
-def test_site_footer_css_contains_two_column_mobile_breakpoint():
+def test_site_footer_css_pushes_right_column_to_container_edge_and_stacks_on_mobile():
     css = (Path(__file__).parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+    columns_css = css.split(".site-footer__columns {", 1)[1].split("}", 1)[0]
+    right_column_css = css.split(".site-footer__column--right {", 1)[1].split("}", 1)[0]
 
     assert ".site-footer__columns" in css
+    assert "display: flex" in columns_css
+    assert "justify-content: space-between" in columns_css
+    assert "align-items: flex-start" in columns_css
+    assert "width: 100%" in columns_css
+    assert "margin-left: auto" in right_column_css
+    assert "text-align: left" in right_column_css
     assert ".site-footer__social-link" in css
     assert ".site-footer__social-icon" in css
     assert ".site-footer__social--gold" in css
     assert "gap: 12px" in css
-    assert "@media (max-width: 700px)" in css
-    mobile_css = css.split("@media (max-width: 700px)", 1)[1]
-    assert "grid-template-columns: 1fr" in mobile_css
+    assert "@media (max-width: 768px)" in css
+    mobile_css = css.split("@media (max-width: 768px)", 1)[1]
+    assert "flex-direction: column" in mobile_css
+    assert "margin-left: 0" in mobile_css
 
 
 def test_social_validation_rejects_invalid_active_rows_but_ignores_empty_inactive_row():
@@ -364,11 +373,10 @@ def test_admin_rejects_unsafe_active_social_url(admin_app, admin_client):
     assert "musi zaczynać się od http:// lub https://" in response.get_data(as_text=True)
 
 
-def test_standard_admin_can_open_site_footer_editor(admin_app, admin_client):
+def test_standard_admin_cannot_open_site_footer_editor(admin_app, admin_client):
     create_user(admin_app, role="admin")
     login(admin_client)
 
     response = admin_client.get("/admin/site/footer")
 
-    assert response.status_code == 200
-    assert "Układ stopki" in response.get_data(as_text=True)
+    assert response.status_code == 403

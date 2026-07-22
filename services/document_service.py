@@ -300,7 +300,10 @@ class DocumentService:
         generated_date = (context_extra or {}).get("generated_date") or date.today().isoformat()
         template_html = self.resolve_document_template(document)
         if document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
-            template_html = upgrade_training_agreement_total_placeholder(template_html)
+            template_html = upgrade_training_agreement_total_placeholder(
+                template_html,
+                show_all_trainings_total=bool(document.get("show_all_trainings_total", True)),
+            )
         generated_documents = []
         prepared_documents = []
         for sequence, item in enumerate(items, start=1):

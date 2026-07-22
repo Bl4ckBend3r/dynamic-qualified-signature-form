@@ -1501,6 +1501,34 @@ def test_dashboard_survives_missing_submission_file_alignment_columns(admin_app,
     assert "Dashboard" in response.get_data(as_text=True)
 
 
+def test_dashboard_reads_email_statistics_and_recent_errors_from_email_logs(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="mail_stats", name="Mail stats")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add_all(
+            [
+                EmailLog(form_id=form_id, public_submission_id="sent-1", status="sent", to_email="ok@example.com"),
+                EmailLog(
+                    form_id=form_id,
+                    public_submission_id="failed-1",
+                    status="failed",
+                    to_email="fail@example.com",
+                    subject="Test",
+                    error_message="Błąd testowy SMTP",
+                ),
+            ]
+        )
+        db.commit()
+    login(admin_client)
+
+    html = admin_client.get("/admin/dashboard").get_data(as_text=True)
+
+    assert "Udane wysyłki e-mail" in html
+    assert "Nieudane wysyłki e-mail" in html
+    assert "Ostatnia próba wysyłki" in html
+    assert "Błąd testowy SMTP" in html
+
+
 def test_send_mail_logs_email(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="sample_form", name="Sample")
@@ -1742,6 +1770,38 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
         assert log.public_submission_id == "abc"
 
 
+def test_bulk_mail_opens_composer_with_preview_variables_and_missing_addresses(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="bulk_composer", name="Bulk composer")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add_all(
+            [
+                FormSubmission(submission_id="with-email", form_slug="bulk_composer", form_name="Bulk", email="ok@example.com"),
+                FormSubmission(submission_id="without-email", form_slug="bulk_composer", form_name="Bulk", email=""),
+            ]
+        )
+        db.commit()
+    login(admin_client)
+    list_html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    token = list_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/mail-selected",
+        data={
+            "csrf_token": token,
+            "compose": "1",
+            "submission_ids": ["with-email", "without-email"],
+        },
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Wyślij wiadomość" in html
+    assert "without-email" in html
+    assert "Dostępne zmienne" in html
+    assert "data-mail-preview" in html
+
+
 def test_admin_mail_module_keeps_endpoint_names(admin_app):
     import routes.admin.mail as admin_mail
     from routes.admin import bp
@@ -1756,7 +1816,7 @@ def test_admin_mail_module_keeps_endpoint_names(admin_app):
         assert url_for("admin.mail_footers_list", form_id=1) == "/admin/forms/1/mail-footers"
 
 
-@pytest.mark.parametrize("role,email", [("super_admin", "admin@example.com"), ("admin", "admin-role@example.com"), ("form_manager", "manager@example.com")])
+@pytest.mark.parametrize("role,email", [("super_admin", "admin@example.com"), ("admin", "admin-role@example.com")])
 def test_mail_template_delete_allowed_for_all_managing_roles(admin_app, admin_client, role, email):
     user_id = create_user(admin_app, email=email, role=role)
     form_id = create_form(admin_app, slug=f"form_{role}", name="Sample", user_id=None if role == "super_admin" else user_id)
@@ -1775,6 +1835,32 @@ def test_mail_template_delete_allowed_for_all_managing_roles(admin_app, admin_cl
     assert response.status_code == 302
     with session_factory() as db:
         assert db.get(MailTemplate, template_id) is None
+
+
+def test_form_manager_sees_mail_templates_read_only_and_cannot_delete(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="manager-readonly@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="readonly_mail", name="Readonly", user_id=manager_id)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        template = MailTemplate(form_id=form_id, name="Keep me", subject="Temat", html_body="<p>Test</p>")
+        db.add(template)
+        db.commit()
+        template_id = template.id
+    login(admin_client, email="manager-readonly@example.com")
+
+    response = admin_client.get(f"/admin/forms/{form_id}/mail-templates")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Widok tylko do odczytu" in html
+    assert "Importuj HTML" not in html
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    delete_response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-templates/{template_id}/delete",
+        data={"csrf_token": token},
+    )
+    assert delete_response.status_code == 403
 
 
 def test_mail_template_delete_requires_manage_permission(admin_app, admin_client):
@@ -1844,7 +1930,7 @@ def test_html_mail_template_import_is_primary_path(admin_app, admin_client):
 
     assert "Importuj HTML" in list_html
     assert "Dodaj szablon" in list_html
-    assert "Import ZIP" not in list_html
+    assert "Import ZIP (zaawansowane)" in list_html
 
     html = admin_client.get(f"/admin/forms/{form_id}/mail-templates/import-html").get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
@@ -2169,8 +2255,8 @@ def test_regular_admin_cannot_toggle_logo(admin_app, admin_client):
         assert logo.active is True
 
 
-def test_form_manager_can_select_existing_logo_but_not_upload(admin_app, admin_client):
-    manager_id = create_user(admin_app, email="manager@example.com", role="form_manager")
+def test_regular_admin_can_select_existing_logo_but_not_upload(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="manager@example.com", role="admin")
     form_id = create_form(admin_app, slug="owned", name="Owned", user_id=manager_id)
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with session_factory() as db:
@@ -2200,8 +2286,9 @@ def test_form_manager_can_select_existing_logo_but_not_upload(admin_app, admin_c
         form = db.get(Form, form_id)
         assert form.logo_id == logo_id
 
-    upload_html = admin_client.get("/admin/forms/upload").get_data(as_text=True)
-    upload_token = upload_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert admin_client.get("/admin/forms/upload").status_code == 403
+    with admin_client.session_transaction() as session:
+        upload_token = session["admin_csrf_token"]
     response = admin_client.post(
         "/admin/logos",
         data={
@@ -3606,7 +3693,7 @@ def test_application_decision_backend_rejects_second_acceptance_after_declaratio
         assert db.query(SubmissionDecision).count() == 0
 
 
-def test_form_manager_with_form_permission_can_review_uploaded_agreement(admin_app, admin_client):
+def test_form_manager_with_form_permission_cannot_review_uploaded_agreement(admin_app, admin_client):
     email = "agreement-manager@example.com"
     manager_id = create_user(admin_app, email=email, role="form_manager")
     form_id = create_form(
@@ -3627,10 +3714,10 @@ def test_form_manager_with_form_permission_can_review_uploaded_agreement(admin_a
         data={"csrf_token": admin_csrf(admin_client), "agreement_decision": "accepted"},
     )
 
-    assert response.status_code == 302
+    assert response.status_code == 403
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with session_factory() as db:
-        assert db.get(FormSubmission, submission_pk).process_status == "PROCESS_COMPLETED"
+        assert db.get(FormSubmission, submission_pk).process_status != "PROCESS_COMPLETED"
 def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="visual_workflow", definition_json=readable_workflow_definition())

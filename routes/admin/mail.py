@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import or_, select
@@ -14,13 +15,16 @@ from services.mail_template_service import (
     import_mail_template_zip,
     parse_mail_content,
     render_platform_mail_html,
+    sanitize_content_html,
 )
 
 from . import (
     MAIL_TEMPLATE_TYPES,
     OFFICER_DECISIONS,
+    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     bp,
+    can_manage_form,
     db_session_factory,
     ensure_form_access,
     list_accessible_forms,
@@ -33,8 +37,33 @@ from . import (
 )
 
 
+MAIL_DYNAMIC_VARIABLES = {
+    "Zgłoszenie": ["submission_id", "created_at", "process_status", "status_label"],
+    "Formularz": ["form_name", "form_slug"],
+    "Użytkownik": ["imiona", "nazwisko", "email", "telefon"],
+    "Szkolenia": ["selected_trainings", "all_selected_trainings_total_formatted"],
+    "Linki": ["status_url", "podpisz_url", "document_url"],
+}
+MAIL_TEMPLATE_LABELS = {
+    "confirmation": "Złożenie wniosku",
+    "accepted": "Akceptacja",
+    "rejected": "Odrzucenie",
+    "auto_rejected_by_condition": "Automatyczne odrzucenie",
+    "correction_required": "Wysłanie do poprawy",
+    "returned_for_correction": "Wysłanie do poprawy",
+    "declaration_ready": "Deklaracja gotowa",
+    "declaration_signed": "Deklaracja podpisana",
+    "agreement_ready": "Umowa gotowa",
+    "agreement_signed_by_user": "Umowa podpisana przez beneficjenta",
+    "agreement_signed_by_office": "Umowa podpisana przez urząd",
+    "stage_rollback": "Cofnięcie etapu",
+    "custom": "Wiadomość własna",
+}
+
+
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/mail", methods=["GET", "POST"])
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_mail(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
@@ -74,11 +103,13 @@ def submission_mail(form_id: int, submission_pk: int):
                 if resolved_footer
                 else "Brak aktywnej stopki e-mail"
             ),
+            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
         )
 
 
 @bp.post("/forms/<int:form_id>/submissions/mail-selected")
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submissions_mail_selected(form_id: int):
     selected_ids = request.form.getlist("submission_ids") or request.form.getlist("selected_submission_ids")
     selected_ids = [str(item).strip() for item in selected_ids if str(item).strip()]
@@ -104,7 +135,19 @@ def submissions_mail_selected(form_id: int):
             .where(or_(MailFooter.form_id == form.id, MailFooter.form_id.is_(None)), MailFooter.is_active.is_(True))
             .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
+        if request.form.get("compose") == "1" and request.form.get("send_now") != "1":
+            return render_template(
+                "admin/submissions/mail_bulk.html",
+                form=form,
+                submissions=submissions,
+                templates=templates,
+                template_payload=mail_template_payload(templates),
+                dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+                missing_email_submissions=[item for item in submissions if not str(item.email or "").strip()],
+            )
+        manual_template = _manual_template_from_request()
         summary = {"sent": 0, "failed": 0, "skipped": 0}
+        skipped_ids = []
         for submission in submissions:
             result = send_selected_submission_mail(
                 db,
@@ -113,11 +156,15 @@ def submissions_mail_selected(form_id: int):
                 templates,
                 footers,
                 trigger_event=request.form.get("trigger_event", "manual_bulk").strip() or "manual_bulk",
+                manual_template=manual_template,
             )
             summary[result.status] = summary.get(result.status, 0) + 1
+            if result.status == "skipped":
+                skipped_ids.append(submission.submission_id)
         db.commit()
     flash(
-        f"Maile: wyslane {summary.get('sent', 0)}, pominiete {summary.get('skipped', 0)}, bledy {summary.get('failed', 0)}.",
+        f"Wiadomości: wysłane {summary.get('sent', 0)}, pominięte {summary.get('skipped', 0)}, błędy {summary.get('failed', 0)}."
+        + (f" Pominięte zgłoszenia: {', '.join(skipped_ids)}." if skipped_ids else ""),
         "success" if summary.get("sent", 0) else "error",
     )
     return redirect(url_for("admin.submissions_list", form_id=form_id))
@@ -127,9 +174,15 @@ def submissions_mail_selected(form_id: int):
 @login_required
 def mail_templates_list(form_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, manage=True)
+        form = ensure_form_access(db, form_id)
         templates = db.execute(select(MailTemplate).where(MailTemplate.form_id == form.id).order_by(MailTemplate.name)).scalars().all()
-        return render_template("admin/mail_templates/list.html", form=form, templates=templates)
+        return render_template(
+            "admin/mail_templates/list.html",
+            form=form,
+            templates=templates,
+            read_only=not can_manage_form(db, g.admin_user, form.id),
+            template_labels=MAIL_TEMPLATE_LABELS,
+        )
 
 
 @bp.get("/mail-templates")
@@ -213,6 +266,8 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             sample_submissions=sample_submissions,
             preview_submission_id=sample_submission.id if sample_submission else "",
             mail_layout=MAIL_LAYOUT,
+            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+            template_labels=MAIL_TEMPLATE_LABELS,
         )
 
 
@@ -524,7 +579,7 @@ def _parse_footer_links(value: str) -> list[dict[str, str]]:
 def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter]):
     template_id = int(request.form.get("template_id") or 0)
     footer_id = int(request.form.get("footer_id") or 0)
-    template = next((item for item in templates if item.id == template_id), None)
+    template = _manual_template_from_request() or next((item for item in templates if item.id == template_id), None)
     if templates and template is None:
         template = templates[0]
     footer = next((item for item in footers if item.id == footer_id), None) if footer_id else select_default_footer(footers, form_id=form.id)
@@ -541,8 +596,17 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
     )
 
 
-def send_selected_submission_mail(db, form, submission, templates: list[MailTemplate], footers: list[MailFooter], *, trigger_event: str):
-    template = select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
+def send_selected_submission_mail(
+    db,
+    form,
+    submission,
+    templates: list[MailTemplate],
+    footers: list[MailFooter],
+    *,
+    trigger_event: str,
+    manual_template=None,
+):
+    template = manual_template or select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
     footer = select_default_footer(footers, form_id=form.id)
     return send_mail_for_submission(
         db,
@@ -575,6 +639,28 @@ def select_default_footer(footers: list[MailFooter], *, form_id: int) -> MailFoo
         return global_footer
     current_app.logger.info("mail_footer_selected scope=none form_id=%s", form_id)
     return None
+
+
+def _manual_template_from_request():
+    subject = str(request.form.get("subject") or "").strip()
+    html_body = str(request.form.get("html_body") or "").strip()
+    text_body = str(request.form.get("text_body") or "").strip()
+    if not any((subject, html_body, text_body)):
+        return None
+    return SimpleNamespace(
+        id=None,
+        subject=subject,
+        content_title="Wiadomość",
+        content_html=sanitize_content_html(html_body),
+        content_text=text_body,
+        html_body=sanitize_content_html(html_body),
+        text_body=text_body,
+        instruction_html="",
+        instruction_text="",
+        footer_note="",
+        use_platform_layout=True,
+        is_active=True,
+    )
 
 
 def mail_template_payload(templates: list[MailTemplate]) -> list[dict]:

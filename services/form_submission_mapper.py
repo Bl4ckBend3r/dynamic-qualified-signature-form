@@ -283,13 +283,22 @@ def validate_required_submission_fields(
     form_config: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
-    required_columns = set(REQUIRED_FORM_COLUMNS)
+    required_columns = set(REQUIRED_FORM_COLUMNS) if form_config is None else set()
+
+    if form_config is not None:
+        for field in form_config.get("fields", []):
+            if not field.get("required") or field.get("type") in {"section", "static_text", "checkbox"}:
+                continue
+            field_name = str(field.get("name") or "")
+            column_name = FORM_FIELD_MAP.get(field_name, field_name)
+            if column_name in FORM_SUBMISSION_COLUMNS:
+                required_columns.add(column_name)
 
     for column_name in required_columns:
         if _is_empty_value(submission.get(column_name)):
             errors[column_name] = "Pole jest wymagane."
 
-    required_consents = set(REQUIRED_CONSENT_COLUMNS)
+    required_consents = set(REQUIRED_CONSENT_COLUMNS) if form_config is None else set()
     for field in (form_config or {}).get("fields", []):
         if field.get("type") != "checkbox" or not field.get("required"):
             continue

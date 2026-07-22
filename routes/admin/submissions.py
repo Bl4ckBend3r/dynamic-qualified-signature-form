@@ -44,6 +44,7 @@ from . import (
     ROLE_SUPER_ADMIN,
     active_fields_for_form,
     bp,
+    can_manage_form,
     db_session_factory,
     ensure_form_access,
     list_accessible_forms,
@@ -67,7 +68,11 @@ def submissions_all():
             if user.role != ROLE_SUPER_ADMIN:
                 query = query.where(FormSubmission.form_slug.in_(slugs))
             submissions = db.execute(query).scalars().all()
-        submissions = filter_submissions(submissions, request.args)
+        submissions = filter_submissions(
+            submissions,
+            request.args,
+            timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
+        )
         submissions = sort_submissions(
             submissions,
             request.args.get("sort") or "created_at",
@@ -91,7 +96,11 @@ def submissions_list(form_id: int):
         submissions = db.execute(
             select(FormSubmission).where(FormSubmission.form_slug == form.slug)
         ).scalars().all()
-        submissions = filter_submissions(submissions, request.args)
+        submissions = filter_submissions(
+            submissions,
+            request.args,
+            timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
+        )
         submissions = sort_submissions(submissions, request.args.get("sort") or "created_at", request.args.get("direction") or "desc")
         return render_template(
             "admin/submissions/list.html",
@@ -153,6 +162,7 @@ def submission_detail(form_id: int, submission_pk: int):
             workflow_view=workflow_view,
             rollback_options=rollback_options,
             status_label=lambda status: admin_status_label(status, form),
+            read_only=not can_manage_form(db, g.admin_user, form.id),
         )
 
 
@@ -508,6 +518,7 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_decision_update(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
@@ -574,6 +585,7 @@ def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
 
 @bp.post("/forms/<int:form_id>/submissions/decisions")
 @login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submissions_decisions_update(form_id: int):
     saved_count = 0
     skipped_count = 0

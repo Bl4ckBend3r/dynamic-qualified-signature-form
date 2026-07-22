@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import hmac
+import secrets
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, render_template, request, send_file, url_for
+from flask import Blueprint, abort, current_app, flash, render_template, request, send_file, session, url_for
 from sqlalchemy import select
 
 from database import create_session_factory
@@ -17,6 +19,44 @@ from services.nextcloud_storage import NextcloudStorageError
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("public_forms", __name__)
+PUBLIC_CSRF_SESSION_KEY = "public_form_csrf_token"
+
+
+def public_csrf_token() -> str:
+    token = str(session.get(PUBLIC_CSRF_SESSION_KEY) or "")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[PUBLIC_CSRF_SESSION_KEY] = token
+    return token
+
+
+@bp.app_context_processor
+def public_form_csrf_context() -> dict:
+    return {"public_csrf_token": public_csrf_token}
+
+
+def _public_csrf_enabled() -> bool:
+    # Existing test/local configurations use this standard switch. Public CSRF
+    # remains enabled by default when no explicit switch is present.
+    if current_app.config.get("WTF_CSRF_ENABLED") is False:
+        return False
+    return bool(current_app.config.get("PUBLIC_CSRF_ENABLED", True))
+
+
+def _provided_public_csrf_token(request_data) -> str:
+    value = request.headers.get("X-CSRF-Token", "")
+    if not value and hasattr(request_data, "get"):
+        value = request_data.get("csrf_token", "")
+    return str(value or "")
+
+
+def _valid_public_csrf(request_data) -> tuple[bool, bool]:
+    provided = _provided_public_csrf_token(request_data)
+    missing = not bool(provided)
+    if not _public_csrf_enabled():
+        return True, missing
+    expected = str(session.get(PUBLIC_CSRF_SESSION_KEY) or "")
+    return bool(expected and provided and hmac.compare_digest(expected, provided)), missing
 
 
 def get_services():
@@ -97,11 +137,36 @@ def submit(slug: str):
         if not form_config:
             abort(404)
 
+    request_data = request.get_json(silent=True) if request.is_json else request.form
+    csrf_valid, csrf_missing = _valid_public_csrf(request_data or {})
+    if not csrf_valid:
+        logger.warning(
+            "public_form_rejected slug=%s reason=csrf_invalid invalid_fields=%s csrf_missing=%s",
+            slug,
+            "csrf_token",
+            csrf_missing,
+        )
+        return render_template(
+            "form_page.html",
+            slug=slug,
+            form_meta=form_meta,
+            form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
+            errors={},
+            values=request_data or {},
+            form_error="Sesja formularza wygasła lub brakuje tokenu bezpieczeństwa. Odśwież stronę i spróbuj ponownie.",
+        ), 400
+
     try:
-        request_data = request.get_json(silent=True) if request.is_json else request.form
         initial_form_config = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
         submission_result = services.submission_service.submit_form(slug, initial_form_config, request_data or {})
         if not submission_result["ok"]:
+            invalid_fields = sorted(str(name) for name in submission_result["errors"])
+            logger.warning(
+                "public_form_rejected slug=%s reason=validation invalid_fields=%s csrf_missing=%s",
+                slug,
+                ",".join(invalid_fields) or "-",
+                csrf_missing,
+            )
             flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
             return render_template(
                 "form_page.html",
@@ -110,6 +175,7 @@ def submit(slug: str):
                 form_definition=initial_form_config,
                 errors=submission_result["errors"],
                 values=submission_result["values"],
+                form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
             ), 400
 
         return render_template("result.html", result=submission_result["result"])

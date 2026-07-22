@@ -18,7 +18,7 @@ from form_loader import (
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
-from services.form_submission_mapper import build_submission_from_form, validate_required_submission_fields
+from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_from_form, validate_required_submission_fields
 from services.process_service import ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
 from services.qualification_condition_service import QualificationConditionService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
@@ -74,6 +74,7 @@ class SubmissionService:
 
         errors = self._validate(form_config, submission_data)
         mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
+        mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
         errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
         if errors:
             return {
@@ -216,6 +217,7 @@ class SubmissionService:
         mapped_submission = build_submission_from_form(submission_data, form_config)
         errors = self._validate(form_config, submission_data)
         mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
+        mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
         errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
         if errors:
             return {"ok": False, "errors": errors, "values": submission_data, "result": None}
@@ -507,3 +509,12 @@ class SubmissionService:
             return self.validator(form_config, submission_data)
         validator = getattr(app_module, "validate_submission", self.validator)
         return validator(form_config, submission_data)
+
+    @staticmethod
+    def _map_errors_to_form_fields(errors: dict[str, str], form_config: dict) -> dict[str, str]:
+        column_to_field = {}
+        for field in form_config.get("fields", []):
+            field_name = str(field.get("name") or "")
+            if field_name:
+                column_to_field.setdefault(FORM_FIELD_MAP.get(field_name, field_name), field_name)
+        return {column_to_field.get(name, name): message for name, message in errors.items()}

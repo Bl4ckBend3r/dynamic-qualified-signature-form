@@ -534,7 +534,7 @@ def submission_decision_update(form_id: int, submission_pk: int):
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         if result["schema_warning"]:
             flash(
-                "Decyzja zostala zapisana, ale audyt decyzji wymaga migracji schematu P4 (uruchom check_p4_schema.py i alembic upgrade head).",
+                "Decyzja zostala zapisana, ale audyt decyzji wymaga migracji schematu P4 (uruchom scripts/diagnostics/check_p4_schema.py i alembic upgrade head).",
                 "warning",
             )
         flash("Decyzja urzednika zostala zapisana.", "success")

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import smtplib
-
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import select
 
 from models import EmailLog, PlatformMailTemplate, SystemMailSettings
+from services.mail_settings_service import diagnose_smtp_error
 from services.mail_template_service import sanitize_content_html
 
 from . import (
@@ -80,12 +79,81 @@ def system_mail_settings_test():
         config = service.resolve_smtp(db, type("SystemForm", (), {"mail_mode": "system"})(), current_app.config)
         try:
             service.test_connection(config or {})
+            _log_smtp_attempt(db, form=None, status="sent")
+            _log_smtp_success(config or {}, form=None)
+            db.commit()
             flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
-            current_app.logger.warning("smtp_connection_test_failed error=%s", exc.__class__.__name__)
-            _log_smtp_failure(db, form=None, exc=exc)
+            diagnostic = diagnose_smtp_error(exc)
+            _log_smtp_failure(config or {}, form=None, diagnostic=diagnostic)
+            _log_smtp_attempt(db, form=None, status="failed", diagnostic=diagnostic)
             db.commit()
-            flash(_smtp_error_message(exc), "error")
+            flash(diagnostic.administrator_message, "error")
+    return redirect(url_for("admin.system_mail_settings"))
+
+
+@bp.post("/mail-settings/test-email")
+@login_required
+@role_required(ROLE_SUPER_ADMIN)
+def system_mail_settings_test_email():
+    settings_service = current_app.extensions["services"].mail_settings_service
+    dispatch_service = current_app.extensions["services"].mail_dispatch_service
+    with db_session_factory()() as db:
+        settings = db.execute(select(SystemMailSettings).order_by(SystemMailSettings.id)).scalars().first()
+        if not settings:
+            flash("Najpierw zapisz domyślną konfigurację SMTP.", "error")
+            return redirect(url_for("admin.system_mail_settings"))
+        config = settings_service.resolve_smtp(
+            db,
+            type("SystemForm", (), {"mail_mode": "system"})(),
+            current_app.config,
+        )
+        recipient = str(g.admin_user.email or "").strip()
+        try:
+            if not recipient:
+                raise ValueError("Brak adresu e-mail administratora.")
+            footer = dispatch_service.mail_footer_resolver.resolve(db, mail_type="system")
+            logo_url, inline_images = dispatch_service.footer_logo_for_email(db, footer)
+            footer_html = dispatch_service.build_footer(footer, logo_url=logo_url)
+            html_body = (
+                "<html><body><p>To jest testowa wiadomość konfiguracji SMTP.</p>"
+                f'<footer class="mail-footer">{footer_html}</footer></body></html>'
+            )
+            sender = dispatch_service.smtp_sender or getattr(dispatch_service.notification_service, "smtp_sender", None)
+            if sender is None:
+                raise RuntimeError("Brak adaptera SMTP.")
+            sender(
+                **(config or {}),
+                to_emails=[recipient],
+                subject="Test konfiguracji SMTP",
+                html_body=html_body,
+                text_body="To jest testowa wiadomość konfiguracji SMTP.",
+                inline_images=inline_images,
+            )
+            _log_smtp_attempt(
+                db,
+                form=None,
+                status="sent",
+                to_email=recipient,
+                subject="Testowa wiadomość SMTP",
+                success_message="Wiadomość testowa SMTP została wysłana.",
+            )
+            _log_smtp_success(config or {}, form=None)
+            db.commit()
+            flash(f"Wysłano wiadomość testową SMTP do {recipient}.", "success")
+        except Exception as exc:
+            diagnostic = diagnose_smtp_error(exc)
+            _log_smtp_failure(config or {}, form=None, diagnostic=diagnostic)
+            _log_smtp_attempt(
+                db,
+                form=None,
+                status="failed",
+                diagnostic=diagnostic,
+                to_email=recipient,
+                subject="Testowa wiadomość SMTP",
+            )
+            db.commit()
+            flash(diagnostic.administrator_message, "error")
     return redirect(url_for("admin.system_mail_settings"))
 
 
@@ -98,31 +166,86 @@ def form_mail_settings_test(form_id: int):
         config = service.resolve_smtp(db, form, current_app.config)
         try:
             service.test_connection(config or {})
+            _log_smtp_attempt(db, form=form, status="sent")
+            _log_smtp_success(config or {}, form=form)
+            db.commit()
             flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
-            current_app.logger.warning("form_smtp_connection_test_failed form_id=%s error=%s", form.id, exc.__class__.__name__)
-            _log_smtp_failure(db, form=form, exc=exc)
+            diagnostic = diagnose_smtp_error(exc)
+            _log_smtp_failure(config or {}, form=form, diagnostic=diagnostic)
+            _log_smtp_attempt(db, form=form, status="failed", diagnostic=diagnostic)
             db.commit()
-            flash(_smtp_error_message(exc), "error")
+            flash(diagnostic.administrator_message, "error")
     return redirect(url_for("admin.form_edit", form_id=form_id, tab="emails"))
 
 
 def _smtp_error_message(exc: Exception) -> str:
-    details = f"{type(exc).__name__}: {exc}".lower()
-    if isinstance(exc, smtplib.SMTPAuthenticationError) or "auth" in details or "uwierzyteln" in details:
-        return "Nie udało się zalogować do serwera SMTP. Sprawdź użytkownika, hasło i metodę szyfrowania."
-    return "Nie udało się połączyć z serwerem SMTP. Sprawdź adres serwera, port i metodę szyfrowania."
+    return diagnose_smtp_error(exc).administrator_message
 
 
-def _log_smtp_failure(db, *, form, exc: Exception) -> None:
+def _log_smtp_attempt(
+    db,
+    *,
+    form,
+    status: str,
+    diagnostic=None,
+    to_email: str = "",
+    subject: str = "Test połączenia SMTP",
+    success_message: str = "Połączenie SMTP zakończyło się powodzeniem.",
+) -> None:
+    administrator_message = (
+        diagnostic.administrator_message
+        if diagnostic
+        else success_message
+    )
     db.add(
         EmailLog(
             form_id=getattr(form, "id", None),
             public_submission_id="",
-            to_email="",
-            subject="Test połączenia SMTP",
-            status="failed",
-            error_message=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
+            to_email=to_email,
+            subject=subject,
+            status=status,
+            event_type="smtp_test",
+            error_type=diagnostic.error_type if diagnostic else "",
+            administrator_message=administrator_message,
+            error_message=administrator_message if diagnostic else "",
             sent_by_id=g.admin_user.id,
         )
+    )
+
+
+def _smtp_log_values(config) -> tuple[str, int, bool, bool, int]:
+    return (
+        str(config.get("smtp_host") or config.get("host") or "").strip(),
+        int(config.get("smtp_port") or config.get("port") or 587),
+        bool(config.get("use_tls")),
+        bool(config.get("use_ssl")),
+        int(config.get("timeout") or current_app.config.get("SMTP_TIMEOUT", 10)),
+    )
+
+
+def _log_smtp_failure(config, *, form, diagnostic) -> None:
+    host, port, use_tls, use_ssl, timeout = _smtp_log_values(config)
+    current_app.logger.warning(
+        "smtp_connection_test_failed error_type=%s host=%s port=%s tls=%s ssl=%s timeout=%s form_id=%s",
+        diagnostic.error_type,
+        host,
+        port,
+        use_tls,
+        use_ssl,
+        timeout,
+        getattr(form, "id", None),
+    )
+
+
+def _log_smtp_success(config, *, form) -> None:
+    host, port, use_tls, use_ssl, timeout = _smtp_log_values(config)
+    current_app.logger.info(
+        "smtp_connection_test_succeeded host=%s port=%s tls=%s ssl=%s timeout=%s form_id=%s",
+        host,
+        port,
+        use_tls,
+        use_ssl,
+        timeout,
+        getattr(form, "id", None),
     )

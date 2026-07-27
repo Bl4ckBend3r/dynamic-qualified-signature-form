@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -628,7 +629,7 @@ def test_regular_admin_cannot_delete_form(admin_app, admin_client):
 
 
 def test_workflow_status_tile_has_no_border():
-    stylesheet = Path("static/documents_to_sign.css").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/documents_to_sign.css").read_text(encoding="utf-8")
     status_block = stylesheet.split(".status-tile {", 1)[1].split("}", 1)[0]
 
     assert "border: 0;" in status_block
@@ -1527,6 +1528,157 @@ def test_dashboard_reads_email_statistics_and_recent_errors_from_email_logs(admi
     assert "Nieudane wysyłki e-mail" in html
     assert "Ostatnia próba wysyłki" in html
     assert "Błąd testowy SMTP" in html
+
+
+def test_smtp_test_failure_is_safely_logged_and_saved_in_email_logs(
+    admin_app, admin_client, monkeypatch, caplog
+):
+    create_user(admin_app)
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        settings = SystemMailSettings(
+            smtp_config={
+                "host": "smtp.failure.test",
+                "port": 2525,
+                "user": "smtp-user",
+                "mail_from": "sender@example.com",
+                "use_tls": True,
+                "use_ssl": False,
+                "timeout": 7,
+            },
+            smtp_password_encrypted=service.encrypt_password("smtp-super-secret"),
+            layout_config={},
+        )
+        db.add(settings)
+        db.commit()
+    login(admin_client)
+
+    def raise_timeout(config):
+        assert config["smtp_password"] == "smtp-super-secret"
+        raise TimeoutError("smtp-super-secret must never be logged")
+
+    monkeypatch.setattr(service, "test_connection", raise_timeout)
+    with caplog.at_level(logging.WARNING):
+        response = admin_client.post(
+            "/admin/mail-settings/test",
+            data={"csrf_token": admin_csrf(admin_client)},
+            follow_redirects=True,
+        )
+
+    html = response.get_data(as_text=True)
+    assert "Nie udało się połączyć z serwerem SMTP w wyznaczonym czasie." in html
+    assert "host=smtp.failure.test" in caplog.text
+    assert "port=2525" in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "smtp-super-secret" not in caplog.text
+    assert "smtp-user" not in caplog.text
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        log = db.query(EmailLog).filter_by(event_type="smtp_test").one()
+        assert log.status == "failed"
+        assert log.error_type == "TimeoutError"
+        assert log.administrator_message.startswith(
+            "Nie udało się połączyć z serwerem SMTP w wyznaczonym czasie."
+        )
+        assert "smtp-super-secret" not in log.error_message
+        assert log.created_at is not None
+
+
+def test_successful_smtp_test_is_saved_and_visible_on_dashboard(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            SystemMailSettings(
+                smtp_config={
+                    "host": "smtp.success.test",
+                    "port": 587,
+                    "mail_from": "sender@example.com",
+                    "timeout": 10,
+                },
+                layout_config={},
+            )
+        )
+        db.commit()
+    login(admin_client)
+    monkeypatch.setattr(service, "test_connection", lambda config: None)
+
+    admin_client.post(
+        "/admin/mail-settings/test",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    html = admin_client.get("/admin/dashboard").get_data(as_text=True)
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        log = db.query(EmailLog).filter_by(event_type="smtp_test").one()
+        assert log.status == "sent"
+        assert log.error_type == ""
+        assert log.created_at is not None
+    assert "Udane testy SMTP" in html
+    assert "Ostatnia próba SMTP" in html
+
+
+def test_smtp_test_email_contains_footer_logo_as_inline_cid(admin_app, admin_client):
+    create_user(admin_app)
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "smtp-test-footer.svg"
+    logo_path.write_bytes(b"<svg></svg>")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Logo Lubuskie",
+            filename="smtp-test-footer.svg",
+            storage_path=str(logo_path),
+            mime_type="image/svg+xml",
+            active=True,
+        )
+        db.add(logo)
+        db.flush()
+        db.add(MailFooter(
+            form_id=None,
+            name="Stopka testowa",
+            html_body="<p>Treść stopki testowej</p>",
+            logo_id=logo.id,
+            logo_width=220,
+            logo_alignment="center",
+            logo_position="top",
+            is_active=True,
+            is_default=True,
+        ))
+        db.add(SystemMailSettings(
+            smtp_config={
+                "host": "smtp.test",
+                "port": 587,
+                "mail_from": "sender@example.com",
+                "use_tls": True,
+                "timeout": 10,
+            },
+            layout_config={},
+        ))
+        db.commit()
+    login(admin_client)
+    sent = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: sent.append(kwargs)
+
+    response = admin_client.post(
+        "/admin/mail-settings/test-email",
+        data={"csrf_token": admin_csrf(admin_client)},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Wysłano wiadomość testową SMTP" in response.get_data(as_text=True)
+    assert len(sent) == 1
+    assert sent[0]["to_emails"] == ["admin@example.com"]
+    assert 'src="cid:footer-logo"' in sent[0]["html_body"]
+    assert "width:220px" in sent[0]["html_body"]
+    assert "text-align:center" in sent[0]["html_body"]
+    assert str(logo_path) not in sent[0]["html_body"]
+    assert sent[0]["inline_images"] == [{
+        "cid": "footer-logo",
+        "content": b"<svg></svg>",
+        "mime_type": "image/svg+xml",
+        "filename": "smtp-test-footer.svg",
+    }]
 
 
 def test_send_mail_logs_email(admin_app, admin_client, monkeypatch):
@@ -3425,10 +3577,17 @@ def test_submission_received_uses_global_template_layout_and_logs_missing_recipi
     assert "#123456" in sent[0]["html_body"]
     assert 'src="cid:platform-logo-' not in sent[0]["html_body"]
     assert 'data-logo-position="footer"' not in sent[0]["html_body"]
-    assert "configured-footer-logo.png" in sent[0]["html_body"]
+    assert 'src="cid:footer-logo"' in sent[0]["html_body"]
     assert "mail-logo.png" not in sent[0]["html_body"]
-    assert sent[0]["html_body"].count("configured-footer-logo.png") == 1
-    assert sent[0]["inline_images"] == []
+    assert "configured-footer-logo.png" not in sent[0]["html_body"]
+    assert sent[0]["html_body"].count('src="cid:footer-logo"') == 1
+    assert len(sent[0]["inline_images"]) == 1
+    assert sent[0]["inline_images"][0] == {
+        "cid": "footer-logo",
+        "content": b"footer-logo",
+        "mime_type": "image/png",
+        "filename": "configured-footer-logo.png",
+    }
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         sent_log = db.query(EmailLog).filter_by(public_submission_id="receipt-1").one()
         missing_log = db.query(EmailLog).filter_by(public_submission_id="receipt-no-email").one()
@@ -3529,6 +3688,63 @@ def test_submission_received_omits_unavailable_logo_without_failing(admin_app):
     assert "Body remains" in sent[0]["html_body"]
     assert "Footer remains" in sent[0]["html_body"]
     assert sent[0]["inline_images"] == []
+
+
+def test_submission_received_omits_missing_mail_footer_logo_and_logs_warning(admin_app, caplog):
+    form_id = create_form(admin_app, slug="missing_footer_logo", name="Missing footer logo", mail_mode="system")
+    missing_path = Path(admin_app.config["TEMP_DIR"]) / "missing-footer.png"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="Missing footer logo",
+            filename="missing-footer.png",
+            storage_path=str(missing_path),
+            mime_type="image/png",
+            active=True,
+        )
+        db.add(logo)
+        db.flush()
+        logo_id = logo.id
+        db.add(MailFooter(
+            form_id=None,
+            name="Global footer",
+            html_body="<p>Stopka pozostaje</p>",
+            logo_id=logo.id,
+            is_active=True,
+            is_default=True,
+        ))
+        db.add(SystemMailSettings(
+            smtp_config={"host": "smtp.test", "mail_from": "sender@example.com"},
+            layout_config={},
+        ))
+        db.add(PlatformMailTemplate(
+            template_type="submission_received",
+            name="Receipt",
+            subject="Receipt",
+            html_body="<p>Treść wiadomości</p>",
+            is_active=True,
+        ))
+        db.add(FormSubmission(
+            submission_id="missing-footer-logo",
+            form_slug="missing_footer_logo",
+            form_name="Missing footer logo",
+            email="jan@example.com",
+        ))
+        db.commit()
+
+    sent = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with caplog.at_level(logging.WARNING), admin_app.test_request_context("/"):
+        result = dispatch.dispatch_submission_received("missing-footer-logo")
+
+    assert result.status == "sent"
+    assert "<img" not in sent[0]["html_body"]
+    assert "Stopka pozostaje" in sent[0]["html_body"]
+    assert sent[0]["inline_images"] == []
+    assert (
+        f"Nie udało się załadować logo stopki mailowej: logo_id={logo_id}, logo_path="
+        in caplog.text
+    )
 
 
 def _create_submission_waiting_for_agreement_review(admin_app, form_slug: str, submission_id: str = "agreement-review"):
@@ -4258,7 +4474,7 @@ def test_super_admin_can_import_full_form_definition_json(admin_app, admin_clien
 
 
 def test_form_tabs_have_mobile_css():
-    css = (Path(__file__).parents[1] / "static" / "admin.css").read_text(encoding="utf-8")
+    css = (Path(__file__).parents[1] / "static" / "css" / "admin.css").read_text(encoding="utf-8")
 
     assert ".admin-form-tab-mobile" in css
     assert "@media (max-width: 720px)" in css

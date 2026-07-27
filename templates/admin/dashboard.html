@@ -15,12 +15,22 @@
     <div class="admin-card admin-stat"><span>Udane wysyłki e-mail</span><strong>{{ email_sent_count or 0 }}</strong></div>
     <div class="admin-card admin-stat"><span>Nieudane wysyłki e-mail</span><strong>{{ email_errors_count or 0 }}</strong></div>
     <div class="admin-card admin-stat"><span>Ostatnia próba wysyłki</span><strong class="admin-stat-date">{{ last_email_attempt_at.strftime("%Y-%m-%d %H:%M") if last_email_attempt_at else "Brak prób" }}</strong></div>
+    <div class="admin-card admin-stat"><span>Udane testy SMTP</span><strong>{{ smtp_success_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Nieudane testy SMTP</span><strong>{{ smtp_failure_count or 0 }}</strong></div>
+    <div class="admin-card admin-stat"><span>Ostatnia próba SMTP</span><strong class="admin-stat-date">{{ last_smtp_attempt_at.strftime("%Y-%m-%d %H:%M") if last_smtp_attempt_at else "Brak prób" }}</strong></div>
 </div>
+<section class="admin-card admin-section">
+    <div class="admin-section-heading"><div><h2>Ostatni błąd SMTP</h2><p>Wynik ostatniego nieudanego testu połączenia SMTP.</p></div></div>
+    {% if last_smtp_error %}
+    <p><strong>{{ last_smtp_error.error_type or "Błąd SMTP" }}</strong> — {{ last_smtp_error.administrator_message or last_smtp_error.error_message }}</p>
+    <p class="admin-muted">{{ last_smtp_error.created_at.strftime("%Y-%m-%d %H:%M") if last_smtp_error.created_at else "-" }}</p>
+    {% else %}<p class="admin-empty-state">Brak zarejestrowanych błędów testu SMTP.</p>{% endif %}
+</section>
 <section class="admin-card admin-section">
     <div class="admin-section-heading"><div><h2>Ostatnie błędy wysyłki</h2><p>Dane pochodzą bezpośrednio z rejestru <code>email_logs</code>.</p></div></div>
     {% if last_email_errors %}
-    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Adresat</th><th>Temat</th><th>Błąd</th></tr></thead><tbody>
-        {% for item in last_email_errors %}<tr><td>{{ item.created_at.strftime("%Y-%m-%d %H:%M") if item.created_at else "-" }}</td><td>{{ item.to_email or "-" }}</td><td>{{ item.subject or "Test SMTP" }}</td><td>{{ item.error_message or "Brak szczegółów" }}</td></tr>{% endfor %}
+    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Adresat</th><th>Temat</th><th>Typ</th><th>Błąd</th></tr></thead><tbody>
+        {% for item in last_email_errors %}<tr><td>{{ item.created_at.strftime("%Y-%m-%d %H:%M") if item.created_at else "-" }}</td><td>{{ item.to_email or "-" }}</td><td>{{ item.subject or "Test SMTP" }}</td><td>{{ item.error_type or "-" }}</td><td>{{ item.administrator_message or item.error_message or "Brak szczegółów" }}</td></tr>{% endfor %}
     </tbody></table></div>
     {% else %}<p class="admin-empty-state">Brak zarejestrowanych błędów wysyłki.</p>{% endif %}
 </section>

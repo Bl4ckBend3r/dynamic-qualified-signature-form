@@ -3,11 +3,11 @@
 {% block title %}Do podpisania{% endblock %}
 
 {% block extra_css %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='documents_to_sign.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/documents_to_sign.css') }}">
 {% endblock %}
 
 {% block extra_js %}
-    <script src="{{ url_for('static', filename='documents_to_sign.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/documents_to_sign.js') }}" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -60,7 +60,7 @@
 
         <div class="form-actions sign-actions">
             <button type="submit" class="btn-primary" id="generate-button" disabled>
-                Kontynuuj ->
+                Kontynuuj
             </button>
         </div>
     </form>

@@ -14,8 +14,8 @@ def test_base_template_has_per_template_asset_blocks():
 
 
 def test_documents_to_sign_static_assets_exist():
-    stylesheet = Path("static/documents_to_sign.css")
-    script = Path("static/documents_to_sign.js")
+    stylesheet = Path("static/css/documents_to_sign.css")
+    script = Path("static/js/documents_to_sign.js")
 
     assert stylesheet.exists()
     assert script.exists()
@@ -35,11 +35,11 @@ def test_documents_to_sign_template_loads_static_assets_only():
     assert "{% block extra_js %}" in template
     assert "<style" not in template
     assert "style=" not in template
-    assert "<script src=\"{{ url_for('static', filename='documents_to_sign.js') }}\" defer></script>" in template
+    assert "<script src=\"{{ url_for('static', filename='js/documents_to_sign.js') }}\" defer></script>" in template
 
 
 def test_documents_to_sign_frontend_uses_backend_status_flags():
-    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
 
     assert "Boolean(data.is_rejected)" in script
     assert "data.agreement_stage_completed" in script
@@ -51,7 +51,7 @@ def test_documents_to_sign_frontend_uses_backend_status_flags():
 
 def test_documents_to_sign_frontend_receives_acceptance_status_url_template():
     template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
-    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
 
     assert "data-acceptance-status-url-template" in template
     assert "url_for('api.api_acceptance_status'" in template
@@ -63,7 +63,7 @@ def test_documents_to_sign_frontend_builds_api_urls_with_base_path():
     if not node:
         return
 
-    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
     runner = f"""
 const vm = require("vm");
 const elements = {{
@@ -116,7 +116,7 @@ def test_user_instruction_window_is_safe_and_remembers_minimize_and_close():
     if not node:
         return
 
-    script = Path("static/documents_to_sign.js").read_text(encoding="utf-8")
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
     runner = f"""
 const vm = require("vm");
 function element() {{
@@ -243,14 +243,14 @@ console.log(JSON.stringify({{
         "closeKey": "v1",
     }
 
-    stylesheet = Path("static/documents_to_sign.css").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/documents_to_sign.css").read_text(encoding="utf-8")
     assert ".instruction-step--current" in stylesheet
     assert "font-weight: 800" in stylesheet
 
 
 def test_training_selection_keeps_full_width_layout():
     template = Path("templates/declaration_form.html").read_text(encoding="utf-8")
-    stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/style.css").read_text(encoding="utf-8")
 
     assert "field.width or 'full'" in template
     assert "training-selection-row" in template

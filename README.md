@@ -313,13 +313,13 @@ Current expected result after the refactor:
 Validate a local JSON file:
 
 ```powershell
-python manage.py validate-form forms/sample_form.json --skip-template-check
+python manage.py validate-form examples/forms/sample_form.json --skip-template-check
 ```
 
 Use a local template root when templates are available on disk:
 
 ```powershell
-python manage.py validate-form forms/sample_form.json --template-root C:\path\to\templates
+python manage.py validate-form examples/forms/sample_form.json --template-root C:\path\to\templates
 ```
 
 Use `--skip-template-check` for forms whose templates exist only in Nextcloud.
@@ -327,8 +327,8 @@ Use `--skip-template-check` for forms whose templates exist only in Nextcloud.
 ## More Documentation
 
 ```text
-docs/process-workflow.md
-docs/document-configuration.md
-docs/json-and-html-templates.md
-docs/instrukcja-deklaracje-i-umowy.md
+docs/workflow/process-workflow.md
+docs/forms/document-configuration.md
+docs/forms/json-and-html-templates.md
+docs/forms/instrukcja-deklaracje-i-umowy.md
 ```

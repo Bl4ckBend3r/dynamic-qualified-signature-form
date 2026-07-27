@@ -49,12 +49,13 @@ def dashboard():
         email_scope = []
         if user.role != ROLE_SUPER_ADMIN:
             email_scope.append(EmailLog.form_id.in_(form_ids or [-1]))
-        sent_query = select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *email_scope)
-        failed_query = select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *email_scope)
-        last_attempt_query = select(func.max(EmailLog.created_at)).where(*email_scope)
+        delivery_scope = [EmailLog.event_type != "smtp_test", *email_scope]
+        sent_query = select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *delivery_scope)
+        failed_query = select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *delivery_scope)
+        last_attempt_query = select(func.max(EmailLog.created_at)).where(*delivery_scope)
         last_errors_query = (
             select(EmailLog)
-            .where(EmailLog.status == "failed", *email_scope)
+            .where(EmailLog.status == "failed", *delivery_scope)
             .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
             .limit(5)
         )
@@ -62,6 +63,22 @@ def dashboard():
         email_errors_count = db.execute(failed_query).scalar() or 0
         last_email_attempt_at = db.execute(last_attempt_query).scalar()
         last_email_errors = db.execute(last_errors_query).scalars().all()
+        smtp_scope = [EmailLog.event_type == "smtp_test", *email_scope]
+        smtp_success_count = db.execute(
+            select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *smtp_scope)
+        ).scalar() or 0
+        smtp_failure_count = db.execute(
+            select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *smtp_scope)
+        ).scalar() or 0
+        last_smtp_attempt_at = db.execute(
+            select(func.max(EmailLog.created_at)).where(*smtp_scope)
+        ).scalar()
+        last_smtp_error = db.execute(
+            select(EmailLog)
+            .where(EmailLog.status == "failed", *smtp_scope)
+            .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
     return render_template(
         "admin/dashboard.html",
         forms_count=forms_count,
@@ -72,4 +89,8 @@ def dashboard():
         email_sent_count=email_sent_count,
         last_email_attempt_at=last_email_attempt_at,
         last_email_errors=last_email_errors,
+        smtp_success_count=smtp_success_count,
+        smtp_failure_count=smtp_failure_count,
+        last_smtp_attempt_at=last_smtp_attempt_at,
+        last_smtp_error=last_smtp_error,
     )

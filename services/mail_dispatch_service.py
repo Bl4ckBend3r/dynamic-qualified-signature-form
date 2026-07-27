@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import current_app, url_for
+from sqlalchemy.exc import SQLAlchemyError
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
 from services.footer_logo_service import (
@@ -467,7 +468,7 @@ class MailDispatchService:
                     status="skipped",
                     error_message="Brak aktywnego szablonu submission_received.",
                 )
-                db.commit()
+                self._commit_email_log(db)
                 return MailDispatchResult(
                     "skipped",
                     recipient=str(submission.email or ""),
@@ -482,7 +483,7 @@ class MailDispatchService:
                     status="skipped",
                     error_message="Brak odbiorcy.",
                 )
-                db.commit()
+                self._commit_email_log(db)
                 return MailDispatchResult("skipped", error_message="Brak odbiorcy.", log=log)
             context = self.build_context_for_submission(
                 form,
@@ -520,7 +521,7 @@ class MailDispatchService:
                 footer=footer,
                 inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
             )
-            db.commit()
+            self._commit_email_log(db)
             return result
 
     def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
@@ -665,8 +666,20 @@ class MailDispatchService:
                 files=self.submission_repository.list_submission_files(submission_id),
                 extra_context=context,
             )
-            db.commit()
+            self._commit_email_log(db)
             return result
+
+    def _commit_email_log(self, db) -> bool:
+        try:
+            db.commit()
+            return True
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "Nie udało się zapisać email_logs. "
+                "Sprawdź migracje bazy danych."
+            )
+            return False
 
     def log_email(
         self,
@@ -697,6 +710,7 @@ class MailDispatchService:
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,
                 status=status,
+                event_type="email_delivery",
                 error_message=error_message or "",
             )
             db.add(log)

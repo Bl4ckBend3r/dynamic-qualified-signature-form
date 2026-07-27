@@ -15,6 +15,7 @@ from routes.api import bp as api_bp
 from routes.documents import bp as documents_bp
 from routes.public_forms import bp as public_forms_bp
 from services.container import create_services
+from services.database_schema_service import prepare_database_schema
 
 load_dotenv()
 
@@ -37,6 +38,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
 
     Path(app.config["TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
 
+    prepare_database_schema(app)
     container = create_services(app, storage_override=storage_override)
     app.extensions["services"] = container
     _register_legacy_extension_aliases(app, container)
@@ -62,6 +64,10 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
     if "AUTO_CREATE_DB_SCHEMA" in os.environ:
         app.config["AUTO_CREATE_DB_SCHEMA"] = os.getenv(
             "AUTO_CREATE_DB_SCHEMA", "false"
+        ).strip().lower() in {"1", "true", "yes", "tak", "on"}
+    if "AUTO_DB_MIGRATE" in os.environ:
+        app.config["AUTO_DB_MIGRATE"] = os.getenv(
+            "AUTO_DB_MIGRATE", "false"
         ).strip().lower() in {"1", "true", "yes", "tak", "on"}
     if any(name in os.environ for name in ("APP_BASE_PATH", "APPLICATION_ROOT", "SCRIPT_NAME")):
         app.config["APP_BASE_PATH"] = normalize_app_base_path(

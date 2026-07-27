@@ -288,6 +288,42 @@ Default local URL:
 http://127.0.0.1:5000
 ```
 
+## Migracja bazy danych po aktualizacji aplikacji
+
+Przed uruchomieniem nowej wersji sprawdź i zaktualizuj schemat:
+
+```powershell
+python manage.py db-check
+alembic upgrade head
+```
+
+Alternatywnie można użyć komendy administracyjnej:
+
+```powershell
+python manage.py db-upgrade
+```
+
+Automatyczna migracja podczas startu jest domyślnie wyłączona. Można ją
+włączyć świadomie:
+
+```env
+AUTO_DB_MIGRATE=true
+```
+
+Na produkcji zalecane jest ręczne wykonanie `alembic upgrade head` przed
+startem aplikacji. Gdy `AUTO_DB_MIGRATE=false`, aplikacja sprawdza kluczowe
+kolumny i zapisuje w logu instrukcję migracji, ale nie modyfikuje schematu.
+
+Przykładowa aktualizacja usługi produkcyjnej:
+
+```bash
+sudo systemctl stop signature-app-new.service
+cd /opt/signature-app-new
+source .venv/bin/activate
+alembic upgrade head
+sudo systemctl start signature-app-new.service
+```
+
 ## Tests
 
 Run all tests:

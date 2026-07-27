@@ -1618,6 +1618,85 @@ def test_successful_smtp_test_is_saved_and_visible_on_dashboard(admin_app, admin
     assert "Ostatnia próba SMTP" in html
 
 
+def test_successful_smtp_test_reports_log_failure_without_claiming_smtp_failure(
+    admin_app, admin_client, monkeypatch
+):
+    create_user(admin_app)
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            SystemMailSettings(
+                smtp_config={
+                    "host": "smtp.success.test",
+                    "port": 587,
+                    "mail_from": "sender@example.com",
+                },
+                layout_config={},
+            )
+        )
+        db.commit()
+    login(admin_client)
+    monkeypatch.setattr(service, "test_connection", lambda config: None)
+    monkeypatch.setattr(
+        "routes.admin.mail_settings._save_smtp_attempt",
+        lambda db, **values: False,
+    )
+
+    response = admin_client.post(
+        "/admin/mail-settings/test",
+        data={"csrf_token": admin_csrf(admin_client)},
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert (
+        "Połączenie SMTP działa, ale nie udało się zapisać logu testu. "
+        "Sprawdź migracje bazy danych."
+    ) in html
+    assert "Nie udało się połączyć z serwerem SMTP" not in html
+
+
+def test_failed_smtp_test_keeps_primary_error_when_log_write_also_fails(
+    admin_app, admin_client, monkeypatch
+):
+    create_user(admin_app)
+    service = admin_app.extensions["services"].mail_settings_service
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            SystemMailSettings(
+                smtp_config={
+                    "host": "smtp.failure.test",
+                    "port": 587,
+                    "mail_from": "sender@example.com",
+                },
+                layout_config={},
+            )
+        )
+        db.commit()
+    login(admin_client)
+    monkeypatch.setattr(
+        service,
+        "test_connection",
+        lambda config: (_ for _ in ()).throw(TimeoutError("timeout")),
+    )
+    monkeypatch.setattr(
+        "routes.admin.mail_settings._save_smtp_attempt",
+        lambda db, **values: False,
+    )
+
+    response = admin_client.post(
+        "/admin/mail-settings/test",
+        data={"csrf_token": admin_csrf(admin_client)},
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Nie udało się połączyć z serwerem SMTP w wyznaczonym czasie." in html
+    assert "Połączenie SMTP działa, ale" not in html
+
+
 def test_smtp_test_email_contains_footer_logo_as_inline_cid(admin_app, admin_client):
     create_user(admin_app)
     logo_path = Path(admin_app.config["TEMP_DIR"]) / "smtp-test-footer.svg"

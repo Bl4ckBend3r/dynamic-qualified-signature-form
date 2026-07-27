@@ -708,9 +708,9 @@ class EmailLog(Base):
     template_id: Mapped[int | None] = mapped_column(ForeignKey("mail_templates.id", ondelete="SET NULL"), nullable=True)
     footer_id: Mapped[int | None] = mapped_column(ForeignKey("mail_footers.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(64), default="sent", nullable=False)
-    event_type: Mapped[str] = mapped_column(String(64), default="email_delivery", nullable=False)
-    error_type: Mapped[str] = mapped_column(String(128), default="", nullable=False)
-    administrator_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    event_type: Mapped[str | None] = mapped_column(String(100), default="email_delivery", nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    administrator_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     sent_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

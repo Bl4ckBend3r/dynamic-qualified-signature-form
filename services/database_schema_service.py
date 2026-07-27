@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Callable
+
+import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config as AlembicConfig
+from sqlalchemy.engine import Engine, make_url
+
+from database import create_engine, normalize_database_url
+
+
+logger = logging.getLogger(__name__)
+
+REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
+    "forms": frozenset({"user_instruction", "user_instruction_config"}),
+    "email_logs": frozenset({"event_type", "error_type", "administrator_message"}),
+    "site_footers": frozenset(
+        {
+            "left_html",
+            "right_html",
+            "layout",
+            "social_links",
+            "social_position",
+            "social_icon_style",
+            "social_show_labels",
+        }
+    ),
+    "mail_footers": frozenset(
+        {
+            "logo_alignment",
+            "contact_html",
+            "links",
+            "legal_text",
+            "use_global",
+            "logo_width",
+            "logo_height",
+            "logo_position",
+            "is_default",
+            "is_active",
+        }
+    ),
+}
+
+MIGRATION_HINT = "Brakuje kolumn w bazie danych. Uruchom: alembic upgrade head"
+
+
+def redact_database_url(database_url: str) -> str:
+    value = str(database_url or "").strip()
+    if not value:
+        return "(brak DATABASE_URL)"
+    try:
+        return make_url(normalize_database_url(value)).render_as_string(hide_password=True)
+    except sa.exc.ArgumentError:
+        return "(nieprawidłowy DATABASE_URL)"
+
+
+def check_database_schema(
+    database_url: str | None = None,
+    *,
+    engine: Engine | None = None,
+) -> dict[str, list[str]]:
+    checked_engine = engine
+    if checked_engine is None:
+        if not database_url:
+            return {}
+        checked_engine = create_engine(database_url)
+    inspector = sa.inspect(checked_engine)
+    tables = set(inspector.get_table_names())
+    missing: dict[str, list[str]] = {}
+    for table_name, required_columns in REQUIRED_SCHEMA_COLUMNS.items():
+        existing_columns = (
+            {column["name"] for column in inspector.get_columns(table_name)}
+            if table_name in tables
+            else set()
+        )
+        absent = sorted(required_columns - existing_columns)
+        if absent:
+            missing[table_name] = absent
+    return missing
+
+
+def run_database_upgrade(
+    database_url: str,
+    *,
+    project_root: Path | None = None,
+    upgrade: Callable[[AlembicConfig, str], None] = command.upgrade,
+) -> None:
+    if not str(database_url or "").strip():
+        raise RuntimeError("DATABASE_URL jest wymagany do uruchomienia migracji.")
+    root = project_root or Path(__file__).resolve().parents[1]
+    config = AlembicConfig(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", normalize_database_url(database_url))
+    try:
+        upgrade(config, "head")
+    except Exception as exc:
+        raise RuntimeError(
+            "Migracja bazy danych nie powiodła się. "
+            "Sprawdź logi i uruchom ręcznie: alembic upgrade head"
+        ) from exc
+
+
+def prepare_database_schema(app) -> dict[str, list[str]]:
+    database_url = str(app.config.get("DATABASE_URL") or "").strip()
+    auto_migrate = bool(app.config.get("AUTO_DB_MIGRATE"))
+    app.extensions["database_schema_missing"] = {}
+    if not database_url:
+        return {}
+
+    safe_url = redact_database_url(database_url)
+    if auto_migrate:
+        app.logger.info(
+            "AUTO_DB_MIGRATE=true; uruchamianie alembic upgrade head database_url=%s",
+            safe_url,
+        )
+        run_database_upgrade(database_url)
+    elif app.config.get("AUTO_CREATE_DB_SCHEMA"):
+        app.logger.info(
+            "Pominięto walidację migracji: AUTO_CREATE_DB_SCHEMA jest włączone."
+        )
+        return {}
+
+    try:
+        missing = check_database_schema(database_url)
+    except Exception as exc:
+        app.logger.exception(
+            "Nie udało się zweryfikować schematu bazy. database_url=%s "
+            "auto_db_migrate=%s",
+            safe_url,
+            auto_migrate,
+        )
+        if auto_migrate:
+            raise RuntimeError(
+                "Nie udało się zweryfikować schematu po automatycznej migracji."
+            ) from exc
+        return {}
+
+    app.extensions["database_schema_missing"] = missing
+    if missing:
+        for table_name, columns in missing.items():
+            app.logger.error(
+                "%s table=%s missing_columns=%s database_url=%s "
+                "auto_db_migrate=%s",
+                MIGRATION_HINT,
+                table_name,
+                ",".join(columns),
+                safe_url,
+                auto_migrate,
+            )
+        if auto_migrate:
+            raise RuntimeError(
+                f"{MIGRATION_HINT}. Automatyczna migracja nie uzupełniła schematu."
+            )
+    else:
+        app.logger.info(
+            "Schemat rozszerzony bazy danych jest aktualny. database_url=%s "
+            "auto_db_migrate=%s",
+            safe_url,
+            auto_migrate,
+        )
+    return missing

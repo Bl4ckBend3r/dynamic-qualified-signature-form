@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from flask import current_app, g, render_template
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from models import EmailLog, FormSubmission, SubmissionFile
@@ -49,36 +49,54 @@ def dashboard():
         email_scope = []
         if user.role != ROLE_SUPER_ADMIN:
             email_scope.append(EmailLog.form_id.in_(form_ids or [-1]))
-        delivery_scope = [EmailLog.event_type != "smtp_test", *email_scope]
-        sent_query = select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *delivery_scope)
-        failed_query = select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *delivery_scope)
-        last_attempt_query = select(func.max(EmailLog.created_at)).where(*delivery_scope)
-        last_errors_query = (
-            select(EmailLog)
-            .where(EmailLog.status == "failed", *delivery_scope)
-            .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
-            .limit(5)
-        )
-        email_sent_count = db.execute(sent_query).scalar() or 0
-        email_errors_count = db.execute(failed_query).scalar() or 0
-        last_email_attempt_at = db.execute(last_attempt_query).scalar()
-        last_email_errors = db.execute(last_errors_query).scalars().all()
-        smtp_scope = [EmailLog.event_type == "smtp_test", *email_scope]
-        smtp_success_count = db.execute(
-            select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *smtp_scope)
-        ).scalar() or 0
-        smtp_failure_count = db.execute(
-            select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *smtp_scope)
-        ).scalar() or 0
-        last_smtp_attempt_at = db.execute(
-            select(func.max(EmailLog.created_at)).where(*smtp_scope)
-        ).scalar()
-        last_smtp_error = db.execute(
-            select(EmailLog)
-            .where(EmailLog.status == "failed", *smtp_scope)
-            .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        try:
+            delivery_scope = [
+                or_(EmailLog.event_type.is_(None), EmailLog.event_type != "smtp_test"),
+                *email_scope,
+            ]
+            sent_query = select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *delivery_scope)
+            failed_query = select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *delivery_scope)
+            last_attempt_query = select(func.max(EmailLog.created_at)).where(*delivery_scope)
+            last_errors_query = (
+                select(EmailLog)
+                .where(EmailLog.status == "failed", *delivery_scope)
+                .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
+                .limit(5)
+            )
+            email_sent_count = db.execute(sent_query).scalar() or 0
+            email_errors_count = db.execute(failed_query).scalar() or 0
+            last_email_attempt_at = db.execute(last_attempt_query).scalar()
+            last_email_errors = db.execute(last_errors_query).scalars().all()
+            smtp_scope = [EmailLog.event_type == "smtp_test", *email_scope]
+            smtp_success_count = db.execute(
+                select(func.count(EmailLog.id)).where(EmailLog.status == "sent", *smtp_scope)
+            ).scalar() or 0
+            smtp_failure_count = db.execute(
+                select(func.count(EmailLog.id)).where(EmailLog.status == "failed", *smtp_scope)
+            ).scalar() or 0
+            last_smtp_attempt_at = db.execute(
+                select(func.max(EmailLog.created_at)).where(*smtp_scope)
+            ).scalar()
+            last_smtp_error = db.execute(
+                select(EmailLog)
+                .where(EmailLog.status == "failed", *smtp_scope)
+                .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "Nie udało się odczytać statystyk email_logs. "
+                "Brakuje kolumn w bazie danych. Uruchom: alembic upgrade head"
+            )
+            email_sent_count = 0
+            email_errors_count = 0
+            last_email_attempt_at = None
+            last_email_errors = []
+            smtp_success_count = 0
+            smtp_failure_count = 0
+            last_smtp_attempt_at = None
+            last_smtp_error = None
     return render_template(
         "admin/dashboard.html",
         forms_count=forms_count,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from models import EmailLog, PlatformMailTemplate, SystemMailSettings
 from services.mail_settings_service import diagnose_smtp_error
@@ -79,16 +80,21 @@ def system_mail_settings_test():
         config = service.resolve_smtp(db, type("SystemForm", (), {"mail_mode": "system"})(), current_app.config)
         try:
             service.test_connection(config or {})
-            _log_smtp_attempt(db, form=None, status="sent")
-            _log_smtp_success(config or {}, form=None)
-            db.commit()
-            flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
             diagnostic = diagnose_smtp_error(exc)
             _log_smtp_failure(config or {}, form=None, diagnostic=diagnostic)
-            _log_smtp_attempt(db, form=None, status="failed", diagnostic=diagnostic)
-            db.commit()
+            _save_smtp_attempt(db, form=None, status="failed", diagnostic=diagnostic)
             flash(diagnostic.administrator_message, "error")
+        else:
+            _log_smtp_success(config or {}, form=None)
+            if _save_smtp_attempt(db, form=None, status="sent"):
+                flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
+            else:
+                flash(
+                    "Połączenie SMTP działa, ale nie udało się zapisać logu testu. "
+                    "Sprawdź migracje bazy danych.",
+                    "error",
+                )
     return redirect(url_for("admin.system_mail_settings"))
 
 
@@ -130,21 +136,10 @@ def system_mail_settings_test_email():
                 text_body="To jest testowa wiadomość konfiguracji SMTP.",
                 inline_images=inline_images,
             )
-            _log_smtp_attempt(
-                db,
-                form=None,
-                status="sent",
-                to_email=recipient,
-                subject="Testowa wiadomość SMTP",
-                success_message="Wiadomość testowa SMTP została wysłana.",
-            )
-            _log_smtp_success(config or {}, form=None)
-            db.commit()
-            flash(f"Wysłano wiadomość testową SMTP do {recipient}.", "success")
         except Exception as exc:
             diagnostic = diagnose_smtp_error(exc)
             _log_smtp_failure(config or {}, form=None, diagnostic=diagnostic)
-            _log_smtp_attempt(
+            _save_smtp_attempt(
                 db,
                 form=None,
                 status="failed",
@@ -152,8 +147,25 @@ def system_mail_settings_test_email():
                 to_email=recipient,
                 subject="Testowa wiadomość SMTP",
             )
-            db.commit()
             flash(diagnostic.administrator_message, "error")
+        else:
+            _log_smtp_success(config or {}, form=None)
+            saved = _save_smtp_attempt(
+                db,
+                form=None,
+                status="sent",
+                to_email=recipient,
+                subject="Testowa wiadomość SMTP",
+                success_message="Wiadomość testowa SMTP została wysłana.",
+            )
+            if saved:
+                flash(f"Wysłano wiadomość testową SMTP do {recipient}.", "success")
+            else:
+                flash(
+                    "Wiadomość testowa SMTP została wysłana, ale nie udało się "
+                    "zapisać logu testu. Sprawdź migracje bazy danych.",
+                    "error",
+                )
     return redirect(url_for("admin.system_mail_settings"))
 
 
@@ -166,16 +178,21 @@ def form_mail_settings_test(form_id: int):
         config = service.resolve_smtp(db, form, current_app.config)
         try:
             service.test_connection(config or {})
-            _log_smtp_attempt(db, form=form, status="sent")
-            _log_smtp_success(config or {}, form=form)
-            db.commit()
-            flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
         except Exception as exc:
             diagnostic = diagnose_smtp_error(exc)
             _log_smtp_failure(config or {}, form=form, diagnostic=diagnostic)
-            _log_smtp_attempt(db, form=form, status="failed", diagnostic=diagnostic)
-            db.commit()
+            _save_smtp_attempt(db, form=form, status="failed", diagnostic=diagnostic)
             flash(diagnostic.administrator_message, "error")
+        else:
+            _log_smtp_success(config or {}, form=form)
+            if _save_smtp_attempt(db, form=form, status="sent"):
+                flash("Połączenie SMTP zakończyło się powodzeniem. Nie wysłano wiadomości.", "success")
+            else:
+                flash(
+                    "Połączenie SMTP działa, ale nie udało się zapisać logu testu. "
+                    "Sprawdź migracje bazy danych.",
+                    "error",
+                )
     return redirect(url_for("admin.form_edit", form_id=form_id, tab="emails"))
 
 
@@ -212,6 +229,20 @@ def _log_smtp_attempt(
             sent_by_id=g.admin_user.id,
         )
     )
+
+
+def _save_smtp_attempt(db, **values) -> bool:
+    try:
+        _log_smtp_attempt(db, **values)
+        db.commit()
+        return True
+    except SQLAlchemyError:
+        db.rollback()
+        current_app.logger.exception(
+            "Nie udało się zapisać logu testu SMTP. "
+            "Sprawdź migracje tabeli email_logs."
+        )
+        return False
 
 
 def _smtp_log_values(config) -> tuple[str, int, bool, bool, int]:

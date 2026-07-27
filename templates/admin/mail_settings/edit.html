@@ -64,5 +64,6 @@
 <form method="post" action="{{ url_for('admin.system_mail_settings_test') }}" class="admin-form-actions">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <button class="admin-button-secondary" type="submit">Testuj połączenie</button>
+    <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.system_mail_settings_test_email') }}">Wyślij wiadomość testową z logo stopki</button>
 </form>
 {% endblock %}

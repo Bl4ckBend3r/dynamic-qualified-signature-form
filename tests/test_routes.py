@@ -99,7 +99,7 @@ def test_public_form_logo_alignment_classes(client, app):
 
 
 def test_public_form_logo_css_keeps_fixed_height_and_alignment_rules():
-    stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/style.css").read_text(encoding="utf-8")
     logo_block = stylesheet.split(".form-logo {", 1)[1].split("}", 1)[0]
 
     assert "height: 84px;" in logo_block

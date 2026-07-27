@@ -16,7 +16,7 @@ def test_declaration_training_ui_shows_dates_availability_and_no_waitlist():
 
 def test_admin_training_ui_uses_sections_and_readable_date_fields():
     template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
-    stylesheet = Path("static/admin.css").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
 
     assert 'name="training_item_code"' not in template
     assert "RRRR-MM-DD|" not in template

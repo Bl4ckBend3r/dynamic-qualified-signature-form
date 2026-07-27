@@ -16,8 +16,8 @@ NEXTCLOUD_LOGO_DIR = "Strona WWW/Formularze/Logo"
 
 def inject_pdf_styles(app, html_string: str) -> str:
     css_paths = [
-        Path(app.root_path) / "static" / "style.css",
-        Path(app.root_path) / "static" / "document_template.css",
+        Path(app.root_path) / "static" / "css" / "style.css",
+        Path(app.root_path) / "static" / "css" / "document_template.css",
     ]
 
     css_content = []

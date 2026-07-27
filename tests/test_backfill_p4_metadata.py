@@ -7,7 +7,7 @@ pytest.importorskip("sqlalchemy")
 
 from database import create_session_factory
 from models import Base, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
-from scripts.backfill_p4_metadata import BackfillP4Metadata, build_parser, write_report
+from scripts.migration.backfill_p4_metadata import BackfillP4Metadata, build_parser, write_report
 from services.submission_document_service import SubmissionDocumentType
 from sqlalchemy import create_engine
 

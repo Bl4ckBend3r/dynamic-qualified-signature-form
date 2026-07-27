@@ -117,7 +117,7 @@
         </section>
     {% endfor %}
 </div>
-{% if g.admin_user.role in ["admin", "super_admin"] %}<p><a class="btn-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></p>{% endif %}
+{% if g.admin_user.role in ["admin", "super_admin"] %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></div>{% endif %}
 {% if detail_view.qualification %}
 <section class="admin-card">
     <h2>Warunki kwalifikujące</h2>
@@ -126,7 +126,7 @@
     </p>
     <p><strong>Data oceny:</strong> {{ detail_view.qualification.evaluated_at or "-" }}</p>
     {% if detail_view.qualification.user_message %}<p><strong>Komunikat dla użytkownika:</strong> {{ detail_view.qualification.user_message }}</p>{% endif %}
-    <table class="data-table">
+    <div class="admin-table-wrap"><table class="admin-table">
         <thead><tr><th>Pole</th><th>Operator</th><th>Wartość oczekiwana</th><th>Wartość zgłoszenia</th><th>Wynik</th><th>Informacja dla urzędnika</th></tr></thead>
         <tbody>
         {% for condition in detail_view.qualification.results %}
@@ -138,25 +138,25 @@
             </tr>
         {% else %}<tr><td colspan="6">Brak aktywnych warunków do oceny.</td></tr>{% endfor %}
         </tbody>
-    </table>
+    </table></div>
 </section>
 {% endif %}
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">
         <h3>{{ section.title }}</h3>
-        <table class="data-table">
+        <div class="admin-table-wrap"><table class="admin-table">
             <tbody>
                 {% for item in section["items"] %}
                     <tr><th>{{ item.label }}</th><td>{{ item.value }}</td></tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
     </section>
 {% endfor %}
 <section class="admin-card">
     <h3>Wybrane szkolenia</h3>
-    <table class="data-table">
+    <div class="admin-table-wrap"><table class="admin-table">
         <thead><tr><th>Nazwa szkolenia</th><th>Cena szkolenia</th><th>Opis</th></tr></thead>
         <tbody>
             {% for training in detail_view.trainings %}
@@ -169,23 +169,23 @@
                 <tr><td colspan="3">Brak danych o szkoleniach.</td></tr>
             {% endfor %}
         </tbody>
-    </table>
+    </table></div>
 </section>
 {% if detail_view.technical_items %}
     <details class="admin-card">
         <summary>Dane techniczne</summary>
-        <table class="data-table">
+        <div class="admin-table-wrap"><table class="admin-table">
             <tbody>
                 {% for item in detail_view.technical_items %}
                     <tr><th>{{ item.label }}</th><td>{{ item.value }}</td></tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
     </details>
 {% endif %}
 <h2>Historia workflow</h2>
 <p><small>Źródło: {{ workflow_history.source }}</small></p>
-<table class="data-table">
+<div class="admin-card admin-table-wrap"><table class="admin-table">
     <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powód</th><th>Data</th></tr></thead>
     <tbody>{% for event in workflow_history.events %}
         <tr>
@@ -198,10 +198,10 @@
     {% else %}
         <tr><td colspan="5">Brak historii workflow.</td></tr>
     {% endfor %}</tbody>
-</table>
+</table></div>
 <h2>Historia decyzji</h2>
 <p><small>Źródło: {{ decision_history.source }}</small></p>
-<table class="data-table">
+<div class="admin-card admin-table-wrap"><table class="admin-table">
     <thead><tr><th>Decyzja</th><th>Uzasadnienie</th><th>Status docelowy</th><th>Mail</th><th>Data</th></tr></thead>
     <tbody>{% for decision in decision_history.decisions %}
         <tr>
@@ -214,14 +214,14 @@
     {% else %}
         <tr><td colspan="5">Brak decyzji.</td></tr>
     {% endfor %}</tbody>
-</table>
+</table></div>
 <h2>Dokumenty Nextcloud</h2>
-<table class="data-table">
+<div class="admin-card admin-table-wrap"><table class="admin-table">
     <thead><tr><th>Nazwa</th><th>Sciezka</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th></tr></thead>
     <tbody>{% for file in files %}
         <tr><td>{{ file.filename }}</td><td>{{ file.storage_path }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td></tr>
     {% else %}
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
-</table>
+</table></div>
 {% endblock %}

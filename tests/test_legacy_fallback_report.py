@@ -6,7 +6,7 @@ pytest.importorskip("sqlalchemy")
 
 from database import create_session_factory
 from models import Base, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
-from scripts.report_legacy_fallbacks import build_parser, write_report
+from scripts.diagnostics.report_legacy_fallbacks import build_parser, write_report
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.submission_document_service import SubmissionDocumentType
 from sqlalchemy import create_engine

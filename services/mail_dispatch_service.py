@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 import logging
+import mimetypes
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,6 @@ from services.footer_logo_service import (
     normalize_footer_logo_alignment,
     normalize_footer_logo_dimension,
     normalize_footer_logo_position,
-    resolve_footer_logo_url,
 )
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
@@ -86,7 +86,7 @@ class MailDispatchService:
     ) -> dict[str, Any]:
         return build_mail_context(form, submission, files or [], **builders)
 
-    def build_footer(self, footer=None, logo_url_builder=None) -> str:
+    def build_footer(self, footer=None, logo_url_builder=None, *, logo_url: str | None = None) -> str:
         if not footer:
             return ""
         alignment = normalize_footer_logo_alignment(getattr(footer, "logo_alignment", "left"))
@@ -97,14 +97,15 @@ class MailDispatchService:
         logo = getattr(footer, "logo", None)
         logo_html = ""
         inline_logo_html = ""
-        logo_url = self._footer_logo_url(footer, logo_url_builder)
-        if logo_url:
+        resolved_logo_url = logo_url if logo_url is not None else self._footer_logo_url(footer, logo_url_builder)
+        if resolved_logo_url:
             image_width = width if width is not None else (None if height is not None else 160)
             image_styles = ["display:inline-block", "max-width:800px", "max-height:400px"]
             image_styles.append(f"width:{image_width}px" if image_width is not None else "width:auto")
             image_styles.append(f"height:{height}px" if height is not None else "height:auto")
             image_html = (
-                f'<img src="{escape(logo_url, quote=True)}" alt="{escape(str(getattr(logo, "name", "")))}" '
+                f'<img src="{escape(resolved_logo_url, quote=True)}" '
+                f'alt="{escape(str(getattr(logo, "name", "") or "Logo stopki"), quote=True)}" '
                 f'style="{";".join(image_styles)};">'
             )
             logo_html = f'<div class="mail-footer-logo" style="text-align:{alignment};">{image_html}</div>'
@@ -169,8 +170,15 @@ class MailDispatchService:
 
     @staticmethod
     def _footer_logo_url(footer, logo_url_builder=None) -> str:
-        """Resolve only the logo configured on the footer: logo_id, logo_path, or none."""
-        return resolve_footer_logo_url(footer, logo_url_builder)
+        """Resolve a library logo for preview; mail delivery supplies a CID explicitly."""
+        logo = getattr(footer, "logo", None)
+        if logo_url_builder is None or logo is None or getattr(logo, "active", False) is False:
+            return ""
+        try:
+            resolved = str(logo_url_builder(logo) or "").strip()
+        except (TypeError, ValueError):
+            return ""
+        return resolved if resolved.lower().startswith(("https://", "http://", "cid:")) else ""
 
     @staticmethod
     def _footer_logo_dimension(value, minimum: int, maximum: int) -> int | None:
@@ -311,7 +319,7 @@ class MailDispatchService:
                 "reply_to": current_app.config.get("MAIL_REPLY_TO", ""),
                 "use_tls": current_app.config.get("SMTP_USE_TLS", True),
                 "use_ssl": current_app.config.get("SMTP_USE_SSL", False),
-                "timeout": current_app.config.get("SMTP_TIMEOUT", 30),
+                "timeout": current_app.config.get("SMTP_TIMEOUT", 10),
             }
         if smtp_config is None:
             log = self.log_email(
@@ -404,7 +412,8 @@ class MailDispatchService:
         context = self.build_context_for_submission(form, submission, files or [], **(context_builders or {}))
         context.update(extra_context or {})
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
-        footer_html = self.build_footer(footer, logo_url_builder=logo_url_builder)
+        footer_logo_url, footer_inline_images = self.footer_logo_for_email(db, footer)
+        footer_html = self.build_footer(footer, logo_url=footer_logo_url)
         layout = self._layout_for_db(db)
         if footer:
             layout = {**layout, "footer_html": ""}
@@ -423,7 +432,7 @@ class MailDispatchService:
             template=template,
             footer=footer,
             sent_by_id=sent_by_id,
-            inline_images=layout.get("_inline_images", []),
+            inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
         )
 
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:
@@ -491,15 +500,8 @@ class MailDispatchService:
                 form=form,
                 submission=submission,
             )
-            footer_html = self.build_footer(
-                footer,
-                logo_url_builder=lambda logo: url_for(
-                    "public_forms.logo_asset",
-                    logo_id=logo.id,
-                    filename=logo.filename,
-                    _external=True,
-                ),
-            )
+            footer_logo_url, footer_inline_images = self.footer_logo_for_email(db, footer)
+            footer_html = self.build_footer(footer, logo_url=footer_logo_url)
             if footer:
                 layout = {**layout, "footer_html": ""}
             html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
@@ -516,7 +518,7 @@ class MailDispatchService:
                 submission=submission,
                 template=None,
                 footer=footer,
-                inline_images=self._inline_images_from_layout(layout),
+                inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
             )
             db.commit()
             return result
@@ -748,6 +750,74 @@ class MailDispatchService:
                 except (OSError, ValueError):
                     current_app.logger.warning("mail_logo_skipped logo_id=%s reason=asset_unavailable", logo.id)
         return layout
+
+    def footer_logo_for_email(self, db, footer) -> tuple[str, list[dict[str, Any]]]:
+        """Resolve a footer logo to an inline CID attachment, never an external/local img URL."""
+        if footer is None:
+            return "", []
+
+        logo_id = getattr(footer, "logo_id", None)
+        logo_path = str(getattr(footer, "logo_path", "") or "").strip()
+        logo = None
+        asset_path = None
+        mime_type = ""
+        filename = "footer-logo"
+
+        if logo_id is not None and db is not None:
+            from models import Logo
+
+            logo = db.get(Logo, logo_id)
+            if logo and getattr(logo, "active", False):
+                asset_path = self._existing_footer_logo_path(getattr(logo, "storage_path", ""))
+                mime_type = str(getattr(logo, "mime_type", "") or "").strip().lower()
+                filename = Path(str(getattr(logo, "filename", "") or filename)).name
+        elif logo_path:
+            asset_path = self._existing_footer_logo_path(logo_path)
+            filename = Path(logo_path).name or filename
+
+        if asset_path and not mime_type.startswith("image/"):
+            mime_type = str(mimetypes.guess_type(filename)[0] or "").lower()
+
+        try:
+            content = asset_path.read_bytes() if asset_path and mime_type.startswith("image/") else b""
+        except OSError:
+            content = b""
+
+        if not content:
+            if logo_id is not None or logo_path:
+                current_app.logger.warning(
+                    "Nie udało się załadować logo stopki mailowej: logo_id=%s, logo_path=%s",
+                    logo_id,
+                    logo_path,
+                )
+            return "", []
+
+        return "cid:footer-logo", [{
+            "cid": "footer-logo",
+            "content": content,
+            "mime_type": mime_type,
+            "filename": filename,
+        }]
+
+    @staticmethod
+    def _existing_footer_logo_path(value: object) -> Path | None:
+        raw_value = str(value or "").strip()
+        if not raw_value or raw_value.lower().startswith(("http://", "https://", "cid:", "data:")):
+            return None
+        raw_path = Path(raw_value)
+        candidates = [raw_path]
+        if not raw_path.is_absolute():
+            candidates.extend([
+                Path(current_app.root_path) / raw_path,
+                Path(current_app.config.get("TEMP_DIR", current_app.root_path)) / raw_path,
+            ])
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+        return None
 
     @staticmethod
     def _inline_images_from_layout(layout: dict[str, Any]) -> list[dict[str, Any]]:

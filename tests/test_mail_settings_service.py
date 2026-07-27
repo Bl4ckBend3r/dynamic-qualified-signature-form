@@ -1,4 +1,11 @@
+import smtplib
+import socket
+
+import pytest
+
+from config import _env_int
 from services.mail_settings_service import MailSettingsService
+from services.mail_settings_service import diagnose_smtp_error
 from services.email_service import _send_email
 
 
@@ -53,6 +60,48 @@ def test_password_encryption_round_trip_and_public_config_never_exposes_password
     assert encrypted != "smtp-secret"
     assert service.decrypt_password(encrypted) == "smtp-secret"
     assert "password" not in service.public_config({"host": "smtp.test", "password": "smtp-secret"})
+
+
+@pytest.mark.parametrize(
+    ("exception", "expected_type", "expected_message"),
+    [
+        (
+            TimeoutError(),
+            "TimeoutError",
+            "Nie udało się połączyć z serwerem SMTP w wyznaczonym czasie. "
+            "Sprawdź host, port, firewall oraz dostępność SMTP z serwera aplikacji.",
+        ),
+        (
+            socket.gaierror(-2, "Name or service not known"),
+            "gaierror",
+            "Nie udało się odnaleźć serwera SMTP. Sprawdź adres hosta SMTP.",
+        ),
+        (
+            smtplib.SMTPAuthenticationError(535, b"bad credentials"),
+            "SMTPAuthenticationError",
+            "Nie udało się zalogować do serwera SMTP. "
+            "Sprawdź użytkownika, hasło i metodę szyfrowania.",
+        ),
+        (
+            ConnectionRefusedError(),
+            "ConnectionRefusedError",
+            "Serwer SMTP odrzucił połączenie. Sprawdź port i konfigurację serwera SMTP.",
+        ),
+    ],
+)
+def test_smtp_errors_have_specific_polish_diagnostics(exception, expected_type, expected_message):
+    diagnostic = diagnose_smtp_error(exception)
+
+    assert diagnostic.error_type == expected_type
+    assert diagnostic.administrator_message == expected_message
+
+
+def test_smtp_timeout_environment_value_is_numeric_and_bounded(monkeypatch):
+    monkeypatch.setenv("SMTP_TIMEOUT", "not-a-number")
+    assert _env_int("SMTP_TIMEOUT", 10, minimum=1, maximum=120) == 10
+
+    monkeypatch.setenv("SMTP_TIMEOUT", "999")
+    assert _env_int("SMTP_TIMEOUT", 10, minimum=1, maximum=120) == 120
 
 
 def test_mail_layout_logo_defaults_and_bounds_are_safe():

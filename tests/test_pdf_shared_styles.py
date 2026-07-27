@@ -4,8 +4,8 @@ from pdf_generator import ensure_document_root, inject_pdf_styles
 
 
 def test_shared_document_css_is_injected_into_admin_html_template(tmp_path):
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
+    static_dir = tmp_path / "static" / "css"
+    static_dir.mkdir(parents=True)
     (static_dir / "document_template.css").write_text(".document-table { width: 100%; }", encoding="utf-8")
     app = SimpleNamespace(root_path=str(tmp_path))
 

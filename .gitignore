@@ -1,10 +1,73 @@
-forms/sample_form.json
-output/
+# Local configuration and virtual environments
+.env
+.env.*
+!.env.example
 .venv/
 
+# Python and test caches
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.tox/
+.nox/
+
+# Coverage output
 .coverage
-tmp/
-MANUAL_ADMIN_FUNCTIONALITY_CHECKLIST.md
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime-generated data
+# `data/` is the legacy runtime location; new local runtime data belongs in
+# `storage/`, `output/`, `uploads/` or `tmp/`.
+data/
+docs/admin
+docs/archive
+docs/database
+docs/deployment
+docs/forms
+docs/mail
+docs/nextcloud
+docs/reports
+docs/setup
+docs/testing
+docs/workflow
+storage/*
+!storage/.gitkeep
+!storage/archive/
+storage/archive/*
+!storage/archive/.gitkeep
+output/*
+!output/.gitkeep
+!output/archive/
+output/archive/*
+!output/archive/.gitkeep
+uploads/*
+!uploads/.gitkeep
+!uploads/archive/
+uploads/archive/*
+!uploads/archive/.gitkeep
+tmp/*
+!tmp/.gitkeep
+!tmp/archive/
+tmp/archive/*
+!tmp/archive/.gitkeep
+*.log
+*.bak
+*.old
+*.tmp
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+
+# Local one-off QA helpers
+.codex_qa_*.py
+.codex
+.agents
+# Operating-system metadata
+.DS_Store
+Thumbs.db

@@ -15,6 +15,14 @@ def _env_list(name: str) -> list[str]:
     return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
 
 
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return min(maximum, max(minimum, value))
+
+
 def normalize_app_base_path(value: str | None) -> str:
     value = (value or "").strip()
     if not value or value == "/":
@@ -49,7 +57,7 @@ class Config:
     NEXTCLOUD_FORMS_DIR = os.getenv("NEXTCLOUD_FORMS_DIR", "Formularze")
     NEXTCLOUD_OUTPUT_DIR = os.getenv("NEXTCLOUD_OUTPUT_DIR", "output")
 
-    FORMS_DIR = BASE_DIR / "forms"
+    FORMS_DIR = BASE_DIR / "examples" / "forms"
     OUTPUT_DIR = BASE_DIR / "output"
     PDF_OUTPUT_DIR = TEMP_DIR / "pdfs"
     CSV_OUTPUT_DIR = TEMP_DIR / "csv"
@@ -77,7 +85,7 @@ class Config:
     MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)
     SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", "true")
     SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", "false")
-    SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "30"))
+    SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 10, minimum=1, maximum=120)
 
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
 

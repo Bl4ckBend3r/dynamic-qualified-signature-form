@@ -63,7 +63,7 @@
             <div class="mail-footer-example__subject"><strong>Temat:</strong> Przykładowa wiadomość dotycząca zgłoszenia</div>
             <div class="mail-footer-example__body"><p>Dzień dobry,</p><p>to jest przykładowa treść wiadomości wysyłanej przez aplikację.</p></div>
             <footer class="mail-footer-example__footer" data-preview-footer-layout>
-                <div class="admin-preview-logo" data-preview-logo style="text-align:{{ footer.logo_alignment or 'left' }}">{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}" onerror="this.remove()">{% endif %}</div>
+                <div class="admin-preview-logo admin-align-{{ footer.logo_alignment or 'left' }}" data-preview-logo>{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}" onerror="this.remove()">{% endif %}</div>
                 <div data-preview-footer-content>
                     <div data-preview-footer-body>{% if footer.html_body %}{{ footer.html_body|safe }}{% else %}<p>Brak treści stopki.</p>{% endif %}</div>
                     <div data-preview-footer-contact>{{ (footer.contact_html or '')|safe }}</div>

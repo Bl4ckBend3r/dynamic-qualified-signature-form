@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import socket
 import smtplib
 import ssl
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -26,6 +28,63 @@ DEFAULT_LAYOUT = {
     "logo_alignment": "center",
     "logo_height_px": 64,
 }
+DEFAULT_SMTP_TIMEOUT = 10
+
+SMTP_TIMEOUT_MESSAGE = (
+    "Nie udało się połączyć z serwerem SMTP w wyznaczonym czasie. "
+    "Sprawdź host, port, firewall oraz dostępność SMTP z serwera aplikacji."
+)
+SMTP_AUTHENTICATION_MESSAGE = (
+    "Nie udało się zalogować do serwera SMTP. "
+    "Sprawdź użytkownika, hasło i metodę szyfrowania."
+)
+SMTP_DNS_MESSAGE = "Nie udało się odnaleźć serwera SMTP. Sprawdź adres hosta SMTP."
+SMTP_CONNECTION_REFUSED_MESSAGE = (
+    "Serwer SMTP odrzucił połączenie. Sprawdź port i konfigurację serwera SMTP."
+)
+SMTP_CONNECT_MESSAGE = (
+    "Serwer SMTP zgłosił błąd podczas nawiązywania połączenia. "
+    "Sprawdź host, port i konfigurację serwera SMTP."
+)
+SMTP_DISCONNECTED_MESSAGE = (
+    "Serwer SMTP przerwał połączenie. Sprawdź dostępność serwera i metodę szyfrowania."
+)
+SMTP_PROTOCOL_MESSAGE = (
+    "Serwer SMTP zwrócił błąd protokołu. Sprawdź konfigurację SMTP i logi techniczne."
+)
+SMTP_UNKNOWN_MESSAGE = (
+    "Nie udało się połączyć z serwerem SMTP. "
+    "Sprawdź adres serwera, port i metodę szyfrowania."
+)
+
+
+@dataclass(frozen=True)
+class SMTPErrorDiagnostic:
+    error_type: str
+    administrator_message: str
+
+
+def diagnose_smtp_error(exc: Exception) -> SMTPErrorDiagnostic:
+    """Map SMTP/network failures to safe, actionable administrator diagnostics."""
+    error_type = type(exc).__name__
+    details = str(exc).lower()
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or "authentication" in details or "uwierzyteln" in details:
+        message = SMTP_AUTHENTICATION_MESSAGE
+    elif isinstance(exc, socket.gaierror):
+        message = SMTP_DNS_MESSAGE
+    elif isinstance(exc, ConnectionRefusedError):
+        message = SMTP_CONNECTION_REFUSED_MESSAGE
+    elif isinstance(exc, (TimeoutError, socket.timeout)):
+        message = SMTP_TIMEOUT_MESSAGE
+    elif isinstance(exc, smtplib.SMTPConnectError):
+        message = SMTP_CONNECT_MESSAGE
+    elif isinstance(exc, smtplib.SMTPServerDisconnected):
+        message = SMTP_DISCONNECTED_MESSAGE
+    elif isinstance(exc, smtplib.SMTPException):
+        message = SMTP_PROTOCOL_MESSAGE
+    else:
+        message = SMTP_UNKNOWN_MESSAGE
+    return SMTPErrorDiagnostic(error_type=error_type, administrator_message=message)
 
 
 class MailSettingsService:
@@ -96,7 +155,7 @@ class MailSettingsService:
             "sender_name": app_config.get("MAIL_SENDER_NAME", ""),
             "use_tls": app_config.get("SMTP_USE_TLS", True),
             "use_ssl": app_config.get("SMTP_USE_SSL", False),
-            "timeout": app_config.get("SMTP_TIMEOUT", 30),
+            "timeout": app_config.get("SMTP_TIMEOUT", DEFAULT_SMTP_TIMEOUT),
             "reply_to": app_config.get("MAIL_REPLY_TO", ""),
         }
         return self._resolved_config(legacy, str(app_config.get("SMTP_PASSWORD") or ""))
@@ -124,7 +183,7 @@ class MailSettingsService:
             "sender_name": str(form_data.get(f"{prefix}sender_name") or "").strip(),
             "use_tls": form_data.get(f"{prefix}use_tls") == "on",
             "use_ssl": form_data.get(f"{prefix}use_ssl") == "on",
-            "timeout": _bounded_int(form_data.get(f"{prefix}timeout"), 30, 1, 120),
+            "timeout": _bounded_int(form_data.get(f"{prefix}timeout"), DEFAULT_SMTP_TIMEOUT, 1, 120),
             "reply_to": str(form_data.get(f"{prefix}reply_to") or "").strip(),
         }
 
@@ -150,7 +209,7 @@ class MailSettingsService:
     def test_connection(self, config: Mapping[str, Any]) -> None:
         host = str(config.get("smtp_host") or config.get("host") or "").strip()
         port = _bounded_int(config.get("smtp_port") or config.get("port"), 587, 1, 65535)
-        timeout = _bounded_int(config.get("timeout"), 30, 1, 120)
+        timeout = _bounded_int(config.get("timeout"), DEFAULT_SMTP_TIMEOUT, 1, 120)
         if not host:
             raise ValueError("Podaj host SMTP.")
         smtp_class = smtplib.SMTP_SSL if config.get("use_ssl") else smtplib.SMTP
@@ -175,7 +234,7 @@ class MailSettingsService:
             "sender_name": str(source.get("sender_name") or ""),
             "use_tls": bool(source.get("use_tls")),
             "use_ssl": bool(source.get("use_ssl")),
-            "timeout": _bounded_int(source.get("timeout"), 30, 1, 120),
+            "timeout": _bounded_int(source.get("timeout"), DEFAULT_SMTP_TIMEOUT, 1, 120),
             "reply_to": str(source.get("reply_to") or ""),
         }
 

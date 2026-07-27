@@ -114,7 +114,7 @@
         </label>
         </div>
         <div class="admin-form-header-preview" data-form-header-preview>
-            <div data-header-logo-wrap style="text-align: {{ form.logo_alignment or 'left' }};">{% if form.logo_id %}<img src="{{ url_for('admin.logo_asset', logo_id=form.logo_id) }}" alt="Podgląd logo" data-header-logo style="max-width: 180px; max-height: 80px;">{% else %}<img alt="Podgląd logo" data-header-logo hidden style="max-width: 180px; max-height: 80px;">{% endif %}</div>
+            <div class="admin-form-header-logo admin-align-{{ form.logo_alignment or 'left' }}" data-header-logo-wrap>{% if form.logo_id %}<img class="admin-form-header-logo__image" src="{{ url_for('admin.logo_asset', logo_id=form.logo_id) }}" alt="Podgląd logo" data-header-logo>{% else %}<img class="admin-form-header-logo__image" alt="Podgląd logo" data-header-logo hidden>{% endif %}</div>
             <span class="admin-form-header-preview__label" data-header-label style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
             <h3 data-header-title>{{ form.title or form.name }}</h3>
             <p>Podgląd nagłówka formularza publicznego</p>
@@ -139,7 +139,7 @@
             <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from" value="{{ form_smtp.get('mail_from', '') }}"></label>
             <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name" value="{{ form_smtp.get('sender_name', '') }}"></label>
             <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to" value="{{ form_smtp.get('reply_to', '') }}"></label>
-            <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="{{ form_smtp.get('timeout', 30) }}"></label>
+            <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="{{ form_smtp.get('timeout', 10) }}"></label>
             <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" {% if form_smtp.get('use_tls') %}checked{% endif %}><span>TLS/STARTTLS</span></label>
             <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl" {% if form_smtp.get('use_ssl') %}checked{% endif %}><span>SSL</span></label>
             {% if form.smtp_password_encrypted %}<label class="admin-check"><input type="checkbox" name="form_smtp_clear_password"><span>Usuń zapisane hasło</span></label>{% endif %}

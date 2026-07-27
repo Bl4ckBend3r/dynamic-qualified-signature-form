@@ -32,7 +32,7 @@ def _send_email(
     text_body: str,
     use_tls: bool = True,
     use_ssl: bool = False,
-    timeout: int = 30,
+    timeout: int = 10,
     sender_name: str = "",
     reply_to: str = "",
     inline_images: list[dict] | None = None,

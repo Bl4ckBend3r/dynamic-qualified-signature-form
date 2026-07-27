@@ -279,7 +279,7 @@ def test_social_links_render_in_configured_slot(position, slot):
 
 
 def test_site_footer_css_pushes_right_column_to_container_edge_and_stacks_on_mobile():
-    css = (Path(__file__).parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+    css = (Path(__file__).parents[1] / "static" / "css" / "style.css").read_text(encoding="utf-8")
     columns_css = css.split(".site-footer__columns {", 1)[1].split("}", 1)[0]
     right_column_css = css.split(".site-footer__column--right {", 1)[1].split("}", 1)[0]
 

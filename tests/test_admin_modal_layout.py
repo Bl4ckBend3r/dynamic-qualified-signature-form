@@ -6,7 +6,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_admin_modal_has_bounded_scrollable_layout_and_fixed_footer():
-    css = (PROJECT_ROOT / "static" / "admin.css").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
 
     assert ".admin-modal {" in css
     assert "max-height: 90vh;" in css
@@ -20,7 +20,7 @@ def test_admin_modal_has_bounded_scrollable_layout_and_fixed_footer():
 
 
 def test_admin_modal_keeps_all_structural_surfaces_opaque():
-    css = (PROJECT_ROOT / "static" / "admin.css").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
 
     for selector in (
         ".admin-modal",

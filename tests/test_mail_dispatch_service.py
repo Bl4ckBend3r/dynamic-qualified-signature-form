@@ -31,7 +31,7 @@ def test_build_footer_handles_missing_footer_and_logo():
     assert service.build_footer(None) == ""
 
 
-def test_footer_logo_source_prefers_logo_id_then_logo_path_then_none():
+def test_footer_logo_source_uses_library_logo_and_never_renders_legacy_path():
     service = MailDispatchService()
     library_logo = SimpleNamespace(active=True, name="Logo stopki", filename="footer.png")
     own_logo = SimpleNamespace(
@@ -59,7 +59,8 @@ def test_footer_logo_source_prefers_logo_id_then_logo_path_then_none():
 
     assert 'src="https://cdn.example/footer.png"' in from_library
     assert "legacy.png" not in from_library
-    assert 'src="https://legacy.example/footer.png"' in from_path
+    assert "<img" not in from_path
+    assert "legacy.example" not in from_path
     assert "<img" not in without_logo
     assert "Lubuskie" not in without_logo
 
@@ -154,6 +155,37 @@ def test_build_footer_replaces_inline_logo_placeholder():
     assert "{{ footer_logo }}" not in rendered
     assert '<span class="mail-footer-logo"' in rendered
     assert rendered.index("Przed") < rendered.index("logo.png") < rendered.index("po logo")
+
+
+def test_build_footer_uses_footer_cid_without_local_or_relative_source():
+    rendered = MailDispatchService().build_footer(
+        _footer_with_logo(logo_width=240, logo_height=90, logo_alignment="center"),
+        logo_url="cid:footer-logo",
+    )
+
+    assert 'src="cid:footer-logo"' in rendered
+    assert "width:240px" in rendered
+    assert "height:90px" in rendered
+    assert "text-align:center" in rendered
+    assert "/static/" not in rendered
+    assert "tmp/" not in rendered
+
+
+def test_legacy_footer_logo_path_is_embedded_as_cid_when_file_exists(app, tmp_path):
+    legacy_path = tmp_path / "legacy-footer.jpg"
+    legacy_path.write_bytes(b"jpeg-footer")
+    footer = _footer_with_logo(logo=None, logo_id=None, logo_path=str(legacy_path))
+    service = MailDispatchService()
+
+    with app.app_context():
+        logo_url, inline_images = service.footer_logo_for_email(None, footer)
+        rendered = service.build_footer(footer, logo_url=logo_url)
+
+    assert logo_url == "cid:footer-logo"
+    assert 'src="cid:footer-logo"' in rendered
+    assert str(legacy_path) not in rendered
+    assert inline_images[0]["content"] == b"jpeg-footer"
+    assert inline_images[0]["mime_type"] == "image/jpeg"
 
 
 def test_build_footer_falls_back_to_bottom_when_inline_placeholder_is_missing(caplog):

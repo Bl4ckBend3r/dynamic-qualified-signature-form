@@ -180,7 +180,19 @@ def resolve_process_status(row: Mapping[str, Any]) -> ProcessStatus:
 
     if explicit_status:
         try:
-            return ProcessStatus(explicit_status)
+            resolved = ProcessStatus(explicit_status)
+            if (
+                is_agreement_blocked(row)
+                and resolved
+                not in {
+                    ProcessStatus.AUTO_REJECTED,
+                    ProcessStatus.OFFICER_REJECTED,
+                    ProcessStatus.PARTICIPANT_REJECTED,
+                    ProcessStatus.RETURNED_FOR_CORRECTION,
+                }
+            ):
+                return ProcessStatus.AGREEMENT_BLOCKED
+            return resolved
         except ValueError:
             pass
 
@@ -238,7 +250,11 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
         status in {ProcessStatus.OFFICER_ACCEPTED, ProcessStatus.ADDITIONAL_FIELDS_COMPLETED}
         and is_declaration_required(row)
     )
-    blocked_statuses = {ProcessStatus.AUTO_REJECTED, ProcessStatus.RETURNED_FOR_CORRECTION}
+    blocked_statuses = {
+        ProcessStatus.AUTO_REJECTED,
+        ProcessStatus.RETURNED_FOR_CORRECTION,
+        ProcessStatus.AGREEMENT_BLOCKED,
+    }
     can_sign_documents = decision == OfficerDecision.ACCEPTED and status not in blocked_statuses
     can_generate_agreement = (
         status not in blocked_statuses

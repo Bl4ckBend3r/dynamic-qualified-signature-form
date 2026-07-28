@@ -928,3 +928,68 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
     assert without_instruction["next_action"] == ""
     assert without_instruction["instruction"]["has_instruction"] is False
     assert "user_instruction" not in without_instruction
+
+
+def test_blocked_agreement_status_has_no_positive_signing_message_or_actions(client, app):
+    app.testing_storage.form_definition["user_instruction"] = "Możesz przejść do podpisywania dokumentów."
+    app.testing_storage.form_definition["user_instruction_config"] = {
+        "title": "Stara instrukcja",
+        "description": "Możesz przejść do podpisywania dokumentów.",
+        "stages": [
+            {
+                "key": "agreement",
+                "label": "Umowa",
+                "status_codes": ["AGREEMENT_READY"],
+                "next_action": "Podpisz umowę.",
+            }
+        ],
+    }
+    app.testing_storage.form_definition["documents"] = {
+        "declaration": {"enabled": True, "template_html": "<p>Deklaracja</p>"},
+        "agreement": {"enabled": True, "template_html": "<p>Umowa</p>"},
+    }
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "blocked-agreement",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz zgłoszeniowy",
+            "officer_decision": "TAK",
+            "acceptance_required": "TAK",
+            "process_status": "AGREEMENT_READY",
+            "declaration_required": "Tak",
+            "declaration_signature_valid": "Tak",
+            "agreement_required": "Tak",
+            "agreement_blocked": "Tak",
+            "agreement_block_reason": "Warunki nie zostały spełnione na podstawie deklaracji uczestnika.",
+            "agreement_generated": "Tak",
+            "agreement_filename": "umowa.pdf",
+        }
+    ]
+
+    payload = client.get("/api/submissions/blocked-agreement/acceptance-status").get_json()
+
+    assert payload["process_status"] == "AGREEMENT_BLOCKED"
+    assert payload["status_title"] == "Umowa nie może zostać wygenerowana"
+    assert payload["can_sign_documents"] is False
+    assert payload["can_view_status_details"] is True
+    assert payload["can_download_agreement"] is False
+    assert payload["can_upload_signed_agreement"] is False
+    assert payload["blocking_reason"] == "Warunki nie zostały spełnione na podstawie deklaracji uczestnika."
+    assert payload["next_action"].startswith("Na tym etapie nie możesz")
+    assert payload["instruction"]["next_action"] == payload["next_action"]
+    assert "Możesz przejść do podpisywania dokumentów" not in payload["message"]
+    assert sum(
+        "Etap zakończony poprawnie" in item["text"]
+        for item in payload["status_messages"]
+    ) == 1
+
+    response = client.get("/do-podpisania?submission_id=blocked-agreement")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Umowa nie może zostać wygenerowana" in html
+    assert "Warunki nie zostały spełnione na podstawie deklaracji uczestnika." in html
+    assert html.count("Etap zakończony poprawnie") == 1
+    assert "Pobierz umowę PDF" not in html
+    assert "Wyślij podpisaną umowę" not in html
+    assert "Wygeneruj umowę" not in html

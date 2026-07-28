@@ -2258,11 +2258,20 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
         name="Katalog maila",
         definition_json={
             "title": "Katalog maila",
-            "fields": [
-                {"name": "pesel", "label": "Numer PESEL", "type": "text"},
-                {"name": "selected_trainings", "label": "Wybrane szkolenia", "type": "select"},
+            "fields": [{"name": "pesel", "label": "Numer PESEL", "type": "text"}],
+            "documents": [
+                {
+                    "id": "declaration",
+                    "fields": [
+                        {
+                            "name": "selected_trainings",
+                            "label": "Wybrane szkolenia",
+                            "type": "training_selection",
+                            "catalog": [{"id": "excel", "name": "Excel"}],
+                        }
+                    ],
+                }
             ],
-            "trainings": [{"id": "excel", "name": "Excel"}],
         },
     )
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
@@ -2282,6 +2291,10 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
     assert "{{ pesel }}" in html
     assert "{{ telefon }}" in html
     assert "{{ selected_trainings_count }}" in html
+    assert "{{ available_trainings }}" in html
+    assert "{{ available_trainings_table }}" in html
+    assert "{{ available_trainings_list }}" in html
+    assert "{{ available_trainings_text }}" in html
     assert 'data-insert-variable="{{ pesel }}"' in html
 
 
@@ -2322,6 +2335,84 @@ def test_mail_template_live_preview_endpoint_uses_fallback_context_without_submi
     assert 'setTimeout(refreshPreview, 400)' in editor_html
     assert "data-preview-frame" in editor_html
     assert " sandbox " in editor_html
+
+
+def test_mail_template_live_preview_renders_available_training_formats_from_form_config(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="mail_training_preview",
+        name="Szkolenia",
+        definition_json={
+            "title": "Szkolenia",
+            "fields": [],
+            "documents": [
+                {
+                    "id": "declaration",
+                    "fields": [
+                        {
+                            "type": "training_selection",
+                            "name": "selected_trainings",
+                            "currency": "PLN",
+                            "catalog": [
+                                {
+                                    "id": "excel",
+                                    "name": "Excel <script>alert(1)</script>",
+                                    "description": "Arkusze i raporty",
+                                    "price": "1234.50",
+                                    "capacity": 2,
+                                    "dates": [
+                                        {
+                                            "start_date": "2026-08-01",
+                                            "location": "Zielona Góra",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(
+            FormSubmission(
+                submission_id="training-mail-1",
+                form_slug="mail_training_preview",
+                form_name="Szkolenia",
+                process_status="FORM_SUBMITTED",
+                selected_trainings='[{"id":"excel","name":"Excel","price":"1234.50"}]',
+            )
+        )
+        db.commit()
+    login(admin_client)
+    editor_html = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new").get_data(as_text=True)
+    token = editor_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-templates/preview",
+        data={
+            "csrf_token": token,
+            "name": "Oferta",
+            "subject": "Dostępne szkolenia",
+            "content_title": "Oferta",
+            "body_html": "{{ available_trainings_table }}",
+            "body_text": "{{ available_trainings_text }}",
+        },
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert "1 234,50 zł" in payload["html"]
+    assert "Dostępne: 1" in payload["html"]
+    assert "01.08.2026" in payload["html"]
+    assert "Zielona Góra" in payload["html"]
+    assert "<script>alert(1)</script>" not in payload["html"]
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in payload["html"]
+    assert "Dostępne szkolenia:" in payload["text"]
+    assert "Dostępne miejsca: 1" in payload["text"]
 
 
 def test_simple_html_full_document_extracts_body_and_sanitizes():

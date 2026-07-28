@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 from services.process_service import ProcessStatus
 from services.status_catalog import build_status_view
 from services.submission_document_service import SubmissionDocumentType
+from services.public_submission_status_service import build_public_submission_status
 
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,7 @@ class DocumentViewService:
     ) -> dict:
         row = submission["row"]
         status_view = build_status_view(process_state.status.value)
+        public_status = build_public_submission_status(row)
         action_targets = {action.get("target_step") for action in available_actions}
         training_agreements = _parse_json_list(row.get("training_agreements"))
         selected_trainings = _parse_json_list(row.get("selected_trainings"))
@@ -203,24 +205,23 @@ class DocumentViewService:
             "submission_id": submission_id,
             "form_slug": submission["form_slug"],
             "form_title": submission["form_title"],
-            "message": (
-                "Deklaracja zostala wygenerowana i jest gotowa do podpisania."
-                if declaration_enabled and declaration.get("created")
-                else "Deklaracja jest gotowa do pobrania i podpisania."
-                if declaration_ready and is_available(declaration_filename)
-                else "Wypelnij deklaracje, aby wygenerowac PDF do podpisu."
-                if declaration_enabled
-                else "Dla tego formularza deklaracja nie jest wymagana."
-            ),
-            "process_status": process_state.status.value,
+            "message": public_status["status_description"],
+            "status_title": public_status["status_title"],
+            "process_status": public_status["effective_process_status"],
             "current_status": status_view["current_status"],
             "process_status_label": status_labeler(process_state.status.value, form_config),
             "is_final": status_view["is_final"],
             "is_rejected": status_view["is_rejected"],
             "requires_user_action": status_view["requires_user_action"],
             "requires_officer_action": status_view["requires_officer_action"],
-            "can_upload": bool(process_state.can_sign_documents and not status_view["is_final"] and not status_view["is_rejected"]),
-            "can_download": bool(process_state.can_sign_documents and not status_view["is_rejected"]),
+            "can_upload": bool(
+                public_status["can_upload_signed_declaration"]
+                or public_status["can_upload_signed_agreement"]
+            ),
+            "can_download": bool(
+                public_status["can_download_declaration"]
+                or public_status["can_download_agreement"]
+            ),
             "visible_steps": [
                 step
                 for step, visible in {
@@ -245,9 +246,9 @@ class DocumentViewService:
             ),
             "declaration_upload_url": declaration_upload_url if declaration_enabled else None,
             "declaration_signature_valid": str(row.get("declaration_signature_valid", "")).strip().lower() == "tak",
-            "agreement_blocked": str(row.get("agreement_blocked", "")).strip().lower() == "tak",
-            "agreement_block_reason": row.get("agreement_block_reason", ""),
-            "can_generate_agreement": (
+            "agreement_blocked": public_status["agreement_blocked"],
+            "agreement_block_reason": public_status["blocking_reason"],
+            "can_generate_agreement": public_status["can_generate_agreement"] and (
                 "agreement" in action_targets
                 or "training_agreements" in action_targets
                 or process_state.can_generate_agreement
@@ -274,10 +275,18 @@ class DocumentViewService:
             "agreement_signature_error": row.get("agreement_signature_error", ""),
             "agreement_url": (
                 download_url_builder(str(row.get("agreement_filename") or ""), False)
-                if agreement_template_configured and is_available(str(row.get("agreement_filename") or ""))
+                if (
+                    agreement_template_configured
+                    and public_status["can_download_agreement"]
+                    and is_available(str(row.get("agreement_filename") or ""))
+                )
                 else ""
             ),
-            "agreement_upload_url": agreement_upload_url if agreement_template_configured else None,
+            "agreement_upload_url": (
+                agreement_upload_url
+                if agreement_template_configured and public_status["can_upload_signed_agreement"]
+                else None
+            ),
             "training_agreements": [
                 {
                     **agreement,
@@ -288,8 +297,13 @@ class DocumentViewService:
                     ),
                     "upload_url": agreement_upload_url_builder(agreement.get("id", "")),
                 }
-                for agreement in (training_agreements if agreement_template_configured else [])
+                for agreement in (
+                    training_agreements
+                    if agreement_template_configured and public_status["can_download_agreement"]
+                    else []
+                )
             ],
+            **public_status,
         }
 
 

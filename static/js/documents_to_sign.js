@@ -294,17 +294,6 @@ function showProcessCompletedBox() {
     showElement(processCompletedBox);
 }
 
-function showCompletedMessage(message) {
-    const messageBox = document.getElementById("completed-stage-message");
-
-    if (!messageBox) {
-        return;
-    }
-
-    messageBox.innerHTML = message;
-    showElement(messageBox);
-}
-
 function hideDeclarationStage() {
     hideElements('[data-stage="declaration"]');
     hideElements('[data-stage="declaration-upload"]');
@@ -317,19 +306,32 @@ function hideAgreementStage() {
 }
 
 function renderStatusTile({ variant = "neutral", icon = "i", title, description }) {
+    renderStatusTiles([{variant, icon, title, description}]);
+}
+
+function renderStatusTiles(items) {
     if (!statusTiles) {
         return;
     }
-
-    statusTiles.innerHTML = `
-        <div class="status-tile status-tile--${variant}">
-            <span class="status-tile__icon" aria-hidden="true">${icon}</span>
-            <div>
-                <p class="status-tile__title">${title}</p>
-                <p class="status-tile__description">${description}</p>
-            </div>
-        </div>
-    `;
+    statusTiles.replaceChildren();
+    items.forEach(({variant = "neutral", icon = "i", title, description}) => {
+        const tile = document.createElement("div");
+        tile.className = `status-tile status-tile--${variant}`;
+        const iconBox = document.createElement("span");
+        iconBox.className = "status-tile__icon";
+        iconBox.setAttribute("aria-hidden", "true");
+        iconBox.textContent = icon;
+        const content = document.createElement("div");
+        const heading = document.createElement("p");
+        heading.className = "status-tile__title";
+        heading.textContent = String(title || "");
+        const text = document.createElement("p");
+        text.className = "status-tile__description";
+        text.textContent = String(description || "");
+        content.append(heading, text);
+        tile.append(iconBox, content);
+        statusTiles.appendChild(tile);
+    });
 }
 
 function clearStatusTile() {
@@ -346,6 +348,30 @@ function renderSubmissionStatus(data) {
             title: "Nie znaleziono wniosku",
             description: data.message || "Sprawdź poprawność wpisanego ID wniosku.",
         });
+        return;
+    }
+
+    if (data.status_title) {
+        const variant = ["success", "warning", "danger"].includes(data.status_variant) ? data.status_variant : "neutral";
+        const icon = variant === "success" ? "✓" : variant === "danger" ? "!" : variant === "warning" ? "…" : "i";
+        const items = [
+            {
+                variant,
+                icon,
+                title: data.status_title,
+                description: data.status_description || data.message || "",
+            },
+            {title: "Status wniosku", description: data.application_status || "Brak danych"},
+            {title: "Status deklaracji", description: data.declaration_status || "Brak danych"},
+            {title: "Status umowy", description: data.agreement_status || "Brak danych"},
+        ];
+        if (data.blocking_reason) {
+            items.push({variant: "warning", icon: "!", title: "Powód blokady", description: data.blocking_reason});
+        }
+        if (data.next_action) {
+            items.push({title: "Co dalej?", description: data.next_action});
+        }
+        renderStatusTiles(items);
         return;
     }
 
@@ -485,7 +511,6 @@ function applyProcessStageVisibility(data) {
 
     if (declarationIsCompleted) {
         hideDeclarationStage();
-        showCompletedMessage("<strong>Deklaracja:</strong> etap zakończony poprawnie.");
     }
 
     if (agreementIsCompleted) {
@@ -493,7 +518,6 @@ function applyProcessStageVisibility(data) {
         hideAgreementStage();
         hideInitialSigningForm();
         disableGenerateButton();
-        showCompletedMessage("<strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.");
         showProcessCompletedBox();
     }
 }
@@ -543,7 +567,7 @@ async function checkAcceptanceStatus() {
         const data = await response.json();
 
         if (statusBox) {
-            statusBox.textContent = data.message || "";
+            statusBox.textContent = data.status_title ? "" : data.message || "";
         }
         renderSubmissionStatus(data);
         applyProcessStageVisibility(data);
@@ -551,7 +575,7 @@ async function checkAcceptanceStatus() {
 
         if (
             data.exists
-            && data.can_sign_documents
+            && (data.can_sign_documents || data.can_view_status_details)
             && !isRejectedStatus(data)
             && !data.agreement_stage_completed
             && !data.is_final

@@ -20,6 +20,7 @@ from services.footer_logo_service import (
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
+from services.training_availability_service import TrainingAvailabilityService
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,10 @@ class MailDispatchService:
         files: list | None = None,
         **builders,
     ) -> dict[str, Any]:
+        builders.setdefault(
+            "training_availability_service",
+            TrainingAvailabilityService(self.submission_repository),
+        )
         return build_mail_context(form, submission, files or [], **builders)
 
     def build_footer(self, footer=None, logo_url_builder=None, *, logo_url: str | None = None) -> str:

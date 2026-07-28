@@ -8,6 +8,7 @@ from flask import Blueprint, current_app
 
 from services.status_catalog import build_status_view
 from services.process_instruction_service import build_process_instruction_view
+from services.public_submission_status_service import build_public_submission_status
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,40 @@ def empty_instruction_payload() -> dict:
     }
 
 
+def public_status_payload(submission: dict) -> dict:
+    public_status = build_public_submission_status(submission["row"])
+    payload = {
+        **status_payload(public_status["effective_process_status"]),
+        **public_status,
+        "raw_process_status": submission.get("process_status") or "",
+    }
+    payload["process_status"] = public_status["effective_process_status"]
+    return payload
+
+
+def reconcile_blocking_instruction(instruction: dict, public_status: dict) -> dict:
+    if not public_status.get("agreement_blocked"):
+        return instruction
+    result = dict(instruction)
+    result["next_action"] = public_status["next_action"]
+    result["form_instruction"] = public_status["status_description"]
+    result["has_form_instruction"] = True
+    result["current_step"] = None
+    result["current_step_label"] = None
+    result["instruction_steps"] = []
+    nested = dict(result.get("instruction") or {})
+    nested["title"] = public_status["status_title"]
+    nested["description"] = public_status["status_description"]
+    nested["has_instruction"] = True
+    nested["current_stage_key"] = None
+    nested["current_stage_label"] = None
+    nested["current_stage_description"] = ""
+    nested["next_action"] = public_status["next_action"]
+    nested["stages"] = []
+    result["instruction"] = nested
+    return result
+
+
 @bp.get("/api/submissions/<submission_id>/acceptance-status")
 def api_acceptance_status(submission_id: str):
     submission_id = submission_id.strip()
@@ -159,34 +194,17 @@ def api_acceptance_status(submission_id: str):
             **empty_instruction_payload(),
         }, 200
 
-    if submission["officer_decision"] == "NIE":
-        return {
-            "exists": True,
-            "can_sign_documents": False,
-            "message": "Wniosek został odrzucony przez urzędnika.",
-            "form_title": submission["form_title"],
-            **instruction_payload(submission),
-            **status_payload(submission["process_status"]),
-        }, 200
-
-    if not submission["can_sign_documents"]:
-        return {
-            "exists": True,
-            "can_sign_documents": False,
-            "message": "Wniosek nie został jeszcze zaakceptowany przez urzędnika.",
-            "form_title": submission["form_title"],
-            **instruction_payload(submission),
-            **status_payload(submission["process_status"]),
-        }, 200
-
+    public_status = public_status_payload(submission)
+    instructions = reconcile_blocking_instruction(instruction_payload(submission), public_status)
     return {
         "exists": True,
-        "can_sign_documents": True,
-        "message": "Wniosek został zaakceptowany. Możesz przejść do podpisywania dokumentów.",
+        "can_sign_documents": submission["can_sign_documents"],
+        "can_view_status_details": submission.get("can_view_status_details", False),
+        "message": public_status["status_description"],
         "form_title": submission["form_title"],
         "form_slug": submission["form_slug"],
-        **instruction_payload(submission),
-        **status_payload(submission["process_status"]),
+        **public_status,
+        **instructions,
     }, 200
 
 
@@ -203,14 +221,19 @@ def api_workflow_status(submission_id: str):
     services = get_services()
     form_config = services.form_config_service.get_form_config(services.storage, submission["form_slug"]) or {}
     row = submission["row"]
+    public_status = public_status_payload(submission)
     qualification = row.get("data_json", {}).get("_qualification") if isinstance(row.get("data_json"), dict) else None
     return {
         "exists": True,
         "submission_id": submission_id,
         "form_slug": submission["form_slug"],
         "form_title": submission["form_title"],
-        **status_payload(submission["process_status"]),
+        **public_status,
         "current_step": services.workflow_service.get_current_step(row, form_config),
-        "available_actions": services.workflow_service.get_available_actions(row, form_config),
+        "available_actions": (
+            []
+            if public_status["agreement_blocked"]
+            else services.workflow_service.get_available_actions(row, form_config)
+        ),
         "qualification_evaluation": qualification,
     }, 200

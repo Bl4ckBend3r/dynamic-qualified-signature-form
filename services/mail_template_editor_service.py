@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.mail_training_context_service import find_training_field
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
@@ -88,11 +89,20 @@ VARIABLE_GROUPS = (
 )
 
 TRAINING_VARIABLES = (
-    ("selected_trainings", "Wybrane szkolenia", "Excel, Zarządzanie projektem"),
+    ("available_trainings", "Dostępne szkolenia, domyślnie jako tabela HTML", "Tabela szkoleń z cenami i dostępnością"),
+    ("available_trainings_table", "Dostępne szkolenia jako tabela HTML", "Tabela szkoleń"),
+    ("available_trainings_list", "Dostępne szkolenia jako lista HTML", "Lista szkoleń"),
+    ("available_trainings_text", "Dostępne szkolenia jako tekst", "Dostępne szkolenia: …"),
+    ("available_trainings_list_text", "Dostępne szkolenia jako lista tekstowa", "1. Nazwa szkolenia …"),
+    ("selected_trainings", "Szkolenia wybrane przez użytkownika", "Excel, Zarządzanie projektem"),
+    ("selected_trainings_table", "Wybrane szkolenia jako tabela HTML", "Tabela wybranych szkoleń"),
+    ("selected_trainings_list", "Wybrane szkolenia jako lista HTML", "Lista wybranych szkoleń"),
+    ("selected_trainings_text", "Wybrane szkolenia jako tekst", "1. Excel …"),
     ("selected_trainings_count", "Liczba wybranych szkoleń", "2"),
-    ("trainings_total_price", "Łączna cena szkoleń", "1 200,00 zł"),
+    ("trainings_total_price", "Łączna wartość wybranych szkoleń", "1 200,00 zł"),
     ("all_selected_trainings_total_formatted", "Sformatowana łączna cena szkoleń", "1 200,00 zł"),
 )
+TRAINING_VARIABLE_NAMES = {item[0] for item in TRAINING_VARIABLES}
 
 
 def trigger_event_options(form) -> list[dict[str, str]]:
@@ -130,7 +140,7 @@ def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) 
     field_variables = []
     for field in _form_fields(form):
         name = str(field.get("name") or "").strip()
-        if not name or name in seen:
+        if not name or name in seen or name in TRAINING_VARIABLE_NAMES:
             continue
         field_variables.append(
             _variable(
@@ -178,13 +188,8 @@ def _form_fields(form) -> list[dict[str, Any]]:
     return result
 
 
-def _supports_trainings(form, field_names: set[str]) -> bool:
-    definition = getattr(form, "definition_json", None) or {}
-    return bool(
-        definition.get("trainings")
-        or definition.get("training_catalog")
-        or any("training" in name or "szkolen" in name for name in field_names)
-    )
+def _supports_trainings(form, _field_names: set[str]) -> bool:
+    return find_training_field(form) is not None
 
 
 def _field_example(field: dict[str, Any]) -> str:

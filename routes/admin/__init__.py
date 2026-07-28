@@ -274,6 +274,8 @@ def can_manage_form(db, user: User, form_id: int) -> bool:
 
 
 def build_mail_context(form: Form, submission: FormSubmission | None, files: list[SubmissionFile]) -> dict:
+    from services.training_availability_service import TrainingAvailabilityService
+
     return service_build_mail_context(
         form,
         submission,
@@ -287,6 +289,9 @@ def build_mail_context(form: Form, submission: FormSubmission | None, files: lis
             {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},
             filename,
         ),
+        training_availability_service=TrainingAvailabilityService(
+            current_app.extensions["services"].submission_repository
+        ),
     )
 
 
@@ -295,6 +300,8 @@ def render_mail_text(raw_text: str, context: dict) -> str:
 
 
 def preview_mail_context(form: Form, submission: FormSubmission | None = None) -> dict:
+    from services.training_availability_service import TrainingAvailabilityService
+
     context = build_mail_context(form, submission, [])
     return service_preview_mail_context(
         form,
@@ -304,6 +311,9 @@ def preview_mail_context(form: Form, submission: FormSubmission | None = None) -
             "podpisz_url": context.get("podpisz_url")
             or url_for("documents.documents_to_sign", submission_id=context.get("submission_id", ""), _external=True),
         },
+        training_availability_service=TrainingAvailabilityService(
+            current_app.extensions["services"].submission_repository
+        ),
     )
 
 

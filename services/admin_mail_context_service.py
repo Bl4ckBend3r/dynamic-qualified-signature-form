@@ -5,6 +5,7 @@ from datetime import datetime
 
 from services.mail_template_service import build_mail_context as build_platform_mail_context
 from services.mail_template_service import render_template_text
+from services.mail_training_context_service import build_training_mail_context
 
 
 def build_mail_context(
@@ -14,6 +15,7 @@ def build_mail_context(
     *,
     documents_to_sign_url_builder=None,
     document_url_builder=None,
+    training_availability_service=None,
     **context_extra,
 ) -> dict[str, Any]:
     context = build_platform_mail_context(form, submission, files or [])
@@ -28,6 +30,13 @@ def build_mail_context(
             context["document_url"] = document_url
             context["pobierz_url"] = document_url
     context.update(context_extra)
+    context.update(
+        build_training_mail_context(
+            form,
+            submission,
+            availability_service=training_availability_service,
+        )
+    )
     return context
 
 
@@ -35,8 +44,38 @@ def render_mail_text(raw_text: str, context: dict) -> str:
     return render_template_text(raw_text or "", context)
 
 
-def preview_mail_context(form, submission=None, base_context: dict | None = None) -> dict[str, Any]:
-    context = dict(base_context or build_mail_context(form, submission, []))
+def preview_mail_context(
+    form,
+    submission=None,
+    base_context: dict | None = None,
+    *,
+    training_availability_service=None,
+) -> dict[str, Any]:
+    context = dict(
+        base_context
+        or build_mail_context(
+            form,
+            submission,
+            [],
+            training_availability_service=training_availability_service,
+        )
+    )
+    preview_training_context = build_training_mail_context(
+        form,
+        submission,
+        availability_service=training_availability_service,
+        use_available_as_selected_fallback=submission is None,
+    )
+    if base_context:
+        context.update(
+            {
+                key: value
+                for key, value in preview_training_context.items()
+                if key.startswith("selected_trainings") or key == "trainings_total_price"
+            }
+        )
+    else:
+        context.update(preview_training_context)
     now = datetime.now()
     context.setdefault("app_name", "Portal formularzy")
     context.setdefault("current_year", now.year)

@@ -19,7 +19,7 @@ from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
 from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_from_form, validate_required_submission_fields
-from services.process_service import ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
+from services.process_service import OfficerDecision, ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
 from services.qualification_condition_service import QualificationConditionService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 
@@ -462,6 +462,7 @@ class SubmissionService:
             if meta:
                 form_title = row.get("form_name") or meta.get("title") or form_slug
         process_state = build_process_state(row)
+        can_view_status_details = process_state.officer_decision == OfficerDecision.ACCEPTED or process_state.agreement_blocked
         return {
             "submission_id": submission_id,
             "form_slug": form_slug,
@@ -469,6 +470,7 @@ class SubmissionService:
             "officer_decision": process_state.officer_decision.value,
             "process_status": str(row.get("process_status") or process_state.status.value),
             "can_sign_documents": process_state.can_sign_documents,
+            "can_view_status_details": can_view_status_details,
             "workflow_step": str(row.get("workflow_step") or "").strip(),
             "row": row,
         }

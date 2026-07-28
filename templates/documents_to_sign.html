@@ -17,12 +17,12 @@
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
-            Podaj ID wniosku. System najpierw sprawdzi, czy formularz został zaakceptowany przez urzędnika.
-            Dopiero po akceptacji możliwe będzie przejście do podpisywania dokumentów.
+            Podaj ID wniosku. System pokaże aktualne statusy wniosku, deklaracji i umowy
+            oraz wyłącznie te czynności, które są obecnie dostępne.
         </p>
     </div>
 
-    <div class="static-text documents-instructions">
+    <div class="static-text documents-instructions{% if result and result.agreement_blocked %} is-hidden{% endif %}">
         <strong>Instrukcja podpisania dokumentów:</strong>
         <ol class="documents-instructions__list">
             <li>Wypełnij wymagany dokument.</li>
@@ -101,19 +101,20 @@
 
     {% if result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
-        {% set declaration_completed = result.declaration_signature_valid|default(false) %}
-        {% set agreement_completed = result.agreement_signature_valid|default(false) %}
+        {% set declaration_completed = result.declaration_completed|default(result.declaration_signature_valid|default(false)) %}
+        {% set agreement_completed = result.agreement_completed|default(result.agreement_signature_valid|default(false)) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
         {% set training_agreements = result.training_agreements|default([]) %}
 
-        {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
-        {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
+        {% set show_declaration_stage = result.can_fill_declaration|default(false) or result.can_download_declaration|default(false) %}
+        {% set show_declaration_upload = result.can_upload_signed_declaration|default(false) and result.declaration_upload_url %}
         {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = ((agreement_generated and result.agreement_upload_url) or training_agreements) and not agreement_completed %}
+        {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and not agreement_completed %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
 
         <div class="result-box" id="signing-result-box">
+            {% if result.status_title %}<h3>{{ result.status_title }}</h3>{% endif %}
             <p>{{ result.message }}</p>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
@@ -122,12 +123,11 @@
                 <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
             {% endif %}
 
-            {% if result.agreement_blocked %}
-                <p><strong>Status umowy:</strong> Umowa zablokowana</p>
-                {% if result.agreement_block_reason %}
-                    <p><strong>Powód:</strong> {{ result.agreement_block_reason }}</p>
-                {% endif %}
-            {% endif %}
+            {% if result.application_status %}<p><strong>Status wniosku:</strong> {{ result.application_status }}</p>{% endif %}
+            {% if result.declaration_status %}<p><strong>Status deklaracji:</strong> {{ result.declaration_status }}</p>{% endif %}
+            {% if result.agreement_status %}<p><strong>Status umowy:</strong> {{ result.agreement_status }}</p>{% endif %}
+            {% if result.blocking_reason %}<p><strong>Powód blokady:</strong> {{ result.blocking_reason }}</p>{% endif %}
+            {% if result.next_action %}<p><strong>Co dalej?</strong> {{ result.next_action }}</p>{% endif %}
             {% if result.agreement_configuration_error %}
                 <div class="form-errors" role="alert">
                     <p>{{ result.agreement_configuration_error }}</p>
@@ -284,7 +284,7 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
-                            {% if training_agreements|length > 1 %}
+                            {% if training_agreements|length > 1 and result.can_upload_signed_agreement %}
                                 <form
                                     method="post"
                                     action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
@@ -338,6 +338,7 @@
                                             <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
                                         {% endif %}
 
+                                        {% if result.can_upload_signed_agreement %}
                                         <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                             <div class="form-row width-full">
                                                 <label class="upload-dropzone" data-upload-dropzone>
@@ -363,6 +364,7 @@
                                                 <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
                                             </div>
                                         </form>
+                                        {% endif %}
                                     {% endif %}
                                 </div>
                             {% endfor %}
@@ -383,6 +385,7 @@
                                 </div>
                             {% endif %}
 
+                            {% if result.can_upload_signed_agreement %}
                             <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                 <div class="form-row width-full">
                                     <label class="upload-dropzone" data-upload-dropzone>
@@ -408,6 +411,7 @@
                                     <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
                                 </div>
                             </form>
+                            {% endif %}
                         </div>
                     {% endif %}
 
@@ -418,15 +422,6 @@
                 </div>
             {% endif %}
 
-            <p id="completed-stage-message" class="document-status-line is-hidden"></p>
-
-            {% if declaration_completed and not show_agreement_stage and not agreement_completed %}
-                <p class="document-status-line"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
-            {% endif %}
-
-            {% if agreement_completed %}
-                <p class="document-status-line"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
-            {% endif %}
         </div>
     {% endif %}
 </div>

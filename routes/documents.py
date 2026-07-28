@@ -618,7 +618,7 @@ def documents_to_sign():
             if not submission:
                 errors["submission_id"] = "Nie znaleziono wniosku o podanym ID."
                 status_code = 404
-            elif not submission["can_sign_documents"]:
+            elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
                 errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
                 status_code = 400
             else:
@@ -657,7 +657,7 @@ def documents_to_sign():
         submission = get_submission_context(submission_id)
         if not submission:
             errors["submission_id"] = "Nie znaleziono wniosku o podanym ID."
-        elif not submission["can_sign_documents"]:
+        elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
             errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
     if acceptance_value != "Tak":
         errors["akceptacja"] = "Akceptacja dokumentów jest wymagana."

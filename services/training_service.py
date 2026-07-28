@@ -73,6 +73,7 @@ def normalize_training_catalog(field: Mapping[str, Any] | None, *, active_only: 
                 "price_formatted": format_price_pln(storage_price, item.get("currency") or currency),
                 "currency": str(item.get("currency") or currency).strip() or DEFAULT_CURRENCY,
                 "description": str(item.get("description") or "").strip(),
+                "location": str(item.get("location") or "").strip(),
                 "active": is_training_active(item),
                 "sort_order": int(item.get("sort_order") or index + 1),
                 "capacity": capacity,

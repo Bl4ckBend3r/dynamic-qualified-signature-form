@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import or_, select
 
 from models import FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
@@ -16,6 +16,13 @@ from services.mail_template_service import (
     parse_mail_content,
     render_platform_mail_html,
     sanitize_content_html,
+    render_platform_mail_text,
+    render_template_text,
+)
+from services.mail_template_editor_service import (
+    build_variable_catalog,
+    trigger_event_options,
+    trigger_status_options,
 )
 
 from . import (
@@ -256,6 +263,7 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             sample_submission = sample_submissions[0]
         preview_context = preview_mail_context(form, sample_submission)
         preview_html = render_platform_mail_html(template, preview_context)
+        variable_catalog = build_variable_catalog(form, preview_context)
         return render_template(
             "admin/mail_templates/edit.html",
             form=form,
@@ -268,7 +276,51 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             mail_layout=MAIL_LAYOUT,
             dynamic_variables=MAIL_DYNAMIC_VARIABLES,
             template_labels=MAIL_TEMPLATE_LABELS,
+            variable_catalog=variable_catalog,
+            trigger_events=trigger_event_options(form),
+            trigger_statuses=trigger_status_options(form),
+            preview_subject=render_template_text(template.subject or "", preview_context),
+            preview_text=render_platform_mail_text(template, preview_context),
         )
+
+
+@bp.post("/forms/<int:form_id>/mail-templates/preview")
+@login_required
+def mail_template_preview(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        sample_submission = None
+        submission_id = parse_optional_int(request.form.get("preview_submission_id"))
+        if submission_id:
+            candidate = db.get(FormSubmission, submission_id)
+            if candidate and candidate.form_slug == form.slug:
+                sample_submission = candidate
+        context = preview_mail_context(form, sample_submission)
+        body_html = sanitize_content_html(request.form.get("body_html", ""))
+        instruction_html = sanitize_content_html(request.form.get("instruction_html", ""))
+        template = SimpleNamespace(
+            name=request.form.get("name", "").strip() or "Wiadomość",
+            content_title=request.form.get("content_title", "").strip(),
+            content_html=body_html,
+            html_body=body_html,
+            content_text=request.form.get("body_text", ""),
+            text_body=request.form.get("body_text", ""),
+            instruction_html=instruction_html,
+            instruction_text=request.form.get("instruction_text", ""),
+            footer_note=request.form.get("footer_note", ""),
+        )
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    "subject": render_template_text(request.form.get("subject", ""), context),
+                    "html": render_platform_mail_html(template, context),
+                    "text": render_platform_mail_text(template, context),
+                }
+            )
+        except Exception:
+            current_app.logger.exception("mail_template_preview_failed form_id=%s", form_id)
+            return jsonify({"ok": False, "error": "Nie udało się wyrenderować podglądu. Sprawdź składnię zmiennych."}), 400
 
 
 @bp.post("/forms/<int:form_id>/mail-templates/<int:template_id>/delete")

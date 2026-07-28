@@ -2250,6 +2250,80 @@ def test_mail_template_preview_renders_platform_layout(admin_app, admin_client):
     assert "Numer zgloszenia" in html
 
 
+def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="mail_catalog",
+        name="Katalog maila",
+        definition_json={
+            "title": "Katalog maila",
+            "fields": [
+                {"name": "pesel", "label": "Numer PESEL", "type": "text"},
+                {"name": "selected_trainings", "label": "Wybrane szkolenia", "type": "select"},
+            ],
+            "trainings": [{"id": "excel", "name": "Excel"}],
+        },
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormField(form_id=form_id, name="telefon", label="Numer telefonu", type="phone", active=True))
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '<select name="trigger_event">' in html
+    assert '<select name="trigger_status">' in html
+    assert "Wniosek złożony — FORM_SUBMITTED" in html
+    assert "{{ app_name }}" in html
+    assert "{{ public_submission_id }}" in html
+    assert "{{ pesel }}" in html
+    assert "{{ telefon }}" in html
+    assert "{{ selected_trainings_count }}" in html
+    assert 'data-insert-variable="{{ pesel }}"' in html
+
+
+def test_mail_template_live_preview_endpoint_uses_fallback_context_without_submissions(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="mail_preview_fallback",
+        name="Formularz podglądu",
+        title="Tytuł formularza",
+        definition_json={"title": "Tytuł formularza", "fields": [{"name": "imie_firmy", "label": "Nazwa firmy"}]},
+    )
+    login(admin_client)
+    editor_response = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new")
+    editor_html = editor_response.get_data(as_text=True)
+    token = editor_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-templates/preview",
+        data={
+            "csrf_token": token,
+            "name": "Powitanie",
+            "subject": "Witaj w {{ form_title }}",
+            "content_title": "Zgłoszenie {{ submission_id }}",
+            "body_html": "<p>{{ imiona }} — {{ process_status_label }}</p><script>alert('x')</script>",
+            "body_text": "{{ imiona }} / {{ public_submission_id }}",
+        },
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["subject"] == "Witaj w Tytuł formularza"
+    assert "Jan" in payload["html"]
+    assert "<script" not in payload["html"]
+    assert "6ef64b28-530b" in payload["text"]
+    assert "Brak zgłoszeń dla formularza" in editor_html
+    assert 'setTimeout(refreshPreview, 400)' in editor_html
+    assert "data-preview-frame" in editor_html
+    assert " sandbox " in editor_html
+
+
 def test_simple_html_full_document_extracts_body_and_sanitizes():
     from services.mail_template_service import parse_mail_content
 

@@ -309,7 +309,7 @@ def validate_required_submission_fields(
 
     for column_name in required_consents:
         if submission.get(column_name) is not True:
-            errors[column_name] = "Wymagane oswiadczenie musi byc zaakceptowane."
+            errors[column_name] = "Wymagane oświadczenie musi zostać zaakceptowane."
 
     return errors
 

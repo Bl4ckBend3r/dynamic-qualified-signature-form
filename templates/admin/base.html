@@ -65,6 +65,40 @@
     <script>
         window.APP_BASE_PATH = {{ app_base_path|tojson }};
         (() => {
+            const enhanceRequiredFields = () => {
+                document.querySelectorAll("form").forEach((form) => {
+                    const requiredFields = Array.from(form.querySelectorAll("input[required], select[required], textarea[required]"));
+                    if (!requiredFields.length) return;
+                    requiredFields.forEach((field) => {
+                        field.setAttribute("aria-required", "true");
+                        const escapedId = field.id && window.CSS?.escape ? CSS.escape(field.id) : "";
+                        const label = field.closest("label") || (escapedId ? form.querySelector(`label[for="${escapedId}"]`) : null);
+                        const labelText = label?.querySelector(":scope > span");
+                        if (labelText && !labelText.querySelector(".required-marker")) {
+                            const marker = document.createElement("span");
+                            marker.className = "required-marker";
+                            marker.setAttribute("aria-hidden", "true");
+                            marker.textContent = "*";
+                            labelText.append(" ", marker);
+                        }
+                    });
+                    if (!form.querySelector(".admin-required-note")) {
+                        const note = document.createElement("p");
+                        note.className = "admin-required-note";
+                        note.append("Pola oznaczone ");
+                        const marker = document.createElement("span");
+                        marker.className = "required-marker";
+                        marker.setAttribute("aria-hidden", "true");
+                        marker.textContent = "*";
+                        note.append(marker, " są obowiązkowe.");
+                        const firstContent = Array.from(form.children).find((element) => (
+                            !element.matches("input[type='hidden']")
+                        ));
+                        form.insertBefore(note, firstContent || null);
+                    }
+                });
+            };
+            enhanceRequiredFields();
             const focusableSelector = "button:not([disabled]), [href], input:not([type='hidden']):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
             const syncModalScrollLock = () => {
                 document.body.classList.toggle("admin-modal-open", Boolean(document.querySelector("[data-admin-modal][open]")));

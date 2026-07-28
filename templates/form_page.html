@@ -42,6 +42,9 @@
         <form method="post" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
             <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
             {% if correction_mode %}<input type="hidden" name="token" value="{{ access_token }}">{% endif %}
+            {% if form_definition.fields|selectattr('required')|list %}
+                <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+            {% endif %}
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">
@@ -69,7 +72,7 @@
                             <label for="{{ field.name }}">
                                 {{ field.label|trusted_html }}
                                 {% if field.required %}
-                                    <span class="required">*</span>
+                                    <span class="required required-marker" aria-hidden="true">*</span>
                                 {% endif %}
                             </label>
                         {% endif %}
@@ -85,7 +88,7 @@
                                 value="{{ value }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                                 {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >
 
@@ -98,7 +101,7 @@
                                 data-field-type="{{ field.type }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                                 {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >{{ value }}</textarea>
 
@@ -109,7 +112,7 @@
                                 name="{{ field.name }}"
                                 data-field-name="{{ field.name }}"
                                 data-field-type="{{ field.type }}"
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                                 {% if field.readonly %}disabled{% endif %}
                                 {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                             >
@@ -135,7 +138,7 @@
                                             data-field-type="{{ field.type }}"
                                             value="{{ option|option_value }}"
                                             {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required{% endif %}
+                                            {% if field.required %}required aria-required="true"{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                             {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                                         >
@@ -157,7 +160,7 @@
                                             data-field-type="{{ field.type }}"
                                             value="{{ option|option_value }}"
                                             {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required{% endif %}
+                                            {% if field.required %}required aria-required="true"{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                             {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
                                         >
@@ -168,7 +171,7 @@
                                                 {{ option|option_label|trusted_html }}
                                             {% endif %}
                                             {% if field.required %}
-                                                <span class="required">*</span>
+                                                <span class="required required-marker" aria-hidden="true">*</span>
                                             {% endif %}
                                         </span>
                                     </label>

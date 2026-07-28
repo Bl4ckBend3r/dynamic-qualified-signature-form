@@ -127,6 +127,7 @@
             {% if result.declaration_status %}<p><strong>Status deklaracji:</strong> {{ result.declaration_status }}</p>{% endif %}
             {% if result.agreement_status %}<p><strong>Status umowy:</strong> {{ result.agreement_status }}</p>{% endif %}
             {% if result.blocking_reason %}<p><strong>Powód blokady:</strong> {{ result.blocking_reason }}</p>{% endif %}
+            {% if result.status_reason and not result.blocking_reason %}<p><strong>Powód:</strong> {{ result.status_reason }}</p>{% endif %}
             {% if result.next_action %}<p><strong>Co dalej?</strong> {{ result.next_action }}</p>{% endif %}
             {% if result.agreement_configuration_error %}
                 <div class="form-errors" role="alert">
@@ -141,6 +142,9 @@
                         <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
                     </div>
                     <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        {% if result.additional_form_definition.fields|selectattr('required')|list %}
+                            <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+                        {% endif %}
                         {% for field in result.additional_form_definition.fields %}
                             {% if field.type == "section" %}
                                 <section class="form-section"><h3>{{ field.label|trusted_html }}</h3></section>
@@ -151,14 +155,14 @@
                                 {% set has_error = result.additional_errors.get(field.name) %}
                                 <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
                                     {% if field.type != "checkbox" %}
-                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</label>
+                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</label>
                                     {% endif %}
                                     {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
-                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required{% endif %}>
+                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required aria-required="true"{% endif %}>
                                     {% elif field.type == "textarea" %}
-                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>{{ value }}</textarea>
+                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>{{ value }}</textarea>
                                     {% elif field.type == "select" %}
-                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>
                                             <option value="">-- wybierz --</option>
                                             {% for option in field.options %}
                                                 <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
@@ -167,13 +171,13 @@
                                     {% elif field.type == "radio" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}</span></label>
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% endif %}

@@ -130,12 +130,18 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
     )
 
     blocking_reason = state.block_reason if blocked else ""
+    status_reason = (
+        blocking_reason
+        or (str(row.get("correction_message") or "").strip() if correction else "")
+        or (str(row.get("officer_decision_reason") or "").strip() if rejected else "")
+    )
     messages = _deduplicate_messages(
         [
             ("application", f"Status wniosku: {application_status}"),
             ("declaration", f"Status deklaracji: {declaration_status}") if declaration_required else None,
             ("agreement", f"Status umowy: {agreement_status}") if agreement_required or blocked else None,
             ("blocking_reason", f"Powód blokady: {blocking_reason}") if blocking_reason else None,
+            ("status_reason", f"Powód: {status_reason}") if status_reason and not blocking_reason else None,
             ("next_action", f"Co dalej? {next_action}") if next_action else None,
         ]
     )
@@ -146,6 +152,7 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         "declaration_status": declaration_status,
         "agreement_status": agreement_status,
         "blocking_reason": blocking_reason,
+        "status_reason": status_reason,
         "next_action": next_action,
         "status_title": headline,
         "status_description": description,
@@ -158,7 +165,13 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         "can_fill_declaration": can_fill_declaration,
         "can_download_declaration": can_download_declaration,
         "can_upload_signed_declaration": can_upload_signed_declaration,
-        "can_generate_agreement": bool(state.can_generate_agreement and not blocked),
+        "can_generate_agreement": bool(
+            state.can_generate_agreement
+            and accepted
+            and not rejected
+            and not correction
+            and not blocked
+        ),
         "can_download_agreement": can_download_agreement,
         "can_upload_signed_agreement": can_upload_signed_agreement,
     }

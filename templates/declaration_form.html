@@ -17,6 +17,9 @@
         </div>
 
         <form method="post" action="{{ action_url }}" novalidate class="dynamic-form">
+            {% if form_definition.fields|selectattr('required')|list %}
+                <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+            {% endif %}
             {% for field in form_definition.fields %}
                 {% if field.type == "section" %}
                     <section class="form-section">
@@ -42,7 +45,7 @@
                             <label for="{{ field.name }}">
                                 {{ field.label }}
                                 {% if field.required %}
-                                    <span class="required">*</span>
+                                    <span class="required required-marker" aria-hidden="true">*</span>
                                 {% endif %}
                             </label>
                         {% endif %}
@@ -55,7 +58,7 @@
                                 value="{{ value }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                             >
 
                         {% elif field.type == "textarea" %}
@@ -64,14 +67,14 @@
                                 name="{{ field.name }}"
                                 placeholder="{{ field.placeholder }}"
                                 {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                             >{{ value }}</textarea>
 
                         {% elif field.type == "select" %}
                             <select
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
-                                {% if field.required %}required{% endif %}
+                                {% if field.required %}required aria-required="true"{% endif %}
                                 {% if field.readonly %}disabled{% endif %}
                             >
                                 <option value="">-- wybierz --</option>
@@ -93,7 +96,7 @@
                                             name="{{ field.name }}"
                                             value="{{ option|option_value }}"
                                             {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required{% endif %}
+                                            {% if field.required %}required aria-required="true"{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>{{ option|option_label }}</span>
@@ -111,13 +114,13 @@
                                             name="{{ field.name }}"
                                             value="{{ option|option_value }}"
                                             {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required{% endif %}
+                                            {% if field.required %}required aria-required="true"{% endif %}
                                             {% if field.readonly %}disabled{% endif %}
                                         >
                                         <span>
                                             {{ option|option_label }}
                                             {% if field.required %}
-                                                <span class="required">*</span>
+                                                <span class="required required-marker" aria-hidden="true">*</span>
                                             {% endif %}
                                         </span>
                                     </label>

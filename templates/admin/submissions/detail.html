@@ -4,24 +4,48 @@
 {% if g.admin_user.role == "form_manager" %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać dane i dokumenty zgłoszenia, ale nie możesz zmieniać decyzji ani wysyłać wiadomości.</div>{% endif %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
+{% if blocked_agreement_view.is_blocked %}
+<section class="admin-card admin-blocked-agreement" aria-labelledby="blocked-agreement-title">
+    <h2 id="blocked-agreement-title">Umowa zablokowana</h2>
+    <p class="admin-alert admin-alert-warning">
+        Umowa została zablokowana, ponieważ warunki wymagane do jej wygenerowania nie zostały spełnione.
+        Administrator może wysłać zgłoszenie do poprawy, cofnąć etap albo — jeśli ma uprawnienia — odblokować umowę ręcznie.
+    </p>
+    <dl class="admin-workflow-summary">
+        <dt>Status umowy</dt><dd>Umowa zablokowana</dd>
+        <dt>Powód blokady</dt><dd>{{ blocked_agreement_view.reason or "Nie podano powodu." }}</dd>
+        <dt>Data blokady</dt><dd>{{ blocked_agreement_view.blocked_at or "Brak danych" }}</dd>
+        <dt>Źródło blokady</dt><dd>{{ blocked_agreement_view.source }}</dd>
+    </dl>
+    {% if blocked_agreement_view.can_manage %}
+    <div class="admin-actions">
+        <button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>
+        {% if rollback_options %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
+        {% if blocked_agreement_view.can_unblock %}<button class="admin-button" type="button" data-admin-modal-target="unblock-agreement-dialog">Odblokuj umowę</button>{% endif %}
+        {% if blocked_agreement_view.can_reject_final %}<button class="admin-button-danger" type="button" data-admin-modal-target="reject-final-dialog">Zakończ jako odrzucone</button>{% endif %}
+    </div>
+    {% endif %}
+</section>
+{% endif %}
 {% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
-    <button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>
+    {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
     <dialog class="admin-modal admin-modal-backdrop" id="rollback-stage-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-stage-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
             <header class="admin-modal__header"><h2 id="rollback-stage-title">Cofnij etap zgłoszenia</h2></header>
             <div class="admin-modal__body">
+                <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
                 <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
                 <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
                 <label>
-                    <span>Docelowy etap/status</span>
-                    <select name="target_status" required autofocus>
+                    <span>Docelowy etap/status <span class="required-marker" aria-hidden="true">*</span></span>
+                    <select name="target_status" required aria-required="true" autofocus>
                         {% for option in rollback_options %}
                             <option value="{{ option.status }}">{{ option.label }} ({{ option.status }})</option>
                         {% endfor %}
                     </select>
                 </label>
-                <label><span>Powód cofnięcia</span><textarea name="rollback_reason" rows="4" required maxlength="5000"></textarea></label>
+                <label><span>Powód cofnięcia <span class="required-marker" aria-hidden="true">*</span></span><textarea name="rollback_reason" rows="4" required aria-required="true" maxlength="5000"></textarea></label>
                 <label class="admin-check admin-modal__check"><input type="checkbox" name="send_notification" checked><span>Wyślij powiadomienie do użytkownika</span></label>
             </div>
             <footer class="admin-modal__footer">
@@ -31,8 +55,8 @@
         </form>
     </dialog>
 {% endif %}
-{% if g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
-    <button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>
+{% if not read_only and g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
+    {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
     <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
@@ -40,8 +64,9 @@
                 <h2 id="return-for-correction-title">Wyślij zgłoszenie do poprawy</h2>
             </header>
             <div class="admin-modal__body">
+                <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
                 <p class="admin-alert admin-alert-warning">Zgłoszenie pozostanie w historii, ale może wymagać ponownego uzupełnienia danych i wygenerowania dokumentów.</p>
-                <label><span>Powód <strong aria-hidden="true">*</strong></span><textarea name="reason" rows="3" required maxlength="5000" autofocus></textarea></label>
+                <label><span>Powód <span class="required-marker" aria-hidden="true">*</span></span><textarea name="reason" rows="3" required maxlength="5000" autofocus aria-required="true"></textarea></label>
                 <label><span>Wiadomość dla użytkownika</span><textarea name="message_to_user" rows="4" maxlength="10000"></textarea></label>
                 <div class="admin-modal__checks">
                     <label class="admin-check admin-modal__check">
@@ -57,6 +82,41 @@
             <footer class="admin-modal__footer">
                 <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
                 <button class="admin-button-danger" type="submit">Wyślij do poprawy</button>
+            </footer>
+        </form>
+    </dialog>
+{% endif %}
+{% if blocked_agreement_view.is_blocked and blocked_agreement_view.can_unblock %}
+    <dialog class="admin-modal admin-modal-backdrop" id="unblock-agreement-dialog" role="dialog" aria-modal="true" aria-labelledby="unblock-agreement-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_agreement_unblock', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <header class="admin-modal__header"><h2 id="unblock-agreement-title">Odblokuj umowę</h2></header>
+            <div class="admin-modal__body">
+                <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+                <p class="admin-alert admin-alert-warning">Ręczne odblokowanie uchyla bieżącą blokadę. Pierwotny powód pozostanie w historii audytowej.</p>
+                <label><span>Uzasadnienie odblokowania <span class="required-marker" aria-hidden="true">*</span></span><textarea name="reason" rows="4" required aria-required="true" maxlength="5000" autofocus></textarea></label>
+            </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button" type="submit">Odblokuj umowę</button>
+            </footer>
+        </form>
+    </dialog>
+{% endif %}
+{% if blocked_agreement_view.is_blocked and blocked_agreement_view.can_reject_final %}
+    <dialog class="admin-modal admin-modal-backdrop" id="reject-final-dialog" role="dialog" aria-modal="true" aria-labelledby="reject-final-title" data-admin-modal>
+        <form method="post" action="{{ url_for('admin.submission_reject_final', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <header class="admin-modal__header"><h2 id="reject-final-title">Zakończ jako odrzucone</h2></header>
+            <div class="admin-modal__body">
+                <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+                <p class="admin-alert admin-alert-warning">Ta decyzja zakończy proces i ukryje użytkownikowi czynności związane z podpisywaniem umowy.</p>
+                <label><span>Powód odrzucenia <span class="required-marker" aria-hidden="true">*</span></span><textarea name="reason" rows="4" required aria-required="true" maxlength="5000" autofocus></textarea></label>
+                <label class="admin-check admin-modal__check"><input type="checkbox" name="send_notification"><span>Wyślij powiadomienie do użytkownika</span></label>
+            </div>
+            <footer class="admin-modal__footer">
+                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
+                <button class="admin-button-danger" type="submit">Zakończ jako odrzucone</button>
             </footer>
         </form>
     </dialog>

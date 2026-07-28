@@ -47,6 +47,15 @@ def test_public_form_renders_csrf_inside_form(client):
     assert _public_csrf(client)
 
 
+def test_public_form_explains_required_markers_and_exposes_accessible_required_fields(client):
+    html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+
+    assert "Pola oznaczone" in html
+    assert "są obowiązkowe." in html
+    assert 'class="required required-marker" aria-hidden="true">*</span>' in html
+    assert 'required aria-required="true"' in html
+
+
 def test_missing_public_csrf_returns_readable_error_and_logs_reason(app, client, caplog):
     app.config["WTF_CSRF_ENABLED"] = True
     _public_csrf(client)

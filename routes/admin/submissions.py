@@ -24,6 +24,7 @@ from services.beneficiary_agreement_service import (
     BeneficiaryAgreementDecisionError,
     can_edit_application_decision,
 )
+from services.blocked_agreement_admin_service import BlockedAgreementActionError
 from services.admin_submission_service import (
     admin_status_label,
     build_submission_detail_sections,
@@ -143,8 +144,23 @@ def submission_detail(form_id: int, submission_pk: int):
             can_review_agreement=can_review_agreement,
         )
         detail_view = build_submission_detail_sections(form, submission)
+        can_manage = can_manage_form(db, g.admin_user, form.id)
+        is_agreement_blocked = (
+            submission.process_status == ProcessStatus.AGREEMENT_BLOCKED.value
+            or str(submission.agreement_blocked or "").strip().lower() == "tak"
+        )
+        block_data = dict(submission.data_json or {})
+        blocked_agreement_view = {
+            "is_blocked": is_agreement_blocked,
+            "reason": str(submission.agreement_block_reason or "").strip(),
+            "blocked_at": block_data.get("_agreement_blocked_at"),
+            "source": str(block_data.get("_agreement_block_source") or "Warunki deklaracji"),
+            "can_manage": can_manage and g.admin_user.role in {ROLE_ADMIN, ROLE_SUPER_ADMIN},
+            "can_unblock": can_manage and g.admin_user.role == ROLE_SUPER_ADMIN,
+            "can_reject_final": can_manage and g.admin_user.role in {ROLE_ADMIN, ROLE_SUPER_ADMIN},
+        }
         rollback_options = []
-        if g.admin_user.role in ALLOWED_ROLES:
+        if can_manage and g.admin_user.role in ALLOWED_ROLES:
             rollback_options = services.submission_stage_rollback_service.get_allowed_targets(
                 db,
                 submission,
@@ -161,8 +177,9 @@ def submission_detail(form_id: int, submission_pk: int):
             decision_history=decision_history,
             workflow_view=workflow_view,
             rollback_options=rollback_options,
+            blocked_agreement_view=blocked_agreement_view,
             status_label=lambda status: admin_status_label(status, form),
-            read_only=not can_manage_form(db, g.admin_user, form.id),
+            read_only=not can_manage,
         )
 
 
@@ -180,7 +197,7 @@ def submission_stage_rollback(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        ensure_form_access(db, form.id)
+        ensure_form_access(db, form.id, manage=True)
 
         target_status = request.form.get("target_status", "").strip()
         reason = request.form.get("rollback_reason", "").strip()
@@ -199,6 +216,14 @@ def submission_stage_rollback(submission_id: str):
         except StageRollbackError as exc:
             db.rollback()
             flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "submission_stage_rollback_failed public_submission_id=%s",
+                submission.submission_id,
+            )
+            flash("Nie udało się cofnąć etapu. Spróbuj ponownie.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
         current_app.logger.info(
@@ -244,6 +269,131 @@ def submission_stage_rollback(submission_id: str):
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 
+@bp.post("/submissions/<submission_id>/agreement/unblock")
+@login_required
+@role_required(ROLE_SUPER_ADMIN)
+def submission_agreement_unblock(submission_id: str):
+    with db_session_factory()() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == str(submission_id).strip())
+        ).scalar_one_or_none()
+        if submission is None:
+            abort(404)
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            abort(404)
+        ensure_form_access(db, form.id, manage=True)
+        reason = request.form.get("reason", "").strip()
+        try:
+            result = current_app.extensions["services"].blocked_agreement_admin_service.unblock(
+                db,
+                submission,
+                reason=reason,
+                actor=g.admin_user,
+            )
+            db.commit()
+        except (BlockedAgreementActionError, PermissionError) as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "manual_agreement_unblock_failed public_submission_id=%s",
+                submission.submission_id,
+            )
+            flash("Nie udało się odblokować umowy. Spróbuj ponownie.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        _log_blocked_agreement_action(
+            "AGREEMENT_UNBLOCKED",
+            submission,
+            result,
+            reason=reason,
+        )
+        flash("Umowa została odblokowana i może przejść do generowania.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+@bp.post("/submissions/<submission_id>/reject-final")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def submission_reject_final(submission_id: str):
+    with db_session_factory()() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == str(submission_id).strip())
+        ).scalar_one_or_none()
+        if submission is None:
+            abort(404)
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            abort(404)
+        ensure_form_access(db, form.id, manage=True)
+        reason = request.form.get("reason", "").strip()
+        send_notification = request.form.get("send_notification") == "on"
+        try:
+            result = current_app.extensions["services"].blocked_agreement_admin_service.reject_final(
+                db,
+                submission,
+                reason=reason,
+                actor=g.admin_user,
+                email_requested=send_notification,
+            )
+            db.commit()
+        except (BlockedAgreementActionError, PermissionError) as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "agreement_block_final_rejection_failed public_submission_id=%s",
+                submission.submission_id,
+            )
+            flash("Nie udało się zakończyć procesu jako odrzuconego. Spróbuj ponownie.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        _log_blocked_agreement_action(
+            "AGREEMENT_BLOCK_REJECTED_FINAL",
+            submission,
+            result,
+            reason=reason,
+        )
+        if send_notification:
+            mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_decision_email(
+                submission.submission_id,
+                "rejected",
+            )
+            if mail_result.status not in {"sent", "queued"}:
+                flash("Proces zakończono, ale powiadomienie e-mail nie zostało wysłane.", "warning")
+        flash("Proces został zakończony jako odrzucony.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+def _log_blocked_agreement_action(event_type: str, submission, result, *, reason: str) -> None:
+    try:
+        current_app.extensions["services"].audit_log_service.log_event(
+            event_type,
+            submission.submission_id,
+            submission.form_slug,
+            old_value=result.previous_status,
+            new_value=result.new_status,
+            actor=str(g.admin_user.email or g.admin_user.role),
+            metadata={
+                "reason": reason,
+                "original_block_reason": result.previous_block_reason,
+                "actor_id": g.admin_user.id,
+                "actor_role": g.admin_user.role,
+            },
+        )
+    except Exception as exc:
+        current_app.logger.exception(
+            "blocked_agreement_audit_failed public_submission_id=%s error=%s",
+            submission.submission_id,
+            exc.__class__.__name__,
+        )
+
+
 @bp.post("/submissions/<submission_id>/return-for-correction")
 @login_required
 @role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
@@ -278,11 +428,21 @@ def submission_return_for_correction(submission_id: str):
                 actor=g.admin_user,
             )
             db.commit()
-        except SubmissionCorrectionError as exc:
+        except (SubmissionCorrectionError, PermissionError) as exc:
             db.rollback()
             if request.is_json:
                 return {"ok": False, "error": str(exc)}, 400
             flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception(
+                "submission_return_for_correction_failed public_submission_id=%s",
+                submission.submission_id,
+            )
+            if request.is_json:
+                return {"ok": False, "error": "Nie udało się wysłać zgłoszenia do poprawy."}, 500
+            flash("Nie udało się wysłać zgłoszenia do poprawy. Spróbuj ponownie.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
         current_app.logger.info(

@@ -1776,6 +1776,26 @@ body.admin-modal-open {
     background: #fffaf0;
 }
 
+.admin-required-note {
+    margin: 0 0 var(--admin-space-4);
+    padding: 9px 12px;
+    border-left: 3px solid var(--danger);
+    border-radius: 6px;
+    background: #fff8f7;
+    color: #5f4b49;
+    font-size: 0.9rem;
+}
+
+.required-marker {
+    color: var(--danger);
+    font-weight: 700;
+}
+
+.admin-blocked-agreement {
+    margin-bottom: var(--admin-space-5);
+    border-left: 4px solid var(--warning);
+}
+
 /* Mail template editor: scoped to the admin surface. */
 .mail-template-editor__workspace {
     display: grid;

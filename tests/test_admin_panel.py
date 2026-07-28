@@ -176,6 +176,39 @@ def create_rollback_submission(app, *, form_slug="rollback_form", email="partici
         return submission.id, submission.submission_id
 
 
+def create_blocked_agreement_submission(
+    app,
+    *,
+    form_slug="blocked_form",
+    submission_id="blocked-public-uuid",
+):
+    session_factory = create_session_factory(app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id=submission_id,
+            form_slug=form_slug,
+            form_name="Blocked Form",
+            email="participant@example.com",
+            process_status="AGREEMENT_BLOCKED",
+            workflow_step="agreement",
+            officer_decision="accepted",
+            officer_decision_reason="",
+            declaration_required="Tak",
+            declaration_generated="Tak",
+            declaration_signature_valid="Tak",
+            agreement_required="Tak",
+            agreement_blocked="Tak",
+            agreement_block_reason="Warunki deklaracji nie zostały spełnione.",
+            data_json={
+                "_agreement_block_source": "Warunki deklaracji",
+                "_agreement_blocked_at": "2026-07-28T09:00:00+00:00",
+            },
+        )
+        db.add(submission)
+        db.commit()
+        return submission.id, submission.submission_id
+
+
 def admin_csrf(client):
     with client.session_transaction() as session:
         return session["admin_csrf_token"]
@@ -474,6 +507,182 @@ def test_return_for_correction_requires_reason_and_is_forbidden_for_form_manager
         data={"csrf_token": admin_csrf(admin_client), "reason": "Próba"},
     )
     assert forbidden.status_code == 403
+
+
+def test_blocked_agreement_section_and_actions_follow_admin_permissions(admin_app, admin_client):
+    super_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="blocked_form", name="Blocked Form", user_id=super_id)
+    submission_pk, _ = create_blocked_agreement_submission(admin_app)
+    login(admin_client)
+
+    super_html = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}"
+    ).get_data(as_text=True)
+
+    assert "Umowa zablokowana" in super_html
+    assert "Warunki deklaracji nie zostały spełnione." in super_html
+    assert "Wyślij do poprawy" in super_html
+    assert "Cofnij etap" in super_html
+    assert "Odblokuj umowę" in super_html
+    assert "Zakończ jako odrzucone" in super_html
+
+    admin_id = create_user(admin_app, email="blocked-admin@example.com", role="admin")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormPermission(user_id=admin_id, form_id=form_id, can_manage=True))
+        db.commit()
+    admin_client.get("/admin/logout")
+    login(admin_client, email="blocked-admin@example.com")
+    admin_html = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}"
+    ).get_data(as_text=True)
+
+    assert "Wyślij do poprawy" in admin_html
+    assert "Cofnij etap" in admin_html
+    assert "Zakończ jako odrzucone" in admin_html
+    assert 'data-admin-modal-target="unblock-agreement-dialog"' not in admin_html
+
+
+def test_unblock_agreement_requires_csrf_and_super_admin(admin_app, admin_client):
+    super_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="blocked_form", name="Blocked Form", user_id=super_id)
+    _, submission_id = create_blocked_agreement_submission(admin_app)
+    login(admin_client)
+
+    missing_csrf = admin_client.post(
+        f"/admin/submissions/{submission_id}/agreement/unblock",
+        data={"reason": "Decyzja po dodatkowej weryfikacji"},
+    )
+    assert missing_csrf.status_code == 400
+
+    admin_id = create_user(admin_app, email="no-unblock@example.com", role="admin")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add(FormPermission(user_id=admin_id, form_id=form_id, can_manage=True))
+        db.commit()
+    admin_client.get("/admin/logout")
+    login(admin_client, email="no-unblock@example.com")
+    forbidden = admin_client.post(
+        f"/admin/submissions/{submission_id}/agreement/unblock",
+        data={"csrf_token": admin_csrf(admin_client), "reason": "Próba"},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_super_admin_unblocks_agreement_and_preserves_audit_history(admin_app, admin_client, monkeypatch):
+    super_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="blocked_form", name="Blocked Form", user_id=super_id)
+    submission_pk, submission_id = create_blocked_agreement_submission(admin_app)
+    login(admin_client)
+    captured = {}
+
+    monkeypatch.setattr(
+        admin_app.extensions["services"].audit_log_service,
+        "log_event",
+        lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}),
+    )
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/agreement/unblock",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "reason": "Potwierdzono wyjątek po dodatkowej weryfikacji.",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.location.endswith(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "AGREEMENT_READY"
+        assert submission.agreement_blocked == ""
+        assert submission.agreement_block_reason == ""
+        history = submission.data_json["_agreement_block_history"]
+        assert history[-1]["original_block_reason"] == "Warunki deklaracji nie zostały spełnione."
+        assert history[-1]["actor_role"] == "super_admin"
+        event = db.query(SubmissionWorkflowEvent).filter_by(source="manual_agreement_unblock").one()
+        assert event.previous_status == "AGREEMENT_BLOCKED"
+        assert event.new_status == "AGREEMENT_READY"
+        assert event.reason == "Potwierdzono wyjątek po dodatkowej weryfikacji."
+    assert captured["args"][0] == "AGREEMENT_UNBLOCKED"
+
+    public_status = admin_client.get(
+        f"/api/submissions/{submission_id}/acceptance-status"
+    ).get_json()
+    assert public_status["process_status"] == "AGREEMENT_READY"
+    assert public_status["agreement_blocked"] is False
+    assert public_status["can_generate_agreement"] is True
+
+
+def test_blocked_agreement_can_be_rolled_back_by_admin(admin_app, admin_client):
+    admin_id = create_user(admin_app, email="blocked-rollback@example.com", role="admin")
+    form_id = create_form(
+        admin_app,
+        slug="blocked_form",
+        name="Blocked Form",
+        user_id=admin_id,
+    )
+    submission_pk, submission_id = create_blocked_agreement_submission(admin_app)
+    login(admin_client, email="blocked-rollback@example.com")
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/rollback-stage",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "target_status": "DECLARATION_SIGNED",
+            "rollback_reason": "Ponowna weryfikacja deklaracji",
+        },
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "DECLARATION_SIGNED"
+        assert submission.agreement_blocked == ""
+        event = db.query(SubmissionWorkflowEvent).filter_by(source="stage_rollback").one()
+        assert event.previous_status == "AGREEMENT_BLOCKED"
+
+
+def test_admin_rejects_blocked_agreement_with_reason_and_public_status(admin_app, admin_client):
+    admin_id = create_user(admin_app, email="blocked-reject@example.com", role="admin")
+    form_id = create_form(
+        admin_app,
+        slug="blocked_form",
+        name="Blocked Form",
+        user_id=admin_id,
+    )
+    submission_pk, submission_id = create_blocked_agreement_submission(admin_app)
+    login(admin_client, email="blocked-reject@example.com")
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/reject-final",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "reason": "Warunki udziału nie zostały spełnione.",
+        },
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        assert submission.process_status == "OFFICER_REJECTED"
+        assert submission.officer_decision == "rejected"
+        assert submission.officer_decision_reason == "Warunki udziału nie zostały spełnione."
+        assert submission.agreement_blocked == ""
+        decision = db.query(SubmissionDecision).filter_by(target_status="OFFICER_REJECTED").one()
+        assert decision.justification == "Warunki udziału nie zostały spełnione."
+        event = db.query(SubmissionWorkflowEvent).filter_by(source="agreement_block_final_rejection").one()
+        assert event.reason == decision.justification
+
+    public_status = admin_client.get(
+        f"/api/submissions/{submission_id}/acceptance-status"
+    ).get_json()
+    assert public_status["process_status"] == "OFFICER_REJECTED"
+    assert public_status["status_reason"] == "Warunki udziału nie zostały spełnione."
+    assert public_status["can_sign_documents"] is False
+    assert public_status["can_generate_agreement"] is False
 
 
 def test_participant_can_refill_returned_submission_and_conditions_are_evaluated_again(
@@ -2236,6 +2445,21 @@ def test_mail_template_edit_does_not_expose_style_controls(admin_app, admin_clie
     assert 'name="label_color"' not in html
     assert 'name="label_background"' not in html
     assert "Margines" not in html
+
+
+def test_admin_form_and_mail_editor_explain_required_fields(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="required_notes", name="Required Notes")
+    login(admin_client)
+
+    form_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    mail_html = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new").get_data(as_text=True)
+
+    for html in (form_html, mail_html):
+        assert "Pola oznaczone" in html
+        assert "są obowiązkowe." in html
+        assert 'class="required-marker" aria-hidden="true">*</span>' in html
+        assert 'aria-required="true"' in html
 
 
 def test_mail_template_preview_renders_platform_layout(admin_app, admin_client):

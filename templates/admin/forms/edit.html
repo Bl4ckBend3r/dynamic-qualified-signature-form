@@ -15,11 +15,12 @@
 <form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
+    <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
     <section class="admin-form-tab-panel" id="form-tab-basic" role="tabpanel" data-form-tab-panel="basic" {% if active_tab != 'basic' %}hidden{% endif %}>
         <div class="admin-section-heading"><div><h2>Podstawowe</h2><p>Najważniejsze informacje i dostępność formularza.</p></div></div>
         <div class="admin-form-grid">
-        <label><span>Nazwa</span><input name="name" value="{{ form.name }}" required></label>
-        <label><span>Slug</span><input name="slug" value="{{ form.slug }}" required></label>
+        <label><span>Nazwa <span class="required-marker" aria-hidden="true">*</span></span><input name="name" value="{{ form.name }}" required aria-required="true"></label>
+        <label><span>Slug <span class="required-marker" aria-hidden="true">*</span></span><input name="slug" value="{{ form.slug }}" required aria-required="true"></label>
         <label><span>Tytuł</span><input name="title" value="{{ form.title }}" data-header-title-input></label>
         <label><span>Kolejność sortowania</span><input type="number" name="sort_order" value="{{ form.sort_order }}"></label>
         <label class="admin-form-wide"><span>Opis</span><textarea name="description">{{ form.description }}</textarea></label>

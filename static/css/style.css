@@ -359,9 +359,22 @@ textarea:focus {
     border-color: var(--danger);
 }
 
-.required {
+.required,
+.required-marker {
     color: var(--danger);
     margin-left: 4px;
+    font-weight: 700;
+}
+
+.form-required-note {
+    grid-column: 1 / -1;
+    margin: 0 0 2px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--danger);
+    border-radius: 6px;
+    background: #fff8f7;
+    color: #5f4b49;
+    font-size: 0.92rem;
 }
 
 /* BUTTONS */

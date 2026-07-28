@@ -367,6 +367,8 @@ function renderSubmissionStatus(data) {
         ];
         if (data.blocking_reason) {
             items.push({variant: "warning", icon: "!", title: "Powód blokady", description: data.blocking_reason});
+        } else if (data.status_reason) {
+            items.push({variant: "warning", icon: "!", title: "Powód", description: data.status_reason});
         }
         if (data.next_action) {
             items.push({title: "Co dalej?", description: data.next_action});

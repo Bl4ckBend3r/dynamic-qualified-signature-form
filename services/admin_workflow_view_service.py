@@ -32,6 +32,7 @@ BLOCKED_QUALIFICATION_STATUSES = {
     ProcessStatus.AUTO_REJECTED.value,
     ProcessStatus.RETURNED_FOR_CORRECTION.value,
 }
+AGREEMENT_BLOCKED_STATUSES = {ProcessStatus.AGREEMENT_BLOCKED.value}
 
 
 def build_admin_workflow_view(
@@ -181,6 +182,8 @@ def _agreement_status(submission, required: bool) -> str:
 
 
 def _agreement_action(status: str, required: bool, can_review: bool) -> str:
+    if status in AGREEMENT_BLOCKED_STATUSES:
+        return "Wymagana decyzja administratora"
     if status in BLOCKED_QUALIFICATION_STATUSES:
         return "Etap zablokowany"
     if not required:
@@ -198,6 +201,8 @@ def _agreement_action(status: str, required: bool, can_review: bool) -> str:
 
 
 def _agreement_state(status: str, required: bool, can_review: bool) -> str:
+    if status in AGREEMENT_BLOCKED_STATUSES:
+        return "current"
     if status in BLOCKED_QUALIFICATION_STATUSES:
         return "future"
     if not required or status in COMPLETED_STATUSES:

@@ -9,6 +9,7 @@ from repositories.submission_repository import CsvSubmissionRepository, Postgres
 from services.access_token_service import AccessTokenService
 from services.audit_log_service import AuditLogService
 from services.beneficiary_agreement_service import BeneficiaryAgreementService
+from services.blocked_agreement_admin_service import BlockedAgreementAdminService
 from services.document_service import DocumentService
 from services.documents.agreement_flow_service import AgreementFlowService
 from services.documents.declaration_flow_service import DeclarationFlowService
@@ -64,6 +65,7 @@ class ServiceContainer:
     rules_service: RulesService
     qualification_condition_service: QualificationConditionService
     submission_correction_service: SubmissionCorrectionService
+    blocked_agreement_admin_service: BlockedAgreementAdminService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -72,6 +74,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     access_token_service = AccessTokenService()
     qualification_condition_service = QualificationConditionService()
     submission_correction_service = SubmissionCorrectionService()
+    blocked_agreement_admin_service = BlockedAgreementAdminService()
 
     form_slugs = []
     try:
@@ -201,4 +204,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         rules_service=rules_service,
         qualification_condition_service=qualification_condition_service,
         submission_correction_service=submission_correction_service,
+        blocked_agreement_admin_service=blocked_agreement_admin_service,
     )

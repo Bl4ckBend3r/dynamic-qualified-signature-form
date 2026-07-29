@@ -115,16 +115,17 @@ class OfficeSignedAgreementService:
     def __init__(self, storage) -> None:
         self._storage = storage
 
-    @staticmethod
-    def _folder(form) -> str:
-        workflow = (getattr(form, "definition_json", None) or {}).get("workflow") or {}
-        configured = workflow.get("nextcloud_agreements_signed_by_office_dir") or getattr(form, "nextcloud_agreements_signed_by_office_dir", "")
-        # App config is injected by the caller as a fallback attribute.
-        configured = configured or getattr(form, "_office_signed_agreements_dir", "")
-        folder = str(configured or "").strip().strip("/")
-        if not folder:
-            raise OfficeSignedAgreementError("Nie skonfigurowano folderu Nextcloud dla umów podpisanych przez urząd.")
-        return folder
+    def _folder(self, form) -> str:
+        slug = str(getattr(form, "slug", "") or "").strip()
+        if not slug:
+            raise OfficeSignedAgreementError("Brak sluga formularza potrzebnego do zbudowania ścieżki Nextcloud.")
+        if hasattr(self.storage, "office_signed_agreement_directory"):
+            return self.storage.office_signed_agreement_directory(slug)
+        output_dir = str(getattr(self.storage, "output_dir", "output") or "output").strip("/")
+        return f"{output_dir}/{slug}/pdf/umowy/podpisane_przez_urzad"
+
+    def folder_for_form(self, form) -> str:
+        return self._folder(form)
 
     @staticmethod
     def _expected_files(db, submission) -> list[str]:

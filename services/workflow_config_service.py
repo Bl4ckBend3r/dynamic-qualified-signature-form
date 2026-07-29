@@ -146,6 +146,63 @@ OFFICE_CONFIRMATION_STATUSES = frozenset(
     {"AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_SIGNED_BY_OFFICE"}
 )
 
+STATUS_TO_STAGE_ALIASES = {
+    "FORM_SUBMITTED": ("submission",),
+    "WAITING_FOR_OFFICER_DECISION": ("officer_review",),
+    "OFFICER_REVIEW": ("officer_review",),
+    "DECLARATION_READY": ("declaration",),
+    "DECLARATION_WAITING_FOR_SIGNATURE": ("declaration_signature",),
+    "AGREEMENT_READY": ("agreement", "training_agreements"),
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": ("agreement_signature", "training_agreements_signature"),
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": ("office_agreement_signature", "beneficiary_agreement_review"),
+    "AGREEMENT_SIGNED_BY_OFFICE": ("office_agreement_signature",),
+    "RETURNED_FOR_CORRECTION": ("waiting_for_correction", "agreement_correction"),
+    "PROCESS_COMPLETED": ("completed",),
+}
+
+
+def normalize_decision_assignments(decisions: Any, steps: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Resolve historic decision-to-stage fields into the canonical ``step_id``."""
+    by_id = {str(step.get("id") or "").strip(): step for step in steps}
+    by_status = {str(step.get("status") or step.get("status_code") or "").strip(): step for step in steps}
+    result = []
+    for raw in decisions or []:
+        if not isinstance(raw, Mapping):
+            continue
+        item = dict(raw)
+        candidate = ""
+        for key in ("assigned_stage", "stage_id", "workflow_stage_id", "decision_stage", "step_id"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                candidate = value
+                break
+        if candidate not in by_id:
+            for key in ("trigger_status", "status"):
+                status = str(item.get(key) or "").strip()
+                if status in by_status:
+                    candidate = str(by_status[status].get("id") or "")
+                    break
+                for alias in STATUS_TO_STAGE_ALIASES.get(status, ()):
+                    if alias in by_id:
+                        candidate = alias
+                        break
+                if candidate in by_id:
+                    break
+        item["step_id"] = candidate if candidate in by_id else ""
+        if item["step_id"]:
+            item["assigned_stage"] = item["step_id"]
+        explicit_active = next((item[key] for key in ("is_active", "active", "enabled") if key in item), None)
+        item["active"] = (
+            bool(item["step_id"])
+            if explicit_active is None
+            else explicit_active is True or str(explicit_active).strip().lower() in {"1", "true", "yes", "tak", "on"}
+        )
+        item["assignment_error"] = "" if item["step_id"] else (
+            f"Nie znaleziono aktywnego etapu dla przypisania „{candidate}”." if candidate else "Brak przypisanego etapu."
+        )
+        result.append(item)
+    return result
+
 
 def repair_agreement_confirmation_path(workflow: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
     """Ensure an enabled agreement workflow includes the office-signature branch.
@@ -336,12 +393,13 @@ class WorkflowConfigNormalizer:
         source["allow_correction"] = bool(source.get("allow_correction", True))
         source["electronic_signature_required"] = bool(source.get("electronic_signature_required", True))
         source["signed_document_uploader"] = str(source.get("signed_document_uploader") or "beneficiary")
-        source["decision_settings"] = self._mapping_list(source.get("decision_settings"))
+        raw_decisions = self._mapping_list(source.get("decision_settings"))
+        source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
+        source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
+        source["decision_settings"] = normalize_decision_assignments(raw_decisions, source["steps"])
         for decision in source["decision_settings"]:
             if decision.get("label"):
                 decision["label"] = _modern_workflow_label(str(decision["label"]).strip())
-        source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
-        source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
         source, _repaired = repair_agreement_confirmation_path(source)
         for step in source["steps"]:
             step["active"] = is_workflow_step_active(step, source)

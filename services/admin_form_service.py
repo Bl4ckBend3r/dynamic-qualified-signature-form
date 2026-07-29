@@ -182,6 +182,12 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
         ("application_rejection", "Odrzucenie wniosku", ""),
         ("agreement_rejection", "Skierowanie umowy do poprawy", ""),
     )
+    known_ids = {item[0] for item in definitions}
+    definitions = (*definitions, *(
+        (decision_id, str(item.get("label") or decision_id), str(item.get("step_id") or ""))
+        for decision_id, item in existing_by_id.items()
+        if decision_id and decision_id not in known_ids
+    ))
     result = []
     for decision_id, label, default_step in definitions:
         current = existing_by_id.get(decision_id, {})
@@ -193,15 +199,21 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
                     form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label
                 ),
                 "step_id": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
+                "assigned_stage": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
                 "values": ["accepted", "rejected", "correction"],
                 "yes_status": form_data.get(
-                    f"decision_{decision_id}_yes_status", current.get("yes_status", "")
+                    f"decision_{decision_id}_yes_status", current.get("yes_status", current.get("status_on_yes", ""))
                 ).strip(),
                 "no_status": form_data.get(
-                    f"decision_{decision_id}_no_status", current.get("no_status", "")
+                    f"decision_{decision_id}_no_status", current.get("no_status", current.get("status_on_no", ""))
                 ).strip(),
                 "reason_required": form_data.get(f"decision_{decision_id}_reason_required") == "on",
                 "send_email": form_data.get(f"decision_{decision_id}_send_email") == "on",
+                "active": (
+                    form_data.get(f"decision_{decision_id}_active") == "on"
+                    if f"decision_{decision_id}_active" in form_data
+                    else bool(current.get("active", current.get("step_id", default_step)))
+                ),
             }
         )
     return result

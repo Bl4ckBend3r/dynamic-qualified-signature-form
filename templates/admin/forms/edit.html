@@ -370,17 +370,32 @@
             ('application_rejection', 'Odrzucenie wniosku'),
             ('agreement_rejection', 'Skierowanie umowy do poprawy')
         ] %}
+        {% set known_decision_ids = decision_definitions|map(attribute=0)|list %}
         <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
             <div class="admin-section-heading"><div><h2>Decyzje urzędnika przypisane do etapów</h2><p>Edytor decyzji jest wyświetlany bezpośrednio w karcie wybranego etapu. Nieprzypisane decyzje pozostają poniżej jako nieaktywne.</p></div></div>
             <div class="workflow-decision-grid" data-workflow-decision-pool>
                 <h3 data-decision-pool-heading>Decyzje nieprzypisane</h3>
                 {% for decision_id, default_label in decision_definitions %}
                     {% set decision = (workflow.get('decision_settings', [])|selectattr('id', 'equalto', decision_id)|list|first)|default({}, true) %}
-                    <article class="workflow-option-card" data-workflow-decision-card>
+                    <article class="workflow-option-card" data-workflow-decision-card data-decision-active="{{ 'true' if decision.get('active', decision.get('step_id')) else 'false' }}">
                         <h3>{{ default_label }}</h3>
                         <label><span>Nazwa decyzji</span><input name="decision_{{ decision_id }}_label" value="{{ decision.get('label', default_label) }}"></label>
                         <label><span>Przypisana do etapu</span><select name="decision_{{ decision_id }}_step" data-decision-step><option value="">Nieaktywna</option>{% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if decision.get('step_id') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}</select></label>
                         <p class="workflow-help">Możliwe wartości: Tak, Nie, Do poprawy</p>
+                        <div class="admin-form-grid">
+                            <label><span>Status po „Tak”</span><select name="decision_{{ decision_id }}_yes_status"><option value="">Bez zmiany</option>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if decision.get('yes_status') == status.value %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
+                            <label><span>Status po „Nie”</span><select name="decision_{{ decision_id }}_no_status"><option value="">Bez zmiany</option>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if decision.get('no_status') == status.value %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
+                        </div>
+                        <label class="admin-check"><input type="checkbox" name="decision_{{ decision_id }}_reason_required" {% if decision.get('reason_required') %}checked{% endif %}><span>Wymagaj uzasadnienia</span></label>
+                        <label class="admin-check"><input type="checkbox" name="decision_{{ decision_id }}_send_email" {% if decision.get('send_email') %}checked{% endif %}><span>Wyślij e-mail do użytkownika</span></label>
+                    </article>
+                {% endfor %}
+                {% for decision in workflow.get('decision_settings', []) if decision.get('id') not in known_decision_ids %}
+                    {% set decision_id = decision.get('id') %}
+                    <article class="workflow-option-card" data-workflow-decision-card data-decision-active="{{ 'true' if decision.get('active', decision.get('step_id')) else 'false' }}">
+                        <h3>{{ decision.get('label', decision_id) }}</h3>
+                        <label><span>Nazwa decyzji</span><input name="decision_{{ decision_id }}_label" value="{{ decision.get('label', decision_id) }}"></label>
+                        <label><span>Przypisana do etapu</span><select name="decision_{{ decision_id }}_step" data-decision-step><option value="">Nieaktywna</option>{% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if decision.get('step_id') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}</select></label>
                         <div class="admin-form-grid">
                             <label><span>Status po „Tak”</span><select name="decision_{{ decision_id }}_yes_status"><option value="">Bez zmiany</option>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if decision.get('yes_status') == status.value %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
                             <label><span>Status po „Nie”</span><select name="decision_{{ decision_id }}_no_status"><option value="">Bez zmiany</option>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if decision.get('no_status') == status.value %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
@@ -1482,10 +1497,11 @@ function syncDecisionEditorsToStages() {
     });
     document.querySelectorAll("[data-workflow-decision-card]").forEach((decisionCard) => {
         const stepId = decisionCard.querySelector("[data-decision-step]")?.value || "";
+        const active = decisionCard.dataset.decisionActive !== "false";
         const stage = Array.from(workflowStepList.querySelectorAll("[data-workflow-step]")).find(
             (item) => item.querySelector("[data-step-id]")?.value === stepId
         );
-        (stage?.querySelector("[data-stage-decisions]") || pool).appendChild(decisionCard);
+        ((active ? stage?.querySelector("[data-stage-decisions]") : null) || pool).appendChild(decisionCard);
     });
     workflowStepList.querySelectorAll("[data-stage-decisions]").forEach((holder) => {
         holder.hidden = !holder.querySelector("[data-workflow-decision-card]");
@@ -1583,7 +1599,11 @@ workflowBuilder?.addEventListener("change", (event) => {
     if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
 });
 document.addEventListener("change", (event) => {
-    if (event.target.matches?.("[data-decision-step]")) syncDecisionEditorsToStages();
+    if (event.target.matches?.("[data-decision-step]")) {
+        const card = event.target.closest("[data-workflow-decision-card]");
+        if (card && event.target.value) card.dataset.decisionActive = "true";
+        syncDecisionEditorsToStages();
+    }
 });
 workflowBuilder?.addEventListener("click", (event) => {
     // The rich-text toolbar dispatches its own input event. Rebuilding the

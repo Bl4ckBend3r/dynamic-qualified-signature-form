@@ -1,6 +1,7 @@
 from services.workflow_config_service import (
     WorkflowConfigNormalizer,
     WorkflowConfigValidator,
+    normalize_decision_assignments,
     repair_agreement_confirmation_path,
     workflow_status_label,
     workflow_status_options,
@@ -345,3 +346,23 @@ def test_repair_does_not_overwrite_a_custom_agreement_confirmation_path():
     by_id = {step["id"]: step for step in repaired["steps"]}
     assert changed is False
     assert by_id["training_agreements_signature"]["next"] == "custom_office_review"
+
+
+def test_normalizes_legacy_decision_stage_assignment_fields():
+    steps = [
+        {"id": "office_agreement_signature", "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE"},
+        {"id": "completed", "status": "PROCESS_COMPLETED"},
+    ]
+    decisions = normalize_decision_assignments(
+        [
+            {"id": "by-assigned", "assigned_stage": "office_agreement_signature"},
+            {"id": "by-stage", "stage_id": "completed"},
+            {"id": "by-status", "trigger_status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE"},
+        ],
+        steps,
+    )
+
+    assert [item["step_id"] for item in decisions] == [
+        "office_agreement_signature", "completed", "office_agreement_signature",
+    ]
+    assert all(item["active"] for item in decisions)

@@ -155,7 +155,8 @@
             {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin"] %}
                 <section class="admin-alert admin-alert-info">
                     <h4>Umowa podpisana przez urząd</h4>
-                    <p>System sprawdzi folder Nextcloud dla umów podpisanych przez urząd oraz plik o nazwie zgodnej z umową wgraną przez beneficjenta.</p>
+                    <p><strong>Folder podpisanych umów przez urząd:</strong> {{ office_signed_agreement_view.folder }}/</p>
+                    <p><strong>Oczekiwana nazwa pliku:</strong> {{ office_signed_agreement_view.expected_filename or "Brak danych" }}</p>
                     <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                         <button class="admin-button" type="submit">Sprawdź podpisaną umowę przez urząd</button>

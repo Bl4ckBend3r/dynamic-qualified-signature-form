@@ -139,6 +139,11 @@ def submission_detail(form_id: int, submission_pk: int):
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
         can_review_agreement = services.beneficiary_agreement_service.can_review(db, submission)
+        office_signed_agreement_view = {
+            "folder": services.office_signed_agreement_service.folder_for_form(form),
+            "expected_filename": str(submission.agreement_signed_filename or "").strip(),
+            "available": submission.process_status == ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value,
+        }
         workflow_view = build_admin_workflow_view(
             submission,
             decisions=decision_history.get("decisions") or [],
@@ -179,6 +184,7 @@ def submission_detail(form_id: int, submission_pk: int):
             workflow_view=workflow_view,
             rollback_options=rollback_options,
             blocked_agreement_view=blocked_agreement_view,
+            office_signed_agreement_view=office_signed_agreement_view,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
         )
@@ -775,10 +781,6 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
-        # A form-level workflow setting wins over the application-wide default.
-        form._office_signed_agreements_dir = current_app.config.get(
-            "NEXTCLOUD_AGREEMENTS_SIGNED_BY_OFFICE_DIR", ""
-        )
         try:
             result = current_app.extensions["services"].office_signed_agreement_service.check(
                 db, form, submission, actor=g.admin_user

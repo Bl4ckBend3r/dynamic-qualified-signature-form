@@ -21,6 +21,7 @@ class NextcloudStorage:
     PDF_DECLARATION_DIR = "deklaracja"
     PDF_AGREEMENT_DIR = "umowy"
     PDF_SIGNED_DIR = "podpisane"
+    PDF_OFFICE_SIGNED_DIR = "podpisane_przez_urzad"
     PDF_UNSIGNED_DIR = "niepodpisane"
 
     def __init__(
@@ -469,6 +470,13 @@ class NextcloudStorage:
         resolved_document_type = document_type or self._infer_pdf_document_type_from_filename(filename)
         resolved_signed = self._infer_pdf_signed_from_filename(filename) if signed is None else signed
         return f"{self._pdf_directory(slug, resolved_document_type, resolved_signed)}/{Path(filename).name}"
+
+    def office_signed_agreement_directory(self, slug: str) -> str:
+        """Canonical Nextcloud folder for files signed outside the application."""
+        return (
+            f"{self.output_dir}/{str(slug).strip('/')}/pdf/"
+            f"{self.PDF_AGREEMENT_DIR}/{self.PDF_OFFICE_SIGNED_DIR}"
+        )
 
     def save_declaration_pdf(
         self,

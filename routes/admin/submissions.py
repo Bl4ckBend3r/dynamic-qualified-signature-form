@@ -35,6 +35,7 @@ from services.admin_submission_service import (
 )
 from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
+from services.office_signed_agreement_service import OfficeSignedAgreementError
 from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
 from services.submission_correction_service import SubmissionCorrectionError
 from statuses import WAITING_FOR_CORRECTION
@@ -624,16 +625,19 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
     if template is None:
         template = MailTemplate(
             form_id=form.id,
-            name="Decyzja dotycząca podpisanej umowy",
+            name="Umowa podpisana przez urząd" if confirmed else "Decyzja dotycząca podpisanej umowy",
             template_type=template_type,
-            subject="Decyzja dotycząca umowy {{ submission_id }}",
+            subject="Umowa została podpisana przez urząd" if confirmed else "Decyzja dotycząca umowy {{ submission_id }}",
             content_html=(
-                "<p>Umowa została podpisana przez urząd.</p>"
+                "<p>Dzień dobry,</p><p>informujemy, że umowa dotycząca zgłoszenia {{ public_submission_id }} została podpisana przez urząd.</p>"
+                "<p>Formularz: {{ form_title }}</p>{% if signed_agreement_download_link %}<p><a href=\"{{ signed_agreement_download_link }}\">Pobierz podpisaną umowę</a></p>{% endif %}"
+                "<p>Pozdrawiamy,<br>zespół platformy</p>"
                 if confirmed
                 else "<p>Podpisana umowa wymaga poprawy.</p><p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
             ),
             content_text=(
-                "Umowa została podpisana przez urząd."
+                "Dzień dobry,\n\ninformujemy, że umowa dotycząca zgłoszenia {{ public_submission_id }} została podpisana przez urząd.\n"
+                "Formularz: {{ form_title }}\n{{ signed_agreement_download_link }}\n\nPozdrawiamy,\nzespół platformy"
                 if confirmed
                 else "Podpisana umowa wymaga poprawy. Powód: {{ agreement_decision_reason_text }}"
             ),
@@ -649,6 +653,13 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
         .order_by(MailFooter.form_id.desc(), MailFooter.is_default.desc(), MailFooter.id.desc())
     ).scalars().first()
     services = current_app.extensions["services"]
+    signed_filename = str(submission.agreement_signed_filename or submission.agreement_filename or "").strip()
+    signed_link = ""
+    if signed_filename:
+        signed_link = services.document_service.build_download_url(
+            {"form_slug": submission.form_slug, "submission_id": submission.submission_id, "access_token": submission.access_token},
+            signed_filename,
+        )
     mail_result = services.mail_dispatch_service.dispatch_to_submission(
         db=db,
         form=form,
@@ -660,13 +671,25 @@ def _notify_beneficiary_agreement_decision(db, form, submission, decision_result
         event_type=("agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"),
         sent_by_id=g.admin_user.id,
         files=services.submission_document_service.list_documents(submission.submission_id),
+        context_builders={
+            "document_url_builder": lambda item, filename: services.document_service.build_download_url(
+                {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token}, filename
+            ),
+        },
         extra_context={
             "agreement_decision_reason": html.escape(decision_record.justification or ""),
             "agreement_decision_reason_text": decision_record.justification or "",
+            "signed_agreement_download_link": signed_link,
+            "signed_agreement_filename": signed_filename,
+            "agreement_number": submission.agreement_number or "",
+            "agreement_signed_by_office_at": decision_record.decided_at.isoformat() if decision_record.decided_at else "",
         },
     )
     decision_record.email_sent = mail_result.sent
     decision_record.email_log_id = getattr(mail_result.log, "id", None)
+    if confirmed and mail_result.sent:
+        submission.office_agreement_signed_email_sent = "Tak"
+        submission.office_agreement_signed_email_sent_for = "agreement_signed_by_office"
     db.commit()
     if not mail_result.sent:
         flash(
@@ -740,6 +763,38 @@ def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
         if send_notification:
             _notify_beneficiary_agreement_decision(db, form, submission, result)
         flash("Potwierdzenie podpisania umowy przez urząd zostało zapisane.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/check-office-signed-agreement")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def check_office_signed_agreement(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        # A form-level workflow setting wins over the application-wide default.
+        form._office_signed_agreements_dir = current_app.config.get(
+            "NEXTCLOUD_AGREEMENTS_SIGNED_BY_OFFICE_DIR", ""
+        )
+        try:
+            result = current_app.extensions["services"].office_signed_agreement_service.check(
+                db, form, submission, actor=g.admin_user
+            )
+        except OfficeSignedAgreementError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        if not result.found:
+            db.rollback()
+            details = f" Oczekiwana nazwa: {', '.join(result.expected_filenames)}. Folder: {result.folder}."
+            flash(result.message + details, "warning")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        db.commit()
+        _notify_beneficiary_agreement_decision(db, form, submission, result)
+        flash("Odnaleziono umowę podpisaną przez urząd w Nextcloud i zarejestrowano jej finalną wersję.", "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 

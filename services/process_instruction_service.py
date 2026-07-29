@@ -23,15 +23,15 @@ DEFAULT_STATUS_INSTRUCTIONS = {
     ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value: {
         "key": "agreement-waiting-for-office-signature",
         "label": "Umowa oczekuje na podpis po stronie urzędu",
-        "description": "Umowa oczekuje na podpis po stronie urzędu. Nie musisz teraz wykonywać dodatkowych czynności.",
-        "next_action": "Poczekaj na zakończenie etapu po stronie urzędu.",
+        "description": "Podpisana umowa została wgrana. Oczekuje na podpis i potwierdzenie po stronie urzędu. Nie musisz wykonywać dodatkowych czynności.",
+        "next_action": "Poczekaj na podpis i potwierdzenie po stronie urzędu.",
         "final": False,
         "rejected": False,
     },
     ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value: {
         "key": "agreement-signed-by-office",
         "label": "Umowa podpisana przez urząd",
-        "description": "Umowa została podpisana przez urząd. Proces został zakończony.",
+        "description": "Umowa została podpisana przez urząd. Informacja została wysłana na adres e-mail wskazany w formularzu.",
         "next_action": "Nie musisz wykonywać dodatkowych czynności.",
         "final": True,
         "rejected": False,

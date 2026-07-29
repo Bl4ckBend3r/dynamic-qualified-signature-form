@@ -279,6 +279,7 @@ class MailDispatchService:
                 subject=subject,
                 sent_by_id=sent_by_id,
                 status="skipped",
+                event_type=event_type,
                 error_message="Brak odbiorcy.",
             )
             return MailDispatchResult("skipped", recipient, subject, "Brak odbiorcy.", log)
@@ -293,6 +294,7 @@ class MailDispatchService:
                 subject=subject,
                 sent_by_id=sent_by_id,
                 status="skipped",
+                event_type=event_type,
                 error_message="Brak tematu.",
             )
             return MailDispatchResult("skipped", recipient, subject, "Brak tematu.", log)
@@ -308,6 +310,7 @@ class MailDispatchService:
                 subject=subject,
                 sent_by_id=sent_by_id,
                 status="skipped",
+                event_type=event_type,
                 error_message="Brak adaptera SMTP.",
             )
             return MailDispatchResult("skipped", recipient, subject, "Brak adaptera SMTP.", log)
@@ -331,7 +334,7 @@ class MailDispatchService:
             log = self.log_email(
                 db, form=form, submission=submission, template=template, footer=footer,
                 to_email=recipient, subject=subject, sent_by_id=sent_by_id,
-                status="skipped", error_message="Brak konfiguracji SMTP.",
+                status="skipped", event_type=event_type, error_message="Brak konfiguracji SMTP.",
             )
             current_app.logger.warning("mail_skipped reason=smtp_not_configured form_id=%s", getattr(form, "id", None))
             return MailDispatchResult("skipped", recipient, subject, "Brak konfiguracji SMTP.", log)
@@ -354,6 +357,7 @@ class MailDispatchService:
                 subject=subject,
                 sent_by_id=sent_by_id,
                 status="sent",
+                event_type=event_type,
             )
             return MailDispatchResult("sent", recipient, subject, log=log)
         except Exception as exc:
@@ -369,6 +373,7 @@ class MailDispatchService:
                 subject=subject,
                 sent_by_id=sent_by_id,
                 status="failed",
+                event_type=event_type,
                 error_message=error_message,
             )
             return MailDispatchResult("failed", recipient, subject, error_message, log)
@@ -407,6 +412,7 @@ class MailDispatchService:
                 to_email=to_email or getattr(submission, "email", ""),
                 sent_by_id=sent_by_id,
                 status="skipped",
+                event_type=event_type,
                 error_message="Brak aktywnego szablonu maila.",
             )
             return MailDispatchResult(
@@ -698,6 +704,7 @@ class MailDispatchService:
         subject: str = "",
         sent_by_id: int | None = None,
         status: str = "sent",
+        event_type: str = "email_delivery",
         error_message: str = "",
     ):
         if db is None:
@@ -715,7 +722,7 @@ class MailDispatchService:
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,
                 status=status,
-                event_type="email_delivery",
+                event_type=event_type or "email_delivery",
                 error_message=error_message or "",
             )
             db.add(log)

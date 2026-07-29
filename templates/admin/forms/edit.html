@@ -302,6 +302,7 @@
                 <label class="admin-check"><input type="checkbox" name="allow_correction" {% if workflow.get('allow_correction') %}checked{% endif %}><span>Pozwól na korektę zgłoszenia</span></label>
             </div>
             <p class="workflow-help">Dokumenty wymagane w procesie konfigurujesz w osobnych zakładkach „Deklaracja” i „Umowa”.</p>
+            <p><button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_repair_agreement_confirmation', form_id=form.id) }}" formmethod="post">Napraw ścieżkę podpisu urzędu</button></p>
         </section>
 
         <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
@@ -1589,6 +1590,15 @@ workflowBuilder?.addEventListener("click", (event) => {
     // workflow here would detach and reinsert the focused instruction card,
     // which makes the textarea lose focus after the first typed character.
     if (isWorkflowInstructionEditorEvent(event)) return;
+    // Decision cards are moved into workflow stages.  Rebuilding that layout
+    // while a native select is opening detaches the select and prevents its
+    // dropdown from appearing.  Form controls must retain their native click
+    // behaviour; their input/change handlers update the workflow afterwards.
+    const actionButton = event.target.closest(
+        "[data-add-workflow-step], [data-remove-workflow-step], [data-edit-workflow-step], "
+        + "[data-edit-step-instruction], [data-workflow-step-up], [data-workflow-step-down]"
+    );
+    if (!actionButton && event.target.closest("input, select, textarea, button, a")) return;
     if (event.target.closest("[data-add-workflow-step]") && workflowStepTemplate && workflowStepList) {
         const fragment = workflowStepTemplate.content.cloneNode(true);
         const card = fragment.querySelector("[data-workflow-step]");

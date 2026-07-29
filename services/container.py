@@ -23,6 +23,7 @@ from services.mail_dispatch_service import MailDispatchService
 from services.mail_settings_service import MailSettingsService
 from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
+from services.office_signed_agreement_service import OfficeSignedAgreementService
 from services.qualification_condition_service import QualificationConditionService
 from services.rules_service import RulesService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
@@ -43,6 +44,7 @@ class ServiceContainer:
     submission_service: SubmissionService
     workflow_service: WorkflowService
     beneficiary_agreement_service: BeneficiaryAgreementService
+    office_signed_agreement_service: OfficeSignedAgreementService
     document_service: DocumentService
     document_access_service: DocumentAccessService
     document_download_service: DocumentDownloadService
@@ -96,6 +98,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
     workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)
     beneficiary_agreement_service = BeneficiaryAgreementService()
+    office_signed_agreement_service = OfficeSignedAgreementService(storage)
     notification_service = NotificationService(
         submission_repository,
         audit_log_service=audit_log_service,
@@ -182,6 +185,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_service=submission_service,
         workflow_service=workflow_service,
         beneficiary_agreement_service=beneficiary_agreement_service,
+        office_signed_agreement_service=office_signed_agreement_service,
         document_service=document_service,
         document_access_service=document_access_service,
         document_download_service=document_download_service,

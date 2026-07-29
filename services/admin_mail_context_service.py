@@ -29,6 +29,33 @@ def build_mail_context(
                 document_url = ""
             context["document_url"] = document_url
             context["pobierz_url"] = document_url
+        signed_files = [
+            item for item in (files or [])
+            if isinstance(item, dict)
+            and item.get("signed")
+            and str(item.get("document_type") or "") in {"signed_agreement", "signed_training_agreement"}
+        ]
+        signed_rows = []
+        signed_text = []
+        for item in signed_files:
+            filename = str(item.get("filename") or "").strip()
+            if not filename:
+                continue
+            link = ""
+            if document_url_builder:
+                try:
+                    link = str(document_url_builder(submission, filename) or "")
+                except Exception:
+                    link = ""
+            signed_rows.append(f'<li><a href="{link}">{filename}</a></li>' if link else f"<li>{filename}</li>")
+            signed_text.append(f"- {filename}" + (f": {link}" if link else ""))
+        context["signed_agreements_list"] = "<ul>" + "".join(signed_rows) + "</ul>" if signed_rows else ""
+        context["signed_agreements_table"] = context["signed_agreements_list"]
+        context["signed_agreements_text"] = "\n".join(signed_text)
+        context.setdefault("signed_agreement_filename", str(getattr(submission, "agreement_signed_filename", "") or ""))
+        context.setdefault("agreement_number", str(getattr(submission, "agreement_number", "") or ""))
+        context.setdefault("signed_agreement_download_link", "")
+        context.setdefault("agreement_signed_by_office_at", "")
     context.update(context_extra)
     context.update(
         build_training_mail_context(

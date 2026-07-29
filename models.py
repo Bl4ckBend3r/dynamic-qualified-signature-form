@@ -163,6 +163,8 @@ class SubmissionFile(Base):
     form_slug: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     document_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     document_type: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    file_role: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    storage_provider: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)

@@ -56,6 +56,9 @@ class Config:
     NEXTCLOUD_APP_PASSWORD = os.getenv("NEXTCLOUD_APP_PASSWORD", "")
     NEXTCLOUD_FORMS_DIR = os.getenv("NEXTCLOUD_FORMS_DIR", "Formularze")
     NEXTCLOUD_OUTPUT_DIR = os.getenv("NEXTCLOUD_OUTPUT_DIR", "output")
+    NEXTCLOUD_AGREEMENTS_SIGNED_BY_OFFICE_DIR = os.getenv(
+        "NEXTCLOUD_AGREEMENTS_SIGNED_BY_OFFICE_DIR", ""
+    ).strip()
 
     FORMS_DIR = BASE_DIR / "examples" / "forms"
     OUTPUT_DIR = BASE_DIR / "output"

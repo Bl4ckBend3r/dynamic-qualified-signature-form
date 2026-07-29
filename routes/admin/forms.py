@@ -27,6 +27,7 @@ from services.site_document_service import save_document_upload, update_form_reg
 from services.upload_validation import UploadValidationError
 from services.workflow_config_service import (
     WorkflowConfigNormalizer,
+    repair_agreement_confirmation_path,
     workflow_status_options,
 )
 
@@ -500,6 +501,28 @@ def _workflow_editor_context(
         "workflow_advanced_elements": normalizer.advanced_elements(normalized),
         "instruction_config_view": instruction_view,
     }
+
+
+@bp.post("/forms/<int:form_id>/workflow/repair-agreement-confirmation")
+@login_required
+def form_repair_agreement_confirmation(form_id: int):
+    """Persist the focused repair exposed by the workflow editor."""
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = dict(form.definition_json or {})
+        workflow, changed = repair_agreement_confirmation_path(definition.get("workflow") or {})
+        if not changed:
+            flash("Ścieżka podpisu urzędu jest już poprawna albo potwierdzenie podpisu nie jest wymagane.", "info")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="workflow"))
+        definition["workflow"] = WorkflowConfigNormalizer().normalize(workflow)
+        form.definition_json = definition
+        form.user_instruction_config = reconcile_instruction_config(
+            form.user_instruction_config,
+            definition["workflow"],
+        )
+        db.commit()
+    flash("Naprawiono ścieżkę podpisu urzędu. Dodano lub uaktywniono wymagany etap.", "success")
+    return redirect(url_for("admin.form_edit", form_id=form_id, tab="workflow"))
 
 
 @bp.post("/forms/<int:form_id>/toggle")

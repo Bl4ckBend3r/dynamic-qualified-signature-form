@@ -153,7 +153,15 @@
             {% endif %}
 
             {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin"] %}
-                <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+                <section class="admin-alert admin-alert-info">
+                    <h4>Umowa podpisana przez urząd</h4>
+                    <p>System sprawdzi folder Nextcloud dla umów podpisanych przez urząd oraz plik o nazwie zgodnej z umową wgraną przez beneficjenta.</p>
+                    <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-button" type="submit">Sprawdź podpisaną umowę przez urząd</button>
+                    </form>
+                </section>
+                <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form" onsubmit="return confirm('Potwierdzasz podpisanie umowy przez urząd. Jeśli pozostawisz zaznaczoną opcję, uczestnik otrzyma e-mail.');">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <label><span>Umowa podpisana przez urząd</span>
                         <select name="agreement_decision" required>
@@ -171,7 +179,7 @@
                         <input type="checkbox" name="send_notification" checked>
                         <span>Wyślij powiadomienie do użytkownika</span>
                     </label>
-                    <button class="admin-button" type="submit">Zapisz decyzję dotyczącą umowy</button>
+                    <button class="admin-button" type="submit">Potwierdź podpisanie umowy przez urząd</button>
                 </form>
             {% endif %}
         </section>

@@ -148,24 +148,102 @@ OFFICE_CONFIRMATION_STATUSES = frozenset(
 
 
 def repair_agreement_confirmation_path(workflow: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
-    """Repair only the known legacy shortcut which bypasses office confirmation."""
+    """Ensure an enabled agreement workflow includes the office-signature branch.
+
+    Imported forms used a few different identifiers for the beneficiary signature
+    step.  The repair deliberately works from statuses as well as identifiers so
+    it is safe for both the visual editor and older JSON definitions.
+    """
     source = dict(workflow or {})
     steps = [dict(step) for step in source.get("steps") or [] if isinstance(step, Mapping)]
     by_id = {str(step.get("id") or "").strip(): step for step in steps}
-    signature = by_id.get("training_agreements_signature")
-    required_ids = {"training_agreements_signature", "stage_10", "stage_11", "completed"}
     changed = False
     confirmation_required = bool(source.get("requires_contract")) and bool(
-        source.get("requires_agreement_confirmation")
+        source.get(
+            "requires_agreement_confirmation",
+            source.get("requires_office_agreement_signature_confirmation", False),
+        )
     )
-    if signature and required_ids.issubset(by_id):
-        if confirmation_required and str(signature.get("next") or "").strip() == "completed":
-            signature["next"] = "stage_10"
+    if not confirmation_required:
+        # Preserve the legacy editor behaviour when the optional branch is
+        # disabled: the beneficiary signature goes directly to completion.
+        for step in steps:
+            if step.get("id") in {"agreement_signature", "training_agreements_signature"} and str(step.get("next") or "") in OFFICE_CONFIRMATION_STEP_IDS:
+                step["next"] = "completed"
+                changed = True
+        source["steps"] = steps
+        return source, changed
+
+    signature_steps = [
+        step for step in steps
+        if step.get("id") in {"agreement_signature", "training_agreements_signature"}
+        or str(step.get("status") or step.get("status_code") or "")
+        == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    ]
+    # A missing agreement branch is a configuration error, not something this
+    # focused repair should mask by adding only its final office stage.
+    if not signature_steps:
+        source["steps"] = steps
+        return source, changed
+    # The old training workflow has two office steps: review then explicit
+    # signature confirmation.  Keep that meaningful distinction intact.
+    if {"stage_10", "stage_11", "completed"}.issubset(by_id):
+        for signature in signature_steps:
+            if str(signature.get("next") or "").strip() == "completed":
+                signature["next"] = "stage_10"
+                changed = True
+        if str(by_id["stage_10"].get("next") or "").strip() != "stage_11":
             by_id["stage_10"]["next"] = "stage_11"
+            changed = True
+        if str(by_id["stage_11"].get("next") or "").strip() != "completed":
             by_id["stage_11"]["next"] = "completed"
             changed = True
-        elif not confirmation_required and str(signature.get("next") or "").strip() in {"stage_10", "stage_11"}:
-            signature["next"] = "completed"
+        source["steps"] = steps
+        return source, changed
+    office_step = next(
+        (
+            step for step in steps
+            if step.get("id") in OFFICE_CONFIRMATION_STEP_IDS
+            or str(step.get("status") or step.get("status_code") or "")
+            == "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE"
+        ),
+        None,
+    )
+    if office_step is None:
+        office_id = "office_agreement_signature"
+        suffix = 2
+        while office_id in by_id:
+            office_id = f"office_agreement_signature_{suffix}"
+            suffix += 1
+        office_step = {
+            "id": office_id,
+            "type": "manual_decision",
+            "label": "Umowa oczekuje na podpis po stronie urzędu",
+            "admin_label": "Umowa oczekuje na podpis po stronie urzędu",
+            "user_label": "Umowa oczekuje na podpis po stronie urzędu",
+            "status": "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+            "description": "Umowa została podpisana przez beneficjenta i oczekuje na podpis oraz potwierdzenie po stronie urzędu.",
+            "next_action": "Oczekuj na podpis i potwierdzenie po stronie urzędu.",
+            "requires_officer_action": True,
+            "decisions": {"accepted": "completed"},
+            "next": "completed",
+        }
+        completed_index = next((index for index, step in enumerate(steps) if step.get("id") == "completed"), len(steps))
+        steps.insert(completed_index, office_step)
+        by_id[office_id] = office_step
+        changed = True
+    office_id = str(office_step["id"])
+    if str(office_step.get("next") or "").strip() in {"", "completed"} and str(office_step.get("next") or "").strip() != "completed":
+        office_step["next"] = "completed"
+        changed = True
+    decisions = dict(office_step.get("decisions") or {})
+    if decisions.get("accepted") != "completed":
+        decisions["accepted"] = "completed"
+        office_step["decisions"] = decisions
+        changed = True
+    for signature in signature_steps:
+        if str(signature.get("next") or "").strip() in {"", "completed"}:
+            signature["next"] = office_id
             changed = True
     source["steps"] = steps
     return source, changed
@@ -249,7 +327,10 @@ class WorkflowConfigNormalizer:
         source["requires_declaration"] = bool(source.get("requires_declaration", False))
         source["requires_contract"] = bool(source.get("requires_contract", False))
         source["requires_agreement_confirmation"] = source["requires_contract"] and bool(
-            source.get("requires_agreement_confirmation", source["requires_contract"])
+            source.get(
+                "requires_agreement_confirmation",
+                source.get("requires_office_agreement_signature_confirmation", source["requires_contract"]),
+            )
         )
         source["send_email_notifications"] = bool(source.get("send_email_notifications", False))
         source["allow_correction"] = bool(source.get("allow_correction", True))

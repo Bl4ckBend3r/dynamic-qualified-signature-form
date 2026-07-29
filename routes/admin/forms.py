@@ -7,7 +7,15 @@ from flask import abort, current_app, flash, g, redirect, render_template, reque
 from sqlalchemy import func, select
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
-from models import Form, FormField, FormPermission, FormRegulation, FormSubmission, User
+from models import (
+    Form,
+    FormField,
+    FormPermission,
+    FormRegulation,
+    FormSubmission,
+    SubmissionTraining,
+    User,
+)
 from services.admin_form_service import (
     build_form_definition_from_admin_form,
     get_declaration_training_field,
@@ -24,6 +32,8 @@ from services.process_instruction_service import (
     reconcile_instruction_config,
 )
 from services.site_document_service import save_document_upload, update_form_regulation_from_upload
+from services.training_catalog_service import TrainingCatalogService
+from services.training_service import parse_training_snapshots
 from services.upload_validation import UploadValidationError
 from services.workflow_config_service import (
     WorkflowConfigNormalizer,
@@ -202,6 +212,7 @@ def form_edit(form_id: int):
         requested_tab = request.form.get("active_tab") if request.method == "POST" else request.args.get("tab")
         active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
         if request.method == "POST":
+            training_catalog_actions: list[dict] = []
             try:
                 instruction_config = _instruction_config_from_admin_form(
                     request.form,
@@ -213,6 +224,38 @@ def form_edit(form_id: int):
                     form.definition_json or {},
                     request.form,
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
+                )
+                used_training_ids = _used_training_ids_for_form(db, form.slug)
+                removed_ids = request.form.getlist("training_removed_id")
+                removed_reasons = request.form.getlist(
+                    "training_removed_reason"
+                )
+                reason_by_id = {
+                    str(training_id): str(reason).strip()
+                    for training_id, reason in zip(
+                        request.form.getlist("training_item_id"),
+                        request.form.getlist("training_item_change_reason"),
+                    )
+                    if str(training_id).strip() and str(reason).strip()
+                }
+                reason_by_id.update({
+                    str(training_id): str(
+                        removed_reasons[index]
+                        if index < len(removed_reasons)
+                        else ""
+                    ).strip()
+                    for index, training_id in enumerate(removed_ids)
+                    if str(training_id).strip()
+                })
+                (
+                    updated_definition,
+                    training_catalog_actions,
+                ) = TrainingCatalogService().reconcile_definition(
+                    form.definition_json or {},
+                    updated_definition,
+                    used_training_ids=used_training_ids,
+                    removal_reasons=reason_by_id,
+                    actor_id=g.admin_user.id,
                 )
                 updated_definition.pop("user_instruction", None)
                 updated_definition.pop("user_instruction_config", None)
@@ -356,6 +399,10 @@ def form_edit(form_id: int):
                     if user.id not in selected_user_ids and user.id in existing:
                         db.delete(existing[user.id])
             db.commit()
+            _audit_training_catalog_actions(
+                form.slug,
+                training_catalog_actions,
+            )
             flash("Formularz został zapisany.", "success")
             return redirect(url_for("admin.form_edit", form_id=form.id, tab=active_tab))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
@@ -378,6 +425,87 @@ def form_edit(form_id: int):
                 instruction_config=form.user_instruction_config,
             ),
         )
+
+
+def _audit_training_catalog_actions(
+    form_slug: str,
+    actions: list[dict],
+) -> None:
+    audit_service = current_app.extensions["services"].audit_log_service
+    for action in actions:
+        try:
+            audit_service.log_event(
+                f"TRAINING_{str(action.get('action') or '').upper()}",
+                f"form:{form_slug}",
+                form_slug,
+                old_value=action.get("old_value"),
+                new_value=action.get("new_value"),
+                actor=str(getattr(g.admin_user, "email", "") or "admin"),
+                metadata={
+                    "training_id": action.get("training_id"),
+                    "training_name": action.get("training_name"),
+                    "reason": action.get("reason"),
+                    "was_used": bool(action.get("was_used")),
+                    "actor_id": action.get("actor_id"),
+                    "action_created_at": action.get("created_at"),
+                },
+            )
+        except Exception:
+            current_app.logger.exception(
+                "training_catalog_audit_failed form_slug=%s training_id=%s",
+                form_slug,
+                action.get("training_id"),
+            )
+
+
+def _used_training_ids_for_form(db, form_slug: str) -> set[str]:
+    """Include normalized rows and legacy selection/agreement JSON."""
+    used = {
+        str(training_id).strip()
+        for training_id in db.execute(
+            select(SubmissionTraining.training_id)
+            .join(
+                FormSubmission,
+                FormSubmission.id == SubmissionTraining.submission_id,
+            )
+            .where(FormSubmission.form_slug == form_slug)
+            .distinct()
+        ).scalars()
+        if str(training_id).strip()
+    }
+    legacy_rows = db.execute(
+        select(
+            FormSubmission.selected_trainings,
+            FormSubmission.training_agreements,
+        ).where(FormSubmission.form_slug == form_slug)
+    ).all()
+    for selected_trainings, raw_agreements in legacy_rows:
+        used.update(
+            str(training.get("id") or "").strip()
+            for training in parse_training_snapshots(selected_trainings)
+            if str(training.get("id") or "").strip()
+        )
+        try:
+            agreements = json.loads(str(raw_agreements or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            agreements = []
+        for agreement in agreements if isinstance(agreements, list) else []:
+            if not isinstance(agreement, dict):
+                continue
+            nested_training = (
+                agreement.get("training")
+                if isinstance(agreement.get("training"), dict)
+                else {}
+            )
+            training_id = str(
+                agreement.get("training_id")
+                or nested_training.get("id")
+                or agreement.get("id")
+                or ""
+            ).strip()
+            if training_id:
+                used.add(training_id)
+    return used
 
 
 def _normalize_form_editor_tab(value: str | None, role: str) -> str:

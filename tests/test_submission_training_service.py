@@ -192,3 +192,116 @@ def test_locked_inactive_training_remains_visible_as_history(db):
     assert historical["is_selected"] is True
     assert historical["is_locked"] is True
     assert historical["participant_status_label"] == "Podpisana umowa wgrana"
+
+
+def test_selection_snapshot_is_not_changed_by_later_catalog_edits(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    original_field = {
+        "name": "selected_trainings",
+        "currency": "PLN",
+        "max_total_amount": "5000",
+        "catalog": [
+            {
+                "id": "stable-id",
+                "name": "Excel — edycja wiosenna",
+                "description": "Opis zapisany w chwili wyboru.",
+                "price": "1200.00",
+                "currency": "PLN",
+                "active": True,
+                "version": 2,
+                "dates": [
+                    {
+                        "start_date": "2026-09-10",
+                        "start_time": "09:00",
+                        "end_time": "15:00",
+                        "location": "Poznań",
+                    }
+                ],
+            }
+        ],
+    }
+
+    service.save(db, submission, original_field, ["stable-id"])
+    row = db.query(SubmissionTraining).one()
+
+    assert row.training_snapshot["name"] == "Excel — edycja wiosenna"
+    assert row.training_snapshot["price"] == "1200.00"
+    assert row.training_snapshot["version"] == 2
+    assert row.training_snapshot["location"] == "Poznań"
+    assert row.training_snapshot["dates"][0]["start_date"] == "2026-09-10"
+
+    changed_field = {
+        **original_field,
+        "catalog": [
+            {
+                **original_field["catalog"][0],
+                "name": "Excel — nowa edycja",
+                "description": "Nowy opis katalogowy.",
+                "price": "1800.00",
+                "version": 3,
+                "dates": [
+                    {
+                        "start_date": "2027-01-15",
+                        "location": "Warszawa",
+                    }
+                ],
+            }
+        ],
+    }
+    summary = service.summary(db, submission, changed_field)
+    stored_selection = json.loads(submission.selected_trainings)[0]
+
+    assert summary["items"][0]["name"] == "Excel — edycja wiosenna"
+    assert summary["items"][0]["price"] == "1200.00"
+    assert summary["items"][0]["description"] == "Opis zapisany w chwili wyboru."
+    assert summary["items"][0]["version"] == 2
+    assert summary["items"][0]["location"] == "Poznań"
+    assert stored_selection["name"] == "Excel — edycja wiosenna"
+    assert stored_selection["price"] == "1200.00"
+
+
+def test_archived_locked_training_remains_in_limit_without_catalog_record(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    row = db.query(SubmissionTraining).one()
+    row.is_locked = True
+    row.status = "agreement_signed_by_office"
+
+    field_without_archived_training = {
+        **FIELD,
+        "catalog": [
+            training
+            for training in FIELD["catalog"]
+            if training["id"] != "python"
+        ],
+    }
+    summary = service.summary(db, submission, field_without_archived_training)
+
+    assert summary["limit_used"] == 3000
+    assert summary["limit_locked"] == 3000
+    assert summary["items"][0]["id"] == "python"
+    assert summary["items"][0]["name"] == "Python"
+
+
+def test_previously_selected_archived_training_is_preserved_on_save(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    archived_field = {
+        **FIELD,
+        "catalog": [
+            training
+            for training in FIELD["catalog"]
+            if training["id"] != "python"
+        ],
+    }
+
+    summary = service.save(db, submission, archived_field, ["python"])
+    row = db.query(SubmissionTraining).one()
+
+    assert row.status == "selected"
+    assert summary["limit_used"] == 3000
+    assert summary["items"][0]["id"] == "python"
+    assert json.loads(submission.selected_trainings)[0]["id"] == "python"

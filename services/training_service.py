@@ -46,6 +46,8 @@ def normalize_training_id(value: Any) -> str:
 
 
 def is_training_active(item: Mapping[str, Any]) -> bool:
+    if item.get("archived"):
+        return False
     value = item.get("active", True)
     if isinstance(value, bool):
         return value
@@ -76,6 +78,13 @@ def normalize_training_catalog(field: Mapping[str, Any] | None, *, active_only: 
                 "description": str(item.get("description") or "").strip(),
                 "location": str(item.get("location") or "").strip(),
                 "active": is_training_active(item),
+                "archived": bool(item.get("archived", False)),
+                "archived_at": str(item.get("archived_at") or "").strip(),
+                "archived_by_id": item.get("archived_by_id"),
+                "archive_reason": str(item.get("archive_reason") or "").strip(),
+                "was_used": bool(item.get("was_used", False)),
+                "version": parse_training_version(item.get("version")),
+                "created_at": str(item.get("created_at") or "").strip(),
                 "sort_order": int(item.get("sort_order") or index + 1),
                 "capacity": capacity,
                 "dates": normalize_training_dates(
@@ -200,7 +209,24 @@ def normalize_training_snapshot(item: Mapping[str, Any]) -> dict:
         "currency": currency,
         "description": str(item.get("description") or "").strip(),
         "dates": normalize_training_dates(item.get("dates")),
+        "location": str(item.get("location") or "").strip(),
+        "locations": [
+            location
+            for location in dict.fromkeys(
+                str(date.get("location") or "").strip()
+                for date in normalize_training_dates(item.get("dates"))
+            )
+            if location
+        ],
+        "version": parse_training_version(item.get("version")),
     }
+
+
+def parse_training_version(value: Any) -> int:
+    try:
+        return max(int(value or 1), 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def parse_capacity(value: Any) -> int | None:

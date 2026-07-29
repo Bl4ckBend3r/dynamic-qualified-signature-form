@@ -15,11 +15,17 @@ from sqlalchemy import (
     inspect,
     select,
 )
+from sqlalchemy.orm import Session
+
+from models import SubmissionTraining
 
 
 SMTP_MIGRATION = "migrations.versions.20260727_0023_smtp_test_diagnostics"
 SCHEMA_MIGRATION = (
     "migrations.versions.20260727_0024_ensure_extended_application_schema"
+)
+TRAINING_SNAPSHOT_MIGRATION = (
+    "migrations.versions.20260729_0027_training_snapshot_details"
 )
 
 
@@ -170,6 +176,86 @@ def test_extended_schema_repair_is_idempotent_and_preserves_existing_data(monkey
 
 def test_extended_schema_json_type_uses_jsonb_only_for_postgresql(monkeypatch):
     migration = importlib.import_module(SCHEMA_MIGRATION)
+
+    class FakeBind:
+        class Dialect:
+            name = "postgresql"
+
+        dialect = Dialect()
+
+    monkeypatch.setattr(migration.op, "get_bind", lambda: FakeBind())
+    assert migration._json_type().__class__.__name__ == "JSONB"
+
+    FakeBind.Dialect.name = "mysql"
+    assert migration._json_type().__class__.__name__ == "JSON"
+
+
+def test_training_snapshot_migration_is_idempotent_and_preserves_rows(monkeypatch):
+    migration = importlib.import_module(TRAINING_SNAPSHOT_MIGRATION)
+    engine = create_engine("sqlite:///:memory:")
+    metadata = MetaData()
+    trainings = Table(
+        "submission_trainings",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("submission_id", Integer, nullable=True),
+        Column("training_id", String(255), nullable=False),
+        Column("training_name_snapshot", String(512), nullable=True),
+        Column("training_price_snapshot", String(64), nullable=True),
+        Column("status", String(64), nullable=True),
+        Column("is_locked", Boolean, nullable=True),
+        Column("locked_at", String(64), nullable=True),
+        Column("locked_by_event", String(128), nullable=True),
+        Column("agreement_id", String(255), nullable=True),
+        Column("agreement_file_id", Integer, nullable=True),
+        Column("selected_at", String(64), nullable=True),
+        Column("unselected_at", String(64), nullable=True),
+        Column("created_at", String(64), nullable=True),
+        Column("updated_at", String(64), nullable=True),
+    )
+    metadata.create_all(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            trainings.insert().values(id=1, training_id="stable-id")
+        )
+        monkeypatch.setattr(migration, "op", _operations(connection))
+        migration.upgrade()
+        migration.upgrade()
+
+        reflected = Table(
+            "submission_trainings",
+            MetaData(),
+            autoload_with=connection,
+        )
+        columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(
+                "submission_trainings"
+            )
+        }
+        row = connection.execute(select(reflected)).mappings().one()
+        with Session(bind=connection) as session:
+            model_row = session.query(SubmissionTraining).one()
+            assert model_row.training_id == "stable-id"
+            assert model_row.training_snapshot is None
+        migration.downgrade()
+        migration.downgrade()
+        columns_after_downgrade = {
+            column["name"]
+            for column in inspect(connection).get_columns(
+                "submission_trainings"
+            )
+        }
+
+    assert "training_snapshot" in columns
+    assert row["training_id"] == "stable-id"
+    assert row["training_snapshot"] is None
+    assert "training_snapshot" not in columns_after_downgrade
+
+
+def test_training_snapshot_json_type_uses_jsonb_only_for_postgresql(monkeypatch):
+    migration = importlib.import_module(TRAINING_SNAPSHOT_MIGRATION)
 
     class FakeBind:
         class Dialect:

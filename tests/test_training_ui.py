@@ -72,5 +72,11 @@ def test_admin_training_ui_uses_sections_and_readable_date_fields():
     assert "Te szkolenia są źródłem danych dla publicznego etapu wyboru szkoleń" in template
     assert "Dotyczy osobnego etapu wyboru szkoleń" in template
     assert 'name="training_item_admin_comment"' in template
+    assert "data-training-removals" in template
+    assert "training_removed_reason" in template
+    assert 'name="training_item_change_reason"' in template
+    assert "Powód dezaktywacji" in template
+    assert "Powód usunięcia lub archiwizacji jest wymagany" in template
+    assert "Archiwalne" in template
     assert ".admin-training-fields" in stylesheet
     assert ".admin-training-table" not in stylesheet

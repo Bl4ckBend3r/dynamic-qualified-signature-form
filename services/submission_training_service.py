@@ -103,10 +103,19 @@ class SubmissionTrainingService:
                 continue
             price = parse_decimal_price(row.training_price_snapshot) or Decimal("0.00")
             used += price
-            source = catalog.get(row.training_id, {})
+            source = {
+                **catalog.get(row.training_id, {}),
+                **dict(row.training_snapshot or {}),
+            }
+            currency = str(
+                source.get("currency")
+                or field.get("currency")
+                or "PLN"
+            )
             items.append({
                 **source, "id": row.training_id, "name": row.training_name_snapshot or source.get("name"),
-                "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, field.get("currency")),
+                "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, currency),
+                "currency": currency,
                 "status": row.status, "status_label": self.status_label(row.status, row.is_locked),
                 "is_locked": row.is_locked,
             })
@@ -219,23 +228,39 @@ class SubmissionTrainingService:
             )
         }
         selected = {str(item).strip() for item in selected_ids if str(item).strip()}
-        if selected - set(catalog):
-            raise TrainingSelectionError("Wybrano szkolenie, które nie jest już dostępne.")
         rows = {row.training_id: row for row in db.query(SubmissionTraining).filter(SubmissionTraining.submission_id == submission.id).all()}
         locked = {key for key, row in rows.items() if row.is_locked}
-        selected |= locked
+        historical = {
+            key
+            for key, row in rows.items()
+            if key not in catalog
+            and (row.status in ACTIVE_STATUSES or row.is_locked)
+        }
+        if selected - set(catalog) - historical:
+            raise TrainingSelectionError(
+                "Wybrano szkolenie, które nie jest już dostępne."
+            )
+        protected = locked | historical
+        selected |= protected
         if field.get("required") and not selected:
             raise TrainingSelectionError("Wybierz co najmniej jedno szkolenie.")
         availability = availability or {}
         unavailable = [
             catalog[key]["name"]
-            for key in selected - locked
+            for key in selected - protected
             if availability.get(key, {}).get("available_seats") == 0
         ]
         if unavailable:
             raise TrainingSelectionError(f"Brak wolnych miejsc dla szkolenia: {unavailable[0]}.")
         total = sum(
-            (parse_decimal_price(rows[key].training_price_snapshot if key in locked else catalog[key].get("price")) or Decimal("0.00"))
+            (
+                parse_decimal_price(
+                    rows[key].training_price_snapshot
+                    if key in protected
+                    else catalog[key].get("price")
+                )
+                or Decimal("0.00")
+            )
             for key in selected
         )
         maximum = TrainingCatalogService.financial_limit(field)
@@ -255,10 +280,14 @@ class SubmissionTrainingService:
             elif row is not None and not row.is_locked:
                 row.status, row.unselected_at, row.updated_at = "cancelled", now, now
         db.flush()
-        submission.selected_trainings = json.dumps([
-            {"id": row.training_id, "name": row.training_name_snapshot, "price": row.training_price_snapshot, "currency": field.get("currency", "PLN")}
-            for row in rows.values() if row.status in ACTIVE_STATUSES or row.is_locked
-        ], ensure_ascii=False)
+        submission.selected_trainings = json.dumps(
+            [
+                self._row_snapshot(row, field)
+                for row in rows.values()
+                if row.status in ACTIVE_STATUSES or row.is_locked
+            ],
+            ensure_ascii=False,
+        )
         has_selection = any(
             row.status in ACTIVE_STATUSES or row.is_locked for row in rows.values()
         )
@@ -324,6 +353,10 @@ class SubmissionTrainingService:
         if row is None:
             row = self._new_row(submission.id, training)
             db.add(row)
+        elif not row.training_snapshot:
+            row.training_snapshot = TrainingCatalogService.build_snapshot(
+                training
+            )
         now = datetime.now(timezone.utc)
         row.status, row.is_locked, row.locked_at = "agreement_uploaded_by_beneficiary", True, now
         row.locked_by_event, row.agreement_id, row.updated_at = "agreement_uploaded_by_beneficiary", str(agreement_id), now
@@ -334,10 +367,36 @@ class SubmissionTrainingService:
     @staticmethod
     def _new_row(submission_id: int, training: Mapping[str, Any]) -> SubmissionTraining:
         now = datetime.now(timezone.utc)
+        snapshot = TrainingCatalogService.build_snapshot(training)
         return SubmissionTraining(
             submission_id=submission_id,
-            training_id=str(training.get("id") or training.get("training_id") or training.get("name") or ""),
-            training_name_snapshot=str(training.get("name") or training.get("training_name") or training.get("id") or ""),
-            training_price_snapshot=str(training.get("price") or training.get("training_price") or "0.00"),
+            training_id=str(snapshot.get("id") or training.get("training_id") or ""),
+            training_name_snapshot=str(snapshot.get("name") or training.get("training_name") or ""),
+            training_price_snapshot=str(snapshot.get("price") or training.get("training_price") or "0.00"),
+            training_snapshot=snapshot,
             status="selected", selected_at=now, created_at=now, updated_at=now,
         )
+
+    @staticmethod
+    def _row_snapshot(
+        row: SubmissionTraining,
+        field: Mapping[str, Any],
+    ) -> dict:
+        snapshot = dict(row.training_snapshot or {})
+        return {
+            **snapshot,
+            "id": row.training_id,
+            "name": row.training_name_snapshot
+            or snapshot.get("name")
+            or row.training_id,
+            "price": row.training_price_snapshot,
+            "currency": str(
+                snapshot.get("currency")
+                or field.get("currency")
+                or "PLN"
+            ),
+            "dates": list(snapshot.get("dates") or []),
+            "location": str(snapshot.get("location") or ""),
+            "locations": list(snapshot.get("locations") or []),
+            "version": TrainingCatalogService._version(snapshot),
+        }

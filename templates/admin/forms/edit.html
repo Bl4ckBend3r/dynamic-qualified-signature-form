@@ -640,31 +640,44 @@
             <button class="admin-button-secondary compact" type="button" data-expand-all-trainings>Rozwiń wszystkie</button>
             <button class="admin-button-secondary compact" type="button" data-collapse-all-trainings>Zwiń wszystkie</button>
         </div>
+        <div data-training-removals></div>
         <div class="admin-training-list" data-training-list data-training-storage-key="form-{{ form.id }}-training-cards" data-training-server-errors="{{ validation_errors|join(' ') }}">
             {% for item in training_catalog %}
                 {% set training_index = loop.index0 %}
-                <details class="admin-training-item admin-training-card" data-training-card data-training-key="{{ item.get('id') or 'training-' ~ loop.index }}" {% if training_catalog|length <= 1 %}open{% endif %}>
+                {% set is_archived = item.get('archived', false) %}
+                <details class="admin-training-item admin-training-card{% if is_archived %} is-archived{% endif %}" data-training-card data-training-key="{{ item.get('id') or 'training-' ~ loop.index }}" {% if is_archived %}data-training-archived="true"{% endif %} {% if training_catalog|length <= 1 %}open{% endif %}>
                     <input type="hidden" name="training_item_id" value="{{ item.get('id', '') }}">
                     <summary class="admin-training-summary">
                         <span class="admin-training-summary__title"><span class="admin-training-number">Szkolenie <span data-training-number>{{ loop.index }}</span></span><strong data-training-summary-name>{{ item.get('name') or 'Bez nazwy' }}</strong></span>
                         <span class="admin-training-summary__facts"><span data-training-summary-price>{{ item.get('price', '—') }} PLN</span><span><span data-training-summary-capacity>{{ item.get('capacity', 0) }}</span> miejsc</span><span><span data-training-summary-dates>{{ item.get('dates', [])|length }}</span> terminów</span></span>
                         <span class="admin-training-summary__badges" data-training-summary-badges>
+                            {% if is_archived %}<span class="training-badge is-inactive">Archiwalne</span>{% endif %}
                             <span class="training-badge {{ 'is-active' if item.get('active', true) else 'is-inactive' }}">{{ 'Aktywne' if item.get('active', true) else 'Nieaktywne' }}</span>
                             {% if (item.get('capacity') or 0)|int == 0 %}<span class="training-badge is-warning">Brak miejsc</span>{% elif (item.get('capacity') or 0)|int <= 5 %}<span class="training-badge is-warning">Mało miejsc</span>{% endif %}
                             {% if not item.get('dates') %}<span class="training-badge is-warning">Brak terminów</span>{% endif %}
                         </span>
                     </summary>
                     <div class="admin-training-card__body">
-                    <div class="admin-training-item-heading"><h3>Szczegóły szkolenia</h3><button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button></div>
+                    <div class="admin-training-item-heading">
+                        <div>
+                            <h3>Szczegóły szkolenia</h3>
+                            <small>ID: {{ item.get('id') }} · wersja {{ item.get('version', 1) }}</small>
+                        </div>
+                        {% if not is_archived %}<button class="admin-link-button admin-link-danger" type="button" data-remove-training>Usuń szkolenie</button>{% endif %}
+                    </div>
+                    {% if is_archived %}
+                        <p class="admin-notice">Szkolenie archiwalne pozostaje tylko do odczytu, ponieważ było użyte w zgłoszeniach. Powód: {{ item.get('archive_reason') or 'Brak podanego powodu.' }}</p>
+                    {% endif %}
                     <div class="admin-training-fields">
-                        <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ item.get('sort_order', loop.index) }}" min="0"></label>
-                        <label class="admin-training-name"><span>Nazwa szkolenia</span><input name="training_item_name" value="{{ item.get('name', '') }}" required></label>
-                        <label><span>Cena (PLN)</span><input type="number" step="0.01" min="0" name="training_item_price" value="{{ item.get('price', '') if item.get('price') is not none else '' }}"></label>
-                        <label><span>Liczba miejsc</span><input type="number" step="1" min="0" name="training_item_capacity" value="{{ item.get('capacity', '') if item.get('capacity') is not none else '' }}" required></label>
-                        <label class="admin-check admin-training-active"><input type="checkbox" name="training_item_active" value="{{ loop.index0 }}" {% if item.get('active', true) %}checked{% endif %}><span>Aktywne</span></label>
-                        <label class="admin-training-wide"><span>Opis</span><textarea class="admin-textarea-small" name="training_item_description" rows="2">{{ item.get('description', '') }}</textarea></label>
-                        <label class="admin-training-wide"><span>Komentarz administratora</span><textarea class="admin-textarea-small" name="training_item_admin_comment" rows="2" placeholder="Widoczny uczestnikowi na karcie szkolenia">{{ item.get('admin_comment', '') }}</textarea></label>
-                        <label class="admin-training-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea class="admin-textarea-small" name="training_item_low_seats_comment" rows="2" placeholder="Widoczny przy 1–5 wolnych miejscach">{{ item.get('low_seats_comment', '') }}</textarea></label>
+                        <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ item.get('sort_order', loop.index) }}" min="0" {% if is_archived %}readonly{% endif %}></label>
+                        <label class="admin-training-name"><span>Nazwa szkolenia</span><input name="training_item_name" value="{{ item.get('name', '') }}" required {% if is_archived %}readonly{% endif %}></label>
+                        <label><span>Cena (PLN)</span><input type="number" step="0.01" min="0" name="training_item_price" value="{{ item.get('price', '') if item.get('price') is not none else '' }}" {% if is_archived %}readonly{% endif %}></label>
+                        <label><span>Liczba miejsc</span><input type="number" step="1" min="0" name="training_item_capacity" value="{{ item.get('capacity', '') if item.get('capacity') is not none else '' }}" required {% if is_archived %}readonly{% endif %}></label>
+                        <label class="admin-check admin-training-active"><input type="checkbox" name="training_item_active" value="{{ loop.index0 }}" {% if item.get('active', true) %}checked{% endif %} {% if is_archived %}disabled{% endif %}><span>Aktywne</span></label>
+                        <label class="admin-training-wide"><span>Opis</span><textarea class="admin-textarea-small" name="training_item_description" rows="2" {% if is_archived %}readonly{% endif %}>{{ item.get('description', '') }}</textarea></label>
+                        <label class="admin-training-wide"><span>Komentarz administratora</span><textarea class="admin-textarea-small" name="training_item_admin_comment" rows="2" placeholder="Widoczny uczestnikowi na karcie szkolenia" {% if is_archived %}readonly{% endif %}>{{ item.get('admin_comment', '') }}</textarea></label>
+                        <label class="admin-training-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea class="admin-textarea-small" name="training_item_low_seats_comment" rows="2" placeholder="Widoczny przy 1–5 wolnych miejscach" {% if is_archived %}readonly{% endif %}>{{ item.get('low_seats_comment', '') }}</textarea></label>
+                        <label class="admin-training-wide"><span>Powód dezaktywacji</span><input name="training_item_change_reason" value="" placeholder="Uzupełnij przed wyłączeniem aktywnego szkolenia" {% if is_archived %}readonly{% endif %}></label>
                     </div>
                     <div class="admin-training-dates-section">
                         <h4>Terminy</h4>
@@ -672,17 +685,17 @@
                             {% for date in item.get('dates', []) %}
                                 <div class="admin-training-date" data-training-date>
                                     <input type="hidden" name="training_date_training_index" value="{{ training_index }}">
-                                    <label><span>Data rozpoczęcia</span><input type="date" name="training_date_start_date" value="{{ date.get('start_date', '') }}" required></label>
-                                    <label><span>Data zakończenia</span><input type="date" name="training_date_end_date" value="{{ date.get('end_date', '') }}"></label>
-                                    <label><span>Godzina rozpoczęcia</span><input type="time" name="training_date_start_time" value="{{ date.get('start_time', '') }}"></label>
-                                    <label><span>Godzina zakończenia</span><input type="time" name="training_date_end_time" value="{{ date.get('end_time', '') }}"></label>
-                                    <label class="admin-training-date-wide"><span>Lokalizacja</span><input type="text" name="training_date_location" value="{{ date.get('location', '') }}"></label>
-                                    <label class="admin-training-date-wide"><span>Opis</span><input type="text" name="training_date_description" value="{{ date.get('description', '') }}"></label>
-                                    <button class="admin-link-button admin-link-danger admin-training-date-remove" type="button" data-remove-training-date>Usuń termin</button>
+                                    <label><span>Data rozpoczęcia</span><input type="date" name="training_date_start_date" value="{{ date.get('start_date', '') }}" required {% if is_archived %}readonly{% endif %}></label>
+                                    <label><span>Data zakończenia</span><input type="date" name="training_date_end_date" value="{{ date.get('end_date', '') }}" {% if is_archived %}readonly{% endif %}></label>
+                                    <label><span>Godzina rozpoczęcia</span><input type="time" name="training_date_start_time" value="{{ date.get('start_time', '') }}" {% if is_archived %}readonly{% endif %}></label>
+                                    <label><span>Godzina zakończenia</span><input type="time" name="training_date_end_time" value="{{ date.get('end_time', '') }}" {% if is_archived %}readonly{% endif %}></label>
+                                    <label class="admin-training-date-wide"><span>Lokalizacja</span><input type="text" name="training_date_location" value="{{ date.get('location', '') }}" {% if is_archived %}readonly{% endif %}></label>
+                                    <label class="admin-training-date-wide"><span>Opis</span><input type="text" name="training_date_description" value="{{ date.get('description', '') }}" {% if is_archived %}readonly{% endif %}></label>
+                                    {% if not is_archived %}<button class="admin-link-button admin-link-danger admin-training-date-remove" type="button" data-remove-training-date>Usuń termin</button>{% endif %}
                                 </div>
                             {% endfor %}
                         </div>
-                        <button class="admin-button-secondary" type="button" data-add-training-date>Dodaj termin</button>
+                        {% if not is_archived %}<button class="admin-button-secondary" type="button" data-add-training-date>Dodaj termin</button>{% endif %}
                     </div>
                     </div>
                 </details>
@@ -708,6 +721,7 @@
                 <label class="admin-training-wide"><span>Opis</span><textarea class="admin-textarea-small" name="training_item_description" rows="2"></textarea></label>
                 <label class="admin-training-wide"><span>Komentarz administratora</span><textarea class="admin-textarea-small" name="training_item_admin_comment" rows="2" placeholder="Widoczny uczestnikowi na karcie szkolenia"></textarea></label>
                 <label class="admin-training-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea class="admin-textarea-small" name="training_item_low_seats_comment" rows="2" placeholder="Widoczny przy 1–5 wolnych miejscach"></textarea></label>
+                <label class="admin-training-wide"><span>Powód dezaktywacji</span><input name="training_item_change_reason" value="" placeholder="Uzupełnij przed wyłączeniem aktywnego szkolenia"></label>
             </div>
             <div class="admin-training-dates-section">
                 <h4>Terminy</h4>
@@ -1826,7 +1840,9 @@ function updateTrainingSummary(card) {
     setText("[data-training-summary-name]", name); setText("[data-training-summary-price]", `${price} PLN`); setText("[data-training-summary-capacity]", capacity); setText("[data-training-summary-dates]", dates);
     const badges = card.querySelector("[data-training-summary-badges]");
     if (badges) {
-        const values = [[active ? "Aktywne" : "Nieaktywne", active ? "is-active" : "is-inactive"]];
+        const values = [];
+        if (card.dataset.trainingArchived === "true") values.push(["Archiwalne", "is-inactive"]);
+        values.push([active ? "Aktywne" : "Nieaktywne", active ? "is-active" : "is-inactive"]);
         if (capacity <= 0) values.push(["Brak miejsc", "is-warning"]); else if (capacity <= 5) values.push(["Mało miejsc", "is-warning"]);
         if (!dates) values.push(["Brak terminów", "is-warning"]);
         if (card.classList.contains("has-error")) values.push(["Błąd konfiguracji", "is-error"]);
@@ -1861,7 +1877,30 @@ addTrainingButton?.addEventListener("click", function () {
 trainingList?.addEventListener("click", function (event) {
     const removeTrainingButton = event.target.closest("[data-remove-training]");
     if (removeTrainingButton) {
-        removeTrainingButton.closest("[data-training-card]")?.remove();
+        const card = removeTrainingButton.closest("[data-training-card]");
+        const trainingId = card?.querySelector('input[name="training_item_id"]')?.value.trim() || "";
+        if (trainingId) {
+            const trainingName = card?.querySelector('input[name="training_item_name"]')?.value.trim() || trainingId;
+            const reason = window.prompt(`Podaj powód usunięcia lub archiwizacji szkolenia „${trainingName}”:`);
+            if (reason === null) return;
+            if (!reason.trim()) {
+                window.alert("Powód usunięcia lub archiwizacji jest wymagany.");
+                return;
+            }
+            const removals = document.querySelector("[data-training-removals]");
+            if (removals) {
+                const idInput = document.createElement("input");
+                idInput.type = "hidden";
+                idInput.name = "training_removed_id";
+                idInput.value = trainingId;
+                const reasonInput = document.createElement("input");
+                reasonInput.type = "hidden";
+                reasonInput.name = "training_removed_reason";
+                reasonInput.value = reason.trim();
+                removals.append(idInput, reasonInput);
+            }
+        }
+        card?.remove();
         syncTrainingIndexes();
         saveTrainingExpansionState();
         return;

@@ -161,6 +161,11 @@ class SubmissionTraining(Base):
     training_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     training_name_snapshot: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     training_price_snapshot: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    training_snapshot: Mapped[dict | None] = mapped_column(
+        JsonDict,
+        default=dict,
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(String(64), default="selected", nullable=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

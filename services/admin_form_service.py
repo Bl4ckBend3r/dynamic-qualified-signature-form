@@ -9,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
+from uuid import uuid4
 
 from form_loader import (
     FIELD_STAGE_INITIAL,
@@ -330,7 +331,7 @@ def parse_training_catalog(form_data) -> list[dict]:
                 )
             continue
         item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
-        training_id = item_id or slugify_training_id(clean_name)
+        training_id = item_id or f"trn_{uuid4().hex}"
         capacity = parse_required_capacity(capacities[index] if index < len(capacities) else "")
         item = {
             "id": training_id,

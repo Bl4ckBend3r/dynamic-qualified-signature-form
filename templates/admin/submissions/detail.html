@@ -224,7 +224,7 @@
     </section>
 {% endfor %}
 <section class="admin-card">
-    <h3>Wybrane szkolenia</h3>
+    <h3>Szkolenia uczestnika</h3>
     {% if participant_training_view %}
         <p>
             <strong>Wykorzystano:</strong> {{ participant_training_view.limit_used_formatted }}
@@ -235,21 +235,31 @@
         </p>
     {% endif %}
     <div class="admin-table-wrap"><table class="admin-table">
-        <thead><tr><th>Nazwa szkolenia</th><th>Cena szkolenia</th><th>Status</th><th>Opis</th></tr></thead>
+        <thead><tr><th>Nazwa szkolenia</th><th>Cena</th><th>Miejsca</th><th>Status uczestnika</th><th>Opis</th></tr></thead>
         <tbody>
-            {% set participant_trainings = participant_training_view["items"] if participant_training_view else [] %}
+            {% set participant_trainings = participant_training_view["catalog"] if participant_training_view else [] %}
             {% for training in participant_trainings %}
                 <tr>
                     <td>{{ training.name }}</td>
                     <td>{{ training.price_formatted }}</td>
-                    <td>{{ "Zablokowane podpisaną umową" if training.is_locked else "Wybrane" }}</td>
+                    <td>
+                        {{ training.display_available_seats if training.display_available_seats is not none else "Brak danych" }}
+                        / {{ training.capacity if training.capacity is not none else "Brak danych" }}
+                    </td>
+                    <td>
+                        {{ training.participant_status_label }}
+                        {% if training.is_locked %}<br><small>Zablokowane podpisaną umową</small>{% endif %}
+                    </td>
                     <td>{{ training.description or "Brak danych" }}</td>
                 </tr>
             {% else %}
-                <tr><td colspan="4">Brak danych o szkoleniach.</td></tr>
+                <tr><td colspan="5">Brak danych o szkoleniach.</td></tr>
             {% endfor %}
         </tbody>
     </table></div>
+    {% if not read_only %}
+        <p><a class="admin-button-secondary compact" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Zarządzaj szkoleniami i naborem</a></p>
+    {% endif %}
 </section>
 {% if detail_view.technical_items %}
     <details class="admin-card">

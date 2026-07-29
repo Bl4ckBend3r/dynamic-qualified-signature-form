@@ -37,6 +37,7 @@ from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
 from services.training_agreement_service import get_training_selection_field
+from services.training_availability_service import TrainingAvailabilityService
 from services.training_service import format_price_pln
 from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
 from services.submission_correction_service import SubmissionCorrectionError
@@ -155,9 +156,22 @@ def submission_detail(form_id: int, submission_pk: int):
         training_field = get_training_selection_field(form.definition_json or {})
         participant_training_view = None
         if training_field:
-            participant_training_view = services.submission_training_service.summary(
-                db, submission, training_field
+            availability = TrainingAvailabilityService(
+                services.submission_repository
+            ).availability_for_field(
+                form_slug=form.slug,
+                field=training_field,
+                current_submission_id=submission.submission_id,
             )
+            training_selection_view = services.submission_training_service.selection_view(
+                db,
+                submission,
+                training_field,
+                availability,
+                form=form,
+            )
+            participant_training_view = training_selection_view["summary"]
+            participant_training_view["catalog"] = training_selection_view["catalog"]
             currency = str(training_field.get("currency") or "PLN")
             participant_training_view.update(
                 limit_total_formatted=format_price_pln(

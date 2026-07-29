@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -17,7 +16,12 @@ from services.document_service import DocumentType, serialize_json_list
 from services.process_service import ProcessStatus
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
-from services.training_service import format_price_pln, normalize_trainings_config
+from services.training_service import (
+    format_price_pln,
+    is_training_section_label,
+    normalize_trainings_config,
+    without_training_selection_section,
+)
 
 
 @dataclass
@@ -41,11 +45,9 @@ class DeclarationFlowService:
             "title": declaration_config.get("form_title") or "Uzupelnienie deklaracji uczestnictwa",
             "description": declaration_config.get("form_description") or "",
             "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklaracje PDF",
-            "fields": [
-                dict(field)
-                for field in declaration_config.get("fields") or []
-                if isinstance(field, Mapping) and field.get("type") != "training_selection"
-            ],
+            "fields": without_training_selection_section(
+                declaration_config.get("fields") or []
+            ),
         }
 
     @staticmethod
@@ -220,12 +222,6 @@ def training_section_insert_index(fields: list[dict]) -> int | None:
         if field.get("type") == "section" and is_training_section_label(field.get("label")):
             return index + 1
     return None
-
-
-def is_training_section_label(value: Any) -> bool:
-    text = unicodedata.normalize("NFKD", str(value or "").strip().lower())
-    ascii_text = "".join(char for char in text if not unicodedata.combining(char))
-    return "wybor" in ascii_text and "szkolen" in ascii_text
 
 
 def normalize_training_fields(

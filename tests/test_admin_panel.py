@@ -3153,17 +3153,18 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             "training_selection_enabled": "on",
             "training_selection_name": "selected_trainings",
             "training_selection_label": "Wybierz szkolenia",
-            "training_selection_max_total": "5000",
+            "training_selection_max_total": "7000",
             "training_selection_currency": "PLN",
             "training_selection_required": "on",
             "training_active_present": "1",
             "training_item_id": ["s1", "s2"],
             "training_item_name": ["Excel zaawansowany", "Kadry i płace"],
-            "training_item_price": ["1345.50", "2199"],
+            "training_item_price": ["6200", "12"],
             "training_item_capacity": ["10", "5"],
             "training_item_active": ["0", "1"],
             "training_item_sort_order": ["1", "2"],
             "training_item_description": ["Arkusze i raporty", "Prawo pracy w praktyce"],
+            "training_item_admin_comment": ["Przynieś własny laptop.", ""],
             "training_item_low_seats_comment": ["Tego komentarza nie pokazuj.", "Zostało niewiele miejsc."],
             "training_date_training_index": ["0"],
             "training_date_start_date": ["2026-09-01"],
@@ -3186,15 +3187,16 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             "Oświadczenia uczestnika",
             "osw_rodo",
         ]
-        assert training_field["max_total_amount"] == "5000.00"
+        assert training_field["max_total_amount"] == "7000.00"
         assert training_field["currency"] == "PLN"
         assert training_field["catalog"] == [
             {
                 "id": "s1",
                 "name": "Excel zaawansowany",
-                "price": "1345.50",
+                "price": "6200.00",
                 "capacity": 10,
                 "description": "Arkusze i raporty",
+                "admin_comment": "Przynieś własny laptop.",
                 "low_seats_comment": "Tego komentarza nie pokazuj.",
                 "dates": [
                     {
@@ -3212,7 +3214,7 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             {
                 "id": "s2",
                 "name": "Kadry i płace",
-                "price": "2199.00",
+                "price": "12.00",
                 "capacity": 5,
                 "description": "Prawo pracy w praktyce",
                 "low_seats_comment": "Zostało niewiele miejsc.",
@@ -3263,10 +3265,15 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     assert training_response.status_code == 200
     assert "Excel zaawansowany" in training_html
     assert "Kadry i płace" in training_html
-    assert "1 345,50 zł" in training_html
-    assert "2 199,00 zł" in training_html
-    assert "Wolne miejsca: 10" in training_html
-    assert "Wolne miejsca: 5" in training_html
+    assert "7 000,00 zł" in training_html
+    assert "6 200,00 zł" in training_html
+    assert "12,00 zł" in training_html
+    assert "Przynieś własny laptop." in training_html
+    assert "Dostępne" in training_html
+    assert "Zajęte" in training_html
+    assert "Limit" in training_html
+    assert ">10</dd>" in training_html
+    assert ">5</dd>" in training_html
     assert "Zostało niewiele miejsc." in training_html
     assert "Tego komentarza nie pokazuj." not in declaration_html
     assert "01.09.2026, 09:00–12:00" in training_html

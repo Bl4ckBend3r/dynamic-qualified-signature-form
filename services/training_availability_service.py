@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Mapping
 
-from services.training_service import build_training_availability, normalize_trainings_config, parse_training_snapshots
+from services.training_catalog_service import TrainingCatalogService
+from services.training_service import build_training_availability, parse_training_snapshots
 
 
 EXCLUDED_STATUS_FRAGMENTS = ("REJECT", "CANCEL", "ANUL", "ODRZUC")
@@ -20,7 +21,10 @@ class TrainingAvailabilityService:
         field: Mapping[str, Any],
         current_submission_id: str | None = None,
     ) -> dict[str, dict]:
-        catalog = normalize_trainings_config(field, active_only=True)
+        catalog = TrainingCatalogService.get_trainings_for_field(
+            field,
+            active_only=True,
+        )
         counts = self.occupied_counts(form_slug=form_slug, current_submission_id=current_submission_id)
         return build_training_availability(catalog, counts)
 

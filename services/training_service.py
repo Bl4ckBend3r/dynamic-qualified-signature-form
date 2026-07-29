@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
@@ -81,14 +82,63 @@ def normalize_training_catalog(field: Mapping[str, Any] | None, *, active_only: 
                     item.get("dates", item.get("training_dates", item.get("dates_text")))
                 ),
                 "low_seats_comment": str(item.get("low_seats_comment") or "").strip(),
+                "admin_comment": str(item.get("admin_comment") or item.get("comment") or "").strip(),
             }
         )
     return sorted(items, key=lambda item: (item["sort_order"], item["name"].lower()))
 
 
 def normalize_trainings_config(field: Mapping[str, Any] | None, *, active_only: bool = True) -> list[dict]:
-    """Return the canonical catalog shared by admin, declarations and documents."""
+    """Return the canonical catalog shared by admin, public UI, mail and documents."""
     return normalize_training_catalog(field, active_only=active_only)
+
+
+def build_training_catalog_view(
+    field: Mapping[str, Any] | None,
+    availability: Mapping[str, Mapping[str, Any]] | None = None,
+    *,
+    active_only: bool = True,
+) -> list[dict]:
+    """Merge the canonical admin catalog with calculated availability."""
+    availability = availability or {}
+    return [
+        {**item, **dict(availability.get(item["id"], {}))}
+        for item in normalize_trainings_config(field, active_only=active_only)
+    ]
+
+
+def without_training_selection_section(fields: list[Mapping[str, Any]] | None) -> list[dict]:
+    """Remove the training picker and its complete named section from public forms."""
+    result: list[dict] = []
+    skipping_training_section = False
+    for raw_field in fields or []:
+        if not isinstance(raw_field, Mapping):
+            continue
+        field = dict(raw_field)
+        field_type = str(field.get("type") or "")
+        if field_type == "section":
+            if is_training_section_label(field.get("label")):
+                skipping_training_section = True
+                continue
+            skipping_training_section = False
+            result.append(field)
+            continue
+        if skipping_training_section or field_type == "training_selection":
+            continue
+        result.append(field)
+    return result
+
+
+def is_training_section_label(value: Any) -> bool:
+    text = unicodedata.normalize("NFKD", str(value or "").strip().lower())
+    ascii_text = "".join(char for char in text if not unicodedata.combining(char))
+    normalized = " ".join(ascii_text.split()).strip(" :–—-")
+    return normalized in {
+        "wybor szkolen",
+        "wybor szkolenia",
+        "szkolenia do wyboru",
+        "training selection",
+    }
 
 
 def selected_training_snapshots(
@@ -96,30 +146,17 @@ def selected_training_snapshots(
     request_form,
     availability: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[list[dict], str | None]:
-    selected_ids = {normalize_training_id(value) for value in request_form.getlist(field.get("name", ""))}
-    catalog = normalize_training_catalog(field, active_only=True)
-    selected = []
-    availability = availability or {}
-    for item in catalog:
-        if item["id"] not in selected_ids:
-            continue
-        available_item = {**dict(item), **dict(availability.get(item["id"], {}))}
-        if available_item.get("available_seats") == 0:
-            return [], f"Brak wolnych miejsc dla szkolenia: {item['name']}."
-        selected.append(available_item)
+    from services.training_catalog_service import TrainingCatalogService
 
-    if field.get("required") and not selected:
-        return [], "Wybierz co najmniej jedno szkolenie."
-
-    max_total = parse_decimal_price(field.get("max_total_amount"))
-    total = sum((parse_decimal_price(item.get("price")) or Decimal("0.00")) for item in selected)
-    if max_total is not None and total > max_total:
-        return selected, (
-            f"Łączna wartość szkoleń przekracza limit "
-            f"{format_price_pln(max_total, field.get('currency') or DEFAULT_CURRENCY)}."
-        )
-
-    return selected, None
+    selected_ids = {
+        normalize_training_id(value)
+        for value in request_form.getlist(str(field.get("name") or ""))
+    }
+    return TrainingCatalogService().select_trainings(
+        field,
+        selected_ids,
+        availability,
+    )
 
 
 def parse_training_snapshots(value: Any) -> list[dict]:

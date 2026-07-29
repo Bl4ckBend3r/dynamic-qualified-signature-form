@@ -2,97 +2,199 @@
 
 {% block title %}Wybór szkoleń{% endblock %}
 
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/training_selection.css') }}">
+{% endblock %}
+
 {% block content %}
 <div class="back-link">
     <a href="{{ url_for('documents.documents_to_sign', submission_id=submission.submission_id) }}">← Powrót do dokumentów</a>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <h2>{{ field.get("label") or "Wybierz szkolenia" }}</h2>
-        <p>Wniosek: <strong>{{ submission.submission_id }}</strong></p>
-        {% if not selection_open %}
-            <p class="form-error">Nabór na szkolenia został zamknięty. Zapisane wybory są dostępne tylko do odczytu.</p>
-        {% endif %}
-        {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
-    </div>
+<section class="card training-picker">
+    <header class="card-header training-picker__header">
+        <div>
+            <span class="training-picker__eyebrow">Etap po podpisaniu deklaracji</span>
+            <h2>{{ field.get("label") or "Wybór szkoleń" }}</h2>
+            <p>Wniosek: <strong>{{ submission.submission_id }}</strong></p>
+        </div>
+        <span class="training-picker__recruitment {{ 'is-open' if selection_open else 'is-closed' }}">
+            Nabór {{ "otwarty" if selection_open else "zamknięty" }}
+        </span>
+    </header>
 
-    <form method="post" action="{{ action_url }}" class="dynamic-form">
-        <div class="static-text">
-            {% if limit_total_formatted %}
-                <p><strong>Limit:</strong> {{ limit_total_formatted }}</p>
-                <p>
-                    <strong>Wykorzystano:</strong> <span data-training-used>{{ limit_used_formatted }}</span>
-                    · <strong>Pozostało:</strong> <span data-training-remaining>{{ limit_remaining_formatted }}</span>
-                </p>
-            {% else %}
-                <p><strong>Wartość wybranych szkoleń:</strong> {{ limit_used_formatted }}</p>
+    {% if not selection_open %}
+        <div class="training-picker__notice" role="status">
+            Nabór na szkolenia został zamknięty. Zapisane wybory pozostają widoczne, ale nie można ich zmieniać.
+        </div>
+    {% endif %}
+    {% if error %}
+        <div class="training-picker__alert" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form
+        method="post"
+        action="{{ action_url }}"
+        class="training-picker__form"
+        data-training-picker
+        data-training-limit="{{ summary.limit_total if summary.limit_total is not none else '' }}"
+        data-training-currency="{{ field.get('currency') or 'PLN' }}"
+        novalidate
+    >
+        <section class="training-summary" aria-label="Podsumowanie limitu finansowania">
+            <div class="training-summary__item">
+                <span>Limit finansowania</span>
+                <strong data-training-limit-label>{{ limit_total_formatted or "Bez limitu" }}</strong>
+            </div>
+            <div class="training-summary__item is-used">
+                <span>Wykorzystano</span>
+                <strong data-training-used>{{ limit_used_formatted }}</strong>
+            </div>
+            <div class="training-summary__item is-remaining">
+                <span>Pozostało</span>
+                <strong data-training-remaining>{{ limit_remaining_formatted or "Bez limitu" }}</strong>
+            </div>
+            {% if summary.limit_locked %}
+                <div class="training-summary__item is-locked">
+                    <span>Już zablokowane umowami</span>
+                    <strong>{{ limit_locked_formatted }}</strong>
+                </div>
             {% endif %}
-            <p>Szkolenia oznaczone jako zablokowane mają już wgraną podpisaną umowę i nie mogą zostać usunięte.</p>
+        </section>
+
+        <div class="training-picker__limit-alert" data-training-limit-alert role="alert" tabindex="-1" hidden></div>
+
+        <div class="training-card-list">
+            {% for training in catalog %}
+                {% set is_selected = training.is_selected %}
+                {% set is_locked = training.is_locked %}
+                {% set unavailable = training.get('available_seats') == 0 and not is_selected %}
+                {% set input_disabled = is_locked or not selection_open or unavailable or not training.active %}
+                <article
+                    class="training-card{% if is_selected %} is-selected{% endif %}{% if is_locked %} is-locked{% endif %}{% if unavailable %} is-unavailable{% endif %}"
+                    data-training-card
+                >
+                    <div class="training-card__heading">
+                        <div>
+                            <div class="training-card__badges">
+                                <span class="training-badge {{ 'is-active' if training.active else 'is-inactive' }}">
+                                    {{ "Aktywne" if training.active else "Nieaktywne" }}
+                                </span>
+                                {% if training.is_low_availability %}
+                                    <span class="training-badge is-warning">Mało miejsc</span>
+                                {% endif %}
+                                {% if training.has_no_dates %}
+                                    <span class="training-badge is-warning">Brak terminów</span>
+                                {% endif %}
+                                <span class="training-badge is-participant" data-training-status>
+                                    {{ training.participant_status_label }}
+                                </span>
+                            </div>
+                            <h3>{{ training.name }}</h3>
+                        </div>
+                        <strong class="training-card__price">{{ training.price_formatted }}</strong>
+                    </div>
+
+                    {% if training.description %}
+                        <p class="training-card__description">{{ training.description }}</p>
+                    {% endif %}
+
+                    <div class="training-card__details">
+                        <section class="training-card__section">
+                            <h4>Terminy i lokalizacja</h4>
+                            {% if training.dates %}
+                                <ul class="training-card__schedule">
+                                    {% for date in training.dates %}
+                                        <li>
+                                            <strong>{{ date.label }}</strong>
+                                            {% if date.location %}<span>{{ date.location }}</span>{% endif %}
+                                            {% if date.description %}<small>{{ date.description }}</small>{% endif %}
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <p>Brak zaplanowanych terminów.</p>
+                                {% if training.location %}<p>{{ training.location }}</p>{% endif %}
+                            {% endif %}
+                        </section>
+
+                        <section class="training-card__section">
+                            <h4>Miejsca</h4>
+                            <dl class="training-card__places">
+                                <div>
+                                    <dt>Dostępne</dt>
+                                    <dd>{{ training.display_available_seats if training.display_available_seats is not none else "Brak danych" }}</dd>
+                                </div>
+                                <div>
+                                    <dt>Zajęte</dt>
+                                    <dd>{{ training.display_occupied_seats }}</dd>
+                                </div>
+                                <div>
+                                    <dt>Limit</dt>
+                                    <dd>{{ training.capacity if training.capacity is not none else "Brak danych" }}</dd>
+                                </div>
+                            </dl>
+                        </section>
+                    </div>
+
+                    {% if training.admin_comment or training.low_seats_comment_visible %}
+                        <div class="training-card__comment">
+                            <strong>Komentarz administratora</strong>
+                            <p>{{ training.admin_comment or training.low_seats_comment_visible }}</p>
+                        </div>
+                    {% endif %}
+
+                    {% if is_locked %}
+                        <div class="training-card__lock">
+                            Zablokowane — podpisana umowa została wgrana. Cena jest wliczona do wykorzystanego limitu.
+                        </div>
+                    {% endif %}
+
+                    <div class="training-card__action">
+                        <label>
+                            <input
+                                type="checkbox"
+                                name="{{ field.get('name') or 'selected_trainings' }}"
+                                value="{{ training.id }}"
+                                data-training-price="{{ training.price or 0 }}"
+                                data-training-locked="{{ 'true' if is_locked else 'false' }}"
+                                data-training-default-status="{{ training.participant_status_label }}"
+                                {% if is_selected %}checked{% endif %}
+                                {% if input_disabled %}disabled{% endif %}
+                            >
+                            <span>
+                                {% if is_locked %}
+                                    Szkolenie zablokowane
+                                {% elif unavailable %}
+                                    Brak wolnych miejsc
+                                {% elif not training.active %}
+                                    Szkolenie nieaktywne
+                                {% else %}
+                                    Wybierz szkolenie
+                                {% endif %}
+                            </span>
+                        </label>
+                        {% if is_selected and input_disabled %}
+                            <input type="hidden" name="{{ field.get('name') or 'selected_trainings' }}" value="{{ training.id }}">
+                        {% endif %}
+                    </div>
+                </article>
+            {% else %}
+                <div class="training-picker__empty">Brak aktywnych szkoleń skonfigurowanych dla tego formularza.</div>
+            {% endfor %}
         </div>
 
-        {% for training in catalog %}
-            {% set is_selected = training.id in selected_ids %}
-            {% set is_locked = training.id in locked_ids %}
-            <div class="form-row">
-                <label>
-                    <input
-                        type="checkbox"
-                        name="{{ field.get('name') or 'selected_trainings' }}"
-                        value="{{ training.id }}"
-                        data-training-price="{{ training.price or 0 }}"
-                        {% if is_selected %}checked{% endif %}
-                        {% if is_locked or not selection_open or training.get('available_seats') == 0 %}disabled{% endif %}
-                    >
-                    {% if is_locked %}
-                        <input type="hidden" name="{{ field.get('name') or 'selected_trainings' }}" value="{{ training.id }}">
-                    {% endif %}
-                    <strong>{{ training.name }}</strong> — {{ training.price_formatted }}
-                    {% if is_locked %}<span>Zablokowane — podpisana umowa została wgrana.</span>{% endif %}
-                </label>
-                {% if training.description %}<p>{{ training.description }}</p>{% endif %}
-                <p>Status: {{ "zablokowane" if is_locked else "wybrane" if is_selected else "dostępne" }}</p>
-                {% if training.get("available_seats") is not none %}
-                    <p>Wolne miejsca: {{ training.available_seats }}</p>
-                {% endif %}
-                {% if training.get("low_seats_comment_visible") %}
-                    <p>{{ training.low_seats_comment_visible }}</p>
-                {% endif %}
-                {% for date in training.dates %}
-                    <p>{{ date.label }}{% if date.location %}, {{ date.location }}{% endif %}</p>
-                {% endfor %}
-            </div>
-        {% else %}
-            <p>Brak aktywnych szkoleń.</p>
-        {% endfor %}
-
         {% if selection_open %}
-            <button type="submit" class="btn-primary">Zapisz wybór szkoleń</button>
+            <div class="training-picker__submit-row">
+                <button type="submit" class="btn-primary training-picker__submit" data-training-submit>
+                    Zapisz wybór szkoleń
+                </button>
+            </div>
         {% endif %}
     </form>
-</div>
+</section>
 {% endblock %}
 
 {% block extra_js %}
-{% if selection_open %}
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-    const inputs = [...document.querySelectorAll("[data-training-price]")];
-    const usedNode = document.querySelector("[data-training-used]");
-    const remainingNode = document.querySelector("[data-training-remaining]");
-    const limit = {{ summary.limit_total|string|tojson if summary.limit_total is not none else "null" }};
-    const format = value => new Intl.NumberFormat("pl-PL", {
-        style: "currency", currency: "{{ field.get('currency') or 'PLN' }}"
-    }).format(value);
-    const update = () => {
-        const used = inputs
-            .filter(input => input.checked)
-            .reduce((total, input) => total + Number(input.dataset.trainingPrice || 0), 0);
-        if (usedNode) usedNode.textContent = format(used);
-        if (remainingNode && limit !== null) remainingNode.textContent = format(Math.max(0, Number(limit) - used));
-    };
-    inputs.forEach(input => input.addEventListener("change", update));
-});
-</script>
-{% endif %}
+    <script src="{{ url_for('static', filename='js/training_selection.js') }}" defer></script>
 {% endblock %}

@@ -603,7 +603,8 @@
         <div class="admin-section-heading">
             <div>
                 <h2>Szkolenia po podpisaniu deklaracji</h2>
-                <p>Te dane zasilają osobny etap wyboru szkoleń dostępny po wgraniu poprawnie podpisanej deklaracji.</p>
+                <p>Te szkolenia nie są częścią deklaracji. Użytkownik wybiera je dopiero po poprawnym wgraniu podpisanej deklaracji.</p>
+                <p>Te szkolenia są źródłem danych dla publicznego etapu wyboru szkoleń po podpisaniu deklaracji. Uczestnik widzi tylko aktywne szkolenia, a ceny i limity są pobierane z tej konfiguracji.</p>
                 <p>
                     <strong>Nabór:</strong> {{ "otwarty" if form.training_selection_open else "zamknięty" }}
                     <button
@@ -627,7 +628,13 @@
             <label><span>Etykieta</span><input name="training_selection_label" value="{{ training_field.get('label', 'Wybierz szkolenia') if training_field else 'Wybierz szkolenia' }}"></label>
             <label><span>Limit finansowania</span><input type="number" step="0.01" min="0" name="training_selection_max_total" value="{{ training_field.get('max_total_amount', '') if training_field else '' }}"></label>
             <label><span>Waluta</span><input name="training_selection_currency" value="{{ training_field.get('currency', 'PLN') if training_field else 'PLN' }}"></label>
-            <label class="admin-check"><input type="checkbox" name="training_selection_required" {% if not training_field or training_field.get('required', true) %}checked{% endif %}><span>Wymagany wybór co najmniej jednego szkolenia</span></label>
+            <label class="admin-check">
+                <input type="checkbox" name="training_selection_required" {% if not training_field or training_field.get('required', true) %}checked{% endif %}>
+                <span>
+                    Wymagany wybór co najmniej jednego szkolenia
+                    <small>Dotyczy osobnego etapu wyboru szkoleń po podpisaniu deklaracji, nie samej deklaracji.</small>
+                </span>
+            </label>
         </div>
         <div class="admin-training-list-toolbar">
             <button class="admin-button-secondary compact" type="button" data-expand-all-trainings>Rozwiń wszystkie</button>
@@ -656,6 +663,7 @@
                         <label><span>Liczba miejsc</span><input type="number" step="1" min="0" name="training_item_capacity" value="{{ item.get('capacity', '') if item.get('capacity') is not none else '' }}" required></label>
                         <label class="admin-check admin-training-active"><input type="checkbox" name="training_item_active" value="{{ loop.index0 }}" {% if item.get('active', true) %}checked{% endif %}><span>Aktywne</span></label>
                         <label class="admin-training-wide"><span>Opis</span><textarea class="admin-textarea-small" name="training_item_description" rows="2">{{ item.get('description', '') }}</textarea></label>
+                        <label class="admin-training-wide"><span>Komentarz administratora</span><textarea class="admin-textarea-small" name="training_item_admin_comment" rows="2" placeholder="Widoczny uczestnikowi na karcie szkolenia">{{ item.get('admin_comment', '') }}</textarea></label>
                         <label class="admin-training-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea class="admin-textarea-small" name="training_item_low_seats_comment" rows="2" placeholder="Widoczny przy 1–5 wolnych miejscach">{{ item.get('low_seats_comment', '') }}</textarea></label>
                     </div>
                     <div class="admin-training-dates-section">
@@ -698,6 +706,7 @@
                 <label><span>Liczba miejsc</span><input type="number" step="1" min="0" name="training_item_capacity" value="" required></label>
                 <label class="admin-check admin-training-active"><input type="checkbox" name="training_item_active" value="" checked><span>Aktywne</span></label>
                 <label class="admin-training-wide"><span>Opis</span><textarea class="admin-textarea-small" name="training_item_description" rows="2"></textarea></label>
+                <label class="admin-training-wide"><span>Komentarz administratora</span><textarea class="admin-textarea-small" name="training_item_admin_comment" rows="2" placeholder="Widoczny uczestnikowi na karcie szkolenia"></textarea></label>
                 <label class="admin-training-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea class="admin-textarea-small" name="training_item_low_seats_comment" rows="2" placeholder="Widoczny przy 1–5 wolnych miejscach"></textarea></label>
             </div>
             <div class="admin-training-dates-section">

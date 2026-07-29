@@ -21,21 +21,22 @@ from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
 from services.qualification_condition_service import QualificationConditionService
+from services.training_catalog_service import TrainingCatalogService
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
-from services.training_service import decimal_price_to_storage, normalize_trainings_config
+from services.training_service import decimal_price_to_storage
 from validators.form_config_validator import FormConfigValidator
 
 
 def get_declaration_training_field(form_definition: dict) -> dict:
     definition = normalize_admin_form_definition(form_definition or {})
-    for document in definition.get("documents") or []:
-        if not isinstance(document, dict) or document.get("id") != "declaration":
-            continue
-        for field in document.get("fields") or []:
-            if isinstance(field, dict) and field.get("type") == "training_selection":
-                normalized_field = {"enabled": True, **dict(field)}
-                normalized_field["catalog"] = normalize_trainings_config(normalized_field, active_only=False)
-                return normalized_field
+    field = TrainingCatalogService.get_training_field(definition)
+    if field:
+        normalized_field = {"enabled": True, **field}
+        normalized_field["catalog"] = TrainingCatalogService.get_trainings_for_field(
+            normalized_field,
+            active_only=False,
+        )
+        return normalized_field
     return {
         "enabled": False,
         "type": "training_selection",
@@ -71,6 +72,8 @@ def validate_admin_form_config(form_definition: dict, *, validate_visual_workflo
         return [str(exc)]
     validator = FormConfigValidator(skip_template_check=True)
     errors = validator.validate(form_definition)
+    training_field = TrainingCatalogService.get_training_field(form_definition)
+    errors.extend(TrainingCatalogService().validate_field(training_field))
     if validate_visual_workflow:
         errors.extend(WorkflowConfigValidator().validate(form_definition.get("workflow") or {}))
     return list(dict.fromkeys(errors))
@@ -311,6 +314,7 @@ def parse_training_catalog(form_data) -> list[dict]:
     prices = form_data.getlist("training_item_price")
     capacities = form_data.getlist("training_item_capacity")
     descriptions = form_data.getlist("training_item_description")
+    admin_comments = form_data.getlist("training_item_admin_comment")
     low_comments = form_data.getlist("training_item_low_seats_comment")
     dates_by_training = parse_training_dates_from_form(form_data, len(names))
     active_values = form_data.getlist("training_item_active")
@@ -320,23 +324,40 @@ def parse_training_catalog(form_data) -> list[dict]:
     for index, name in enumerate(names):
         clean_name = str(name or "").strip()
         if not clean_name:
+            if default_active or index in active_indexes:
+                raise ValueError(
+                    f"Aktywne szkolenie {index + 1} musi mieć nazwę."
+                )
             continue
         item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
         training_id = item_id or slugify_training_id(clean_name)
         capacity = parse_required_capacity(capacities[index] if index < len(capacities) else "")
-        catalog.append(
-            {
-                "id": training_id,
-                "name": clean_name,
-                "price": decimal_price_to_storage(prices[index] if index < len(prices) else ""),
-                "capacity": capacity,
-                "description": str(descriptions[index] if index < len(descriptions) else "").strip(),
-                "low_seats_comment": str(low_comments[index] if index < len(low_comments) else "").strip(),
-                "dates": dates_by_training[index],
-                "active": default_active or index in active_indexes,
-                "sort_order": parse_optional_int_value(sort_orders[index] if index < len(sort_orders) else "", index + 1),
-            }
-        )
+        item = {
+            "id": training_id,
+            "name": clean_name,
+            "price": decimal_price_to_storage(
+                prices[index] if index < len(prices) else ""
+            ),
+            "capacity": capacity,
+            "description": str(
+                descriptions[index] if index < len(descriptions) else ""
+            ).strip(),
+            "low_seats_comment": str(
+                low_comments[index] if index < len(low_comments) else ""
+            ).strip(),
+            "dates": dates_by_training[index],
+            "active": default_active or index in active_indexes,
+            "sort_order": parse_optional_int_value(
+                sort_orders[index] if index < len(sort_orders) else "",
+                index + 1,
+            ),
+        }
+        admin_comment = str(
+            admin_comments[index] if index < len(admin_comments) else ""
+        ).strip()
+        if admin_comment:
+            item["admin_comment"] = admin_comment
+        catalog.append(item)
     return sorted(catalog, key=lambda item: (item["sort_order"], item["name"].lower()))
 
 

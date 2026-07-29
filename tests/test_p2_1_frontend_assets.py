@@ -248,12 +248,13 @@ console.log(JSON.stringify({{
     assert "font-weight: 800" in stylesheet
 
 
-def test_training_selection_keeps_full_width_layout():
-    template = Path("templates/declaration_form.html").read_text(encoding="utf-8")
-    stylesheet = Path("static/css/style.css").read_text(encoding="utf-8")
+def test_training_selection_uses_separate_full_width_screen():
+    declaration = Path("templates/declaration_form.html").read_text(encoding="utf-8")
+    template = Path("templates/training_selection.html").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/training_selection.css").read_text(encoding="utf-8")
 
-    assert "field.width or 'full'" in template
-    assert "training-selection-row" in template
-    assert ".training-selection-row" in stylesheet
-    assert "grid-column: 1 / -1;" in stylesheet
-    assert ".training-selection .checkbox-item span" in stylesheet
+    assert "training_selection" not in declaration
+    assert "training-card-list" in template
+    assert "training-picker__submit-row" in template
+    assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
+    assert ".training-picker__submit" in stylesheet

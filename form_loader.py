@@ -67,9 +67,11 @@ def build_consents_view(
     form_definition: Dict[str, Any],
     submission_data: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    from services.training_service import without_training_selection_section
+
     consents_view: List[Dict[str, Any]] = []
 
-    for field in form_definition.get("fields", []):
+    for field in without_training_selection_section(form_definition.get("fields", [])):
         if field.get("type") != "checkbox":
             continue
 
@@ -235,12 +237,24 @@ def fields_for_stage(form_definition: Dict[str, Any], stage: str) -> List[Dict[s
 
 
 def form_definition_for_stage(form_definition: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    from services.training_service import without_training_selection_section
+
     normalized = normalize_form_definition(form_definition)
-    return {**normalized, "fields": fields_for_stage(normalized, stage)}
+    return {
+        **normalized,
+        "fields": without_training_selection_section(fields_for_stage(normalized, stage)),
+    }
 
 
 def additional_fields_for_acceptance(form_definition: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return fields_for_stage(normalize_form_definition(form_definition), FIELD_STAGE_AFTER_ACCEPTANCE)
+    from services.training_service import without_training_selection_section
+
+    return without_training_selection_section(
+        fields_for_stage(
+            normalize_form_definition(form_definition),
+            FIELD_STAGE_AFTER_ACCEPTANCE,
+        )
+    )
 
 
 def has_additional_fields_after_acceptance(form_definition: Dict[str, Any]) -> bool:
@@ -706,6 +720,8 @@ def build_submission_view(
     form_definition: Dict[str, Any],
     submission_data: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    from services.training_service import without_training_selection_section
+
     view: List[Dict[str, Any]] = []
     current_section = {
         "title": "Dane formularza",
@@ -716,7 +732,7 @@ def build_submission_view(
         title = (section.get("title") or "").strip().lower()
         return title == "oświadczenia"
 
-    for field in form_definition["fields"]:
+    for field in without_training_selection_section(form_definition["fields"]):
         field_type = field["type"]
 
         if field_type == "section":

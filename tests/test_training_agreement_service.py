@@ -98,7 +98,6 @@ def test_declaration_form_omits_training_selection():
     )
 
     assert [field.get("name") or field.get("label") for field in definition["fields"]] == [
-        "Wybór szkoleń",
         "Oświadczenia uczestnika",
         "osw_rodo",
     ]

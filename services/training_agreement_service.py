@@ -2,19 +2,12 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from services.document_service import DocumentType, get_document_config
-from services.training_service import normalize_training_id, selected_training_snapshots
+from services.training_catalog_service import TrainingCatalogService
+from services.training_service import normalize_training_id
 
 
 def get_training_selection_field(form_definition: Mapping[str, object]) -> dict | None:
-    if form_definition.get("id") == DocumentType.DECLARATION:
-        declaration_config = dict(form_definition)
-    else:
-        declaration_config = get_document_config(form_definition, DocumentType.DECLARATION)
-    for field in declaration_config.get("fields") or []:
-        if isinstance(field, Mapping) and field.get("type") == "training_selection":
-            return dict(field)
-    return None
+    return TrainingCatalogService.get_training_field(form_definition)
 
 
 def extract_training_selection(
@@ -22,7 +15,15 @@ def extract_training_selection(
     request_form,
     availability: Mapping[str, Mapping[str, object]] | None = None,
 ) -> tuple[list[dict], str | None]:
-    return selected_training_snapshots(field, request_form, availability=availability)
+    selected_ids = {
+        normalize_training_id(value)
+        for value in request_form.getlist(str(field.get("name") or ""))
+    }
+    return TrainingCatalogService().select_trainings(
+        field,
+        selected_ids,
+        availability,
+    )
 
 
 def build_training_agreement_number(

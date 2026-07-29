@@ -4,10 +4,10 @@ from decimal import Decimal
 from html import escape
 from typing import Any, Mapping
 
+from services.training_catalog_service import TrainingCatalogService
 from services.training_service import (
     build_training_availability,
     format_price_pln,
-    normalize_trainings_config,
     parse_decimal_price,
     parse_training_snapshots,
 )
@@ -165,11 +165,21 @@ def _available_trainings(form, field, availability_service) -> list[dict[str, An
             field=field,
             current_submission_id="",
         )
-        catalog = normalize_trainings_config(field, active_only=True)
-        return [{**item, **dict(availability.get(item["id"], {}))} for item in catalog]
-    catalog = normalize_trainings_config(field, active_only=True)
+        return TrainingCatalogService.get_trainings_for_field(
+            field,
+            availability,
+            active_only=True,
+        )
+    catalog = TrainingCatalogService.get_trainings_for_field(
+        field,
+        active_only=True,
+    )
     availability = build_training_availability(catalog, {})
-    return [availability[item["id"]] for item in catalog]
+    return TrainingCatalogService.get_trainings_for_field(
+        field,
+        availability,
+        active_only=True,
+    )
 
 
 def _find_training_field(value: Any) -> dict[str, Any] | None:

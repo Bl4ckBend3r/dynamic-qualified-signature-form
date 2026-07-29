@@ -19,10 +19,10 @@ from models import Form, FormSubmission, SubmissionFile
 from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
-from services.process_service import ProcessStatus, build_process_state
+from services.process_service import build_process_state
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
-from services.training_service import format_price_pln, normalize_training_catalog
+from services.training_service import format_price_pln
 from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
 
@@ -170,16 +170,17 @@ def _open_training_selection_stage(submission_id: str, slug: str) -> bool:
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
         form = db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none()
-        field = get_training_selection_field(form.definition_json or {}) if form else None
-        if not field or not field.get("enabled", True):
-            return False
         submission = db.execute(
             select(FormSubmission).where(FormSubmission.submission_id == submission_id)
         ).scalar_one_or_none()
-        if submission is None:
+        if form is None or submission is None:
             return False
-        submission.process_status = ProcessStatus.TRAINING_SELECTION_OPEN.value
-        submission.workflow_step = ProcessStatus.TRAINING_SELECTION_OPEN.value
+        if not get_services().submission_training_service.open_selection_stage(
+            db,
+            form,
+            submission,
+        ):
+            return False
         db.commit()
         return True
 
@@ -228,10 +229,6 @@ def training_selection(submission_id: str):
             field=field,
             current_submission_id=submission.submission_id,
         )
-        catalog = [
-            {**item, **dict(availability.get(item["id"], {}))}
-            for item in normalize_training_catalog(field, active_only=True)
-        ]
         error = None
         status_code = 200
         if request.method == "POST":
@@ -261,10 +258,16 @@ def training_selection(submission_id: str):
                     error = str(exc)
                     status_code = 400
 
-        summary = services.submission_training_service.summary(db, submission, field)
+        selection_view = services.submission_training_service.selection_view(
+            db,
+            submission,
+            field,
+            availability,
+            form=form,
+        )
+        summary = selection_view["summary"]
+        catalog = selection_view["catalog"]
         db.commit()
-        selected_ids = {item["id"] for item in summary["items"]}
-        locked_ids = {item["id"] for item in summary["items"] if item["is_locked"]}
         currency = str(field.get("currency") or "PLN")
         return (
             render_template(
@@ -273,8 +276,6 @@ def training_selection(submission_id: str):
                 form=form,
                 field=field,
                 catalog=catalog,
-                selected_ids=selected_ids,
-                locked_ids=locked_ids,
                 selection_open=bool(form.training_selection_open),
                 summary=summary,
                 limit_total_formatted=format_price_pln(summary["limit_total"], currency)
@@ -284,6 +285,7 @@ def training_selection(submission_id: str):
                 limit_remaining_formatted=format_price_pln(summary["limit_remaining"], currency)
                 if summary["limit_remaining"] is not None
                 else None,
+                limit_locked_formatted=format_price_pln(summary["limit_locked"], currency),
                 error=error,
                 action_url=url_for(
                     "documents.training_selection",

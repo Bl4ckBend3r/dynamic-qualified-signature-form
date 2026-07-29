@@ -137,3 +137,58 @@ def test_legacy_signed_agreement_is_backfilled_as_locked(db):
     assert summary["items"][0]["is_locked"] is True
     row = db.query(SubmissionTraining).one()
     assert row.locked_by_event == "legacy_signed_agreement"
+
+
+def test_selection_view_contains_full_catalog_status_and_place_counts(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+
+    view = service.selection_view(
+        db,
+        submission,
+        FIELD,
+        {
+            "python": {
+                "occupied_seats": 2,
+                "available_seats": 8,
+                "is_available": True,
+            }
+        },
+    )
+
+    python = next(item for item in view["catalog"] if item["id"] == "python")
+    excel = next(item for item in view["catalog"] if item["id"] == "excel")
+    assert python["participant_status_label"] == "Wybrane"
+    assert python["display_occupied_seats"] == 3
+    assert excel["participant_status_label"] == "Dostępne"
+
+
+def test_locked_inactive_training_remains_visible_as_history(db):
+    submission = make_submission(db)
+    db.add(
+        SubmissionTraining(
+            submission_id=submission.id,
+            training_id="inactive",
+            training_name_snapshot="Nieaktywne",
+            training_price_snapshot="100.00",
+            status="agreement_uploaded_by_beneficiary",
+            is_locked=True,
+        )
+    )
+    db.flush()
+
+    view = SubmissionTrainingService().selection_view(
+        db,
+        submission,
+        FIELD,
+        {},
+    )
+
+    historical = next(
+        item for item in view["catalog"] if item["id"] == "inactive"
+    )
+    assert historical["active"] is False
+    assert historical["is_selected"] is True
+    assert historical["is_locked"] is True
+    assert historical["participant_status_label"] == "Podpisana umowa wgrana"

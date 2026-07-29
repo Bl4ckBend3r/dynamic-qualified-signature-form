@@ -3,11 +3,13 @@ from datetime import date
 import pytest
 
 from form_loader import (
+    FIELD_STAGE_INITIAL,
     apply_pesel_derived_values,
     build_consents_view,
     build_submission_view,
     calculate_age,
     extract_submission_data,
+    form_definition_for_stage,
     normalize_form_definition,
     parse_pesel,
     validate_form_definition,
@@ -246,3 +248,39 @@ def test_build_consents_view_contains_required_consents(form_definition, valid_f
     assert "accept_regulamin" in consent_names
     assert "accept_rodo" in consent_names
     assert all(item["accepted"] is True for item in consents)
+
+
+def test_public_stage_and_pdf_view_omit_complete_training_section():
+    definition = {
+        "title": "Formularz",
+        "fields": [
+            {"type": "text", "name": "email", "label": "E-mail", "required": True},
+            {"type": "section", "label": "Wybór szkoleń"},
+            {"type": "static_text", "label": "Limit finansowania"},
+            {
+                "type": "training_selection",
+                "name": "selected_trainings",
+                "label": "Wybierz szkolenie",
+                "required": True,
+                "catalog": [{"id": "excel", "name": "Excel"}],
+            },
+            {"type": "section", "label": "Oświadczenia uczestnika"},
+            {"type": "checkbox", "name": "osw_rodo", "label": "RODO"},
+        ],
+    }
+
+    public_definition = form_definition_for_stage(definition, FIELD_STAGE_INITIAL)
+    errors = validate_submission(
+        public_definition,
+        {"email": "test@example.com", "osw_rodo": "Tak"},
+    )
+    pdf_view = build_submission_view(definition, {"email": "test@example.com"})
+
+    labels = [
+        field.get("name") or field.get("label")
+        for field in public_definition["fields"]
+    ]
+    assert "Wybór szkoleń" not in labels
+    assert "selected_trainings" not in labels
+    assert "selected_trainings" not in errors
+    assert "Wybór szkoleń" not in {section["title"] for section in pdf_view}

@@ -7,10 +7,23 @@ from typing import Any, Mapping
 
 from models import SubmissionTraining
 from services.process_service import ProcessStatus
-from services.training_service import format_price_pln, normalize_training_catalog, parse_decimal_price, parse_training_snapshots
+from services.training_catalog_service import TrainingCatalogService
+from services.training_service import (
+    format_price_pln,
+    parse_decimal_price,
+    parse_training_snapshots,
+)
 
 
 ACTIVE_STATUSES = {"selected", "agreement_generated", "agreement_uploaded_by_beneficiary", "agreement_signed_by_office", "locked"}
+PARTICIPANT_STATUS_LABELS = {
+    "selected": "Wybrane",
+    "agreement_generated": "Umowa wygenerowana",
+    "agreement_uploaded_by_beneficiary": "Podpisana umowa wgrana",
+    "agreement_signed_by_office": "Podpisane przez urząd",
+    "locked": "Zablokowane",
+    "cancelled": "Dostępne",
+}
 
 
 class TrainingSelectionError(ValueError):
@@ -18,6 +31,16 @@ class TrainingSelectionError(ValueError):
 
 
 class SubmissionTrainingService:
+    @staticmethod
+    def open_selection_stage(db, form, submission) -> bool:
+        field = TrainingCatalogService.get_training_field(form)
+        if not field or not field.get("enabled", True):
+            return False
+        submission.process_status = ProcessStatus.TRAINING_SELECTION_OPEN.value
+        submission.workflow_step = ProcessStatus.TRAINING_SELECTION_OPEN.value
+        db.flush()
+        return True
+
     @staticmethod
     def can_select(form, submission) -> bool:
         decision = str(
@@ -67,7 +90,13 @@ class SubmissionTrainingService:
     def summary(self, db, submission, field: Mapping[str, Any]) -> dict[str, Any]:
         self.synchronize_legacy(db, submission)
         rows = db.query(SubmissionTraining).filter(SubmissionTraining.submission_id == submission.id).order_by(SubmissionTraining.id).all()
-        catalog = {item["id"]: item for item in normalize_training_catalog(field, active_only=False)}
+        catalog = {
+            item["id"]: item
+            for item in TrainingCatalogService.get_trainings_for_field(
+                field,
+                active_only=False,
+            )
+        }
         items, used = [], Decimal("0.00")
         for row in rows:
             if row.status not in ACTIVE_STATUSES and not row.is_locked:
@@ -78,13 +107,100 @@ class SubmissionTrainingService:
             items.append({
                 **source, "id": row.training_id, "name": row.training_name_snapshot or source.get("name"),
                 "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, field.get("currency")),
-                "status": row.status, "is_locked": row.is_locked,
+                "status": row.status, "status_label": self.status_label(row.status, row.is_locked),
+                "is_locked": row.is_locked,
             })
-        maximum = parse_decimal_price(field.get("max_total_amount"))
+        maximum = TrainingCatalogService.financial_limit(field)
+        locked_total = sum(
+            (
+                parse_decimal_price(row.training_price_snapshot) or Decimal("0.00")
+                for row in rows
+                if row.is_locked
+            ),
+            Decimal("0.00"),
+        )
         return {
             "items": items, "limit_total": maximum, "limit_used": used,
             "limit_remaining": max(Decimal("0.00"), maximum - used) if maximum is not None else None,
+            "limit_locked": locked_total,
         }
+
+    def selection_view(
+        self,
+        db,
+        submission,
+        field: Mapping[str, Any],
+        availability: Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        form=None,
+    ) -> dict[str, Any]:
+        catalog_service = TrainingCatalogService()
+        configured_field = (
+            catalog_service.get_training_field(form) if form is not None else None
+        )
+        if configured_field is not None:
+            field = configured_field
+        summary = self.summary(db, submission, field)
+        rows = {
+            row.training_id: row
+            for row in db.query(SubmissionTraining)
+            .filter(SubmissionTraining.submission_id == submission.id)
+            .all()
+        }
+        catalog = (
+            catalog_service.get_available_trainings_for_form(
+                form,
+                availability,
+                active_only=True,
+            )
+            if form is not None
+            else catalog_service.get_trainings_for_field(
+                field,
+                availability,
+                active_only=True,
+            )
+        )
+        catalog_ids = {item["id"] for item in catalog}
+        for historical in summary["items"]:
+            if historical["id"] not in catalog_ids:
+                catalog.append({**historical, "active": False})
+
+        items = []
+        for item in catalog:
+            row = rows.get(item["id"])
+            is_selected = bool(
+                row and (row.status in ACTIVE_STATUSES or row.is_locked)
+            )
+            is_locked = bool(row and row.is_locked)
+            occupied = int(item.get("occupied_seats") or 0) + (1 if is_selected else 0)
+            capacity = item.get("capacity")
+            display_available = (
+                max(int(capacity) - occupied, 0) if capacity is not None else None
+            )
+            status = row.status if row else "available"
+            items.append(
+                {
+                    **item,
+                    "is_selected": is_selected,
+                    "is_locked": is_locked,
+                    "participant_status": status,
+                    "participant_status_label": self.status_label(status, is_locked),
+                    "display_occupied_seats": occupied,
+                    "display_available_seats": display_available,
+                    "is_low_availability": (
+                        display_available is not None and 0 < display_available <= 5
+                    ),
+                }
+            )
+        return {"catalog": items, "summary": summary}
+
+    @staticmethod
+    def status_label(status: str, is_locked: bool = False) -> str:
+        if status == "agreement_signed_by_office":
+            return PARTICIPANT_STATUS_LABELS[status]
+        if is_locked and status not in PARTICIPANT_STATUS_LABELS:
+            return PARTICIPANT_STATUS_LABELS["locked"]
+        return PARTICIPANT_STATUS_LABELS.get(status, "Dostępne")
 
     def save(
         self,
@@ -95,7 +211,13 @@ class SubmissionTrainingService:
         availability: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self.synchronize_legacy(db, submission)
-        catalog = {item["id"]: item for item in normalize_training_catalog(field, active_only=True)}
+        catalog = {
+            item["id"]: item
+            for item in TrainingCatalogService.get_trainings_for_field(
+                field,
+                active_only=True,
+            )
+        }
         selected = {str(item).strip() for item in selected_ids if str(item).strip()}
         if selected - set(catalog):
             raise TrainingSelectionError("Wybrano szkolenie, które nie jest już dostępne.")
@@ -116,7 +238,7 @@ class SubmissionTrainingService:
             (parse_decimal_price(rows[key].training_price_snapshot if key in locked else catalog[key].get("price")) or Decimal("0.00"))
             for key in selected
         )
-        maximum = parse_decimal_price(field.get("max_total_amount"))
+        maximum = TrainingCatalogService.financial_limit(field)
         if maximum is not None and total > maximum:
             raise TrainingSelectionError(f"Łączna wartość szkoleń przekracza limit {format_price_pln(maximum, field.get('currency'))}.")
         now = datetime.now(timezone.utc)

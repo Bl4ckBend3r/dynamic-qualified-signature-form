@@ -19,6 +19,7 @@ class ProcessStatus(StrEnum):
     DECLARATION_WAITING_FOR_SIGNATURE = "DECLARATION_WAITING_FOR_SIGNATURE"
     DECLARATION_SIGNED = "DECLARATION_SIGNED"
     DECLARATION_SIGNATURE_INVALID = "DECLARATION_SIGNATURE_INVALID"
+    TRAINING_SELECTION_OPEN = "TRAINING_SELECTION_OPEN"
     AGREEMENT_NOT_REQUIRED = "AGREEMENT_NOT_REQUIRED"
     AGREEMENT_BLOCKED = "AGREEMENT_BLOCKED"
     AGREEMENT_READY = "AGREEMENT_READY"
@@ -258,6 +259,7 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
     can_sign_documents = decision == OfficerDecision.ACCEPTED and status not in blocked_statuses
     can_generate_agreement = (
         status not in blocked_statuses
+        and status != ProcessStatus.TRAINING_SELECTION_OPEN
         and
         is_agreement_required(row)
         and (is_declaration_signature_valid(row) or not is_declaration_required(row))

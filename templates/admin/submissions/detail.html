@@ -225,17 +225,28 @@
 {% endfor %}
 <section class="admin-card">
     <h3>Wybrane szkolenia</h3>
+    {% if participant_training_view %}
+        <p>
+            <strong>Wykorzystano:</strong> {{ participant_training_view.limit_used_formatted }}
+            {% if participant_training_view.limit_total_formatted %}
+                z {{ participant_training_view.limit_total_formatted }}
+                (pozostało {{ participant_training_view.limit_remaining_formatted }})
+            {% endif %}
+        </p>
+    {% endif %}
     <div class="admin-table-wrap"><table class="admin-table">
-        <thead><tr><th>Nazwa szkolenia</th><th>Cena szkolenia</th><th>Opis</th></tr></thead>
+        <thead><tr><th>Nazwa szkolenia</th><th>Cena szkolenia</th><th>Status</th><th>Opis</th></tr></thead>
         <tbody>
-            {% for training in detail_view.trainings %}
+            {% set participant_trainings = participant_training_view["items"] if participant_training_view else [] %}
+            {% for training in participant_trainings %}
                 <tr>
                     <td>{{ training.name }}</td>
                     <td>{{ training.price_formatted }}</td>
+                    <td>{{ "Zablokowane podpisaną umową" if training.is_locked else "Wybrane" }}</td>
                     <td>{{ training.description or "Brak danych" }}</td>
                 </tr>
             {% else %}
-                <tr><td colspan="3">Brak danych o szkoleniach.</td></tr>
+                <tr><td colspan="4">Brak danych o szkoleniach.</td></tr>
             {% endfor %}
         </tbody>
     </table></div>

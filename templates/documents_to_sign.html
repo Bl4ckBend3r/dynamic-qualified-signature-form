@@ -129,6 +129,13 @@
             {% if result.blocking_reason %}<p><strong>Powód blokady:</strong> {{ result.blocking_reason }}</p>{% endif %}
             {% if result.status_reason and not result.blocking_reason %}<p><strong>Powód:</strong> {{ result.status_reason }}</p>{% endif %}
             {% if result.next_action %}<p><strong>Co dalej?</strong> {{ result.next_action }}</p>{% endif %}
+            {% if result.training_selection_url %}
+                <p>
+                    <a class="btn-primary" href="{{ result.training_selection_url }}">
+                        Wybierz lub zmień szkolenia
+                    </a>
+                </p>
+            {% endif %}
             {% if result.agreement_configuration_error %}
                 <div class="form-errors" role="alert">
                     <p>{{ result.agreement_configuration_error }}</p>

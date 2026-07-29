@@ -327,7 +327,7 @@ def test_declaration_flow_saves_additional_fields_and_legacy_status():
     assert repository.updated[0][1]["process_status"] == "additional_fields_completed"
 
 
-def test_declaration_flow_generates_pdf_with_current_training_selection():
+def test_declaration_flow_generates_pdf_without_training_selection():
     repository = DummyRepository(metadata=None)
     document_service = FakeDocumentService()
     submission = {
@@ -384,14 +384,9 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
 
     assert result.success is True
     context_extra = document_service.generated_documents[0][1]["context_extra"]
-    selected = json.loads(context_extra["selected_trainings"])
-    assert [(item["id"], item["name"], item["price"]) for item in selected] == [
-        ("s1", "Szkolenie 1", "6200.00"),
-        ("s2", "Szkolenie 2", "800.00"),
-    ]
-    assert selected[0]["price_formatted"].startswith("6 200,00")
-    row_selected = json.loads(document_service.generated_documents[0][0][0]["row"]["selected_trainings"])
-    assert [(item["id"], item["price"]) for item in row_selected] == [("s1", "6200.00"), ("s2", "800.00")]
+    assert context_extra["selected_trainings"] == []
+    assert context_extra["selected_trainings_normalized"] == []
+    assert repository.updated[0][1].get("selected_trainings") is None
 
 
 def test_agreement_flow_generates_collection_with_today_by_default():

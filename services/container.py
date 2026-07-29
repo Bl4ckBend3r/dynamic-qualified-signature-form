@@ -30,6 +30,7 @@ from services.strict_mode_stabilization_service import StrictModeStabilizationSe
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_training_service import SubmissionTrainingService
 from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
@@ -42,6 +43,7 @@ class ServiceContainer:
     storage_repository: StorageRepository
     submission_repository: object
     submission_service: SubmissionService
+    submission_training_service: SubmissionTrainingService
     workflow_service: WorkflowService
     beneficiary_agreement_service: BeneficiaryAgreementService
     office_signed_agreement_service: OfficeSignedAgreementService
@@ -169,6 +171,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_document_service=submission_document_service,
         qualification_condition_service=qualification_condition_service,
     )
+    submission_training_service = SubmissionTrainingService()
     document_signing_service = DocumentSigningService(
         storage=storage,
         submission_repository=submission_repository,
@@ -183,6 +186,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage_repository=storage_repository,
         submission_repository=submission_repository,
         submission_service=submission_service,
+        submission_training_service=submission_training_service,
         workflow_service=workflow_service,
         beneficiary_agreement_service=beneficiary_agreement_service,
         office_signed_agreement_service=office_signed_agreement_service,

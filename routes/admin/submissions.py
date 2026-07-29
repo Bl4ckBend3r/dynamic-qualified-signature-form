@@ -36,6 +36,8 @@ from services.admin_submission_service import (
 from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
+from services.training_agreement_service import get_training_selection_field
+from services.training_service import format_price_pln
 from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
 from services.submission_correction_service import SubmissionCorrectionError
 from statuses import WAITING_FOR_CORRECTION
@@ -150,6 +152,29 @@ def submission_detail(form_id: int, submission_pk: int):
             can_review_agreement=can_review_agreement,
         )
         detail_view = build_submission_detail_sections(form, submission)
+        training_field = get_training_selection_field(form.definition_json or {})
+        participant_training_view = None
+        if training_field:
+            participant_training_view = services.submission_training_service.summary(
+                db, submission, training_field
+            )
+            currency = str(training_field.get("currency") or "PLN")
+            participant_training_view.update(
+                limit_total_formatted=format_price_pln(
+                    participant_training_view["limit_total"], currency
+                )
+                if participant_training_view["limit_total"] is not None
+                else None,
+                limit_used_formatted=format_price_pln(
+                    participant_training_view["limit_used"], currency
+                ),
+                limit_remaining_formatted=format_price_pln(
+                    participant_training_view["limit_remaining"], currency
+                )
+                if participant_training_view["limit_remaining"] is not None
+                else None,
+            )
+            db.commit()
         can_manage = can_manage_form(db, g.admin_user, form.id)
         is_agreement_blocked = (
             submission.process_status == ProcessStatus.AGREEMENT_BLOCKED.value
@@ -185,6 +210,7 @@ def submission_detail(form_id: int, submission_pk: int):
             rollback_options=rollback_options,
             blocked_agreement_view=blocked_agreement_view,
             office_signed_agreement_view=office_signed_agreement_view,
+            participant_training_view=participant_training_view,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
         )

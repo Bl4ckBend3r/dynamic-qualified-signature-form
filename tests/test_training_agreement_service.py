@@ -85,7 +85,7 @@ def test_extract_training_selection_skips_inactive_catalog_items():
     assert error == "Wybierz co najmniej jedno szkolenie."
 
 
-def test_declaration_form_places_training_selection_under_training_section():
+def test_declaration_form_omits_training_selection():
     definition = DeclarationFlowService.build_declaration_form_definition(
         {
             "fields": [
@@ -99,7 +99,6 @@ def test_declaration_form_places_training_selection_under_training_section():
 
     assert [field.get("name") or field.get("label") for field in definition["fields"]] == [
         "Wybór szkoleń",
-        "selected_trainings",
         "Oświadczenia uczestnika",
         "osw_rodo",
     ]

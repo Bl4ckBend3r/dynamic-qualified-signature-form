@@ -15,9 +15,9 @@ from form_loader import (
 )
 from services.document_service import DocumentType, serialize_json_list
 from services.process_service import ProcessStatus
-from services.training_agreement_service import extract_training_selection, get_training_selection_field
-from services.training_service import format_price_pln, normalize_trainings_config
+from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
+from services.training_service import format_price_pln, normalize_trainings_config
 
 
 @dataclass
@@ -41,10 +41,11 @@ class DeclarationFlowService:
             "title": declaration_config.get("form_title") or "Uzupelnienie deklaracji uczestnictwa",
             "description": declaration_config.get("form_description") or "",
             "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklaracje PDF",
-            "fields": normalize_training_fields(
-                fields_with_training_selection_in_training_section(declaration_config.get("fields") or []),
-                availability=availability,
-            ),
+            "fields": [
+                dict(field)
+                for field in declaration_config.get("fields") or []
+                if isinstance(field, Mapping) and field.get("type") != "training_selection"
+            ],
         }
 
     @staticmethod
@@ -72,13 +73,7 @@ class DeclarationFlowService:
         declaration_config: Mapping[str, Any],
         submission_repository=None,
     ) -> DeclarationFlowResult:
-        training_field = get_training_selection_field(declaration_config)
-        availability = self._training_availability(
-            submission=submission,
-            training_field=training_field,
-            submission_repository=submission_repository,
-        )
-        declaration_definition = self.build_declaration_form_definition(declaration_config, availability=availability)
+        declaration_definition = self.build_declaration_form_definition(declaration_config)
         return DeclarationFlowResult(
             success=True,
             values=dict(submission["row"]),
@@ -98,24 +93,11 @@ class DeclarationFlowService:
         document_service,
         refresh_submission: Callable[[str], dict | None],
     ) -> DeclarationFlowResult:
-        training_field = get_training_selection_field(declaration_config)
-        availability = self._training_availability(
-            submission=submission,
-            training_field=training_field,
-            submission_repository=submission_repository,
-        )
-        declaration_definition = self.build_declaration_form_definition(declaration_config, availability=availability)
+        declaration_definition = self.build_declaration_form_definition(declaration_config)
         declaration_data = extract_submission_data(declaration_definition, form_data)
         declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values = {**submission["row"], **declaration_data}
         errors = validate_submission(declaration_definition, declaration_data)
-
-        if training_field:
-            selected_trainings, training_error = extract_training_selection(training_field, form_data, availability=availability)
-            declaration_data["selected_trainings"] = serialize_json_list(selected_trainings)
-            values["selected_trainings"] = declaration_data["selected_trainings"]
-            if training_error:
-                errors[training_field.get("name", "selected_trainings")] = training_error
 
         if errors:
             return DeclarationFlowResult(
@@ -138,7 +120,7 @@ class DeclarationFlowService:
                 refreshed_submission,
                 form_config,
                 DocumentType.DECLARATION,
-                context_extra=updates,
+                context_extra={**updates, "selected_trainings": [], "selected_trainings_normalized": []},
                 force=True,
             )
         return DeclarationFlowResult(

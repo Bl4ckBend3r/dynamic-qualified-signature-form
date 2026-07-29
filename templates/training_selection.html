@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Wybór szkoleń{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{{ url_for('documents.documents_to_sign', submission_id=submission.submission_id) }}">← Powrót do dokumentów</a>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>{{ field.get("label") or "Wybierz szkolenia" }}</h2>
+        <p>Wniosek: <strong>{{ submission.submission_id }}</strong></p>
+        {% if not selection_open %}
+            <p class="form-error">Nabór na szkolenia został zamknięty. Zapisane wybory są dostępne tylko do odczytu.</p>
+        {% endif %}
+        {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    </div>
+
+    <form method="post" action="{{ action_url }}" class="dynamic-form">
+        <div class="static-text">
+            {% if limit_total_formatted %}
+                <p><strong>Limit:</strong> {{ limit_total_formatted }}</p>
+                <p>
+                    <strong>Wykorzystano:</strong> <span data-training-used>{{ limit_used_formatted }}</span>
+                    · <strong>Pozostało:</strong> <span data-training-remaining>{{ limit_remaining_formatted }}</span>
+                </p>
+            {% else %}
+                <p><strong>Wartość wybranych szkoleń:</strong> {{ limit_used_formatted }}</p>
+            {% endif %}
+            <p>Szkolenia oznaczone jako zablokowane mają już wgraną podpisaną umowę i nie mogą zostać usunięte.</p>
+        </div>
+
+        {% for training in catalog %}
+            {% set is_selected = training.id in selected_ids %}
+            {% set is_locked = training.id in locked_ids %}
+            <div class="form-row">
+                <label>
+                    <input
+                        type="checkbox"
+                        name="{{ field.get('name') or 'selected_trainings' }}"
+                        value="{{ training.id }}"
+                        data-training-price="{{ training.price or 0 }}"
+                        {% if is_selected %}checked{% endif %}
+                        {% if is_locked or not selection_open or training.get('available_seats') == 0 %}disabled{% endif %}
+                    >
+                    {% if is_locked %}
+                        <input type="hidden" name="{{ field.get('name') or 'selected_trainings' }}" value="{{ training.id }}">
+                    {% endif %}
+                    <strong>{{ training.name }}</strong> — {{ training.price_formatted }}
+                    {% if is_locked %}<span>Zablokowane — podpisana umowa została wgrana.</span>{% endif %}
+                </label>
+                {% if training.description %}<p>{{ training.description }}</p>{% endif %}
+                <p>Status: {{ "zablokowane" if is_locked else "wybrane" if is_selected else "dostępne" }}</p>
+                {% if training.get("available_seats") is not none %}
+                    <p>Wolne miejsca: {{ training.available_seats }}</p>
+                {% endif %}
+                {% if training.get("low_seats_comment_visible") %}
+                    <p>{{ training.low_seats_comment_visible }}</p>
+                {% endif %}
+                {% for date in training.dates %}
+                    <p>{{ date.label }}{% if date.location %}, {{ date.location }}{% endif %}</p>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p>Brak aktywnych szkoleń.</p>
+        {% endfor %}
+
+        {% if selection_open %}
+            <button type="submit" class="btn-primary">Zapisz wybór szkoleń</button>
+        {% endif %}
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if selection_open %}
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const inputs = [...document.querySelectorAll("[data-training-price]")];
+    const usedNode = document.querySelector("[data-training-used]");
+    const remainingNode = document.querySelector("[data-training-remaining]");
+    const limit = {{ summary.limit_total|string|tojson if summary.limit_total is not none else "null" }};
+    const format = value => new Intl.NumberFormat("pl-PL", {
+        style: "currency", currency: "{{ field.get('currency') or 'PLN' }}"
+    }).format(value);
+    const update = () => {
+        const used = inputs
+            .filter(input => input.checked)
+            .reduce((total, input) => total + Number(input.dataset.trainingPrice || 0), 0);
+        if (usedNode) usedNode.textContent = format(used);
+        if (remainingNode && limit !== null) remainingNode.textContent = format(Math.max(0, Number(limit) - used));
+    };
+    inputs.forEach(input => input.addEventListener("change", update));
+});
+</script>
+{% endif %}
+{% endblock %}

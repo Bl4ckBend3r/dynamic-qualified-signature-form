@@ -74,7 +74,7 @@ def test_low_seats_comment_is_visible_only_for_one_to_five_available_seats():
     assert availability["low"]["available_seats_label"] == "Dostępne miejsca: 5"
 
 
-def test_declaration_definition_contains_only_active_admin_catalog_items():
+def test_declaration_definition_omits_training_catalog():
     declaration = {
         "fields": [
             {
@@ -96,8 +96,4 @@ def test_declaration_definition_contains_only_active_admin_catalog_items():
     }
 
     definition = DeclarationFlowService.build_declaration_form_definition(declaration, availability)
-    catalog = definition["fields"][0]["catalog"]
-
-    assert [item["id"] for item in catalog] == ["open"]
-    assert catalog[0]["is_available"] is False
-    assert catalog[0]["available_seats_label"] == "Brak wolnych miejsc"
+    assert definition["fields"] == []

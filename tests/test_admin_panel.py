@@ -32,6 +32,7 @@ from models import (
     ServiceDocument,
     SubmissionDecision,
     SubmissionFile,
+    SubmissionTraining,
     SubmissionWorkflowEvent,
     SystemMailSettings,
     User,
@@ -3228,6 +3229,10 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
                 officer_decision="accepted",
                 acceptance_required="Tak",
                 declaration_required="Tak",
+                declaration_generated="Tak",
+                declaration_signed="Tak",
+                declaration_signature_valid="Tak",
+                access_token="training-secret",
             )
         )
         db.commit()
@@ -3248,19 +3253,51 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     declaration_html = declaration_response.get_data(as_text=True)
 
     assert declaration_response.status_code == 200
-    assert "Excel zaawansowany" in declaration_html
-    assert "Kadry i płace" in declaration_html
-    assert "1 345,50 zł" in declaration_html
-    assert "2 199,00 zł" in declaration_html
-    assert "Dostępne miejsca: 10" in declaration_html
-    assert "Dostępne miejsca: 5" in declaration_html
-    assert "Zostało niewiele miejsc." in declaration_html
+    assert "Excel zaawansowany" not in declaration_html
+    assert "Kadry i płace" not in declaration_html
+
+    training_response = admin_client.get(
+        "/submissions/training-declaration-1/trainings?token=training-secret"
+    )
+    training_html = training_response.get_data(as_text=True)
+    assert training_response.status_code == 200
+    assert "Excel zaawansowany" in training_html
+    assert "Kadry i płace" in training_html
+    assert "1 345,50 zł" in training_html
+    assert "2 199,00 zł" in training_html
+    assert "Wolne miejsca: 10" in training_html
+    assert "Wolne miejsca: 5" in training_html
+    assert "Zostało niewiele miejsc." in training_html
     assert "Tego komentarza nie pokazuj." not in declaration_html
-    assert "01.09.2026, 09:00–12:00" in declaration_html
-    assert "Lokalizacja: Zielona Góra" in declaration_html
-    assert "Szkolenie 1" not in declaration_html
-    assert "Szkolenie 2" not in declaration_html
-    assert "Szkolenie 3" not in declaration_html
+    assert "01.09.2026, 09:00–12:00" in training_html
+    assert "Zielona Góra" in training_html
+
+    save_response = admin_client.post(
+        "/submissions/training-declaration-1/trainings?token=training-secret",
+        data={"selected_trainings": ["s1", "s2"]},
+    )
+    assert save_response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        selected = db.query(SubmissionTraining).order_by(SubmissionTraining.training_id).all()
+        assert [item.training_id for item in selected] == ["s1", "s2"]
+
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=trainings").get_data(as_text=True)
+    token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    close_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-selection/toggle",
+        data={"csrf_token": token},
+    )
+    assert close_response.status_code == 302
+    closed_save = admin_client.post(
+        "/submissions/training-declaration-1/trainings?token=training-secret",
+        data={"selected_trainings": ["s1"]},
+    )
+    assert closed_save.status_code == 409
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        assert form.training_selection_open is False
+        selected = db.query(SubmissionTraining).all()
+        assert {item.training_id for item in selected} == {"s1", "s2"}
 
 
 def test_declaration_download_disabled_before_declaration_form_is_completed(admin_app, admin_client):

@@ -602,12 +602,24 @@
         <input type="hidden" name="training_active_present" value="1">
         <div class="admin-section-heading">
             <div>
-                <h2>Szkolenia w deklaracji</h2>
-                <p>Te dane zasilają wybór szkoleń, ceny, dostępność i terminy widoczne w deklaracji.</p>
+                <h2>Szkolenia po podpisaniu deklaracji</h2>
+                <p>Te dane zasilają osobny etap wyboru szkoleń dostępny po wgraniu poprawnie podpisanej deklaracji.</p>
+                <p>
+                    <strong>Nabór:</strong> {{ "otwarty" if form.training_selection_open else "zamknięty" }}
+                    <button
+                        class="admin-button-secondary compact"
+                        type="submit"
+                        formmethod="post"
+                        formnovalidate
+                        formaction="{{ url_for('admin.form_training_selection_toggle', form_id=form.id) }}"
+                    >
+                        {{ "Zamknij nabór" if form.training_selection_open else "Otwórz nabór" }}
+                    </button>
+                </p>
             </div>
             <label class="admin-check compact">
                 <input type="checkbox" name="training_selection_enabled" {% if training_field and training_field.get('enabled') %}checked{% endif %}>
-                <span>Pokaż wybór szkoleń</span>
+                <span>Udostępnij etap wyboru szkoleń</span>
             </label>
         </div>
         <div class="admin-form-grid">

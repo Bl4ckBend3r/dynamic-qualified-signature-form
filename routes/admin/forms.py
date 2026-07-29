@@ -32,6 +32,7 @@ from services.workflow_config_service import (
 )
 
 from . import (
+    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     active_fields_for_form,
     bp,
@@ -535,6 +536,24 @@ def form_toggle(form_id: int):
         is_active = form.is_active
     flash("Formularz został aktywowany." if is_active else "Formularz został dezaktywowany.", "success")
     return redirect(url_for("admin.forms_list"))
+
+
+@bp.post("/forms/<int:form_id>/training-selection/toggle")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def form_training_selection_toggle(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        form.training_selection_open = not form.training_selection_open
+        db.commit()
+        is_open = form.training_selection_open
+    flash(
+        "Nabór na szkolenia został otwarty."
+        if is_open
+        else "Nabór na szkolenia został zamknięty. Istniejące wybory pozostają bez zmian.",
+        "success",
+    )
+    return redirect(url_for("admin.form_edit", form_id=form_id, tab="trainings"))
 
 
 @bp.route("/forms/<int:form_id>/fields", methods=["GET", "POST"])

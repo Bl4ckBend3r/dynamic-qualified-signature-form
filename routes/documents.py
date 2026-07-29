@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -14,10 +15,14 @@ from flask import Blueprint, abort, current_app, flash, jsonify, redirect, rende
 from werkzeug.exceptions import HTTPException
 from sqlalchemy import select
 from database import create_session_factory
-from models import Form
+from models import Form, FormSubmission, SubmissionFile
 from services.document_service import DocumentType
+from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
-from services.process_service import build_process_state
+from services.process_service import ProcessStatus, build_process_state
+from services.training_agreement_service import get_training_selection_field
+from services.training_availability_service import TrainingAvailabilityService
+from services.training_service import format_price_pln, normalize_training_catalog
 from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
 
@@ -108,6 +113,188 @@ def form_config_with_training_adapter(form_config: dict) -> tuple[dict, dict]:
     )
 
 
+def _training_access_token(submission: dict) -> str:
+    return str((submission.get("row") or {}).get("access_token") or "").strip()
+
+
+def _lock_submission_training(submission_id: str, agreement_id: str) -> None:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        return
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        agreement_file_id = db.execute(
+            select(SubmissionFile.id)
+            .where(
+                SubmissionFile.public_submission_id == submission_id,
+                SubmissionFile.training_key == agreement_id,
+                SubmissionFile.signed.is_(True),
+            )
+            .order_by(SubmissionFile.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if submission and get_services().submission_training_service.lock_for_agreement(
+            db,
+            submission,
+            agreement_id,
+            agreement_file_id=agreement_file_id,
+        ):
+            db.commit()
+
+
+def _associate_generated_training_agreements(
+    submission_id: str, agreements: list[dict]
+) -> None:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url or not agreements:
+        return
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if submission:
+            get_services().submission_training_service.associate_generated_agreements(
+                db, submission, agreements
+            )
+            db.commit()
+
+
+def _open_training_selection_stage(submission_id: str, slug: str) -> bool:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        return False
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none()
+        field = get_training_selection_field(form.definition_json or {}) if form else None
+        if not field or not field.get("enabled", True):
+            return False
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if submission is None:
+            return False
+        submission.process_status = ProcessStatus.TRAINING_SELECTION_OPEN.value
+        submission.workflow_step = ProcessStatus.TRAINING_SELECTION_OPEN.value
+        db.commit()
+        return True
+
+
+@bp.route("/submissions/<submission_id>/trainings", methods=["GET", "POST"])
+def training_selection(submission_id: str):
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        abort(404)
+
+    token = str(request.values.get("token") or "").strip()
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if (
+            submission is None
+            or not token
+            or not secrets.compare_digest(token, str(submission.access_token or ""))
+        ):
+            abort(404)
+
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            abort(404)
+        field = get_training_selection_field(form.definition_json or {})
+        if field is None or not field.get("enabled", True):
+            abort(404)
+        decision = str(
+            submission.officer_decision or submission.acceptance_required or ""
+        ).strip().lower()
+        if (
+            decision not in {"tak", "accepted"}
+            or str(submission.declaration_generated or "").strip().lower() != "tak"
+            or str(submission.declaration_signed or "").strip().lower() != "tak"
+            or str(submission.declaration_signature_valid or "").strip().lower() != "tak"
+        ):
+            abort(403)
+
+        services = get_services()
+        availability = TrainingAvailabilityService(
+            services.submission_repository
+        ).availability_for_field(
+            form_slug=form.slug,
+            field=field,
+            current_submission_id=submission.submission_id,
+        )
+        catalog = [
+            {**item, **dict(availability.get(item["id"], {}))}
+            for item in normalize_training_catalog(field, active_only=True)
+        ]
+        error = None
+        status_code = 200
+        if request.method == "POST":
+            if not form.training_selection_open:
+                error = "Wybór szkoleń dla tego formularza został zamknięty."
+                status_code = 409
+            else:
+                try:
+                    services.submission_training_service.save(
+                        db,
+                        submission,
+                        field,
+                        request.form.getlist(str(field.get("name") or "selected_trainings")),
+                        availability=availability,
+                    )
+                    db.commit()
+                    flash("Wybór szkoleń został zapisany.", "success")
+                    return redirect(
+                        url_for(
+                            "documents.training_selection",
+                            submission_id=submission.submission_id,
+                            token=token,
+                        )
+                    )
+                except TrainingSelectionError as exc:
+                    db.rollback()
+                    error = str(exc)
+                    status_code = 400
+
+        summary = services.submission_training_service.summary(db, submission, field)
+        db.commit()
+        selected_ids = {item["id"] for item in summary["items"]}
+        locked_ids = {item["id"] for item in summary["items"] if item["is_locked"]}
+        currency = str(field.get("currency") or "PLN")
+        return (
+            render_template(
+                "training_selection.html",
+                submission=submission,
+                form=form,
+                field=field,
+                catalog=catalog,
+                selected_ids=selected_ids,
+                locked_ids=locked_ids,
+                selection_open=bool(form.training_selection_open),
+                summary=summary,
+                limit_total_formatted=format_price_pln(summary["limit_total"], currency)
+                if summary["limit_total"] is not None
+                else None,
+                limit_used_formatted=format_price_pln(summary["limit_used"], currency),
+                limit_remaining_formatted=format_price_pln(summary["limit_remaining"], currency)
+                if summary["limit_remaining"] is not None
+                else None,
+                error=error,
+                action_url=url_for(
+                    "documents.training_selection",
+                    submission_id=submission.submission_id,
+                    token=token,
+                ),
+            ),
+            status_code,
+        )
+
+
 @bp.get("/nextcloud-assets/<path:asset_path>")
 def nextcloud_asset(asset_path: str):
     services = get_services()
@@ -151,6 +338,15 @@ def upload_signed_declaration(slug: str, submission_id: str):
             flash("Podpis deklaracji nie jest dopuszczalnym podpisem mSzafir ani Profilem Zaufanym.", "error")
         else:
             flash("Deklaracja została podpisana i poprawnie zweryfikowana.", "success")
+            token = _training_access_token(submission)
+            if token and _open_training_selection_stage(submission_id, slug):
+                return redirect(
+                    url_for(
+                        "documents.training_selection",
+                        submission_id=submission_id,
+                        token=token,
+                    )
+                )
     except ValueError as exc:
         flash(str(exc), "error")
     except Exception as exc:
@@ -284,6 +480,8 @@ def generate_training_agreements(slug: str, submission_id: str):
             form_config=form_config,
             document_service=services.document_service,
         )
+        if result.success:
+            _associate_generated_training_agreements(submission_id, result.agreements)
         flash(result.message or "Wygenerowano umowy.", "success" if result.success else "error")
     except Exception as exc:
         logger.exception("Nie udało się wygenerować umów szkoleniowych: %s", exc)
@@ -312,6 +510,7 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
         elif not result["is_valid"]:
             flash("Podpis umowy nie jest dopuszczalnym podpisem.", "error")
         else:
+            _lock_submission_training(submission_id, agreement_id)
             flash("Podpisana umowa została poprawnie zweryfikowana.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
@@ -372,6 +571,7 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             elif not verification["is_valid"]:
                 item["message"] = "Podpis umowy nie jest dopuszczalnym podpisem."
             else:
+                _lock_submission_training(submission_id, agreement_id)
                 item.update(status="uploaded", message="Wgrano i zweryfikowano.")
         except ValueError as exc:
             item["message"] = str(exc)
@@ -547,7 +747,7 @@ def build_documents_to_sign_result(
         and str(agreement_document.get("template_html") or agreement_document.get("template") or "").strip()
     )
 
-    return services.document_service.document_view_service.build_documents_to_sign_result(
+    result = services.document_service.document_view_service.build_documents_to_sign_result(
         submission_id=submission_id,
         submission=refreshed_submission,
         form_config=form_config,
@@ -587,6 +787,21 @@ def build_documents_to_sign_result(
         status_labeler=workflow_status_label,
         available_filenames=documents_view.get("available_filenames", set()),
     )
+    token = _training_access_token(refreshed_submission)
+    training_field = get_training_selection_field(form_config)
+    result["training_selection_url"] = (
+        url_for(
+            "documents.training_selection",
+            submission_id=submission_id,
+            token=token,
+        )
+        if token
+        and result.get("declaration_signature_valid")
+        and training_field
+        and training_field.get("enabled", True)
+        else ""
+    )
+    return result
 
 
 def build_existing_declaration_result(services, submission: dict, form_config: dict) -> dict:

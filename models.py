@@ -149,6 +149,27 @@ class FormSubmission(Base):
     )
 
 
+class SubmissionTraining(Base):
+    __tablename__ = "submission_trainings"
+    __table_args__ = (
+        UniqueConstraint("submission_id", "training_id", name="uq_submission_trainings_submission_training"),
+        Index("ix_submission_trainings_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), index=True, nullable=False)
+    training_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    training_name_snapshot: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    training_price_snapshot: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(64), default="selected", nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by_event: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    agreement_file_id: Mapped[int | None] = mapped_column(ForeignKey("submission_files.id", ondelete="SET NULL"), nullable=True)
+    selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class SubmissionFile(Base):
     __tablename__ = "submission_files"
     __table_args__ = (
@@ -329,6 +350,7 @@ class Form(Base):
     definition_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    training_selection_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     label_text: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     label_variant: Mapped[str] = mapped_column(String(64), default="project", nullable=False)
     label_color: Mapped[str] = mapped_column(String(64), default="#b38d45", nullable=False)

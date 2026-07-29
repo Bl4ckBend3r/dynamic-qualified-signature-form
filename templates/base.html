@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
+    
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block extra_css %}{% endblock %}
+    <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
+<link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
 </head>
 <body>
     <div class="page-shell">

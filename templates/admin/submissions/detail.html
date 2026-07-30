@@ -273,20 +273,53 @@
         </table></div>
     </details>
 {% endif %}
+{% set submission_workflow = (form.definition_json or {}).get("workflow", {}) %}
+{% set submission_steps = submission_workflow.get("steps", []) %}
+{% set active_workflow_stage = submission.workflow_stage or submission.workflow_step %}
+{% if submission_steps %}
+<section class="admin-card submission-workflow-map">
+    <div class="admin-section-heading">
+        <div>
+            <h2>Pozycja zgłoszenia w workflow</h2>
+            <p>Aktywny etap, ukończona ścieżka i dostępne przejścia według konfiguracji formularza.</p>
+        </div>
+        <span class="workflow-status-badge">{{ active_workflow_stage or "Etap nierozpoznany" }}</span>
+    </div>
+    <div class="submission-workflow-map__track" role="img" aria-label="Schemat workflow zgłoszenia">
+        {% for step in submission_steps if step.get("active", True) %}
+            {% set is_active = step.get("id") == active_workflow_stage %}
+            <article class="submission-workflow-node{% if is_active %} is-active{% endif %}{% if step.get('final') %} is-final{% endif %}{% if step.get('rejected') %} is-rejected{% endif %}">
+                <small>{{ step.get("status") }}</small>
+                <strong>{{ step.get("admin_label") or step.get("label") or step.get("id") }}</strong>
+                {% if is_active %}
+                    <span>Aktualny etap</span>
+                    {% if step.get("next") %}<small>Dalej: {{ step.get("next") }}</small>{% endif %}
+                    {% for decision, target in (step.get("decisions") or {}).items() %}
+                        <small>{{ decision }} → {{ target }}</small>
+                    {% endfor %}
+                {% endif %}
+            </article>
+            {% if not loop.last %}<span class="submission-workflow-map__arrow" aria-hidden="true">→</span>{% endif %}
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
 <h2>Historia workflow</h2>
 <p><small>Źródło: {{ workflow_history.source }}</small></p>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
-    <thead><tr><th>Status</th><th>Krok</th><th>Aktor</th><th>Powód</th><th>Data</th></tr></thead>
+    <thead><tr><th>Status</th><th>Krok</th><th>Decyzja</th><th>Aktor</th><th>Powód / wiadomość</th><th>Akcje uboczne</th><th>Data</th></tr></thead>
     <tbody>{% for event in workflow_history.events %}
         <tr>
             <td>{{ event.new_status_label or event.new_status }}</td>
             <td>{{ event.new_step }}</td>
+            <td>{{ event.decision_code or "—" }}</td>
             <td>{{ event.actor_role }}</td>
-            <td>{{ event.reason }}</td>
+            <td>{{ event.reason }}{% if event.user_message %}<br><small>{{ event.user_message }}</small>{% endif %}</td>
+            <td>{% if event.side_effects %}<code>{{ event.side_effects }}</code>{% else %}—{% endif %}</td>
             <td>{{ event.created_at }}</td>
         </tr>
     {% else %}
-        <tr><td colspan="5">Brak historii workflow.</td></tr>
+        <tr><td colspan="7">Brak historii workflow.</td></tr>
     {% endfor %}</tbody>
 </table></div>
 <h2>Historia decyzji</h2>

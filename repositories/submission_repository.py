@@ -529,6 +529,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
                     actor_email=str(event.get("actor_email") or ""),
                     actor_role=str(event.get("actor_role") or "system"),
                     reason=str(event.get("reason") or ""),
+                    decision_code=str(event.get("decision_code") or ""),
+                    user_message=str(event.get("user_message") or ""),
+                    side_effects=dict(event.get("side_effects") or {}),
                     source=str(event.get("source") or "system"),
                 )
             )

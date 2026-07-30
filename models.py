@@ -101,6 +101,12 @@ class FormSubmission(Base):
 
     process_status: Mapped[str] = mapped_column(String(128), default="FORM_SUBMITTED", nullable=False)
     workflow_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    # Canonical layered workflow state. The columns above remain compatibility
+    # aliases until all external integrations have migrated.
+    workflow_stage: Mapped[str | None] = mapped_column(String(100), default=None, nullable=True)
+    final_outcome: Mapped[str | None] = mapped_column(String(100), default=None, nullable=True)
+    document_states: Mapped[dict | None] = mapped_column(JsonDict, default=None, nullable=True)
+    legacy_process_status: Mapped[str | None] = mapped_column(String(100), default=None, nullable=True)
     officer_decision: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     officer_decision_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     officer_decision_email_requested: Mapped[str] = mapped_column(String(16), default="", nullable=False)
@@ -244,6 +250,9 @@ class SubmissionWorkflowEvent(Base):
     actor_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     actor_role: Mapped[str] = mapped_column(String(64), default="system", nullable=False)
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    decision_code: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True)
+    user_message: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
+    side_effects: Mapped[dict | None] = mapped_column(JsonDict, default=None, nullable=True)
     source: Mapped[str] = mapped_column(String(128), default="system", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -76,7 +76,12 @@ def validate_admin_form_config(form_definition: dict, *, validate_visual_workflo
     training_field = TrainingCatalogService.get_training_field(form_definition)
     errors.extend(TrainingCatalogService().validate_field(training_field))
     if validate_visual_workflow:
-        errors.extend(WorkflowConfigValidator().validate(form_definition.get("workflow") or {}))
+        errors.extend(
+            WorkflowConfigValidator().validate(
+                form_definition.get("workflow") or {},
+                form_definition,
+            )
+        )
     return list(dict.fromkeys(errors))
 
 
@@ -211,8 +216,19 @@ def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
                 "no_status": form_data.get(
                     f"decision_{decision_id}_no_status", current.get("no_status", current.get("status_on_no", ""))
                 ).strip(),
+                "correction_status": form_data.get(
+                    f"decision_{decision_id}_correction_status",
+                    current.get("correction_status", current.get("status_on_correction", "")),
+                ).strip(),
                 "reason_required": form_data.get(f"decision_{decision_id}_reason_required") == "on",
+                "require_reason": form_data.get(f"decision_{decision_id}_reason_required") == "on",
                 "send_email": form_data.get(f"decision_{decision_id}_send_email") == "on",
+                "user_message": form_data.get(
+                    f"decision_{decision_id}_user_message", current.get("user_message", "")
+                ).strip(),
+                "system_action": form_data.get(
+                    f"decision_{decision_id}_system_action", current.get("system_action", "")
+                ).strip(),
                 "active": (
                     form_data.get(f"decision_{decision_id}_active") == "on"
                     if f"decision_{decision_id}_active" in form_data

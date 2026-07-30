@@ -92,6 +92,10 @@ FORM_FIELD_MAP: dict[str, str] = {
     # Workflow/status columns.
     "process_status": "process_status",
     "workflow_step": "workflow_step",
+    "workflow_stage": "workflow_stage",
+    "final_outcome": "final_outcome",
+    "document_states": "document_states",
+    "legacy_process_status": "legacy_process_status",
     "officer_decision": "officer_decision",
     "officer_decision_reason": "officer_decision_reason",
     "officer_decision_email_requested": "officer_decision_email_requested",
@@ -165,7 +169,7 @@ DATETIME_COLUMNS = {
 
 INTEGER_COLUMNS = {"wiek"}
 NUMERIC_COLUMNS: set[str] = set()
-JSON_COLUMNS = {"data_json"}
+JSON_COLUMNS = {"data_json", "document_states"}
 
 TEXT_COLUMNS = (
     FORM_SUBMISSION_COLUMNS
@@ -196,6 +200,10 @@ REQUIRED_CONSENT_COLUMNS = {
 STATUS_DEFAULTS: dict[str, Any] = {
     "process_status": ProcessStatus.FORM_SUBMITTED.value,
     "workflow_step": "",
+    "workflow_stage": "",
+    "final_outcome": "ACTIVE",
+    "document_states": {},
+    "legacy_process_status": "",
     "officer_decision": "",
     "officer_decision_reason": "",
     "officer_decision_email_requested": "",

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
+
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessStatusCode(StrEnum):
@@ -262,6 +266,7 @@ def get_status_label(value: str | None) -> str:
     status = normalize_status(raw_value)
     if raw_value == status.value:
         return STATUS_CATALOG[status].label
+    logger.warning("Unknown process status; using controlled public fallback: %s", raw_value)
     return f"Nieznany status: {raw_value}"
 
 

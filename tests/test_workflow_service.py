@@ -200,3 +200,31 @@ def test_workflow_and_decision_rollback_when_strict_disabled():
     assert workflow["used_legacy_fallback"] is True
     assert decision["source"] == "legacy_form_submission"
     assert decision["used_legacy_fallback"] is True
+
+
+def test_transition_runs_registered_side_effects_and_records_results():
+    repository = FakeRepository()
+    calls = []
+
+    def generate_document(**context):
+        calls.append(context["target_step"])
+        return {"filename": "agreement.pdf"}
+
+    service = WorkflowService(
+        repository,
+        side_effect_handlers={"generate_document": generate_document},
+    )
+
+    assert service.transition_to(
+        "abc",
+        "agreement",
+        metadata={
+            "side_effects": ["generate_document", "send_email"],
+            "user_message": "Umowa jest gotowa.",
+        },
+    )
+    assert calls == ["agreement"]
+    event = repository.events[-1][1]
+    assert event["side_effects"]["generate_document"]["status"] == "completed"
+    assert event["side_effects"]["send_email"]["status"] == "skipped"
+    assert event["user_message"] == "Umowa jest gotowa."

@@ -12,6 +12,7 @@ from statuses import (
     normalize_status,
 )
 from services.status_catalog import can_transition, get_status_label, normalize_status as catalog_normalize_status
+from services.workflow_state_service import FinalOutcome, final_outcome_for_status
 
 
 def workflow_status_label(status_id: str, form_config: dict | None = None) -> str:
@@ -36,12 +37,13 @@ def workflow_status_label(status_id: str, form_config: dict | None = None) -> st
 
 
 class WorkflowService:
-    def __init__(self, submission_repository=None, audit_log_service=None) -> None:
+    def __init__(self, submission_repository=None, audit_log_service=None, *, side_effect_handlers=None) -> None:
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
+        self.side_effect_handlers = dict(side_effect_handlers or {})
 
     def get_current_step(self, submission: dict, form_config: dict) -> str:
-        explicit = str(submission.get("workflow_step") or "").strip()
+        explicit = str(submission.get("workflow_stage") or submission.get("workflow_step") or "").strip()
         if explicit:
             return explicit
         workflow = form_config.get("workflow") or {}
@@ -59,11 +61,26 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
-        old_step = submission.get("workflow_step")
+        old_step = submission.get("workflow_stage") or submission.get("workflow_step")
+        target_status = str((metadata or {}).get("target_status") or self._status_for_step(target_step))
+        side_effects = self._run_side_effects(
+            (metadata or {}).get("side_effects") or [],
+            submission_id=submission_id,
+            submission=submission,
+            target_step=target_step,
+            metadata=metadata or {},
+        )
         updates = {
             "workflow_step": target_step,
-            "process_status": self._status_for_step(target_step),
+            "workflow_stage": target_step,
+            "process_status": target_status,
+            "legacy_process_status": str(submission.get("legacy_process_status") or submission.get("process_status") or ""),
+            "final_outcome": final_outcome_for_status(target_status).value,
         }
+        if isinstance((metadata or {}).get("document_states"), dict):
+            updates["document_states"] = dict((metadata or {})["document_states"])
+        if (metadata or {}).get("officer_decision"):
+            updates["officer_decision"] = str((metadata or {})["officer_decision"])
         updated = self.submission_repository.update(submission_id, updates)
         if updated:
             self._record_workflow_event(
@@ -74,6 +91,9 @@ class WorkflowService:
                 new_step=target_step,
                 actor=actor,
                 reason=str((metadata or {}).get("reason") or ""),
+                decision_code=str((metadata or {}).get("officer_decision") or ""),
+                user_message=str((metadata or {}).get("user_message") or ""),
+                side_effects=side_effects,
                 source="workflow_transition_to",
             )
         if updated and self.audit_log_service:
@@ -106,6 +126,12 @@ class WorkflowService:
         submission.process_status = target_status
         if target_step is not None:
             submission.workflow_step = target_step
+            if hasattr(submission, "workflow_stage"):
+                submission.workflow_stage = target_step
+        if hasattr(submission, "legacy_process_status") and not submission.legacy_process_status:
+            submission.legacy_process_status = str(old_status or "")
+        if hasattr(submission, "final_outcome"):
+            submission.final_outcome = final_outcome_for_status(target_status).value
         self._record_workflow_event(
             getattr(submission, "submission_id", ""),
             previous_status=old_status,
@@ -114,6 +140,9 @@ class WorkflowService:
             new_step=getattr(submission, "workflow_step", None),
             actor=actor,
             reason=reason,
+            decision_code="",
+            user_message="",
+            side_effects={},
             source="workflow_transition_submission",
         )
         if self.audit_log_service:
@@ -177,6 +206,12 @@ class WorkflowService:
             "correction_requested_at": datetime.now(timezone.utc).isoformat(),
             "process_status": WAITING_FOR_CORRECTION,
             "workflow_step": "waiting_for_correction",
+            "workflow_stage": "waiting_for_correction",
+            "final_outcome": FinalOutcome.ACTIVE.value,
+            "legacy_process_status": str(
+                submission_before.get("legacy_process_status") or submission_before.get("process_status") or ""
+            ),
+            "officer_decision": "correction_required",
         }
         updated = self.submission_repository.update(submission_id, updates)
         if updated:
@@ -188,6 +223,9 @@ class WorkflowService:
                 new_step="waiting_for_correction",
                 actor=actor,
                 reason=message,
+                decision_code="correction_required",
+                user_message=message,
+                side_effects={},
                 source="workflow_request_correction",
             )
         if updated and self.audit_log_service:
@@ -226,6 +264,8 @@ class WorkflowService:
                 "correction_required": "Nie",
                 "process_status": CORRECTED,
                 "workflow_step": "officer_review",
+                "workflow_stage": "officer_review",
+                "final_outcome": FinalOutcome.ACTIVE.value,
             },
         )
         if updated:
@@ -237,6 +277,9 @@ class WorkflowService:
                 new_step="officer_review",
                 actor=actor,
                 reason="correction_submitted",
+                decision_code="",
+                user_message="",
+                side_effects={},
                 source="workflow_mark_corrected",
             )
         return updated
@@ -268,6 +311,9 @@ class WorkflowService:
         new_step: str | None,
         actor: str,
         reason: str,
+        decision_code: str = "",
+        user_message: str = "",
+        side_effects: dict | None = None,
         source: str,
     ) -> bool:
         if not self.submission_repository or not hasattr(self.submission_repository, "record_workflow_event"):
@@ -286,9 +332,44 @@ class WorkflowService:
                         "new_step": new_step or "",
                         "actor_role": actor_value,
                         "reason": reason,
+                        "decision_code": decision_code,
+                        "user_message": user_message,
+                        "side_effects": dict(side_effects or {}),
                         "source": source,
                     },
                 )
             )
         except Exception:
             return False
+
+    def _run_side_effects(
+        self,
+        requested,
+        *,
+        submission_id: str,
+        submission: dict,
+        target_step: str,
+        metadata: dict,
+    ) -> dict:
+        """Execute configured transition actions through one controlled registry."""
+
+        results: dict[str, dict] = {}
+        for raw_name in requested if isinstance(requested, (list, tuple, set)) else []:
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            handler = self.side_effect_handlers.get(name)
+            if handler is None:
+                results[name] = {"status": "skipped", "reason": "handler_not_configured"}
+                continue
+            try:
+                value = handler(
+                    submission_id=submission_id,
+                    submission=submission,
+                    target_step=target_step,
+                    metadata=metadata,
+                )
+                results[name] = {"status": "completed", "result": value}
+            except Exception as exc:
+                results[name] = {"status": "failed", "error": str(exc)}
+        return results

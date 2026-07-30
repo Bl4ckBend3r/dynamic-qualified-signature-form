@@ -90,6 +90,9 @@ KNOWN_STEP_FIELDS = {
     "repeat_item_alias",
     "triggers",
     "active",
+    "stage_type",
+    "instruction",
+    "side_effects",
 }
 
 
@@ -380,6 +383,7 @@ class WorkflowConfigNormalizer:
         source = dict(workflow or {})
         raw_steps = source.get("steps") if isinstance(source.get("steps"), list) else []
         source["name"] = str(source.get("name") or source.get("label") or "Workflow").strip()
+        source["schema_version"] = 2
         source["initial_step"] = str(source.get("initial_step") or (raw_steps[0].get("id") if raw_steps else "")).strip()
         source["requires_declaration"] = bool(source.get("requires_declaration", False))
         source["requires_contract"] = bool(source.get("requires_contract", False))
@@ -400,6 +404,7 @@ class WorkflowConfigNormalizer:
         for decision in source["decision_settings"]:
             if decision.get("label"):
                 decision["label"] = _modern_workflow_label(str(decision["label"]).strip())
+            self._normalize_decision(decision)
         source, _repaired = repair_agreement_confirmation_path(source)
         for step in source["steps"]:
             step["active"] = is_workflow_step_active(step, source)
@@ -407,6 +412,7 @@ class WorkflowConfigNormalizer:
 
     def normalize_step(self, step: Mapping[str, Any], index: int) -> dict[str, Any]:
         item = dict(step)
+        instruction = item.get("instruction") if isinstance(item.get("instruction"), Mapping) else {}
         step_id = self._step_id(item.get("id"), index)
         status = str(item.get("status") or item.get("status_code") or DEFAULT_STEP_STATUS.get(step_id) or "").strip()
         label = _modern_workflow_label(str(
@@ -430,6 +436,21 @@ class WorkflowConfigNormalizer:
                 "requires_user_action": bool(item.get("requires_user_action", self._user_action(step_id))),
                 "requires_officer_action": bool(item.get("requires_officer_action", item.get("type") == "manual_decision")),
                 "active": bool(item.get("active", True)),
+                "stage_type": str(item.get("stage_type") or self._stage_type(item, step_id)).strip(),
+                "instruction": {
+                    "title": str(instruction.get("title") or item.get("user_label") or label).strip(),
+                    "description": sanitize_instruction_html(
+                        instruction.get("description", item.get("description"))
+                    ),
+                    "next_action": sanitize_instruction_html(
+                        instruction.get("next_action", item.get("next_action"))
+                    ),
+                    "links": list(instruction.get("links") or []),
+                    "conditional_message": sanitize_instruction_html(
+                        instruction.get("conditional_message")
+                    ),
+                },
+                "side_effects": list(item.get("side_effects") or []),
             }
         )
         if not item.get("label"):
@@ -439,6 +460,50 @@ class WorkflowConfigNormalizer:
         else:
             item["decisions"] = dict(item["decisions"])
         return item
+
+    @staticmethod
+    def _stage_type(item: Mapping[str, Any], step_id: str) -> str:
+        if item.get("final") or item.get("type") == "end":
+            return "final"
+        if item.get("document_id") or any(token in step_id for token in ("declaration", "agreement")):
+            return "document"
+        if item.get("type") == "manual_decision" or item.get("requires_officer_action"):
+            return "officer_action"
+        if item.get("requires_user_action"):
+            return "user_action"
+        return "system"
+
+    @staticmethod
+    def _normalize_decision(decision: dict[str, Any]) -> None:
+        decision["technical_name"] = str(
+            decision.get("technical_name") or decision.get("id") or ""
+        ).strip()
+        decision["display_name"] = str(
+            decision.get("display_name") or decision.get("label") or decision["technical_name"]
+        ).strip()
+        decision["require_reason"] = bool(decision.get("require_reason", False))
+        decision["user_message"] = sanitize_instruction_html(decision.get("user_message"))
+        decision["system_action"] = str(decision.get("system_action") or "").strip()
+        decision["email_template"] = str(decision.get("email_template") or "").strip()
+        if not isinstance(decision.get("outcomes"), list):
+            outcomes = []
+            if decision.get("yes_status"):
+                outcomes.append(
+                    {"code": "yes", "label": "Tak", "target_status": str(decision["yes_status"])}
+                )
+            if decision.get("no_status"):
+                outcomes.append(
+                    {"code": "no", "label": "Nie", "target_status": str(decision["no_status"])}
+                )
+            if decision.get("correction_status"):
+                outcomes.append(
+                    {
+                        "code": "correction",
+                        "label": "Do poprawy",
+                        "target_status": str(decision["correction_status"]),
+                    }
+                )
+            decision["outcomes"] = outcomes
 
     def advanced_elements(self, workflow: Mapping[str, Any] | None) -> list[str]:
         normalized = self.normalize(workflow)
@@ -451,6 +516,7 @@ class WorkflowConfigNormalizer:
             "declaration_filename_pattern", "declaration_generation_mode",
             "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern",
             "contract_show_all_trainings_total", "managed_documents",
+            "schema_version",
         }
         result.extend(str(key) for key in normalized if key not in known_workflow)
         for step in normalized["steps"]:
@@ -479,8 +545,13 @@ class WorkflowConfigNormalizer:
 
 
 class WorkflowConfigValidator:
-    def validate(self, workflow: Mapping[str, Any] | None) -> list[str]:
+    def validate(
+        self,
+        workflow: Mapping[str, Any] | None,
+        form_config: Mapping[str, Any] | None = None,
+    ) -> list[str]:
         raw_workflow = dict(workflow or {})
+        strict_graph_validation = int(raw_workflow.get("schema_version") or 1) >= 2
         config = WorkflowConfigNormalizer().normalize(workflow)
         all_steps = config["steps"]
         steps = active_workflow_steps(config)
@@ -521,6 +592,10 @@ class WorkflowConfigValidator:
                         f"Decyzja „{decision}” w etapie „{step['admin_label']}” prowadzi do nieistniejącego "
                         f"etapu „{target}”. Wskaż istniejący etap docelowy w karcie tej decyzji."
                     )
+            if strict_graph_validation and not step.get("final") and not step.get("rejected") and not step.get("next") and not step.get("decisions"):
+                errors.append(
+                    f"Etap '{step['admin_label']}' nie ma wyjścia i nie jest etapem końcowym."
+                )
         statuses = {step["status"] for step in steps}
         steps_by_id = {step["id"]: step for step in steps}
         all_steps_by_id = {step["id"]: step for step in all_steps}
@@ -608,11 +683,17 @@ class WorkflowConfigValidator:
                     f"„{step['admin_label']}” ({workflow_status_label(step['status'])}), na którym nie może być wykonana."
                     f"{agreement_context}"
                 )
-            for target_key in ("yes_status", "no_status"):
+            for target_key in ("yes_status", "no_status", "correction_status"):
                 target_status = str(decision.get(target_key) or "").strip()
                 if target_status and target_status not in STATUS_LABELS:
                     errors.append(
                         f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieznany status docelowy."
+                    )
+            for outcome in decision.get("outcomes") or []:
+                if not str(outcome.get("target_status") or outcome.get("target_step") or "").strip():
+                    errors.append(
+                        f"Wynik „{outcome.get('label') or outcome.get('code')}” decyzji "
+                        f"„{decision.get('display_name') or decision.get('id')}” nie ma zdefiniowanego celu."
                     )
         for notification in config.get("email_notifications", []):
             if notification.get("enabled") and not str(notification.get("template_type") or "").strip():
@@ -621,6 +702,99 @@ class WorkflowConfigValidator:
                 errors.append(
                     f"Powiadomienie „{notification.get('label') or notification.get('id')}” nie może być jednocześnie ręczne i automatyczne."
                 )
+        if strict_graph_validation:
+            errors.extend(self._validate_graph(config, steps))
+        if form_config:
+            errors.extend(self._validate_modules(config, steps, form_config))
+        return errors
+
+    @staticmethod
+    def _validate_graph(config: Mapping[str, Any], steps: list[dict[str, Any]]) -> list[str]:
+        if not steps:
+            return []
+        by_id = {step["id"]: step for step in steps}
+        initial = str(config.get("initial_step") or "")
+        if initial not in by_id:
+            return []
+        edges = {
+            step_id: {
+                target
+                for target in [step.get("next"), *(step.get("decisions") or {}).values()]
+                if target in by_id
+            }
+            for step_id, step in by_id.items()
+        }
+        reachable: set[str] = set()
+        stack = [initial]
+        while stack:
+            node = stack.pop()
+            if node in reachable:
+                continue
+            reachable.add(node)
+            stack.extend(edges[node] - reachable)
+        errors = [
+            f"Etap '{by_id[step_id]['admin_label']}' jest nieosiągalny z etapu początkowego."
+            for step_id in by_id.keys() - reachable
+        ]
+        finals = {step_id for step_id, step in by_id.items() if step.get("final") or step.get("rejected")}
+        if not finals:
+            errors.append("Workflow nie zawiera etapu końcowego.")
+            return errors
+        if not reachable & finals:
+            errors.append("Workflow nie ma osiągalnej ścieżki zakończenia.")
+        can_finish = set(finals)
+        changed = True
+        while changed:
+            changed = False
+            for node, targets in edges.items():
+                if node not in can_finish and targets & can_finish:
+                    can_finish.add(node)
+                    changed = True
+        for step_id in reachable - can_finish:
+            step = by_id[step_id]
+            if "correction" not in step_id and "correction" not in str(step.get("stage_type") or ""):
+                errors.append(
+                    f"Etap '{step['admin_label']}' należy do cyklu lub ślepej ścieżki bez zakończenia."
+                )
+        return errors
+
+    @staticmethod
+    def _validate_modules(
+        config: Mapping[str, Any],
+        steps: list[dict[str, Any]],
+        form_config: Mapping[str, Any],
+    ) -> list[str]:
+        errors: list[str] = []
+        documents = form_config.get("documents") or {}
+        if isinstance(documents, list):
+            document_ids = {
+                str(item.get("id") or "")
+                for item in documents
+                if isinstance(item, Mapping) and item.get("enabled", True)
+            }
+        else:
+            document_ids = {
+                str(key)
+                for key, item in documents.items()
+                if not isinstance(item, Mapping) or item.get("enabled", True)
+            }
+        if config.get("requires_declaration") and "declaration" not in document_ids:
+            errors.append("Etap deklaracji jest włączony, ale dokument deklaracji nie jest skonfigurowany.")
+        if config.get("requires_contract") and not document_ids & {"agreement", "training_agreement"}:
+            errors.append("Etap umowy jest włączony, ale dokument umowy nie jest skonfigurowany.")
+        training_enabled = any(
+            isinstance(field, Mapping)
+            and field.get("type") == "training_selection"
+            and field.get("enabled", True)
+            for field in form_config.get("fields") or []
+        )
+        training_stage = any(
+            "training" in str(step.get("id") or "")
+            or str(step.get("status") or "") == "TRAINING_SELECTION_OPEN"
+            for step in steps
+        )
+        if training_enabled and not training_stage:
+            errors.append("Wybór szkoleń jest włączony, ale workflow nie zawiera etapu wyboru szkoleń.")
         return errors
 
 

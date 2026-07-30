@@ -1492,6 +1492,57 @@ body.admin-modal-open {
 .workflow-preview-errors p { margin: .2rem 0; }
 .workflow-preview.is-user-mode .workflow-preview-list { max-width: 720px; }
 
+.workflow-diagram {
+    width: 100%;
+    margin: 0 0 1.25rem;
+    overflow: auto;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 12px;
+    background: linear-gradient(#fff, #fafbfc);
+}
+.workflow-diagram svg { display: block; width: 100%; min-width: 700px; height: auto; }
+.workflow-diagram__edge { fill: none; stroke: #7b8493; stroke-width: 2; }
+.workflow-diagram__edge.is-positive { stroke: #27814d; }
+.workflow-diagram__edge.is-negative { stroke: #b42318; }
+.workflow-diagram__edge.is-decision { stroke: #7a4b00; }
+.workflow-diagram__arrow { fill: #697386; }
+.workflow-diagram__edge-label { fill: #475467; font-size: 12px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 4px; }
+.workflow-diagram__node { fill: #fff; stroke: #98a2b3; stroke-width: 2; }
+.workflow-diagram__node.is-user-action { fill: #eef7ff; stroke: #2878b5; }
+.workflow-diagram__node.is-officer-action { fill: #fff8e7; stroke: #a36b00; }
+.workflow-diagram__node.is-document { fill: #f3efff; stroke: #6941c6; }
+.workflow-diagram__node.is-final { fill: #eaf8ef; stroke: #27814d; stroke-width: 3; }
+.workflow-diagram__node.is-rejected { fill: #fff0ee; stroke: #b42318; }
+.workflow-diagram__node.has-error { stroke: #b42318; stroke-dasharray: 6 4; }
+.workflow-diagram__decision { fill: #fff8e7; stroke: #a36b00; stroke-width: 2; }
+.workflow-diagram__label { fill: #182230; font-size: 15px; font-weight: 750; }
+.workflow-diagram__number, .workflow-diagram__status { fill: #667085; font-size: 11px; }
+.workflow-diagram__decision-label { fill: #533800; font-size: 11px; font-weight: 750; text-anchor: middle; }
+
+.submission-workflow-map__track {
+    display: flex;
+    align-items: stretch;
+    gap: .55rem;
+    overflow: auto;
+    padding: .5rem 0;
+}
+.submission-workflow-node {
+    display: grid;
+    flex: 0 0 210px;
+    gap: .35rem;
+    min-height: 92px;
+    padding: .8rem;
+    border: 2px solid #c7cdd6;
+    border-radius: 12px;
+    background: #fff;
+}
+.submission-workflow-node.is-active { border-color: #245fa6; box-shadow: 0 0 0 3px rgba(36, 95, 166, .14); background: #eef6ff; }
+.submission-workflow-node.is-final { border-radius: 28px; border-color: #27814d; background: #eaf8ef; }
+.submission-workflow-node.is-rejected { border-color: #b42318; background: #fff0ee; }
+.submission-workflow-node small { color: #667085; }
+.submission-workflow-node span { color: #245fa6; font-size: .82rem; font-weight: 750; }
+.submission-workflow-map__arrow { align-self: center; color: #667085; font-size: 1.4rem; font-weight: 800; }
+
 .workflow-linked-instructions {
     display: grid;
     gap: 1rem;

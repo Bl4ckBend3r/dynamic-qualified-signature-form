@@ -38,3 +38,10 @@ def test_export_status_catalog_for_frontend_contains_legacy_mappings():
 
     assert catalog["statuses"]["COMPLETED"]["final"] is True
     assert catalog["legacy_mappings"]["FORM_SUBMITTED"] == "SUBMITTED"
+
+
+def test_unknown_status_uses_public_fallback_and_logs_warning(caplog):
+    label = get_status_label("UNLISTED_LEGACY_STATUS")
+
+    assert label == "Nieznany status: UNLISTED_LEGACY_STATUS"
+    assert "UNLISTED_LEGACY_STATUS" in caplog.text

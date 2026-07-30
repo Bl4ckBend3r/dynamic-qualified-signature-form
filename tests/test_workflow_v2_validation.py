@@ -1,4 +1,4 @@
-from services.workflow_config_service import WorkflowConfigValidator
+from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 from pathlib import Path
 
 
@@ -64,3 +64,79 @@ def test_admin_editor_contains_live_svg_decision_graph():
     assert "data-step-stage-type" in template
     assert 'name="decision_{{ decision_id }}_correction_status"' in template
     assert 'name="decision_{{ decision_id }}_user_message"' in template
+
+
+def test_admin_editor_contains_centered_layered_interactive_diagram():
+    template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
+
+    assert "data-workflow-diagram-viewport" in template
+    assert "data-workflow-diagram-fit" in template
+    assert "data-workflow-diagram-zoom-in" in template
+    assert "data-workflow-diagram-layout-reset" in template
+    assert "workflowDiagramState.positions" in template
+    assert "startWorkflowNodeDrag" in template
+    assert "diagram_layout" in template
+    assert "Układ automatyczny" in template
+    assert "Układ ręczny" in template
+    assert "justify-content: center" in stylesheet
+    assert "min-height: 440px" in stylesheet
+    assert "overflow: auto" in stylesheet
+
+
+def test_layered_diagram_uses_orthogonal_edges_and_side_columns():
+    template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
+
+    assert "const columns = {correction:" in template
+    assert "main: 420" in template
+    assert "decision: 820" in template
+    assert "rejection: 1200" in template
+    assert "pathData = `M ${start.x} ${start.y} L" in template
+    assert "const ranks = new Map()" in template
+    assert "const rankBuckets = new Map()" in template
+    assert "verticalBlocked" in template
+
+
+def test_diagram_validation_can_focus_invalid_stage():
+    template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
+
+    assert "Element diagramu z błędem" in template
+    assert "focusWorkflowNode" in template
+    assert "wybierz status po „Tak”" in template
+    assert "wybierz status po „Nie”" in template
+    assert "brakuje etapu podpisu urzędu" in template
+
+
+def test_workflow_normalizer_preserves_valid_manual_layout():
+    workflow = {
+        "initial_step": "start",
+        "steps": [_step("start", next_step="completed"), _step("completed", final=True)],
+        "diagram_layout": {
+            "nodes": {
+                "start": {"x": 120, "y": 40},
+                "decision:start:0": {"x": 420.25, "y": 180.5},
+                "invalid": {"x": "not-a-number", "y": 20},
+            }
+        },
+    }
+
+    normalized = WorkflowConfigNormalizer().normalize(workflow)
+
+    assert normalized["diagram_layout"] == {
+        "nodes": {
+            "start": {"x": 120.0, "y": 40.0},
+            "decision:start:0": {"x": 420.25, "y": 180.5},
+        }
+    }
+    assert "diagram_layout" not in WorkflowConfigNormalizer().advanced_elements(workflow)
+
+
+def test_workflow_without_diagram_layout_remains_automatic():
+    normalized = WorkflowConfigNormalizer().normalize(
+        {
+            "initial_step": "start",
+            "steps": [_step("start", next_step="completed"), _step("completed", final=True)],
+        }
+    )
+
+    assert "diagram_layout" not in normalized

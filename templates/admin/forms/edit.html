@@ -359,8 +359,18 @@
                 </div>
             </div>
             <div class="workflow-preview-errors" data-workflow-preview-errors hidden></div>
+            <div class="workflow-diagram-toolbar" role="toolbar" aria-label="Sterowanie diagramem workflow">
+                <span class="workflow-diagram-mode" data-workflow-diagram-mode>Układ automatyczny</span>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-fit>Dopasuj do ekranu</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-in aria-label="Powiększ diagram">Powiększ</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-out aria-label="Pomniejsz diagram">Pomniejsz</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-reset>Reset zoom</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-layout-reset>Resetuj układ diagramu</button>
+            </div>
             <div class="workflow-diagram" data-workflow-diagram-wrap>
-                <svg data-workflow-diagram role="img" aria-label="Schemat blokowy workflow"></svg>
+                <div class="workflow-diagram__viewport" data-workflow-diagram-viewport>
+                    <svg data-workflow-diagram role="img" aria-label="Schemat blokowy workflow"></svg>
+                </div>
             </div>
             <ol class="workflow-preview-list" data-workflow-preview-list></ol>
             <p class="workflow-empty" data-workflow-preview-empty hidden>Brak etapów do wyświetlenia.</p>
@@ -809,6 +819,11 @@ function setActiveFormTab(tabName, updateAddress = true) {
         url.searchParams.set("tab", tabName);
         window.history.replaceState({}, "", url);
     }
+    if (tabName === "workflow") {
+        window.requestAnimationFrame(() => {
+            if (!workflowDiagramState.hasInitialFit) fitWorkflowDiagram();
+        });
+    }
 }
 
 tabButtons.forEach((button) => button.addEventListener("click", () => setActiveFormTab(button.dataset.formTabTarget)));
@@ -1154,6 +1169,17 @@ const workflowStepTemplate = document.querySelector("[data-workflow-step-templat
 const workflowBuilderInput = workflowBuilder?.querySelector("[data-workflow-builder-json]");
 const workflowInitialSelect = workflowBuilder?.querySelector("[data-workflow-initial]");
 let workflowSource = {{ workflow_builder|tojson }};
+const initialDiagramNodes = workflowSource?.diagram_layout?.nodes;
+const workflowDiagramState = {
+    zoom: 1,
+    positions: initialDiagramNodes && typeof initialDiagramNodes === "object"
+        ? structuredClone(initialDiagramNodes)
+        : {},
+    dragging: null,
+    canvasWidth: 1200,
+    canvasHeight: 440,
+    hasInitialFit: false,
+};
 
 function sanitizeInstructionPreview(value) {
     const template = document.createElement("template");
@@ -1349,7 +1375,7 @@ function collectWorkflow() {
         rejected: Boolean(card.querySelector("[data-step-rejected]")?.checked),
         active: workflowStepIsActive(card),
     }));
-    return {
+    const workflow = {
         ...workflowSource,
         name: workflowBuilder?.querySelector('[name="workflow_name"]')?.value.trim() || "Workflow",
         initial_step: workflowInitialSelect?.value || "",
@@ -1358,6 +1384,27 @@ function collectWorkflow() {
         requires_agreement_confirmation: Boolean(workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]')?.checked),
         steps,
     };
+    const activeNodeIds = new Set(steps.map((step) => step.id));
+    currentDecisionSettings().forEach((decision, index) => {
+        activeNodeIds.add(`decision:${decision.step_id}:${decision.id || index}`);
+    });
+    const manualNodes = Object.fromEntries(
+        Object.entries(workflowDiagramState.positions)
+            .filter(([nodeId, position]) => (
+                activeNodeIds.has(nodeId)
+                || (nodeId.startsWith("decision:")
+                    && activeNodeIds.has(nodeId.split(":")[1]))
+            )
+                && Number.isFinite(Number(position?.x))
+                && Number.isFinite(Number(position?.y)))
+            .map(([nodeId, position]) => [nodeId, {
+                x: Math.round(Number(position.x) * 100) / 100,
+                y: Math.round(Number(position.y) * 100) / 100,
+            }])
+    );
+    if (Object.keys(manualNodes).length) workflow.diagram_layout = {nodes: manualNodes};
+    else delete workflow.diagram_layout;
+    return workflow;
 }
 
 function workflowStepType(step) {
@@ -1370,13 +1417,18 @@ function workflowStepType(step) {
 }
 
 function currentDecisionSettings() {
-    return Array.from(document.querySelectorAll(".workflow-option-card")).map((card) => ({
-        label: card.querySelector('input[name$="_label"]')?.value.trim() || card.querySelector("h3")?.textContent.trim() || "Decyzja urzędnika",
-        step_id: card.querySelector('select[name$="_step"]')?.value || "",
-        yes_status: card.querySelector('select[name$="_yes_status"]')?.value || "",
-        no_status: card.querySelector('select[name$="_no_status"]')?.value || "",
-        correction_status: card.querySelector('select[name$="_correction_status"]')?.value || "",
-    })).filter((item) => item.step_id);
+    return Array.from(document.querySelectorAll(".workflow-option-card")).map((card) => {
+        const labelInput = card.querySelector('input[name$="_label"]');
+        const decisionId = labelInput?.name.match(/^decision_(.+)_label$/)?.[1] || "";
+        return {
+            id: decisionId,
+            label: labelInput?.value.trim() || card.querySelector("h3")?.textContent.trim() || "Decyzja urzędnika",
+            step_id: card.querySelector('select[name$="_step"]')?.value || "",
+            yes_status: card.querySelector('select[name$="_yes_status"]')?.value || "",
+            no_status: card.querySelector('select[name$="_no_status"]')?.value || "",
+            correction_status: card.querySelector('select[name$="_correction_status"]')?.value || "",
+        };
+    }).filter((item) => item.step_id);
 }
 
 function emailsForWorkflowStep(step) {
@@ -1408,6 +1460,17 @@ function renderWorkflowPreview() {
     if (config.requires_contract && !config.steps.some((step) => String(step.status).startsWith("AGREEMENT_") || ["agreement", "training_agreement"].includes(step.document_id))) {
         errors.push("Etap umowy jest wymagany, ale nie został dodany.");
     }
+    if (config.requires_agreement_confirmation && !config.steps.some((step) => [
+        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+        "AGREEMENT_SIGNED_BY_OFFICE",
+    ].includes(String(step.status)))) {
+        const agreementStep = config.steps.find((step) => String(step.status).startsWith("AGREEMENT_"));
+        errors.push(`${agreementStep?.admin_label || "Workflow"}: brakuje etapu podpisu urzędu wymaganego przez konfigurację umowy.`);
+    }
+    decisions.forEach((decision) => {
+        if (!decision.yes_status) errors.push(`${decision.label}: wybierz status po „Tak”.`);
+        if (!decision.no_status) errors.push(`${decision.label}: wybierz status po „Nie”.`);
+    });
     if (document.querySelector("[data-inactive-instruction]")) errors.push("Instrukcja przypisana do etapu spoza workflow została oznaczona jako nieaktywna.");
     list.replaceChildren();
     config.steps.forEach((step, index) => {
@@ -1448,7 +1511,7 @@ function renderWorkflowPreview() {
     renderWorkflowDiagram(config, decisions, errors);
 }
 
-function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
+function renderWorkflowDiagramLegacy(config, configuredDecisions, validationErrors) {
     const svg = document.querySelector("[data-workflow-diagram]");
     const wrap = document.querySelector("[data-workflow-diagram-wrap]");
     if (!svg || !wrap) return;
@@ -1575,6 +1638,407 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
         }
         svg.appendChild(make("text", {x: position.x + 16, y: position.y + 84, class: "workflow-diagram__status"}, step.status || "brak statusu"));
     });
+}
+
+function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
+    const svg = document.querySelector("[data-workflow-diagram]");
+    const wrap = document.querySelector("[data-workflow-diagram-wrap]");
+    const mode = document.querySelector("[data-workflow-diagram-mode]");
+    if (!svg || !wrap) return;
+    const ns = "http://www.w3.org/2000/svg";
+    const steps = config.steps || [];
+    wrap.hidden = !steps.length;
+    svg.replaceChildren();
+    if (!steps.length) return;
+
+    const make = (tag, attributes = {}, text = "") => {
+        const element = document.createElementNS(ns, tag);
+        Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)));
+        if (text) element.textContent = text;
+        return element;
+    };
+    const defs = make("defs");
+    const marker = make("marker", {id: "workflow-arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse"});
+    marker.appendChild(make("path", {d: "M 0 0 L 10 5 L 0 10 z", class: "workflow-diagram__arrow"}));
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    const nodeWidth = 280;
+    const nodeHeight = 96;
+    const decisionWidth = 152;
+    const decisionHeight = 104;
+    const rowHeight = 174;
+    const margin = 52;
+    const columns = {correction: 70, main: 420, decision: 820, rejection: 1200};
+    const stepById = new Map(steps.map((step) => [step.id, step]));
+    const statusTargets = new Map(steps.map((step) => [step.status, step.id]));
+    const decisions = [];
+    steps.forEach((step) => {
+        const inline = Object.entries(step.decisions || {});
+        if (inline.length) decisions.push({
+            id: `inline:${step.id}`,
+            step_id: step.id,
+            label: "Decyzja",
+            outcomes: inline.map(([label, target]) => ({label, target_step: target})),
+        });
+    });
+    configuredDecisions.forEach((decision) => decisions.push({
+        ...decision,
+        outcomes: [
+            {label: "Tak", target_step: statusTargets.get(decision.yes_status)},
+            {label: "Nie", target_step: statusTargets.get(decision.no_status)},
+            {label: "Do poprawy", target_step: statusTargets.get(decision.correction_status)},
+        ].filter((outcome) => outcome.target_step),
+    }));
+
+    const outgoing = new Map(steps.map((step) => [step.id, []]));
+    steps.forEach((step) => {
+        if (stepById.has(step.next)) outgoing.get(step.id).push(step.next);
+        Object.values(step.decisions || {}).forEach((target) => {
+            if (stepById.has(target) && !outgoing.get(step.id).includes(target)) outgoing.get(step.id).push(target);
+        });
+    });
+    decisions.forEach((decision) => {
+        (decision.outcomes || []).forEach((outcome) => {
+            if (stepById.has(outcome.target_step) && !outgoing.get(decision.step_id)?.includes(outcome.target_step)) {
+                outgoing.get(decision.step_id)?.push(outcome.target_step);
+            }
+        });
+    });
+
+    const ranks = new Map();
+    const initial = stepById.has(config.initial_step) ? config.initial_step : steps[0]?.id;
+    if (initial) ranks.set(initial, 0);
+    const queue = initial ? [initial] : [];
+    while (queue.length) {
+        const sourceId = queue.shift();
+        (outgoing.get(sourceId) || []).forEach((targetId) => {
+            if (!ranks.has(targetId)) {
+                ranks.set(targetId, (ranks.get(sourceId) || 0) + 1);
+                queue.push(targetId);
+            }
+        });
+    }
+    steps.forEach((step, index) => {
+        if (!ranks.has(step.id)) ranks.set(step.id, index);
+    });
+    const terminalRank = Math.max(0, ...ranks.values()) + 1;
+    steps.forEach((step) => {
+        if (step.final && !step.rejected) ranks.set(step.id, terminalRank);
+    });
+    const stepColumn = (step) => {
+        const id = String(step.id || "").toLowerCase();
+        const type = String(step.stage_type || step.type || "").toLowerCase();
+        const status = String(step.status || "").toLowerCase();
+        if (step.rejected || /reject|cancel|odrzuc|anul/.test(`${id} ${type} ${status}`)) return "rejection";
+        if (/correct|popraw|korekt/.test(`${id} ${type} ${status}`)) return "correction";
+        return "main";
+    };
+    const rankBuckets = new Map();
+    steps.forEach((step) => {
+        const rank = ranks.get(step.id);
+        const column = stepColumn(step);
+        const key = `${rank}:${column}`;
+        if (!rankBuckets.has(key)) rankBuckets.set(key, []);
+        rankBuckets.get(key).push(step.id);
+    });
+    const rankCounts = new Map();
+    rankBuckets.forEach((ids, key) => {
+        const rank = Number(key.split(":")[0]);
+        rankCounts.set(rank, Math.max(rankCounts.get(rank) || 0, ids.length));
+    });
+    const rankOffsets = new Map();
+    let nextRankY = margin;
+    const maximumRank = Math.max(0, ...ranks.values());
+    for (let rank = 0; rank <= maximumRank; rank += 1) {
+        rankOffsets.set(rank, nextRankY);
+        nextRankY += Math.max(rowHeight, (rankCounts.get(rank) || 1) * (nodeHeight + 28) + 50);
+    }
+    const automaticStepPosition = (step) => {
+        const rank = ranks.get(step.id);
+        const column = stepColumn(step);
+        const slot = rankBuckets.get(`${rank}:${column}`).indexOf(step.id);
+        return {
+            x: columns[column],
+            y: rankOffsets.get(rank) + slot * (nodeHeight + 28),
+        };
+    };
+    const positionFor = (nodeId, automatic, width, height) => {
+        const manual = workflowDiagramState.positions[nodeId];
+        const point = manual && Number.isFinite(Number(manual.x)) && Number.isFinite(Number(manual.y))
+            ? {x: Number(manual.x), y: Number(manual.y)}
+            : automatic;
+        return {...point, width, height};
+    };
+    const positions = new Map(steps.map((step) => [
+        step.id,
+        positionFor(step.id, automaticStepPosition(step), nodeWidth, nodeHeight),
+    ]));
+    const decisionPositions = new Map();
+    const decisionsPerOwner = new Map();
+    decisions.forEach((decision, index) => {
+        const owner = positions.get(decision.step_id);
+        if (!owner) return;
+        const nodeId = `decision:${decision.step_id}:${decision.id || index}`;
+        const legacyNodeId = `decision:${decision.step_id}:${index}`;
+        if (!workflowDiagramState.positions[nodeId] && workflowDiagramState.positions[legacyNodeId]) {
+            workflowDiagramState.positions[nodeId] = workflowDiagramState.positions[legacyNodeId];
+            if (legacyNodeId !== nodeId) delete workflowDiagramState.positions[legacyNodeId];
+        }
+        const ownerSlot = decisionsPerOwner.get(decision.step_id) || 0;
+        decisionsPerOwner.set(decision.step_id, ownerSlot + 1);
+        decisionPositions.set(nodeId, positionFor(
+            nodeId,
+            {
+                x: columns.decision + ownerSlot * (decisionWidth + 34),
+                y: owner.y - 4,
+            },
+            decisionWidth,
+            decisionHeight,
+        ));
+    });
+
+    const allPositions = [...positions.values(), ...decisionPositions.values()];
+    const contentMinX = Math.min(...allPositions.map((position) => position.x));
+    const contentMaxX = Math.max(...allPositions.map((position) => position.x + position.width));
+    const contentWidth = contentMaxX - contentMinX;
+    const canvasWidth = Math.max(1200, contentWidth + 2 * margin);
+    const canvasHeight = Math.max(440, ...allPositions.map((position) => position.y + position.height + margin));
+    const viewBoxX = contentMinX + contentWidth / 2 - canvasWidth / 2;
+    workflowDiagramState.canvasWidth = canvasWidth;
+    workflowDiagramState.canvasHeight = canvasHeight;
+    svg.setAttribute("viewBox", `${viewBoxX} 0 ${canvasWidth} ${canvasHeight}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+    svg.style.width = `${canvasWidth * workflowDiagramState.zoom}px`;
+    svg.style.height = `${canvasHeight * workflowDiagramState.zoom}px`;
+    const visibleNodeIds = new Set([...positions.keys(), ...decisionPositions.keys()]);
+    const manualMode = Object.keys(workflowDiagramState.positions).some((nodeId) => visibleNodeIds.has(nodeId));
+    if (mode) {
+        mode.textContent = manualMode ? "Układ ręczny" : "Układ automatyczny";
+        mode.classList.toggle("is-manual", manualMode);
+    }
+
+    const anchor = (position, side) => {
+        if (side === "top") return {x: position.x + position.width / 2, y: position.y};
+        if (side === "bottom") return {x: position.x + position.width / 2, y: position.y + position.height};
+        if (side === "left") return {x: position.x, y: position.y + position.height / 2};
+        return {x: position.x + position.width, y: position.y + position.height / 2};
+    };
+    const drawEdge = (from, to, label, cssClass = "", branch = 0) => {
+        if (!from || !to) return;
+        const aligned = Math.abs((from.x + from.width / 2) - (to.x + to.width / 2)) < 80;
+        const backwards = to.y <= from.y;
+        const startCenterX = from.x + from.width / 2;
+        const verticalStart = from.y + from.height;
+        const verticalEnd = to.y;
+        const verticalBlocked = allPositions.some((position) => (
+            position !== from
+            && position !== to
+            && startCenterX > position.x - 16
+            && startCenterX < position.x + position.width + 16
+            && position.y < Math.max(verticalStart, verticalEnd)
+            && position.y + position.height > Math.min(verticalStart, verticalEnd)
+        ));
+        let pathData;
+        let labelX;
+        let labelY;
+        if (aligned && !backwards && !verticalBlocked) {
+            const start = anchor(from, "bottom");
+            const end = anchor(to, "top");
+            const midY = start.y + Math.max(28, (end.y - start.y) / 2);
+            pathData = `M ${start.x} ${start.y} L ${start.x} ${midY} L ${end.x} ${midY} L ${end.x} ${end.y}`;
+            labelX = start.x + 28 + branch * 17;
+            labelY = midY - 7;
+        } else {
+            const routeRight = to.x >= from.x && !backwards;
+            const start = anchor(from, routeRight ? "right" : "left");
+            const end = anchor(to, routeRight ? "left" : "right");
+            const gutter = routeRight
+                ? Math.max(start.x + 38, end.x - 46 - branch * 18)
+                : Math.min(start.x - 48 - branch * 18, end.x + 48);
+            pathData = `M ${start.x} ${start.y} L ${gutter} ${start.y} L ${gutter} ${end.y} L ${end.x} ${end.y}`;
+            labelX = gutter + (routeRight ? -8 : 8);
+            labelY = start.y + (end.y - start.y) / 2 - 7;
+        }
+        svg.appendChild(make("path", {
+            d: pathData,
+            class: `workflow-diagram__edge ${cssClass}`,
+            "marker-end": "url(#workflow-arrow)",
+        }));
+        if (label) svg.appendChild(make("text", {
+            x: labelX,
+            y: labelY,
+            class: "workflow-diagram__edge-label",
+        }, String(label).slice(0, 24)));
+    };
+
+    steps.forEach((step) => drawEdge(positions.get(step.id), positions.get(step.next), "Dalej"));
+    decisions.forEach((decision, index) => {
+        const nodeId = `decision:${decision.step_id}:${decision.id || index}`;
+        const position = decisionPositions.get(nodeId);
+        drawEdge(positions.get(decision.step_id), position, "Decyzja", "is-decision");
+        (decision.outcomes || []).forEach((outcome, branch) => {
+            const label = String(outcome.label || "");
+            const negative = /nie|odrz/i.test(label);
+            drawEdge(position, positions.get(outcome.target_step), label, negative ? "is-negative" : "is-positive", branch);
+        });
+    });
+
+    const focusWorkflowNode = (stepId, fieldSelector = "[data-step-admin-label]") => {
+        const card = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || [])
+            .find((item) => item.querySelector("[data-step-id]")?.value === stepId);
+        if (!card) return;
+        const editor = card.querySelector("[data-workflow-step-editor]");
+        if (editor) editor.hidden = false;
+        card.scrollIntoView({behavior: "smooth", block: "center"});
+        card.querySelector(fieldSelector)?.focus({preventScroll: true});
+    };
+    const focusWorkflowDecision = (decision, missingField) => {
+        const field = decision.id
+            ? document.querySelector(`[name="decision_${CSS.escape(decision.id)}_${missingField}_status"]`)
+            : null;
+        if (!field) {
+            focusWorkflowNode(decision.step_id);
+            return;
+        }
+        const editor = field.closest("[data-workflow-step]")?.querySelector("[data-workflow-step-editor]");
+        if (editor) editor.hidden = false;
+        field.closest("[data-workflow-decision-card]")?.scrollIntoView({behavior: "smooth", block: "center"});
+        field.focus({preventScroll: true});
+    };
+    const draggableGroup = (nodeId, position, errorStepId = "", errorAction = null, errorMessage = "") => {
+        const group = make("g", {
+            class: `workflow-diagram__node-group${errorStepId ? " has-error" : ""}`,
+            transform: `translate(${position.x} ${position.y})`,
+            "data-diagram-node-id": nodeId,
+            tabindex: "0",
+            role: "button",
+            "aria-label": errorStepId
+                ? "Element diagramu z błędem. Kliknij, aby przejść do konfiguracji."
+                : "Element diagramu. Przeciągnij, aby zmienić położenie.",
+        });
+        group.addEventListener("pointerdown", (event) => startWorkflowNodeDrag(event, nodeId, position));
+        if (errorMessage) group.appendChild(make("title", {}, errorMessage));
+        if (errorStepId) group.addEventListener("click", () => (
+            errorAction ? errorAction() : focusWorkflowNode(errorStepId)
+        ));
+        return group;
+    };
+
+    decisions.forEach((decision, index) => {
+        const nodeId = `decision:${decision.step_id}:${decision.id || index}`;
+        const position = decisionPositions.get(nodeId);
+        if (!position) return;
+        const outcomeLabels = new Set((decision.outcomes || []).map((item) => String(item.label || "").toLowerCase()));
+        const missingField = !outcomeLabels.has("tak") ? "yes" : (!outcomeLabels.has("nie") ? "no" : "");
+        const hasError = Boolean(missingField);
+        const group = draggableGroup(
+            nodeId,
+            position,
+            hasError ? decision.step_id : "",
+            hasError ? () => focusWorkflowDecision(decision, missingField) : null,
+            hasError ? `Decyzja wymaga ustawienia statusu po „${missingField === "yes" ? "Tak" : "Nie"}”.` : "",
+        );
+        group.appendChild(make("polygon", {
+            points: `${decisionWidth / 2},0 ${decisionWidth},${decisionHeight / 2} ${decisionWidth / 2},${decisionHeight} 0,${decisionHeight / 2}`,
+            class: `workflow-diagram__decision${hasError ? " has-error" : ""}`,
+        }));
+        const label = String(decision.label || "Decyzja urzędnika");
+        group.appendChild(make("text", {x: decisionWidth / 2, y: decisionHeight / 2 - 4, class: "workflow-diagram__decision-label"}, label.slice(0, 24)));
+        if (label.length > 24) group.appendChild(make("text", {x: decisionWidth / 2, y: decisionHeight / 2 + 13, class: "workflow-diagram__decision-label"}, label.slice(24, 48)));
+        svg.appendChild(group);
+    });
+
+    steps.forEach((step, index) => {
+        const position = positions.get(step.id);
+        const nodeErrors = validationErrors.filter((error) => String(error).includes(step.admin_label || step.id));
+        const hasError = nodeErrors.length > 0
+            || (!step.final && !step.rejected && !step.next && !Object.keys(step.decisions || {}).length)
+            || (step.next && !stepById.has(step.next));
+        const fallbackError = !step.final && !step.rejected && !step.next && !Object.keys(step.decisions || {}).length
+            ? "Etap nie ma skonfigurowanego wyjścia."
+            : (step.next && !stepById.has(step.next) ? "Przejście prowadzi do nieistniejącego etapu." : "");
+        const group = draggableGroup(
+            step.id,
+            position,
+            hasError ? step.id : "",
+            fallbackError ? () => focusWorkflowNode(step.id, "[data-step-next]") : null,
+            nodeErrors.map(String).join(" ") || fallbackError,
+        );
+        const classes = [
+            "workflow-diagram__node",
+            step.final || step.rejected ? "is-final" : "",
+            step.rejected ? "is-rejected" : "",
+            step.requires_user_action ? "is-user-action" : "",
+            step.requires_officer_action ? "is-officer-action" : "",
+            step.document_id || step.stage_type === "document" ? "is-document" : "",
+            hasError ? "has-error" : "",
+        ].filter(Boolean).join(" ");
+        group.appendChild(make("rect", {x: 0, y: 0, width: nodeWidth, height: nodeHeight, rx: step.final || step.rejected ? 28 : 12, class: classes}));
+        group.appendChild(make("text", {x: 16, y: 25, class: "workflow-diagram__number"}, `${index + 1}. ${workflowStepType(step)}`));
+        const label = String(step.admin_label || step.id || "Etap");
+        group.appendChild(make("text", {x: 16, y: 50, class: "workflow-diagram__label"}, label.slice(0, 28)));
+        if (label.length > 28) group.appendChild(make("text", {x: 16, y: 69, class: "workflow-diagram__label"}, label.slice(28, 56)));
+        group.appendChild(make("text", {x: 16, y: 87, class: "workflow-diagram__status"}, String(step.status || "brak statusu").slice(0, 38)));
+        svg.appendChild(group);
+    });
+}
+
+function startWorkflowNodeDrag(event, nodeId, position) {
+    if (event.button !== 0) return;
+    const svg = document.querySelector("[data-workflow-diagram]");
+    if (!svg?.getScreenCTM()) return;
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(svg.getScreenCTM().inverse());
+    workflowDiagramState.dragging = {
+        nodeId,
+        offsetX: local.x - position.x,
+        offsetY: local.y - position.y,
+        moved: false,
+    };
+    event.preventDefault();
+}
+
+document.addEventListener("pointermove", (event) => {
+    const drag = workflowDiagramState.dragging;
+    const svg = document.querySelector("[data-workflow-diagram]");
+    if (!drag || !svg?.getScreenCTM()) return;
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(svg.getScreenCTM().inverse());
+    workflowDiagramState.positions[drag.nodeId] = {
+        x: Math.max(20, Math.min(9800, local.x - drag.offsetX)),
+        y: Math.max(20, Math.min(9800, local.y - drag.offsetY)),
+    };
+    drag.moved = true;
+    renderWorkflowPreview();
+});
+document.addEventListener("pointerup", () => {
+    if (!workflowDiagramState.dragging) return;
+    const moved = workflowDiagramState.dragging.moved;
+    workflowDiagramState.dragging = null;
+    if (moved) {
+        if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+        formIsDirty = true;
+    }
+});
+
+function setWorkflowDiagramZoom(value) {
+    workflowDiagramState.zoom = Math.max(.35, Math.min(2, Number(value) || 1));
+    renderWorkflowPreview();
+}
+
+function fitWorkflowDiagram() {
+    const wrap = document.querySelector("[data-workflow-diagram-wrap]");
+    if (!wrap || wrap.clientWidth < 1) return false;
+    const available = Math.max(320, wrap.clientWidth - 72);
+    setWorkflowDiagramZoom(Math.min(1, available / workflowDiagramState.canvasWidth));
+    workflowDiagramState.hasInitialFit = true;
+    wrap.scrollTo({left: 0, top: 0, behavior: "smooth"});
+    return true;
 }
 
 function createLinkedInstructionEditor(workflowCard) {
@@ -1743,6 +2207,10 @@ function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
 
 function renderWorkflowFromJson(config) {
     workflowSource = config;
+    const importedDiagramNodes = config?.diagram_layout?.nodes;
+    workflowDiagramState.positions = importedDiagramNodes && typeof importedDiagramNodes === "object"
+        ? structuredClone(importedDiagramNodes)
+        : {};
     const decisionPool = document.querySelector("[data-workflow-decision-pool]");
     document.querySelectorAll("[data-workflow-decision-card]").forEach((card) => decisionPool?.appendChild(card));
     workflowStepList?.replaceChildren();
@@ -1783,6 +2251,8 @@ document.addEventListener("change", (event) => {
         const card = event.target.closest("[data-workflow-decision-card]");
         if (card && event.target.value) card.dataset.decisionActive = "true";
         syncDecisionEditorsToStages();
+        if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+        renderWorkflowPreview();
     }
 });
 workflowBuilder?.addEventListener("click", (event) => {
@@ -1856,6 +2326,22 @@ document.getElementById("instruction_title")?.addEventListener("input", renderIn
 document.getElementById("user_instruction")?.addEventListener("input", renderInstructionPreview);
 document.querySelector("[data-refresh-workflow-preview]")?.addEventListener("click", renderWorkflowPreview);
 document.querySelector("[data-workflow-user-preview]")?.addEventListener("change", renderWorkflowPreview);
+document.querySelector("[data-workflow-diagram-zoom-in]")?.addEventListener("click", () => {
+    setWorkflowDiagramZoom(workflowDiagramState.zoom + .15);
+});
+document.querySelector("[data-workflow-diagram-zoom-out]")?.addEventListener("click", () => {
+    setWorkflowDiagramZoom(workflowDiagramState.zoom - .15);
+});
+document.querySelector("[data-workflow-diagram-zoom-reset]")?.addEventListener("click", () => {
+    setWorkflowDiagramZoom(1);
+});
+document.querySelector("[data-workflow-diagram-fit]")?.addEventListener("click", fitWorkflowDiagram);
+document.querySelector("[data-workflow-diagram-layout-reset]")?.addEventListener("click", () => {
+    workflowDiagramState.positions = {};
+    if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+    formIsDirty = true;
+    renderWorkflowPreview();
+});
 document.querySelector("[data-refresh-instruction-preview]")?.addEventListener("click", renderInstructionPreview);
 
 document.querySelector("[data-refresh-workflow-json]")?.addEventListener("click", () => {
@@ -1913,6 +2399,7 @@ document.querySelector("[data-export-form-json]")?.addEventListener("click", () 
 
 syncAgreementConfirmationPath();
 syncWorkflowBuilder();
+window.requestAnimationFrame(fitWorkflowDiagram);
 
 function syncWorkflowTemplateVisibility() {
     const declaration = document.querySelector('[data-workflow-toggle="declaration"]');

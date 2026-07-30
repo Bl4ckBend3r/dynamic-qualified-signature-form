@@ -401,6 +401,8 @@ class WorkflowConfigNormalizer:
         source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
         source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
         source["decision_settings"] = normalize_decision_assignments(raw_decisions, source["steps"])
+        if "diagram_layout" in source:
+            source["diagram_layout"] = self._normalize_diagram_layout(source.get("diagram_layout"))
         for decision in source["decision_settings"]:
             if decision.get("label"):
                 decision["label"] = _modern_workflow_label(str(decision["label"]).strip())
@@ -516,7 +518,7 @@ class WorkflowConfigNormalizer:
             "declaration_filename_pattern", "declaration_generation_mode",
             "contract_generation_mode", "contract_filename_pattern", "contract_number_pattern",
             "contract_show_all_trainings_total", "managed_documents",
-            "schema_version",
+            "schema_version", "diagram_layout",
         }
         result.extend(str(key) for key in normalized if key not in known_workflow)
         for step in normalized["steps"]:
@@ -532,6 +534,28 @@ class WorkflowConfigNormalizer:
         if isinstance(value, list):
             return [dict(item) for item in value if isinstance(item, Mapping)]
         return []
+
+    @staticmethod
+    def _normalize_diagram_layout(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        raw_nodes = value.get("nodes")
+        if not isinstance(raw_nodes, Mapping):
+            return {}
+        nodes: dict[str, dict[str, float]] = {}
+        for raw_id, raw_position in raw_nodes.items():
+            node_id = str(raw_id or "").strip()
+            if not node_id or not isinstance(raw_position, Mapping):
+                continue
+            try:
+                x = float(raw_position.get("x"))
+                y = float(raw_position.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if not (-10000 <= x <= 10000 and -10000 <= y <= 10000):
+                continue
+            nodes[node_id] = {"x": round(x, 2), "y": round(y, 2)}
+        return {"nodes": nodes} if nodes else {}
 
     @staticmethod
     def _step_id(value: Any, index: int) -> str:

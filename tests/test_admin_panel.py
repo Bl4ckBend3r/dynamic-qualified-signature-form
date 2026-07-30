@@ -4554,6 +4554,165 @@ def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app,
     assert "syncLinkedInstructionValues();" in reopened
 
 
+def test_workflow_builder_preserves_manual_diagram_layout_after_save(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="workflow_manual_layout",
+        definition_json=readable_workflow_definition(),
+    )
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    workflow = readable_workflow_definition()["workflow"]
+    workflow["diagram_layout"] = {
+        "nodes": {
+            "submission": {"x": 180, "y": 60},
+            "decision:review:0": {"x": 760.5, "y": 220.25},
+        }
+    }
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "workflow",
+            "name": "Workflow manual layout",
+            "slug": "workflow_manual_layout",
+            "title": "Workflow manual layout",
+            "workflow_name": "Obsługa wniosku",
+            "workflow_initial_step": workflow["initial_step"],
+            "workflow_builder_json": json.dumps(workflow, ensure_ascii=False),
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        saved_layout = db.get(Form, form_id).definition_json["workflow"]["diagram_layout"]
+        assert saved_layout == workflow["diagram_layout"]
+
+    reopened = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
+    assert '"submission": {"x": 180.0, "y": 60.0}' in reopened
+    assert '"decision:review:0": {"x": 760.5, "y": 220.25}' in reopened
+
+
+def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    definition = readable_workflow_definition()
+    workflow = definition["workflow"]
+    workflow["steps"].insert(
+        2,
+        {
+            "id": "waiting_for_correction",
+            "admin_label": "Korekta wniosku",
+            "user_label": "Popraw wniosek",
+            "status": "WAITING_FOR_CORRECTION",
+            "next": "review",
+            "stage_type": "correction",
+        },
+    )
+    workflow["steps"].insert(
+        3,
+        {
+            "id": "end_rejected",
+            "admin_label": "Wniosek odrzucony",
+            "user_label": "Wniosek odrzucony",
+            "status": "OFFICER_REJECTED",
+            "final": True,
+            "rejected": True,
+        },
+    )
+    workflow["decision_settings"] = [
+        {
+            "id": "application_decision",
+            "label": "Decyzja o wniosku",
+            "step_id": "review",
+            "yes_status": "PROCESS_COMPLETED",
+            "no_status": "OFFICER_REJECTED",
+            "correction_status": "WAITING_FOR_CORRECTION",
+            "active": True,
+        }
+    ]
+    form_id = create_form(
+        admin_app,
+        slug="workflow_diagram_browser",
+        definition_json=definition,
+    )
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        script_errors = []
+        page.on("pageerror", lambda exception: script_errors.append(str(exception)))
+        page.set_content(html, wait_until="domcontentloaded")
+        page.wait_for_function(
+            "document.querySelectorAll('[data-diagram-node-id]').length === 6"
+        )
+
+        positions = page.locator("[data-diagram-node-id]").evaluate_all(
+            """(nodes) => Object.fromEntries(nodes.map((node) => {
+                const matrix = node.transform.baseVal.consolidate().matrix;
+                return [node.dataset.diagramNodeId, {x: matrix.e, y: matrix.f}];
+            }))"""
+        )
+        assert len({(position["x"], position["y"]) for position in positions.values()}) == 6
+        assert positions["waiting_for_correction"]["x"] < positions["review"]["x"]
+        assert positions["decision:review:application_decision"]["x"] > positions["review"]["x"]
+        assert positions["end_rejected"]["x"] > positions["decision:review:application_decision"]["x"]
+        assert abs(
+            positions["decision:review:application_decision"]["y"] - positions["review"]["y"]
+        ) < 10
+        assert positions["completed"]["y"] > positions["review"]["y"]
+        assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ automatyczny"
+
+        first_label = page.locator("[data-step-admin-label]").first
+        first_label.evaluate(
+            """(field) => {
+                field.value = "Złożenie zaktualizowane";
+                field.dispatchEvent(new Event("input", {bubbles: true}));
+            }"""
+        )
+        assert "Złożenie zaktualizowane" in page.locator(
+            '[data-diagram-node-id="submission"]'
+        ).text_content()
+
+        node = page.locator('[data-diagram-node-id="submission"]')
+        node.scroll_into_view_if_needed()
+        box = node.bounding_box()
+        assert box
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2 + 80, box["y"] + box["height"] / 2 + 30)
+        page.mouse.up()
+        assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ ręczny"
+        saved_workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
+        assert saved_workflow["diagram_layout"]["nodes"]["submission"]["x"] > 420
+
+        width_before_zoom = page.locator("[data-workflow-diagram]").evaluate(
+            "(svg) => parseFloat(svg.style.width)"
+        )
+        page.locator("[data-workflow-diagram-zoom-in]").click()
+        width_after_zoom = page.locator("[data-workflow-diagram]").evaluate(
+            "(svg) => parseFloat(svg.style.width)"
+        )
+        assert width_after_zoom > width_before_zoom
+
+        page.locator("[data-workflow-diagram-layout-reset]").click()
+        reset_workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
+        assert "diagram_layout" not in reset_workflow
+        assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ automatyczny"
+        assert script_errors == []
+        browser.close()
+
+
 def test_existing_instruction_config_is_loaded_into_workflow_instruction_editors(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(

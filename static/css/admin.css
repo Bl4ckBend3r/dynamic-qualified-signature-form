@@ -1294,6 +1294,26 @@ body.admin-modal-open {
     min-width: 0;
 }
 
+.admin-upload-panel {
+    display: grid;
+    min-width: 0;
+    gap: 1rem;
+    padding-top: .25rem;
+}
+
+.admin-upload-panel:not(.is-active),
+.admin-upload-panel[hidden] {
+    display: none !important;
+}
+
+.admin-upload-panel > :first-child {
+    margin-top: 0;
+}
+
+.admin-upload-panel > :last-child {
+    margin-bottom: 0;
+}
+
 .admin-form-tabbed {
     position: relative;
     min-height: 18rem;
@@ -1372,11 +1392,17 @@ body.admin-modal-open {
 
 @media (max-width: 720px) {
     .admin-form-tabs {
-        display: none;
+        position: static;
+        display: flex;
+        margin-inline: -0.25rem;
+    }
+
+    .admin-form-tab {
+        min-height: 2.75rem;
     }
 
     .admin-form-tab-mobile {
-        display: grid;
+        display: none;
     }
 
     .workflow-advanced-diagnostics {

@@ -141,11 +141,11 @@ def forms_upload():
     uploaded_file = request.files.get("form_file")
     if not uploaded_file or not uploaded_file.filename:
         flash("Wybierz plik formularza.", "error")
-        return _render_forms_upload_error(), 400
+        return _render_forms_upload_error("fields"), 400
     suffix = Path(uploaded_file.filename).suffix.lower()
     if suffix not in {".json", ".html", ".docx"}:
         flash("Dozwolone formaty to JSON, HTML i DOCX.", "error")
-        return _render_forms_upload_error(), 400
+        return _render_forms_upload_error("fields"), 400
     try:
         form_definition = parse_uploaded_form_definition(uploaded_file.read(), uploaded_file.filename)
         form_definition = normalize_admin_form_definition(form_definition)
@@ -161,7 +161,7 @@ def forms_upload():
                 "pustych linii do wypełnienia albo znaczników {{ nazwa_pola }}."
             )
         flash(message or "Plik nie zawiera poprawnej definicji formularza.", "error")
-        return _render_forms_upload_error(), 400
+        return _render_forms_upload_error("fields"), 400
 
     slug = request.form.get("slug", "").strip() or form_definition.get("slug") or Path(uploaded_file.filename).stem
     slug = normalize_slug(slug)
@@ -179,7 +179,7 @@ def forms_upload():
     with db_session_factory()() as db:
         if db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none():
             flash("Formularz o takim slugu już istnieje.", "error")
-            return _render_forms_upload_error(), 400
+            return _render_forms_upload_error("basic"), 400
         selected_logo_id = parse_optional_int(request.form.get("logo_id"))
         if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
             abort(403)
@@ -224,12 +224,13 @@ def forms_upload():
     return redirect(url_for("admin.form_fields", form_id=form_id))
 
 
-def _render_forms_upload_error():
+def _render_forms_upload_error(active_tab: str):
     with db_session_factory()() as db:
         return render_template(
             "admin/forms/upload.html",
             import_instruction=get_form_import_instruction(db),
             logos=list_selectable_logos(db, g.admin_user, None),
+            upload_active_tab=active_tab,
         )
 
 

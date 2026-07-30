@@ -1095,6 +1095,79 @@ def test_upload_html_form_redirects_to_fields(admin_app, admin_client):
         assert form.label_text == "PROJEKT TEST"
 
 
+def test_upload_form_saves_basic_mail_and_appearance_settings_for_public_views(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    payload = {
+        "title": "Tytuł z pliku",
+        "fields": [{"type": "text", "name": "imiona", "label": "Imiona"}],
+    }
+    token = admin_client.get("/admin/forms/upload").get_data(as_text=True).split(
+        'name="csrf_token" value="', 1
+    )[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/forms/upload",
+        data={
+            "csrf_token": token,
+            "name": "Nazwa administratora",
+            "title": "Tytuł publiczny administratora",
+            "description": "Opis publiczny administratora",
+            "slug": "ustawienia_importu",
+            "sort_order": "17",
+            "label_text": "PROJEKT IMPORT",
+            "label_color": "#123456",
+            "label_background": "#abcdef",
+            "logo_alignment": "right",
+            "mail_mode": "custom",
+            "form_smtp_host": "smtp.example.test",
+            "form_smtp_port": "465",
+            "form_smtp_mail_from": "formularz@example.test",
+            "form_smtp_sender_name": "Formularz testowy",
+            "form_smtp_reply_to": "odpowiedz@example.test",
+            "form_smtp_use_ssl": "on",
+            "is_active": "on",
+            "is_public": "on",
+            "form_file": (io.BytesIO(json.dumps(payload).encode()), "ustawienia.json"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.query(Form).filter_by(slug="ustawienia_importu").one()
+        assert form.name == "Nazwa administratora"
+        assert form.title == "Tytuł publiczny administratora"
+        assert form.description == "Opis publiczny administratora"
+        assert form.sort_order == 17
+        assert form.label_text == "PROJEKT IMPORT"
+        assert form.label_color == "#123456"
+        assert form.label_background == "#abcdef"
+        assert form.logo_alignment == "right"
+        assert form.mail_mode == "custom"
+        assert form.smtp_config == {
+            "host": "smtp.example.test",
+            "port": 465,
+            "user": "",
+            "mail_from": "formularz@example.test",
+            "sender_name": "Formularz testowy",
+            "use_tls": False,
+            "use_ssl": True,
+            "timeout": 10,
+            "reply_to": "odpowiedz@example.test",
+        }
+
+    index_html = admin_client.get("/").get_data(as_text=True)
+    public_form_html = admin_client.get("/form/ustawienia_importu").get_data(as_text=True)
+    assert "Tytuł publiczny administratora" in index_html
+    assert "PROJEKT IMPORT" in index_html
+    assert "color: #123456; background: #abcdef;" in index_html
+    assert "Tytuł publiczny administratora" in public_form_html
+    assert "Opis publiczny administratora" in public_form_html
+    assert "color: #123456; background: #abcdef;" in public_form_html
+
+
 def test_imported_fields_default_to_required_and_preserve_explicit_false():
     definition = normalize_form_definition(
         {
@@ -5265,6 +5338,61 @@ def test_form_upload_uses_tabs_and_polish_labels(admin_app, admin_client):
     assert "Obsługiwane formaty" in html
     assert "Kolejność sortowania" in html
     assert "Powrót" in html
+
+
+def test_form_upload_renders_four_separate_tab_panels(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+
+    html = admin_client.get("/admin/forms/upload").get_data(as_text=True)
+
+    assert html.count('role="tabpanel"') == 4
+    assert html.count("data-upload-panel=") == 4
+    fields_panel = html.split('id="upload-panel-fields"', 1)[1].split("</section>", 1)[0]
+    basic_panel = html.split('id="upload-panel-basic"', 1)[1].split("</section>", 1)[0]
+    emails_panel = html.split('id="upload-panel-emails"', 1)[1].split("</section>", 1)[0]
+    appearance_panel = html.split('id="upload-panel-appearance"', 1)[1].split("</section>", 1)[0]
+
+    assert 'name="form_file"' in fields_panel
+    assert 'name="name"' not in fields_panel
+    assert 'name="mail_mode"' not in fields_panel
+    assert 'name="name"' in basic_panel
+    assert 'name="form_file"' not in basic_panel
+    assert 'name="mail_mode"' not in basic_panel
+    assert 'name="mail_mode"' in emails_panel
+    assert 'name="form_file"' not in emails_panel
+    assert 'name="name"' not in emails_panel
+    assert 'name="logo_id"' in appearance_panel
+    assert 'name="form_file"' not in appearance_panel
+    assert 'name="mail_mode"' not in appearance_panel
+    assert 'id="upload-panel-basic"' in html and 'id="upload-panel-basic" class="admin-upload-panel" role=' in html
+    assert 'panel.classList.toggle("is-active", isActive)' in html
+    assert 'button.setAttribute("aria-selected", String(isActive))' in html
+
+
+def test_form_upload_validation_returns_to_fields_tab_and_preserves_values(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    html = admin_client.get("/admin/forms/upload").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/forms/upload",
+        data={
+            "csrf_token": token,
+            "active_tab": "emails",
+            "name": "Zachowana nazwa",
+            "form_smtp_mail_from": "nadawca@example.com",
+        },
+    )
+    response_html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert 'name="active_tab" value="fields"' in response_html
+    assert 'id="upload-panel-fields" class="admin-upload-panel is-active"' in response_html
+    assert 'id="upload-panel-emails" class="admin-upload-panel"' in response_html
+    assert 'value="Zachowana nazwa"' in response_html
+    assert 'value="nadawca@example.com"' in response_html
 
 
 def test_super_admin_can_import_full_form_definition_json(admin_app, admin_client):

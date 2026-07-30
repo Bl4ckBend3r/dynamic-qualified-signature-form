@@ -24,6 +24,16 @@ SUPPORTED_FIELD_TYPES = {
     "static_text",
     "training_selection",
 }
+NON_INPUT_FIELD_TYPES = {"section", "static_text"}
+
+
+def field_is_user_input(field: Dict[str, Any]) -> bool:
+    return (
+        field.get("type") not in NON_INPUT_FIELD_TYPES
+        and not bool(field.get("hidden"))
+        and not bool(field.get("system"))
+        and not bool(field.get("technical"))
+    )
 
 FIELD_STAGE_INITIAL = "initial_submission"
 FIELD_STAGE_AFTER_ACCEPTANCE = "after_officer_acceptance"
@@ -145,7 +155,15 @@ def validate_form_definition(form_definition: Dict[str, Any]) -> None:
                     "Dla trybu podpisu 'optional' co najmniej jedna metoda podpisu musi być dozwolona."
                 )
 
-    for field in form_definition["fields"]:
+    seen_names: set[str] = set()
+    for index, field in enumerate(form_definition["fields"], start=1):
+        if not isinstance(field, dict):
+            raise ValueError(f"Pole nr {index} musi być obiektem.")
+        field_name = str(field.get("name") or "").strip()
+        if field_name:
+            if field_name in seen_names:
+                raise ValueError(f"Duplikat pola 'name': '{field_name}'. Każde pole musi mieć unikalną nazwę.")
+            seen_names.add(field_name)
         field_type = field.get("type")
         if field_type not in SUPPORTED_FIELD_TYPES:
             raise ValueError(f"Nieobsługiwany typ pola: {field_type}")
@@ -204,7 +222,10 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
             field["name"] = field["id"]
         field.setdefault("label", "")
         field.setdefault("placeholder", "")
-        field.setdefault("required", False)
+        if "required" not in field:
+            field["required"] = field_is_user_input(field)
+        else:
+            field["required"] = bool(field["required"])
         field.setdefault("options", [])
         field.setdefault("help_text", "")
         field.setdefault("default", "")

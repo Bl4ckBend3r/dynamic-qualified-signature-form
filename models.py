@@ -470,7 +470,7 @@ class FormField(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     label: Mapped[str] = mapped_column(Text, default="", nullable=False)
     type: Mapped[str] = mapped_column(String(64), default="text", nullable=False)
-    required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     options: Mapped[dict | list] = mapped_column(JsonDict, default=list, nullable=False)
     default_value: Mapped[str] = mapped_column(Text, default="", nullable=False)
     section: Mapped[str] = mapped_column(String(255), default="", nullable=False)

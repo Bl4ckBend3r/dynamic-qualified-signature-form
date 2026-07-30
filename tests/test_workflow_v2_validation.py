@@ -64,6 +64,9 @@ def test_admin_editor_contains_live_svg_decision_graph():
     assert "data-step-stage-type" in template
     assert 'name="decision_{{ decision_id }}_correction_status"' in template
     assert 'name="decision_{{ decision_id }}_user_message"' in template
+    assert "buildWorkflowDiagramDecisions" in template
+    assert "Scalono techniczne przejścia etapu z konkretną decyzją" in template
+    assert 'label: "Decyzja"' not in template
 
 
 def test_admin_editor_contains_centered_layered_interactive_diagram():

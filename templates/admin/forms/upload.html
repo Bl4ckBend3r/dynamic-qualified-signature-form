@@ -12,14 +12,44 @@
 <nav class="admin-form-tabs" role="tablist" aria-label="Etapy tworzenia formularza" data-upload-tabs>
     <button type="button" class="admin-form-tab{% if upload_tab == 'fields' %} is-active{% endif %}" data-upload-tab="fields">Pola formularza</button>
     <button type="button" class="admin-form-tab{% if upload_tab == 'basic' %} is-active{% endif %}" data-upload-tab="basic">Podstawowe</button>
-    <button type="button" class="admin-form-tab{% if upload_tab == 'emails' %} is-active{% endif %}" data-upload-tab="emails">E-maile</button>
+    <button type="button" class="admin-form-tab{% if upload_tab == 'emails' %} is-active{% endif %}" data-upload-tab="emails">E-mail</button>
     <button type="button" class="admin-form-tab{% if upload_tab == 'appearance' %} is-active{% endif %}" data-upload-tab="appearance">Logo i wygląd</button>
 </nav>
-<label class="admin-form-tab-mobile"><span>Obszar tworzenia</span><select data-upload-tab-select><option value="fields">Pola formularza</option><option value="basic">Podstawowe</option><option value="emails">E-maile</option><option value="appearance">Logo i wygląd</option></select></label>
+<label class="admin-form-tab-mobile"><span>Obszar tworzenia</span><select data-upload-tab-select><option value="fields">Pola formularza</option><option value="basic">Podstawowe</option><option value="emails">E-mail</option><option value="appearance">Logo i wygląd</option></select></label>
 <div class="admin-card">
     <form method="post" enctype="multipart/form-data" class="admin-form" data-upload-form data-upload-active="{{ upload_tab }}">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
         <input type="hidden" name="active_tab" value="{{ upload_tab }}" data-upload-active-input>
+        <p class="admin-required-note">Zaimportowane i dodawane pola są domyślnie wymagane. Wyjątkiem są pola ukryte, systemowe i sekcje. W JSON możesz jawnie ustawić <code>"required": false</code>.</p>
+        <div class="admin-alert admin-alert-info" data-upload-panel="fields">
+            <strong>Jak przygotować plik?</strong>
+            {% if import_instruction and import_instruction.storage_path %}
+                <a href="{{ url_for('admin.service_document_admin_file', document_id=import_instruction.id) }}">Pobierz instrukcję przygotowania plików formularza</a>
+                <small>Aktualizacja: {{ import_instruction.updated_at.strftime('%Y-%m-%d %H:%M') if import_instruction.updated_at else '-' }}</small>
+            {% else %}
+                <span>Instrukcja przygotowania plików nie została jeszcze opublikowana. Skontaktuj się z superadministratorem.</span>
+            {% endif %}
+        </div>
+        <div class="admin-alert admin-alert-info" data-upload-panel="fields">
+            JSON powinien zawierać co najmniej <code>title</code> i listę <code>fields</code>; każde pole wejściowe wymaga unikalnego <code>name</code> i obsługiwanego <code>type</code>. HTML wymaga kontrolek z atrybutem <code>name</code>. DOCX może używać znaczników <code>{{ '{{ nazwa_pola }}' }}</code> albo etykiet, np. „Imię: ______”. Nazwy systemowe, takie jak <code>submission_id</code>, <code>form_slug</code> i <code>process_status</code>, są zarządzane przez aplikację.
+            <details>
+                <summary>Skrócona specyfikacja plików i zmiennych</summary>
+                <h3>JSON</h3>
+                <p>Struktura główna: <code>title</code>, opcjonalne <code>name</code>, <code>description</code>, <code>slug</code> oraz tablica <code>fields</code>. Pole może zawierać <code>name</code>, <code>label</code>, <code>type</code>, <code>required</code>, <code>options</code>, <code>placeholder</code>, <code>help_text</code>, <code>default</code>, <code>validation</code>, <code>width</code>, <code>visible_if</code>, <code>readonly</code> i <code>stage</code>.</p>
+                <p>Obsługiwane typy: text, textarea, email, tel, number, date, select, radio, checkbox, pesel, section, static_text i training_selection.</p>
+                <pre><code>{
+  "title": "Formularz zgłoszeniowy",
+  "fields": [
+    {"type": "text", "name": "imie", "label": "Imię"},
+    {"type": "email", "name": "email", "label": "E-mail", "required": false}
+  ]
+}</code></pre>
+                <h3>HTML i DOCX</h3>
+                <p>W HTML użyj <code>input</code>, <code>select</code> lub <code>textarea</code> z unikalnym atrybutem <code>name</code>. W DOCX użyj znaczników <code>{{ '{{ nazwa_pola }}' }}</code> albo etykiet zakończonych dwukropkiem i miejscem do wpisania.</p>
+                <h3>Zmienne systemowe</h3>
+                <p>Identyfikatory techniczne nie są polami użytkownika i nie należy dodawać ich do <code>fields</code>. Należą do nich identyfikatory zgłoszenia i formularza (<code>submission_id</code>, <code>form_slug</code>), statusy i workflow (<code>process_status</code>, <code>current_stage</code>), metadane utworzenia/aktualizacji, dane wygenerowanych dokumentów i podpisów oraz techniczne znaczniki instrukcji i wysyłki e-mail.</p>
+            </details>
+        </div>
         <p>Po wgraniu pliku przejdziesz do edytora pól. Zakładki szkoleń, dokumentów, workflow i instrukcji będą dostępne po utworzeniu formularza.</p>
         <div class="admin-form-grid">
             <label data-upload-panel="fields">
@@ -32,6 +62,14 @@
                 <input type="text" name="name" placeholder="np. Formularz rekrutacyjny">
             </label>
             <label data-upload-panel="basic">
+                <span>Tytuł publiczny</span>
+                <input type="text" name="title" placeholder="Nagłówek widoczny nad formularzem">
+            </label>
+            <label class="admin-form-wide" data-upload-panel="basic">
+                <span>Opis publiczny</span>
+                <textarea name="description" rows="4" placeholder="Opis widoczny dla użytkownika"></textarea>
+            </label>
+            <label data-upload-panel="basic">
                 <span>Slug</span>
                 <input type="text" name="slug" placeholder="np. formularz_rekrutacyjny">
             </label>
@@ -39,7 +77,7 @@
                 <span>Kolejność sortowania</span>
                 <input type="number" name="sort_order" value="0">
             </label>
-            <label data-upload-panel="appearance">
+            <label data-upload-panel="basic">
                 <span>Etykieta projektu</span>
                 <input type="text" name="label_text" placeholder="np. PROJEKT 6.08">
             </label>
@@ -50,6 +88,17 @@
             <label data-upload-panel="appearance">
                 <span>Tło etykiety</span>
                 <input type="text" name="label_background" value="#f7f3ec">
+            </label>
+            <label data-upload-panel="appearance">
+                <span>Logo formularza</span>
+                <select name="logo_id">
+                    <option value="">Bez logo</option>
+                    {% for logo in logos or [] %}<option value="{{ logo.id }}">{{ logo.name }}</option>{% endfor %}
+                </select>
+            </label>
+            <label data-upload-panel="appearance">
+                <span>Wyrównanie logo</span>
+                <select name="logo_alignment"><option value="left">Do lewej</option><option value="center">Na środku</option><option value="right">Do prawej</option></select>
             </label>
             <label class="admin-check" data-upload-panel="basic">
                 <input type="checkbox" name="is_active" checked>
@@ -65,17 +114,24 @@
             <div class="admin-form-grid">
                 <label><span>Sposób wysyłki</span><select name="mail_mode" data-mail-mode><option value="system">Użyj domyślnej poczty systemowej</option><option value="custom">Użyj indywidualnej poczty dla tego formularza</option><option value="disabled">Nie wysyłaj maili dla tego formularza</option></select></label>
             </div>
-            <div class="admin-form-grid" data-custom-smtp hidden>
+            <div data-custom-smtp hidden>
+                <div class="admin-form-grid">
+                    <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from"></label>
+                    <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name"></label>
+                    <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to"></label>
+                </div>
+                <details>
+                    <summary>Zaawansowane ustawienia własnego SMTP</summary>
+                    <div class="admin-form-grid">
                 <label><span>SMTP host</span><input name="form_smtp_host"></label>
                 <label><span>SMTP port</span><input type="number" min="1" max="65535" name="form_smtp_port" value="587"></label>
                 <label><span>Użytkownik SMTP</span><input name="form_smtp_user" autocomplete="off"></label>
                 <label><span>Hasło SMTP</span><input type="password" name="form_smtp_password" autocomplete="new-password"></label>
-                <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from"></label>
-                <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name"></label>
-                <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to"></label>
                 <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="10"></label>
                 <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" checked><span>TLS/STARTTLS</span></label>
                 <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl"><span>SSL</span></label>
+                    </div>
+                </details>
             </div>
         </div>
         <div class="admin-form-actions">

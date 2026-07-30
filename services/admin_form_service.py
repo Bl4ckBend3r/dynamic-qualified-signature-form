@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from form_loader import (
     FIELD_STAGE_INITIAL,
+    SUPPORTED_FIELD_TYPES,
     SUPPORTED_FIELD_STAGES,
     has_additional_fields_after_acceptance,
     normalize_form_definition,
@@ -536,24 +537,43 @@ def parse_workflow_json(raw_value: str, fallback: dict) -> dict:
 
 def build_definition_from_html(html: str, filename: str) -> dict:
     fields: list[dict] = []
+    errors: list[str] = []
+    seen_names: set[str] = set()
     input_pattern = re.compile(r"<(input|select|textarea)\b([^>]*)>", re.IGNORECASE | re.DOTALL)
-    for tag, attrs in input_pattern.findall(html):
+    for index, (tag, attrs) in enumerate(input_pattern.findall(html), start=1):
         name = html_attr(attrs, "name")
-        if not name or name.startswith("_") or name == "csrf_token":
+        field_type = (html_attr(attrs, "type") or "text").lower() if tag.lower() == "input" else tag.lower()
+        if field_type in {"submit", "button", "reset", "image"}:
             continue
-        field_type = tag.lower()
-        if tag.lower() == "input":
-            field_type = html_attr(attrs, "type") or "text"
+        if not name:
+            if field_type != "hidden":
+                errors.append(f"Kontrolka HTML nr {index} nie ma atrybutu 'name'.")
+            continue
+        if name.startswith("_") or name == "csrf_token":
+            continue
+        if name in seen_names:
+            errors.append(f"Duplikat pola HTML o nazwie '{name}'.")
+            continue
+        seen_names.add(name)
+        if field_type == "hidden":
+            continue
+        if field_type not in SUPPORTED_FIELD_TYPES:
+            errors.append(f"Pole '{name}' ma nieobsługiwany typ HTML '{field_type}'.")
+            continue
         fields.append(
             {
                 "type": field_type,
                 "name": name,
                 "label": humanize_field_name(name),
-                "required": "required" in attrs.lower(),
+                "required": True,
             }
         )
+    if errors:
+        raise ValueError("Nie można zaimportować HTML: " + " ".join(errors))
     if not fields:
-        raise ValueError("no fields")
+        raise ValueError(
+            "Nie wykryto pól formularza w HTML. Dodaj kontrolki input, select lub textarea z atrybutem 'name'."
+        )
     return {"title": Path(filename).stem, "fields": fields}
 
 
@@ -584,7 +604,7 @@ def build_definition_from_docx(content: bytes, filename: str) -> dict:
         name = _docx_field_name(clean_label)
         if not name or name in fields_by_name:
             return
-        field = {"type": field_type, "name": name, "label": clean_label, "required": False}
+        field = {"type": field_type, "name": name, "label": clean_label, "required": True}
         if options:
             field["options"] = options
         fields_by_name[name] = field
@@ -592,7 +612,7 @@ def build_definition_from_docx(content: bytes, filename: str) -> dict:
     for name in re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw):
         fields_by_name.setdefault(
             name,
-            {"type": "text", "name": name, "label": humanize_field_name(name), "required": False},
+            {"type": "text", "name": name, "label": humanize_field_name(name), "required": True},
         )
 
     checkbox_group: list[str] = []

@@ -132,18 +132,25 @@
                 <option value="disabled" {% if form.mail_mode == 'disabled' %}selected{% endif %}>Nie wysyłaj maili dla tego formularza</option>
             </select></label>
         </div>
-        <div class="admin-form-grid" data-custom-smtp>
+        <div data-custom-smtp>
+            <div class="admin-form-grid">
+                <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from" value="{{ form_smtp.get('mail_from', '') }}"></label>
+                <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name" value="{{ form_smtp.get('sender_name', '') }}"></label>
+                <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to" value="{{ form_smtp.get('reply_to', '') }}"></label>
+            </div>
+            <details>
+                <summary>Zaawansowane ustawienia własnego SMTP</summary>
+                <div class="admin-form-grid">
             <label><span>SMTP host</span><input name="form_smtp_host" value="{{ form_smtp.get('host', '') }}"></label>
             <label><span>SMTP port</span><input type="number" min="1" max="65535" name="form_smtp_port" value="{{ form_smtp.get('port', 587) }}"></label>
             <label><span>Użytkownik SMTP</span><input name="form_smtp_user" value="{{ form_smtp.get('user', '') }}" autocomplete="off"></label>
             <label><span>Nowe hasło SMTP</span><input type="password" name="form_smtp_password" value="" autocomplete="new-password" placeholder="{{ 'Hasło jest zapisane' if form.smtp_password_encrypted else 'Brak zapisanego hasła' }}"></label>
-            <label><span>Nadawca e-mail</span><input type="email" name="form_smtp_mail_from" value="{{ form_smtp.get('mail_from', '') }}"></label>
-            <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name" value="{{ form_smtp.get('sender_name', '') }}"></label>
-            <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to" value="{{ form_smtp.get('reply_to', '') }}"></label>
             <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="{{ form_smtp.get('timeout', 10) }}"></label>
             <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" {% if form_smtp.get('use_tls') %}checked{% endif %}><span>TLS/STARTTLS</span></label>
             <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl" {% if form_smtp.get('use_ssl') %}checked{% endif %}><span>SSL</span></label>
             {% if form.smtp_password_encrypted %}<label class="admin-check"><input type="checkbox" name="form_smtp_clear_password"><span>Usuń zapisane hasło</span></label>{% endif %}
+                </div>
+            </details>
         </div>
         <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_mail_settings_test', form_id=form.id) }}" formmethod="post">Testuj połączenie</button>
     </div>
@@ -1198,6 +1205,7 @@ const workflowDiagramState = {
     canvasHeight: 440,
     hasInitialFit: false,
 };
+const workflowDiagramDiagnosticKeys = new Set();
 
 function sanitizeInstructionPreview(value) {
     const template = document.createElement("template");
@@ -1403,17 +1411,14 @@ function collectWorkflow() {
         steps,
         decision_settings: allDecisionSettings(),
     };
-    const activeNodeIds = new Set(steps.map((step) => step.id));
-    currentDecisionSettings().forEach((decision, index) => {
+    const activeSteps = steps.filter((step) => step.active !== false);
+    const activeNodeIds = new Set(activeSteps.map((step) => step.id));
+    buildWorkflowDiagramDecisions(activeSteps, currentDecisionSettings(), {warnOnDuplicate: false}).forEach((decision, index) => {
         activeNodeIds.add(`decision:${decision.step_id}:${decision.id || index}`);
     });
     const manualNodes = Object.fromEntries(
         Object.entries(workflowDiagramState.positions)
-            .filter(([nodeId, position]) => (
-                activeNodeIds.has(nodeId)
-                || (nodeId.startsWith("decision:")
-                    && activeNodeIds.has(nodeId.split(":")[1]))
-            )
+            .filter(([nodeId, position]) => activeNodeIds.has(nodeId)
                 && Number.isFinite(Number(position?.x))
                 && Number.isFinite(Number(position?.y)))
             .map(([nodeId, position]) => [nodeId, {
@@ -1617,7 +1622,7 @@ function renderWorkflowDiagramLegacy(config, configuredDecisions, validationErro
     const allDecisions = [];
     steps.forEach((step) => {
         const inline = Object.entries(step.decisions || {});
-        if (inline.length) allDecisions.push({step_id: step.id, label: "Decyzja", outcomes: inline.map(([label, target]) => ({label, target_step: target}))});
+        if (inline.length) allDecisions.push({step_id: step.id, label: `Wybór: ${step.admin_label || step.id}`, outcomes: inline.map(([label, target]) => ({label, target_step: target}))});
     });
     configuredDecisions.forEach((decision) => {
         const outcomes = [
@@ -1684,6 +1689,134 @@ function renderWorkflowDiagramLegacy(config, configuredDecisions, validationErro
     });
 }
 
+function workflowDiagramOutcomeLabel(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["yes", "accepted", "accept", "tak"].includes(normalized)) return "Tak";
+    if (["no", "rejected", "reject", "nie"].includes(normalized)) return "Nie";
+    if (["correction", "correct", "do poprawy", "korekta"].includes(normalized)) return "Do poprawy";
+    return String(value || "").trim();
+}
+
+function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplicate = true} = {}) {
+    const stepById = new Map(steps.map((step) => [step.id, step]));
+    const statusTargets = new Map(steps.map((step) => [step.status, step.id]));
+    const decisions = [];
+    const decisionsByKey = new Map();
+    const diagnostic = (message, details) => {
+        if (!warnOnDuplicate) return;
+        const diagnosticKey = [
+            message,
+            details?.key || "",
+            details?.step_id || "",
+            details?.decision_id || details?.decision?.id || "",
+        ].join("|");
+        if (workflowDiagramDiagnosticKeys.has(diagnosticKey)) return;
+        workflowDiagramDiagnosticKeys.add(diagnosticKey);
+        console.warn(`[workflow-diagram] ${message}`, details);
+    };
+    const normalizeOutcome = (outcome) => {
+        const targetStep = String(
+            outcome?.target_step
+            || statusTargets.get(outcome?.target_status)
+            || ""
+        ).trim();
+        if (!targetStep || !stepById.has(targetStep)) return null;
+        return {
+            label: workflowDiagramOutcomeLabel(outcome?.label || outcome?.code),
+            target_step: targetStep,
+        };
+    };
+    const mergeOutcomes = (target, incoming, diagnosticDetails) => {
+        incoming.map(normalizeOutcome).filter(Boolean).forEach((outcome) => {
+            const semanticLabel = workflowDiagramOutcomeLabel(outcome.label).toLowerCase();
+            const existingByLabel = target.outcomes.find(
+                (item) => workflowDiagramOutcomeLabel(item.label).toLowerCase() === semanticLabel
+            );
+            if (existingByLabel) {
+                if (existingByLabel.target_step !== outcome.target_step) {
+                    diagnostic("Wykryto sprzeczne przejścia zduplikowanej decyzji; zachowano konfigurację decyzji.", {
+                        ...diagnosticDetails,
+                        existing: existingByLabel,
+                        ignored: outcome,
+                    });
+                }
+                return;
+            }
+            if (target.outcomes.some((item) => item.target_step === outcome.target_step)) return;
+            target.outcomes.push(outcome);
+        });
+    };
+
+    (configuredDecisions || []).forEach((decision, index) => {
+        if (decision.active === false || !stepById.has(decision.step_id)) return;
+        const configuredOutcomes = [
+            ...(Array.isArray(decision.outcomes) ? decision.outcomes : []),
+            {label: "Tak", target_status: decision.yes_status},
+            {label: "Nie", target_status: decision.no_status},
+            {label: "Do poprawy", target_status: decision.correction_status},
+        ];
+        const outcomes = configuredOutcomes.map(normalizeOutcome).filter(Boolean);
+        if (!outcomes.length) return;
+        const rawLabel = String(decision.label || decision.name || "").trim();
+        const ownerLabel = String(stepById.get(decision.step_id)?.admin_label || decision.step_id);
+        const label = rawLabel && rawLabel.toLowerCase() !== "decyzja"
+            ? rawLabel
+            : `Wybór: ${ownerLabel}`;
+        const key = decision.id
+            ? `id:${decision.id}`
+            : `label:${label.toLowerCase()}|stage:${decision.step_id}`;
+        const existing = decisionsByKey.get(key);
+        if (existing) {
+            diagnostic("Wykryto zduplikowaną decyzję; scalono jej krawędzie.", {
+                key,
+                decision,
+            });
+            mergeOutcomes(existing, outcomes, {key, decision});
+            return;
+        }
+        const normalized = {
+            ...decision,
+            id: decision.id || `configured:${decision.step_id}:${index}`,
+            label,
+            outcomes: [],
+        };
+        mergeOutcomes(normalized, outcomes, {key, decision});
+        decisionsByKey.set(key, normalized);
+        decisions.push(normalized);
+    });
+
+    steps.forEach((step) => {
+        const inlineOutcomes = Object.entries(step.decisions || {}).map(([label, targetStep]) => ({
+            label,
+            target_step: targetStep,
+        })).map(normalizeOutcome).filter(Boolean);
+        if (!inlineOutcomes.length) return;
+        const candidates = decisions.filter((decision) => decision.step_id === step.id);
+        if (candidates.length) {
+            const score = (decision) => inlineOutcomes.reduce((total, outcome) => (
+                total + (decision.outcomes.some((item) => (
+                    item.target_step === outcome.target_step
+                    || workflowDiagramOutcomeLabel(item.label) === workflowDiagramOutcomeLabel(outcome.label)
+                )) ? 1 : 0)
+            ), 0);
+            const target = [...candidates].sort((left, right) => score(right) - score(left))[0];
+            diagnostic("Scalono techniczne przejścia etapu z konkretną decyzją.", {
+                step_id: step.id,
+                decision_id: target.id,
+            });
+            mergeOutcomes(target, inlineOutcomes, {step_id: step.id, decision_id: target.id});
+            return;
+        }
+        decisions.push({
+            id: `inline:${step.id}`,
+            step_id: step.id,
+            label: `Wybór: ${step.admin_label || step.id}`,
+            outcomes: inlineOutcomes,
+        });
+    });
+    return decisions;
+}
+
 function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
     const svg = document.querySelector("[data-workflow-diagram]");
     const wrap = document.querySelector("[data-workflow-diagram-wrap]");
@@ -1715,25 +1848,7 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
     const margin = 52;
     const columns = {correction: 70, main: 420, decision: 820, rejection: 1200};
     const stepById = new Map(steps.map((step) => [step.id, step]));
-    const statusTargets = new Map(steps.map((step) => [step.status, step.id]));
-    const decisions = [];
-    steps.forEach((step) => {
-        const inline = Object.entries(step.decisions || {});
-        if (inline.length) decisions.push({
-            id: `inline:${step.id}`,
-            step_id: step.id,
-            label: "Decyzja",
-            outcomes: inline.map(([label, target]) => ({label, target_step: target})),
-        });
-    });
-    configuredDecisions.forEach((decision) => decisions.push({
-        ...decision,
-        outcomes: [
-            {label: "Tak", target_step: statusTargets.get(decision.yes_status)},
-            {label: "Nie", target_step: statusTargets.get(decision.no_status)},
-            {label: "Do poprawy", target_step: statusTargets.get(decision.correction_status)},
-        ].filter((outcome) => outcome.target_step),
-    }));
+    const decisions = buildWorkflowDiagramDecisions(steps, configuredDecisions);
 
     const outgoing = new Map(steps.map((step) => [step.id, []]));
     steps.forEach((step) => {
@@ -1920,7 +2035,7 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
     decisions.forEach((decision, index) => {
         const nodeId = `decision:${decision.step_id}:${decision.id || index}`;
         const position = decisionPositions.get(nodeId);
-        drawEdge(positions.get(decision.step_id), position, "Decyzja", "is-decision");
+        drawEdge(positions.get(decision.step_id), position, "", "is-decision");
         (decision.outcomes || []).forEach((outcome, branch) => {
             const label = String(outcome.label || "");
             const negative = /nie|odrz/i.test(label);
@@ -1985,9 +2100,10 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
             points: `${decisionWidth / 2},0 ${decisionWidth},${decisionHeight / 2} ${decisionWidth / 2},${decisionHeight} 0,${decisionHeight / 2}`,
             class: `workflow-diagram__decision${hasError ? " has-error" : ""}`,
         }));
-        const label = String(decision.label || "Decyzja urzędnika");
-        group.appendChild(make("text", {x: decisionWidth / 2, y: decisionHeight / 2 - 4, class: "workflow-diagram__decision-label"}, label.slice(0, 24)));
-        if (label.length > 24) group.appendChild(make("text", {x: decisionWidth / 2, y: decisionHeight / 2 + 13, class: "workflow-diagram__decision-label"}, label.slice(24, 48)));
+        const label = String(decision.label || `Wybór: ${stepById.get(decision.step_id)?.admin_label || decision.step_id}`);
+        group.appendChild(make("text", {x: decisionWidth / 2, y: 40, class: "workflow-diagram__decision-label"}, label.slice(0, 24)));
+        if (label.length > 24) group.appendChild(make("text", {x: decisionWidth / 2, y: 56, class: "workflow-diagram__decision-label"}, label.slice(24, 48)));
+        group.appendChild(make("text", {x: decisionWidth / 2, y: 75, class: "workflow-diagram__decision-type"}, "Decyzja urzędnika"));
         svg.appendChild(group);
     });
 

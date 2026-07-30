@@ -37,7 +37,8 @@ from models import (
     SystemMailSettings,
     User,
 )
-from services.admin_form_service import sync_form_fields
+from services.admin_form_service import build_definition_from_html, sync_form_fields
+from form_loader import normalize_form_definition, validate_form_definition
 
 
 class AdminTestConfig(Config):
@@ -1073,6 +1074,9 @@ def test_upload_html_form_redirects_to_fields(admin_app, admin_client):
             "csrf_token": token,
             "slug": "html_form",
             "name": "HTML Form",
+            "title": "Publiczny formularz HTML",
+            "description": "Opis z kreatora",
+            "label_text": "PROJEKT TEST",
             "form_file": (io.BytesIO(html_form), "html_form.html"),
         },
         content_type="multipart/form-data",
@@ -1084,6 +1088,108 @@ def test_upload_html_form_redirects_to_fields(admin_app, admin_client):
     with session_factory() as db:
         form = db.query(Form).filter_by(slug="html_form").one()
         assert [field.name for field in form.fields] == ["email", "opis"]
+        assert all(field.required for field in form.fields)
+        assert form.name == "HTML Form"
+        assert form.title == "Publiczny formularz HTML"
+        assert form.description == "Opis z kreatora"
+        assert form.label_text == "PROJEKT TEST"
+
+
+def test_imported_fields_default_to_required_and_preserve_explicit_false():
+    definition = normalize_form_definition(
+        {
+            "title": "Wymagalnosc",
+            "fields": [
+                {"type": "section", "label": "Sekcja"},
+                {"type": "text", "name": "default_required"},
+                {"type": "email", "name": "optional_email", "required": False},
+                {"type": "text", "name": "system_value", "system": True},
+            ],
+        }
+    )
+
+    assert definition["fields"][0]["required"] is False
+    assert definition["fields"][1]["required"] is True
+    assert definition["fields"][2]["required"] is False
+    assert definition["fields"][3]["required"] is False
+
+
+def test_html_import_reports_missing_names_duplicates_and_unsupported_types():
+    with pytest.raises(ValueError) as exc_info:
+        build_definition_from_html(
+            '<form><input type="text"><input name="email"><input name="email"><input name="avatar" type="file"></form>',
+            "bledny.html",
+        )
+
+    message = str(exc_info.value)
+    assert "nie ma atrybutu 'name'" in message
+    assert "Duplikat pola HTML" in message
+    assert "nieobsługiwany typ HTML 'file'" in message
+
+
+def test_json_validation_reports_duplicate_field_names():
+    definition = normalize_form_definition(
+        {
+            "title": "Duplikaty",
+            "fields": [
+                {"type": "text", "name": "email"},
+                {"type": "email", "name": "email"},
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Duplikat pola"):
+        validate_form_definition(definition)
+
+
+def test_super_admin_manages_import_instruction_and_download_is_protected(admin_app, admin_client):
+    create_user(admin_app)
+    create_user(admin_app, email="manager-instruction@example.com", role="form_manager")
+    login(admin_client)
+    documents_page = admin_client.get("/admin/site/documents")
+    token = documents_page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        "/admin/site/documents",
+        data={
+            "csrf_token": token,
+            "document_type": "form_import_instruction",
+            "title": "Instrukcja przygotowania plikow formularza",
+            "document_file": (io.BytesIO(b"# Instrukcja\n\nPola formularza."), "instrukcja.md", "text/markdown"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "instrukcja.md" in response.get_data(as_text=True)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        instruction = db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one()
+        instruction_id = instruction.id
+        stored_path = Path(instruction.storage_path)
+        assert stored_path.exists()
+
+    upload_page = admin_client.get("/admin/forms/upload").get_data(as_text=True)
+    assert "Pobierz instrukcję przygotowania plików formularza" in upload_page
+    assert admin_client.get(f"/admin/site/documents/{instruction_id}/file").status_code == 200
+
+    manager_client = admin_app.test_client()
+    login(manager_client, email="manager-instruction@example.com")
+    assert manager_client.get(f"/admin/site/documents/{instruction_id}/file").status_code == 403
+
+    delete_token = admin_client.get("/admin/site/documents").get_data(as_text=True).split(
+        'name="csrf_token" value="', 1
+    )[1].split('"', 1)[0]
+    delete_response = admin_client.post(
+        "/admin/site/documents/form-import-instruction/delete",
+        data={"csrf_token": delete_token},
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+    assert not stored_path.exists()
+    with session_factory() as db:
+        assert db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one_or_none() is None
 
 
 def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
@@ -4636,6 +4742,11 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
             "active": True,
         }
     ]
+    workflow["steps"][1]["decisions"] = {
+        "accepted": "completed",
+        "rejected": "end_rejected",
+        "correction": "waiting_for_correction",
+    }
     form_id = create_form(
         admin_app,
         slug="workflow_diagram_browser",
@@ -4651,7 +4762,14 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
             pytest.skip(f"Brak przeglądarki Playwright: {exception}")
         page = browser.new_page(viewport={"width": 1400, "height": 900})
         script_errors = []
+        console_warnings = []
         page.on("pageerror", lambda exception: script_errors.append(str(exception)))
+        page.on(
+            "console",
+            lambda message: console_warnings.append(message.text)
+            if message.type == "warning"
+            else None,
+        )
         page.set_content(html, wait_until="domcontentloaded")
         page.wait_for_function(
             "document.querySelectorAll('[data-diagram-node-id]').length === 6"
@@ -4671,6 +4789,13 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
             positions["decision:review:application_decision"]["y"] - positions["review"]["y"]
         ) < 10
         assert positions["completed"]["y"] > positions["review"]["y"]
+        decision_nodes = page.locator('[data-diagram-node-id^="decision:"]')
+        assert decision_nodes.count() == 1
+        assert page.locator('[data-diagram-node-id*="inline:"]').count() == 0
+        assert "Decyzja o wniosku" in decision_nodes.text_content()
+        edge_labels = page.locator(".workflow-diagram__edge-label").all_text_contents()
+        assert {"Tak", "Nie", "Do poprawy"}.issubset(set(edge_labels))
+        assert any("Scalono techniczne przejścia etapu" in warning for warning in console_warnings)
         assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ automatyczny"
         inactive_section = page.locator("[data-workflow-inactive-decisions]")
         assert inactive_section.evaluate("(details) => details.open") is False
@@ -4683,12 +4808,13 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
         ).count() == 5
 
         review_stage.locator("[data-add-workflow-decision]").click()
+        assert review_stage.locator("[data-workflow-decision-card]").count() == 2
+        assert page.locator("[data-diagram-node-id]").count() == 6
+        added_card = review_stage.locator('[data-workflow-decision-card][data-decision-created="true"]')
+        added_card.locator('[data-decision-field="yes_status"]').select_option("PROCESS_COMPLETED")
         page.wait_for_function(
             "document.querySelectorAll('[data-diagram-node-id]').length === 7"
         )
-        assert review_stage.locator("[data-workflow-decision-card]").count() == 2
-        added_card = review_stage.locator('[data-workflow-decision-card][data-decision-created="true"]')
-        added_card.locator('[data-decision-field="yes_status"]').select_option("PROCESS_COMPLETED")
         added_workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
         added_decision = next(
             decision
@@ -4956,7 +5082,7 @@ def test_form_edit_renders_tabbed_configuration(admin_app, admin_client):
 
     for label in (
         "Podstawowe", "Pola formularza", "Szkolenia", "Deklaracja", "Umowa", "Workflow",
-        "Instrukcje", "E-maile", "Regulaminy i dokumenty", "Logo i wygląd", "Uprawnienia",
+        "Instrukcje", "E-mail", "Regulaminy i dokumenty", "Logo i wygląd", "Uprawnienia",
         "Ustawienia zaawansowane",
     ):
         assert label in html

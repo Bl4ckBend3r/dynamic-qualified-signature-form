@@ -16,8 +16,11 @@ from services.footer_logo_service import (
 from services.instruction_html_service import sanitize_instruction_html
 from services.contact_page_service import default_contact_page, ensure_contact_defaults, phones_from_form
 from services.site_document_service import (
+    FORM_IMPORT_INSTRUCTION_TITLE,
+    FORM_IMPORT_INSTRUCTION_TYPE,
     SERVICE_DOCUMENT_TYPES,
     save_document_upload,
+    save_form_import_instruction_upload,
     update_service_document_from_upload,
 )
 from services.upload_validation import UploadValidationError
@@ -175,19 +178,26 @@ def service_documents_edit():
     with db_session_factory()() as db:
         if request.method == "POST":
             document_type = request.form.get("document_type", "").strip()
-            if document_type not in SERVICE_DOCUMENT_TYPES:
+            allowed_document_types = {**SERVICE_DOCUMENT_TYPES, FORM_IMPORT_INSTRUCTION_TYPE: FORM_IMPORT_INSTRUCTION_TITLE}
+            if document_type not in allowed_document_types:
                 abort(400)
             document = db.execute(select(ServiceDocument).where(ServiceDocument.document_type == document_type)).scalar_one_or_none()
             if not document:
-                document = ServiceDocument(document_type=document_type, title=SERVICE_DOCUMENT_TYPES[document_type])
+                document = ServiceDocument(document_type=document_type, title=allowed_document_types[document_type])
                 db.add(document)
-            document.title = request.form.get("title", "").strip() or SERVICE_DOCUMENT_TYPES[document_type]
+            document.title = request.form.get("title", "").strip() or allowed_document_types[document_type]
             document.content_html = request.form.get("content_html", "").strip()
             uploaded_file = request.files.get("document_file")
             if uploaded_file and uploaded_file.filename:
                 uploaded_bytes = uploaded_file.read()
+                previous_path = Path(document.storage_path or "")
                 try:
-                    metadata = save_document_upload(
+                    save_upload = (
+                        save_form_import_instruction_upload
+                        if document_type == FORM_IMPORT_INSTRUCTION_TYPE
+                        else save_document_upload
+                    )
+                    metadata = save_upload(
                         temp_dir=current_app.config["TEMP_DIR"],
                         uploaded_filename=uploaded_file.filename,
                         uploaded_bytes=uploaded_bytes,
@@ -197,6 +207,8 @@ def service_documents_edit():
                     flash(str(exc), "error")
                     return redirect(url_for("admin.service_documents_edit"))
                 update_service_document_from_upload(document, metadata, uploaded_by_user_id=g.admin_user.id)
+                if previous_path.is_file() and str(previous_path) != metadata["storage_path"]:
+                    previous_path.unlink()
             else:
                 document.updated_by_user_id = g.admin_user.id
             db.commit()
@@ -211,7 +223,29 @@ def service_documents_edit():
             "admin/site/documents.html",
             document_types=SERVICE_DOCUMENT_TYPES,
             documents=documents,
+            form_import_instruction=documents.get(FORM_IMPORT_INSTRUCTION_TYPE),
+            form_import_instruction_type=FORM_IMPORT_INSTRUCTION_TYPE,
+            form_import_instruction_title=FORM_IMPORT_INSTRUCTION_TITLE,
         )
+
+
+@bp.post("/site/documents/form-import-instruction/delete")
+@login_required
+def form_import_instruction_delete():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        return "Nie masz uprawnień.", 403
+    with db_session_factory()() as db:
+        document = db.execute(
+            select(ServiceDocument).where(ServiceDocument.document_type == FORM_IMPORT_INSTRUCTION_TYPE)
+        ).scalar_one_or_none()
+        if document:
+            path = Path(document.storage_path or "")
+            if path.is_file():
+                path.unlink()
+            db.delete(document)
+            db.commit()
+    flash("Instrukcja importu została usunięta.", "success")
+    return redirect(url_for("admin.service_documents_edit"))
 
 
 @bp.get("/site/documents/<int:document_id>/file")

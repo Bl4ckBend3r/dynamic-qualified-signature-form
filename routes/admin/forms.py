@@ -31,7 +31,11 @@ from services.process_instruction_service import (
     normalize_instruction_config,
     reconcile_instruction_config,
 )
-from services.site_document_service import save_document_upload, update_form_regulation_from_upload
+from services.site_document_service import (
+    get_form_import_instruction,
+    save_document_upload,
+    update_form_regulation_from_upload,
+)
 from services.training_catalog_service import TrainingCatalogService
 from services.training_service import parse_training_snapshots
 from services.upload_validation import UploadValidationError
@@ -129,16 +133,19 @@ def form_delete(form_id: int):
 @role_required(ROLE_SUPER_ADMIN)
 def forms_upload():
     if request.method == "GET":
-        return render_template("admin/forms/upload.html")
+        with db_session_factory()() as db:
+            instruction = get_form_import_instruction(db)
+            logos = list_selectable_logos(db, g.admin_user, None)
+            return render_template("admin/forms/upload.html", import_instruction=instruction, logos=logos)
 
     uploaded_file = request.files.get("form_file")
     if not uploaded_file or not uploaded_file.filename:
         flash("Wybierz plik formularza.", "error")
-        return render_template("admin/forms/upload.html"), 400
+        return _render_forms_upload_error(), 400
     suffix = Path(uploaded_file.filename).suffix.lower()
     if suffix not in {".json", ".html", ".docx"}:
         flash("Dozwolone formaty to JSON, HTML i DOCX.", "error")
-        return render_template("admin/forms/upload.html"), 400
+        return _render_forms_upload_error(), 400
     try:
         form_definition = parse_uploaded_form_definition(uploaded_file.read(), uploaded_file.filename)
         form_definition = normalize_admin_form_definition(form_definition)
@@ -154,11 +161,13 @@ def forms_upload():
                 "pustych linii do wypełnienia albo znaczników {{ nazwa_pola }}."
             )
         flash(message or "Plik nie zawiera poprawnej definicji formularza.", "error")
-        return render_template("admin/forms/upload.html"), 400
+        return _render_forms_upload_error(), 400
 
-    slug = request.form.get("slug", "").strip() or Path(uploaded_file.filename).stem
+    slug = request.form.get("slug", "").strip() or form_definition.get("slug") or Path(uploaded_file.filename).stem
     slug = normalize_slug(slug)
-    title = request.form.get("name", "").strip() or form_definition.get("title") or slug
+    name = request.form.get("name", "").strip() or form_definition.get("name") or form_definition.get("title") or slug
+    title = request.form.get("title", "").strip() or form_definition.get("title") or name
+    description = request.form.get("description", "").strip() or str(form_definition.get("description") or "").strip()
     is_active = request.form.get("is_active", "on") == "on"
     is_public = request.form.get("is_public", "on") == "on"
     user_instruction = str(form_definition.pop("user_instruction", "") or "").strip() or None
@@ -170,22 +179,39 @@ def forms_upload():
     with db_session_factory()() as db:
         if db.execute(select(Form).where(Form.slug == slug)).scalar_one_or_none():
             flash("Formularz o takim slugu już istnieje.", "error")
-            return render_template("admin/forms/upload.html"), 400
+            return _render_forms_upload_error(), 400
+        selected_logo_id = parse_optional_int(request.form.get("logo_id"))
+        if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
+            abort(403)
+        logo_alignment = request.form.get("logo_alignment", "left").strip()
         form = Form(
             slug=slug,
-            name=title,
-            title=form_definition.get("title", title),
-            description=form_definition.get("description", ""),
+            name=name,
+            title=title,
+            description=description,
             user_instruction=user_instruction,
             user_instruction_config=instruction_config,
             definition_json=form_definition,
             created_by_id=g.admin_user.id,
             is_active=is_active,
             is_public=is_public,
-            label_text=request.form.get("label_text", "").strip(),
-            label_color=request.form.get("label_color", "").strip() or "#b38d45",
-            label_background=request.form.get("label_background", "").strip() or "#f7f3ec",
+            label_text=(
+                request.form.get("label_text", "").strip()
+                or str(form_definition.get("label_text") or form_definition.get("project_label") or "").strip()
+            ),
+            label_color=(
+                request.form.get("label_color", "").strip()
+                or str(form_definition.get("label_color") or "").strip()
+                or "#b38d45"
+            ),
+            label_background=(
+                request.form.get("label_background", "").strip()
+                or str(form_definition.get("label_background") or "").strip()
+                or "#f7f3ec"
+            ),
             sort_order=parse_int(request.form.get("sort_order"), 0),
+            logo_id=selected_logo_id,
+            logo_alignment=logo_alignment if logo_alignment in LOGO_ALIGNMENTS else "left",
         )
         current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
         db.add(form)
@@ -196,6 +222,15 @@ def forms_upload():
         form_id = form.id
     flash("Formularz został wgrany, a pola zostały wykryte.", "success")
     return redirect(url_for("admin.form_fields", form_id=form_id))
+
+
+def _render_forms_upload_error():
+    with db_session_factory()() as db:
+        return render_template(
+            "admin/forms/upload.html",
+            import_instruction=get_form_import_instruction(db),
+            logos=list_selectable_logos(db, g.admin_user, None),
+        )
 
 
 @bp.route("/forms/<int:form_id>/edit", methods=["GET", "POST"])

@@ -1557,6 +1557,7 @@ body.admin-modal-open {
 .workflow-diagram__label { fill: #182230; font-size: 15px; font-weight: 750; }
 .workflow-diagram__number, .workflow-diagram__status { fill: #667085; font-size: 11px; }
 .workflow-diagram__decision-label { fill: #533800; font-size: 11px; font-weight: 750; text-anchor: middle; }
+.workflow-diagram__decision-type { fill: #7a5a1e; font-size: 9px; text-anchor: middle; }
 
 @media (max-width: 820px) {
     .workflow-diagram { padding: .5rem; }

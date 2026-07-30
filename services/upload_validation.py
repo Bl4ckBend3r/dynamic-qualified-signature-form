@@ -11,6 +11,14 @@ DOCUMENT_MIME_TYPES = {
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+FORM_IMPORT_INSTRUCTION_MIME_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/html",
+    "text/markdown",
+    "text/plain",
+}
 LOGO_SIGNATURES = {
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/jpeg": (b"\xff\xd8\xff",),
@@ -73,6 +81,41 @@ def validate_document_upload(filename: str, content: bytes, mime_type: str | Non
     if suffix == ".doc" and not content.startswith(b"\xd0\xcf\x11\xe0"):
         raise UploadValidationError("Plik DOC nie ma poprawnego nagłówka.")
     if normalized_mime and normalized_mime != expected_mime:
+        if not (suffix == ".pdf" and normalized_mime == "application/x-pdf"):
+            raise UploadValidationError("Rozszerzenie lub MIME nie zgadza się z zawartością pliku.")
+    return expected_mime
+
+
+def validate_form_import_instruction_upload(
+    filename: str,
+    content: bytes,
+    mime_type: str | None = None,
+) -> str:
+    clean_name = validate_upload_filename(filename, allowed_suffixes={".pdf", ".docx", ".html", ".md"})
+    if not content:
+        raise UploadValidationError("Plik instrukcji jest pusty.")
+    if len(content) > MAX_DOCUMENT_UPLOAD_BYTES:
+        raise UploadValidationError("Plik instrukcji jest zbyt duży.")
+    suffix = PurePath(clean_name).suffix.lower()
+    expected_mime = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".html": "text/html",
+        ".md": "text/markdown",
+    }[suffix]
+    normalized_mime = str(mime_type or "").strip().lower()
+    if normalized_mime and normalized_mime not in FORM_IMPORT_INSTRUCTION_MIME_TYPES:
+        raise UploadValidationError("Nieprawidłowy typ MIME pliku instrukcji.")
+    if suffix == ".pdf" and not content.startswith(b"%PDF"):
+        raise UploadValidationError("Plik PDF nie ma poprawnego nagłówka.")
+    if suffix == ".docx" and not content.startswith(b"PK"):
+        raise UploadValidationError("Plik DOCX nie ma poprawnego nagłówka.")
+    if suffix in {".html", ".md"}:
+        try:
+            content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise UploadValidationError("Plik tekstowy instrukcji musi byc zapisany w UTF-8.") from exc
+    if normalized_mime and suffix in {".pdf", ".docx"} and normalized_mime != expected_mime:
         if not (suffix == ".pdf" and normalized_mime == "application/x-pdf"):
             raise UploadValidationError("Rozszerzenie lub MIME nie zgadza się z zawartością pliku.")
     return expected_mime

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from types import SimpleNamespace
 
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import or_, select
 
-from models import FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
+from models import Form, FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_template_service import (
     MAIL_LAYOUT,
@@ -21,13 +22,11 @@ from services.mail_template_service import (
 )
 from services.mail_template_editor_service import (
     build_variable_catalog,
-    trigger_event_options,
-    trigger_status_options,
 )
+from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
 from . import (
     MAIL_TEMPLATE_TYPES,
-    OFFICER_DECISIONS,
     ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     bp,
@@ -44,13 +43,6 @@ from . import (
 )
 
 
-MAIL_DYNAMIC_VARIABLES = {
-    "Zgłoszenie": ["submission_id", "created_at", "process_status", "status_label"],
-    "Formularz": ["form_name", "form_slug"],
-    "Użytkownik": ["imiona", "nazwisko", "email", "telefon"],
-    "Szkolenia": ["selected_trainings", "all_selected_trainings_total_formatted"],
-    "Linki": ["status_url", "podpisz_url", "document_url"],
-}
 MAIL_TEMPLATE_LABELS = {
     "confirmation": "Złożenie wniosku",
     "accepted": "Akceptacja",
@@ -66,6 +58,7 @@ MAIL_TEMPLATE_LABELS = {
     "stage_rollback": "Cofnięcie etapu",
     "custom": "Wiadomość własna",
 }
+MAIL_PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)")
 
 
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/mail", methods=["GET", "POST"])
@@ -110,7 +103,7 @@ def submission_mail(form_id: int, submission_pk: int):
                 if resolved_footer
                 else "Brak aktywnej stopki e-mail"
             ),
-            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+            variable_catalog=build_variable_catalog(form, preview_mail_context(form, submission)),
         )
 
 
@@ -143,13 +136,14 @@ def submissions_mail_selected(form_id: int):
             .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
         if request.form.get("compose") == "1" and request.form.get("send_now") != "1":
+            preview_submission = submissions[0] if submissions else None
             return render_template(
                 "admin/submissions/mail_bulk.html",
                 form=form,
                 submissions=submissions,
                 templates=templates,
                 template_payload=mail_template_payload(templates),
-                dynamic_variables=MAIL_DYNAMIC_VARIABLES,
+                variable_catalog=build_variable_catalog(form, preview_mail_context(form, preview_submission)),
                 missing_email_submissions=[item for item in submissions if not str(item.email or "").strip()],
             )
         manual_template = _manual_template_from_request()
@@ -264,21 +258,22 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
         preview_context = preview_mail_context(form, sample_submission)
         preview_html = render_platform_mail_html(template, preview_context)
         variable_catalog = build_variable_catalog(form, preview_context)
+        trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
         return render_template(
             "admin/mail_templates/edit.html",
             form=form,
             template=template,
             preview_html=preview_html,
-            officer_decisions=OFFICER_DECISIONS,
             template_types=MAIL_TEMPLATE_TYPES,
             sample_submissions=sample_submissions,
             preview_submission_id=sample_submission.id if sample_submission else "",
             mail_layout=MAIL_LAYOUT,
-            dynamic_variables=MAIL_DYNAMIC_VARIABLES,
             template_labels=MAIL_TEMPLATE_LABELS,
             variable_catalog=variable_catalog,
-            trigger_events=trigger_event_options(form),
-            trigger_statuses=trigger_status_options(form),
+            trigger_catalog=trigger_catalog,
+            trigger_events=trigger_catalog["events"],
+            trigger_statuses=trigger_catalog["statuses"],
+            trigger_decisions=trigger_catalog["decisions"],
             preview_subject=render_template_text(template.subject or "", preview_context),
             preview_text=render_platform_mail_text(template, preview_context),
         )
@@ -296,6 +291,29 @@ def mail_template_preview(form_id: int):
             if candidate and candidate.form_slug == form.slug:
                 sample_submission = candidate
         context = preview_mail_context(form, sample_submission)
+        trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
+        selected_event = request.form.get("trigger_event", "").strip()
+        selected_status = request.form.get("trigger_status", "").strip()
+        selected_decision = request.form.get("trigger_decision", "").strip()
+        context.update(
+            {
+                "trigger_event": selected_event,
+                "trigger_status": selected_status,
+                "trigger_decision": selected_decision,
+            }
+        )
+        if selected_status:
+            status_option = next(
+                (item for item in trigger_catalog["statuses"] if item["value"] == selected_status),
+                None,
+            )
+            context["process_status"] = selected_status
+            context["process_status_label"] = (
+                status_option["label"] if status_option else selected_status
+            )
+            context["status_label"] = context["process_status_label"]
+        if selected_decision:
+            context["officer_decision"] = selected_decision
         body_html = sanitize_content_html(request.form.get("body_html", ""))
         instruction_html = sanitize_content_html(request.form.get("instruction_html", ""))
         template = SimpleNamespace(
@@ -310,17 +328,63 @@ def mail_template_preview(form_id: int):
             footer_note=request.form.get("footer_note", ""),
         )
         try:
+            source_values = [
+                request.form.get("subject", ""),
+                request.form.get("content_title", ""),
+                request.form.get("body_html", ""),
+                request.form.get("body_text", ""),
+                request.form.get("instruction_html", ""),
+                request.form.get("instruction_text", ""),
+                request.form.get("footer_note", ""),
+            ]
+            unknown_variables = sorted(
+                {
+                    name
+                    for source in source_values
+                    for name in MAIL_PLACEHOLDER_PATTERN.findall(source or "")
+                    if name not in context
+                }
+            )
             return jsonify(
                 {
                     "ok": True,
                     "subject": render_template_text(request.form.get("subject", ""), context),
+                    "title": render_template_text(request.form.get("content_title", ""), context),
                     "html": render_platform_mail_html(template, context),
                     "text": render_platform_mail_text(template, context),
+                    "unknown_variables": unknown_variables,
+                    "warnings": [
+                        f"Nierozpoznana zmienna: {{{{ {name} }}}}" for name in unknown_variables
+                    ],
                 }
             )
         except Exception:
             current_app.logger.exception("mail_template_preview_failed form_id=%s", form_id)
             return jsonify({"ok": False, "error": "Nie udało się wyrenderować podglądu. Sprawdź składnię zmiennych."}), 400
+
+
+@bp.get("/forms/<int:form_id>/mail-variables")
+@login_required
+def form_mail_variables(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = None
+        submission_pk = parse_optional_int(request.args.get("submission_id"))
+        if submission_pk:
+            candidate = db.get(FormSubmission, submission_pk)
+            if candidate and candidate.form_slug == form.slug:
+                submission = candidate
+        return jsonify(_mail_variable_payload(form, submission))
+
+
+@bp.get("/submissions/<int:submission_pk>/mail-variables")
+@login_required
+def submission_mail_variables(submission_pk: int):
+    with db_session_factory()() as db:
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none() or abort(404)
+        ensure_form_access(db, form.id)
+        return jsonify(_mail_variable_payload(form, submission))
 
 
 @bp.post("/forms/<int:form_id>/mail-templates/<int:template_id>/delete")
@@ -343,7 +407,12 @@ def mail_template_import_html(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         if request.method == "GET":
-            return render_template("admin/mail_templates/import_html.html", form=form, officer_decisions=OFFICER_DECISIONS, template_types=MAIL_TEMPLATE_TYPES)
+            return render_template(
+                "admin/mail_templates/import_html.html",
+                form=form,
+                template_types=MAIL_TEMPLATE_TYPES,
+                **_mail_trigger_template_context(form),
+            )
 
         uploaded_html = read_uploaded_template_file("html_file", {".html"})
         uploaded_txt = read_uploaded_template_file("txt_file", {".txt"})
@@ -351,7 +420,12 @@ def mail_template_import_html(form_id: int):
         raw_text = uploaded_txt if uploaded_txt is not None else request.form.get("body_text", "").strip()
         if not raw_html:
             flash("Wgraj plik HTML albo wklej HTML.", "error")
-            return render_template("admin/mail_templates/import_html.html", form=form, officer_decisions=OFFICER_DECISIONS, template_types=MAIL_TEMPLATE_TYPES), 400
+            return render_template(
+                "admin/mail_templates/import_html.html",
+                form=form,
+                template_types=MAIL_TEMPLATE_TYPES,
+                **_mail_trigger_template_context(form),
+            ), 400
 
         parsed = parse_mail_content(raw_html, raw_text)
         content_text = raw_text or generate_text_from_html(parsed.body_html)
@@ -400,12 +474,22 @@ def mail_template_import_zip(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         if request.method == "GET":
-            return render_template("admin/mail_templates/import_zip.html", form=form, officer_decisions=OFFICER_DECISIONS, template_types=MAIL_TEMPLATE_TYPES)
+            return render_template(
+                "admin/mail_templates/import_zip.html",
+                form=form,
+                template_types=MAIL_TEMPLATE_TYPES,
+                **_mail_trigger_template_context(form),
+            )
 
         uploaded_file = request.files.get("zip_file")
         if not uploaded_file or not uploaded_file.filename:
             flash("Wybierz paczke ZIP.", "error")
-            return render_template("admin/mail_templates/import_zip.html", form=form, officer_decisions=OFFICER_DECISIONS, template_types=MAIL_TEMPLATE_TYPES), 400
+            return render_template(
+                "admin/mail_templates/import_zip.html",
+                form=form,
+                template_types=MAIL_TEMPLATE_TYPES,
+                **_mail_trigger_template_context(form),
+            ), 400
         try:
             parsed = import_mail_template_zip(uploaded_file.read())
             template = MailTemplate(
@@ -445,7 +529,12 @@ def mail_template_import_zip(form_id: int):
             db.commit()
         except MailImportError as exc:
             flash(str(exc), "error")
-            return render_template("admin/mail_templates/import_zip.html", form=form, officer_decisions=OFFICER_DECISIONS, template_types=MAIL_TEMPLATE_TYPES), 400
+            return render_template(
+                "admin/mail_templates/import_zip.html",
+                form=form,
+                template_types=MAIL_TEMPLATE_TYPES,
+                **_mail_trigger_template_context(form),
+            ), 400
 
         flash("Szablon maila zostal zaimportowany z ZIP.", "success")
         return redirect(url_for("admin.mail_template_edit", form_id=form.id, template_id=template.id))
@@ -744,6 +833,32 @@ def template_body_text(template) -> str:
         or getattr(template, "body_text", "")
         or ""
     )
+
+
+def _mail_variable_payload(form, submission=None) -> dict:
+    context = preview_mail_context(form, submission)
+    groups = build_variable_catalog(form, context)
+    return {
+        "form_id": form.id,
+        "submission_id": submission.id if submission else None,
+        "categories": [
+            {
+                "name": group["category"],
+                "variables": group["variables"],
+            }
+            for group in groups
+        ],
+    }
+
+
+def _mail_trigger_template_context(form) -> dict:
+    catalog = WorkflowMailTriggerService().options_for_form(form)
+    return {
+        "trigger_catalog": catalog,
+        "trigger_events": catalog["events"],
+        "trigger_statuses": catalog["statuses"],
+        "trigger_decisions": catalog["decisions"],
+    }
 
 
 def send_mail_for_submission(

@@ -3,35 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.mail_training_context_service import find_training_field
-from services.status_catalog import WORKFLOW_STATUS_LABELS
-
-
-TRIGGER_EVENT_LABELS = {
-    "manual": "Wiadomość wysyłana ręcznie",
-    "manual_bulk": "Wiadomość zbiorcza",
-    "application_submitted": "Wniosek złożony",
-    "submission_received": "Potwierdzenie odebrania wniosku",
-    "officer_accepted": "Wniosek zaakceptowany",
-    "officer_rejected": "Wniosek odrzucony",
-    "auto_rejected_by_condition": "Automatyczne odrzucenie",
-    "returned_for_correction": "Wysłanie do poprawy",
-    "additional_fields_completed": "Uzupełniono dodatkowe pola",
-    "document_generated": "Dokument wygenerowany",
-    "document_uploaded": "Dokument wgrany",
-    "declaration_signed": "Deklaracja podpisana",
-    "agreement_ready": "Umowa gotowa",
-    "agreement_signed_by_user": "Umowa podpisana przez beneficjenta",
-    "agreement_signed_by_office": "Umowa podpisana przez urząd",
-    "stage_rollback": "Cofnięcie etapu",
-    "email_requested": "Workflow wymaga wiadomości",
-}
+from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
 
 VARIABLE_GROUPS = (
     (
-        "Zmienne systemowe",
+        "Systemowe",
         (
             ("app_name", "Nazwa aplikacji", "Portal formularzy"),
             ("current_year", "Bieżący rok", str(datetime.now().year)),
@@ -61,15 +39,23 @@ VARIABLE_GROUPS = (
         ),
     ),
     (
-        "Workflow i decyzja",
+        "Workflow",
         (
-            ("officer_decision", "Decyzja urzędnika", "accepted"),
-            ("officer_decision_reason", "Uzasadnienie decyzji", "Wniosek spełnia wymagania."),
+            ("trigger_event", "Zdarzenie wyzwalające wiadomość", "application_submitted"),
+            ("trigger_status", "Status wyzwalający wiadomość", "FORM_SUBMITTED"),
+            ("trigger_decision", "Decyzja wyzwalająca wiadomość", "accepted"),
             ("correction_message", "Wiadomość dotycząca korekty", "Uzupełnij brakujące dane."),
             ("user_instruction", "Instrukcja dla uczestnika", "Podpisz wygenerowany dokument."),
             ("acceptance_required", "Czy akceptacja jest wymagana", "Tak"),
             ("declaration_required", "Czy deklaracja jest wymagana", "Tak"),
             ("agreement_required", "Czy umowa jest wymagana", "Nie"),
+        ),
+    ),
+    (
+        "Decyzje urzędnika",
+        (
+            ("officer_decision", "Decyzja urzędnika", "accepted"),
+            ("officer_decision_reason", "Uzasadnienie decyzji", "Wniosek spełnia wymagania."),
         ),
     ),
     (
@@ -93,6 +79,14 @@ VARIABLE_GROUPS = (
             ("document_url", "Link do pobrania dokumentu", "https://formularze.example.com/dokument/abc"),
         ),
     ),
+    (
+        "E-mail",
+        (
+            ("email", "Adres e-mail uczestnika", "jan.kowalski@example.com"),
+            ("reply_to", "Adres odpowiedzi dla wiadomości", "kontakt@example.com"),
+            ("sender_name", "Nazwa nadawcy wiadomości", "Portal formularzy"),
+        ),
+    ),
 )
 
 TRAINING_VARIABLES = (
@@ -113,26 +107,11 @@ TRAINING_VARIABLE_NAMES = {item[0] for item in TRAINING_VARIABLES}
 
 
 def trigger_event_options(form) -> list[dict[str, str]]:
-    values = dict(TRIGGER_EVENT_LABELS)
-    values.update({key: _humanize(key) for key in TRIGGER_DESCRIPTIONS})
-    definition = getattr(form, "definition_json", None) or {}
-    workflow = definition.get("workflow") or {}
-    for collection in (definition.get("notifications") or [], workflow.get("notifications") or []):
-        for item in collection if isinstance(collection, list) else []:
-            value = str((item or {}).get("event") or (item or {}).get("trigger") or "").strip()
-            if value:
-                values.setdefault(value, _humanize(value))
-    return [{"value": value, "label": label} for value, label in sorted(values.items(), key=lambda item: item[1])]
+    return WorkflowMailTriggerService().options_for_form(form)["events"]
 
 
 def trigger_status_options(form) -> list[dict[str, str]]:
-    values = dict(WORKFLOW_STATUS_LABELS)
-    workflow = (getattr(form, "definition_json", None) or {}).get("workflow") or {}
-    for step in workflow.get("steps") or []:
-        value = str((step or {}).get("status") or (step or {}).get("id") or "").strip()
-        if value:
-            values.setdefault(value, str((step or {}).get("label") or (step or {}).get("name") or _humanize(value)))
-    return [{"value": value, "label": label} for value, label in sorted(values.items(), key=lambda item: item[1])]
+    return WorkflowMailTriggerService().options_for_form(form)["statuses"]
 
 
 def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -159,7 +138,7 @@ def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) 
         )
         seen.add(name)
     if field_variables:
-        groups.insert(3, {"category": "Pola formularza i uczestnik", "variables": field_variables})
+        groups.insert(3, {"category": "Pola formularza", "variables": field_variables})
 
     if _supports_trainings(form, seen):
         training_variables = [
@@ -167,7 +146,12 @@ def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) 
             for name, description, example in TRAINING_VARIABLES
             if name not in seen
         ]
-        groups.append(
+        email_group_index = next(
+            (index for index, group in enumerate(groups) if group["category"] == "E-mail"),
+            len(groups),
+        )
+        groups.insert(
+            email_group_index,
             {
                 "category": "Szkolenia",
                 "variables": training_variables,
@@ -217,15 +201,19 @@ def _field_example(field: dict[str, Any]) -> str:
     }.get(field_type, f"Przykładowa wartość: {field.get('label') or _humanize(str(field.get('name') or 'pole'))}")
 
 
-def _variable(name: str, description: str, fallback: str, context: dict[str, Any]) -> dict[str, str]:
+def _variable(name: str, description: str, fallback: str, context: dict[str, Any]) -> dict[str, Any]:
     raw_example = context.get(name, fallback)
     if raw_example is None or raw_example == "":
         raw_example = fallback
     return {
         "name": name,
+        "key": name,
         "placeholder": "{{ " + name + " }}",
+        "label": description,
         "description": description,
         "example": str(raw_example),
+        "available_in_html": True,
+        "available_in_txt": True,
     }
 
 

@@ -10,7 +10,7 @@
     <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Powrót</a>
 </div>
 
-<form method="post" enctype="multipart/form-data" class="admin-form mail-template-editor" data-mail-template-editor data-preview-url="{{ url_for('admin.mail_template_preview', form_id=form.id) }}">
+<form method="post" enctype="multipart/form-data" class="admin-form mail-template-editor" data-mail-template-editor data-mail-variable-scope data-preview-url="{{ url_for('admin.mail_template_preview', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
 
@@ -32,10 +32,11 @@
                 <div class="admin-section-heading">
                     <div><h2 id="mail-trigger-heading">2. Wyzwalanie</h2><p>Wskaż, kiedy system może automatycznie wybrać ten szablon.</p></div>
                 </div>
+                {% if trigger_catalog.message %}<div class="admin-alert admin-alert-info">{{ trigger_catalog.message }}</div>{% endif %}
                 <div class="admin-form-grid">
-                    <label class="admin-field"><span>Zdarzenie</span><select name="trigger_event"><option value="">Dowolne zdarzenie</option>{% if template.trigger_event and template.trigger_event not in trigger_events|map(attribute='value')|list %}<option value="{{ template.trigger_event }}" selected>{{ template.trigger_event }} (wartość historyczna)</option>{% endif %}{% for option in trigger_events %}<option value="{{ option.value }}" {% if template.trigger_event == option.value %}selected{% endif %}>{{ option.label }} — {{ option.value }}</option>{% endfor %}</select><small class="admin-field-help">Biznesowa akcja, która uruchamia wysyłkę.</small></label>
-                    <label class="admin-field"><span>Status procesu</span><select name="trigger_status"><option value="">Dowolny status</option>{% if template.trigger_status and template.trigger_status not in trigger_statuses|map(attribute='value')|list %}<option value="{{ template.trigger_status }}" selected>{{ template.trigger_status }} (wartość historyczna)</option>{% endif %}{% for option in trigger_statuses %}<option value="{{ option.value }}" {% if template.trigger_status == option.value %}selected{% endif %}>{{ option.label }} — {{ option.value }}</option>{% endfor %}</select><small class="admin-field-help">Opcjonalnie ogranicza szablon do wybranego statusu.</small></label>
-                    <label class="admin-field"><span>Decyzja</span><select name="trigger_decision">{% for value, label in officer_decisions %}<option value="{{ value }}" {% if template.trigger_decision == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><small class="admin-field-help">Dodatkowy warunek związany z decyzją urzędnika.</small></label>
+                    <label class="admin-field"><span>Zdarzenie</span><select name="trigger_event"><option value="">Dowolne zdarzenie</option>{% if template.trigger_event and template.trigger_event not in trigger_events|map(attribute='value')|list %}<option value="{{ template.trigger_event }}" selected>{{ template.trigger_event }} (wartość historyczna)</option>{% endif %}{% for option in trigger_events %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_event == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Biznesowa akcja z aktywnego workflow. Kod techniczny wybranej wartości jest dostępny w podpowiedzi.</small>{% if template.trigger_event and template.trigger_event not in trigger_events|map(attribute='value')|list %}<span class="admin-field-warning">Wybrane zdarzenie nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
+                    <label class="admin-field"><span>Status procesu</span><select name="trigger_status"><option value="">Dowolny status</option>{% if template.trigger_status and template.trigger_status not in trigger_statuses|map(attribute='value')|list %}<option value="{{ template.trigger_status }}" selected>{{ template.trigger_status }} (wartość historyczna)</option>{% endif %}{% for option in trigger_statuses %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_status == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Opcjonalnie ogranicza szablon do aktywnego etapu workflow.</small>{% if template.trigger_status and template.trigger_status not in trigger_statuses|map(attribute='value')|list %}<span class="admin-field-warning">Wybrany status nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
+                    <label class="admin-field"><span>Decyzja</span><select name="trigger_decision"><option value="">Dowolna decyzja</option>{% if template.trigger_decision and template.trigger_decision not in trigger_decisions|map(attribute='value')|list %}<option value="{{ template.trigger_decision }}" selected>{{ template.trigger_decision }} (wartość historyczna)</option>{% endif %}{% for option in trigger_decisions %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_decision == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Aktywna decyzja urzędnika przypisana do etapu workflow.</small>{% if template.trigger_decision and template.trigger_decision not in trigger_decisions|map(attribute='value')|list %}<span class="admin-field-warning">Wybrana decyzja nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
                     <label class="admin-check mail-editor-check"><input type="checkbox" name="is_default_for_status" {% if template.is_default_for_status %}checked{% endif %}><span>Domyślny dla wybranego statusu</span></label>
                 </div>
             </section>
@@ -70,51 +71,31 @@
                     </div>
                 </div>
                 <div class="mail-editor-panel" data-editor-panel="preview" hidden>
-                    <p class="admin-field-help">Ten sam podgląd jest stale dostępny w prawej kolumnie na szerokim ekranie.</p>
+                    <p class="admin-field-help">Podgląd jest stale dostępny bezpośrednio pod edytorem treści.</p>
                     <button type="button" class="admin-button-secondary" data-scroll-preview>Przejdź do podglądu</button>
                 </div>
                 <input type="hidden" name="use_platform_layout" value="on">
             </section>
 
-            <section class="admin-card mail-editor-section mail-variable-catalog" data-variable-panel aria-labelledby="mail-variables-heading">
+            <section class="admin-card mail-editor-section mail-editor-preview" data-preview-section aria-labelledby="mail-preview-heading">
                 <div class="admin-section-heading">
-                    <div><h2 id="mail-variables-heading">4. Dostępne zmienne</h2><p>Wstaw zmienną w miejscu kursora w ostatnio aktywnym polu. Domyślnie zostanie dodana do HTML.</p></div>
-                    <label class="mail-variable-search"><span class="admin-visually-hidden">Filtruj zmienne</span><input type="search" placeholder="Szukaj zmiennej lub opisu…" data-variable-filter></label>
+                    <div><h2 id="mail-preview-heading">5. Podgląd wiadomości</h2><p>Odświeża się automatycznie po zakończeniu edycji.</p></div>
+                    <span class="mail-preview-state" data-preview-state aria-live="polite">Gotowy</span>
                 </div>
-                <div class="mail-variable-groups">
-                    {% for group in variable_catalog %}
-                    <details class="mail-variable-group" open>
-                        <summary>{{ group.category }} <span>{{ group.variables|length }}</span></summary>
-                        <div class="mail-variable-list">
-                            {% for variable in group.variables %}
-                            <article class="mail-variable-row" data-variable-row data-variable-search="{{ variable.name }} {{ variable.description }}">
-                                <div><code>{{ variable.placeholder }}</code><strong>{{ variable.description }}</strong><small>Przykład: {{ variable.example }}</small></div>
-                                <button type="button" class="admin-button-secondary mail-variable-insert" data-insert-variable="{{ variable.placeholder }}">Wstaw</button>
-                            </article>
-                            {% endfor %}
-                        </div>
-                    </details>
-                    {% endfor %}
-                </div>
-                <p class="admin-empty-state mail-variable-empty" data-variable-empty hidden>Nie znaleziono pasujących zmiennych.</p>
+                {% if sample_submissions %}
+                <label class="admin-field"><span>Dane przykładowe</span><select name="preview_submission_id" data-preview-submission><option value="">Dane zastępcze</option>{% for submission in sample_submissions %}<option value="{{ submission.id }}" {% if preview_submission_id == submission.id %}selected{% endif %}>{{ submission.submission_id }} / {{ submission.email or "bez adresu e-mail" }}</option>{% endfor %}</select><small class="admin-field-help">Możesz użyć ostatniego zgłoszenia albo bezpiecznych danych zastępczych.</small></label>
+                {% else %}
+                <div class="mail-preview-fallback">Brak zgłoszeń dla formularza — podgląd korzysta z przykładowych danych.</div>
+                {% endif %}
+                <div class="mail-preview-error" data-preview-error role="alert" hidden></div>
+                <dl class="mail-preview-meta"><dt>Temat</dt><dd data-preview-subject>{{ preview_subject or "Bez tematu" }}</dd><dt>Tytuł wiadomości</dt><dd data-preview-title>{{ template.content_title or "Bez tytułu" }}</dd></dl>
+                <iframe class="mail-preview-frame" data-preview-frame title="Podgląd wiadomości HTML" sandbox srcdoc="{{ preview_html|e }}"></iframe>
+                <details class="mail-preview-text"><summary>Wersja tekstowa</summary><pre data-preview-text>{{ preview_text }}</pre></details>
             </section>
         </div>
 
-        <aside class="admin-card mail-editor-preview" data-preview-section aria-labelledby="mail-preview-heading">
-            <div class="admin-section-heading">
-                <div><h2 id="mail-preview-heading">5. Podgląd wiadomości</h2><p>Odświeża się automatycznie po zakończeniu edycji.</p></div>
-                <span class="mail-preview-state" data-preview-state aria-live="polite">Gotowy</span>
-            </div>
-            {% if sample_submissions %}
-            <label class="admin-field"><span>Dane przykładowe</span><select name="preview_submission_id" data-preview-submission><option value="">Dane zastępcze</option>{% for submission in sample_submissions %}<option value="{{ submission.id }}" {% if preview_submission_id == submission.id %}selected{% endif %}>{{ submission.submission_id }} / {{ submission.email or "bez adresu e-mail" }}</option>{% endfor %}</select><small class="admin-field-help">Możesz użyć ostatniego zgłoszenia albo bezpiecznych danych zastępczych.</small></label>
-            {% else %}
-            <div class="mail-preview-fallback">Brak zgłoszeń dla formularza — podgląd korzysta z przykładowych danych.</div>
-            {% endif %}
-            <div class="mail-preview-error" data-preview-error role="alert" hidden></div>
-            <dl class="mail-preview-meta"><dt>Temat</dt><dd data-preview-subject>{{ preview_subject or "Bez tematu" }}</dd></dl>
-            <iframe class="mail-preview-frame" data-preview-frame title="Podgląd wiadomości HTML" sandbox srcdoc="{{ preview_html|e }}"></iframe>
-            <details class="mail-preview-text"><summary>Wersja tekstowa</summary><pre data-preview-text>{{ preview_text }}</pre></details>
-        </aside>
+        {% set variable_storage_key = 'mail-template-variables-collapsed' %}
+        {% include "admin/mail_templates/_variable_panel.html" %}
     </div>
 
     <div class="admin-form-actions mail-editor-actions">
@@ -127,33 +108,6 @@
 document.addEventListener("DOMContentLoaded", () => {
     const editor = document.querySelector("[data-mail-template-editor]");
     if (!editor) return;
-    const fields = Array.from(editor.querySelectorAll("[data-variable-target]"));
-    const htmlField = editor.querySelector('[name="body_html"]');
-    let target = htmlField;
-    fields.forEach((field) => field.addEventListener("focus", () => { target = field; }));
-
-    editor.querySelector("[data-variable-panel]")?.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-insert-variable]");
-        if (!button) return;
-        target = target || htmlField;
-        const start = target.selectionStart ?? target.value.length;
-        const end = target.selectionEnd ?? start;
-        target.setRangeText(button.dataset.insertVariable, start, end, "end");
-        target.focus();
-        target.dispatchEvent(new Event("input", {bubbles: true}));
-    });
-
-    const filter = editor.querySelector("[data-variable-filter]");
-    filter?.addEventListener("input", () => {
-        const phrase = filter.value.trim().toLocaleLowerCase("pl");
-        let visible = 0;
-        editor.querySelectorAll("[data-variable-row]").forEach((row) => {
-            row.hidden = Boolean(phrase) && !row.dataset.variableSearch.toLocaleLowerCase("pl").includes(phrase);
-            if (!row.hidden) visible += 1;
-        });
-        editor.querySelector("[data-variable-empty]").hidden = visible > 0;
-    });
-
     editor.querySelectorAll("[data-editor-tab]").forEach((tab) => tab.addEventListener("click", () => {
         editor.querySelectorAll("[data-editor-tab]").forEach((item) => {
             const active = item === tab;
@@ -196,10 +150,19 @@ document.addEventListener("DOMContentLoaded", () => {
             const result = await response.json();
             if (!response.ok || !result.ok) throw new Error(result.error || "Nie udało się odświeżyć podglądu.");
             editor.querySelector("[data-preview-subject]").textContent = result.subject || "Bez tematu";
+            editor.querySelector("[data-preview-title]").textContent = result.title || "Bez tytułu";
             editor.querySelector("[data-preview-frame]").srcdoc = result.html;
             editor.querySelector("[data-preview-text]").textContent = result.text || "Brak wersji tekstowej.";
-            previewError.hidden = true;
-            previewState.textContent = "Aktualny";
+            if (result.warnings?.length) {
+                previewError.textContent = result.warnings.join(" ");
+                previewError.classList.add("is-warning");
+                previewError.hidden = false;
+                previewState.textContent = "Ostrzeżenie";
+            } else {
+                previewError.hidden = true;
+                previewError.classList.remove("is-warning");
+                previewState.textContent = "Aktualny";
+            }
         } catch (error) {
             if (error.name === "AbortError") return;
             previewError.textContent = error.message;
@@ -220,4 +183,5 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 </script>
+<script src="{{ url_for('static', filename='js/mail_variables_panel.js') }}"></script>
 {% endblock %}

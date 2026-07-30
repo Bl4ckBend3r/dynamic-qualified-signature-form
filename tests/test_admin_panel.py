@@ -2663,6 +2663,17 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
         definition_json={
             "title": "Katalog maila",
             "fields": [{"name": "pesel", "label": "Numer PESEL", "type": "text"}],
+            "workflow": {
+                "initial_step": "submission",
+                "steps": [
+                    {
+                        "id": "submission",
+                        "admin_label": "Złożenie wniosku",
+                        "status": "FORM_SUBMITTED",
+                        "triggers": ["application_submitted"],
+                    }
+                ],
+            },
             "documents": [
                 {
                     "id": "declaration",
@@ -2689,7 +2700,8 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
     assert response.status_code == 200
     assert '<select name="trigger_event">' in html
     assert '<select name="trigger_status">' in html
-    assert "Wniosek złożony — FORM_SUBMITTED" in html
+    assert ">Wniosek złożony</option>" in html
+    assert "Wniosek złożony — FORM_SUBMITTED" not in html
     assert "{{ app_name }}" in html
     assert "{{ public_submission_id }}" in html
     assert "{{ pesel }}" in html
@@ -2700,6 +2712,11 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
     assert "{{ available_trainings_list }}" in html
     assert "{{ available_trainings_text }}" in html
     assert 'data-insert-variable="{{ pesel }}"' in html
+    assert 'class="admin-card mail-variable-sidebar"' in html
+    assert 'data-variable-collapse' in html
+    assert 'data-variable-expand' in html
+    assert html.index("5. Podgląd wiadomości") < html.index('class="admin-card mail-variable-sidebar"')
+    assert "js/mail_variables_panel.js" in html
 
 
 def test_mail_template_live_preview_endpoint_uses_fallback_context_without_submissions(admin_app, admin_client):
@@ -2739,6 +2756,116 @@ def test_mail_template_live_preview_endpoint_uses_fallback_context_without_submi
     assert 'setTimeout(refreshPreview, 400)' in editor_html
     assert "data-preview-frame" in editor_html
     assert " sandbox " in editor_html
+
+
+def test_mail_variable_endpoints_return_form_and_submission_context(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="mail_variables_api",
+        name="Zmienne API",
+        definition_json={
+            "title": "Zmienne API",
+            "fields": [{"name": "firma", "label": "Nazwa firmy", "type": "text"}],
+        },
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = FormSubmission(
+            submission_id="mail-variables-submission",
+            form_slug="mail_variables_api",
+            form_name="Zmienne API",
+            email="real@example.com",
+            data_json={"firma": "Realna firma"},
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+
+    form_response = admin_client.get(f"/admin/forms/{form_id}/mail-variables")
+    submission_response = admin_client.get(f"/admin/submissions/{submission_pk}/mail-variables")
+
+    assert form_response.status_code == 200
+    assert submission_response.status_code == 200
+    form_payload = form_response.get_json()
+    submission_payload = submission_response.get_json()
+    assert [group["name"] for group in form_payload["categories"]] == [
+        "Systemowe",
+        "Formularz",
+        "Zgłoszenie",
+        "Pola formularza",
+        "Workflow",
+        "Decyzje urzędnika",
+        "Dokumenty",
+        "E-mail",
+    ]
+    form_variables = {
+        variable["key"]: variable
+        for group in form_payload["categories"]
+        for variable in group["variables"]
+    }
+    submission_variables = {
+        variable["key"]: variable
+        for group in submission_payload["categories"]
+        for variable in group["variables"]
+    }
+    assert form_variables["firma"]["placeholder"] == "{{ firma }}"
+    assert form_variables["firma"]["available_in_html"] is True
+    assert form_variables["firma"]["available_in_txt"] is True
+    assert submission_variables["firma"]["example"] == "Realna firma"
+    assert submission_variables["email"]["example"] == "real@example.com"
+
+
+def test_mail_preview_reports_unknown_variable_without_server_error(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="unknown_mail_variable", name="Nieznana zmienna")
+    login(admin_client)
+    editor_html = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new").get_data(as_text=True)
+    token = editor_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-templates/preview",
+        data={
+            "csrf_token": token,
+            "subject": "Test {{ nieznana_zmienna }}",
+            "content_title": "Tytuł",
+            "body_html": "<p>{{ nieznana_zmienna }}</p>",
+            "body_text": "{{ nieznana_zmienna }}",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["unknown_variables"] == ["nieznana_zmienna"]
+    assert payload["warnings"] == ["Nierozpoznana zmienna: {{ nieznana_zmienna }}"]
+
+
+def test_custom_submission_mail_uses_reusable_collapsible_variable_panel(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="custom_mail_panel", name="Własna wiadomość")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = FormSubmission(
+            submission_id="custom-mail-panel-submission",
+            form_slug="custom_mail_panel",
+            form_name="Własna wiadomość",
+            email="participant@example.com",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+
+    html = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/mail"
+    ).get_data(as_text=True)
+
+    assert 'data-mail-variable-scope' in html
+    assert 'class="admin-card mail-variable-sidebar"' in html
+    assert 'data-variable-storage-key="submission-mail-variables-collapsed"' in html
+    assert 'data-variable-target' in html
+    assert 'data-variable-default-target' in html
+    assert "js/mail_variables_panel.js" in html
 
 
 def test_mail_template_live_preview_renders_available_training_formats_from_form_config(admin_app, admin_client):

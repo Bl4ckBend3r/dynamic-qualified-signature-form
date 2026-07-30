@@ -4672,6 +4672,32 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
         ) < 10
         assert positions["completed"]["y"] > positions["review"]["y"]
         assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ automatyczny"
+        inactive_section = page.locator("[data-workflow-inactive-decisions]")
+        assert inactive_section.evaluate("(details) => details.open") is False
+        review_stage = page.locator("[data-workflow-step]").filter(
+            has=page.locator('[data-step-id][value="review"]')
+        )
+        assert review_stage.locator("[data-workflow-decision-card]").count() == 1
+        assert page.locator(
+            "[data-workflow-decision-pool] > [data-workflow-decision-card]"
+        ).count() == 5
+
+        review_stage.locator("[data-add-workflow-decision]").click()
+        page.wait_for_function(
+            "document.querySelectorAll('[data-diagram-node-id]').length === 7"
+        )
+        assert review_stage.locator("[data-workflow-decision-card]").count() == 2
+        added_card = review_stage.locator('[data-workflow-decision-card][data-decision-created="true"]')
+        added_card.locator('[data-decision-field="yes_status"]').select_option("PROCESS_COMPLETED")
+        added_workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
+        added_decision = next(
+            decision
+            for decision in added_workflow["decision_settings"]
+            if decision["id"].startswith("custom_decision_")
+        )
+        assert added_decision["step_id"] == "review"
+        assert added_decision["active"] is True
+        assert added_decision["yes_status"] == "PROCESS_COMPLETED"
 
         first_label = page.locator("[data-step-admin-label]").first
         first_label.evaluate(

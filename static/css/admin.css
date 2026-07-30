@@ -2170,8 +2170,90 @@ body.admin-modal-open {
     border-top: 1px solid #d9dde5;
 }
 
-.workflow-stage-decisions h4 {
+.workflow-stage-decisions h4,
+.workflow-stage-decisions__heading {
     margin: 0;
+}
+
+.workflow-stage-decisions__heading,
+.workflow-decision-actions,
+.workflow-decision-summary__flags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .6rem;
+}
+
+.workflow-stage-decisions__heading {
+    justify-content: space-between;
+}
+
+.workflow-stage-decisions .workflow-option-card {
+    padding: .85rem;
+    background: #f8fbff;
+    border-color: #cbd8e8;
+}
+
+.workflow-decision-summary__transitions {
+    display: grid;
+    gap: .35rem;
+    margin: .25rem 0 .65rem;
+    padding: 0;
+    list-style: none;
+}
+
+.workflow-decision-summary__transitions li {
+    display: grid;
+    grid-template-columns: minmax(6rem, auto) auto minmax(0, 1fr);
+    gap: .45rem;
+    align-items: baseline;
+}
+
+.workflow-decision-summary__flags span {
+    padding: .22rem .5rem;
+    border-radius: 999px;
+    color: #344054;
+    background: #e8eef6;
+    font-size: .78rem;
+    font-weight: 700;
+}
+
+.workflow-decision-summary__inactive {
+    margin: .25rem 0 .65rem;
+    color: var(--admin-muted, #626975);
+}
+
+.workflow-decision-actions {
+    margin-top: .7rem;
+}
+
+.workflow-decision-editor {
+    display: grid;
+    gap: .75rem;
+    margin-top: .85rem;
+    padding-top: .85rem;
+    border-top: 1px solid var(--admin-border, #d9dce3);
+}
+
+.workflow-inactive-decisions {
+    margin-top: .75rem;
+    padding: .85rem 1rem;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: 12px;
+    background: var(--admin-surface-soft, #f8f9fb);
+}
+
+.workflow-inactive-decisions > summary {
+    cursor: pointer;
+    font-weight: 750;
+}
+
+.workflow-inactive-decisions[open] > summary {
+    margin-bottom: .5rem;
+}
+
+.workflow-inactive-decisions .workflow-decision-grid {
+    grid-template-columns: 1fr;
 }
 
 /* Shared spacing and responsive layout for admin-only surfaces. */

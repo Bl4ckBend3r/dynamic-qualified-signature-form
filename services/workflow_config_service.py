@@ -192,6 +192,7 @@ def normalize_decision_assignments(decisions: Any, steps: list[Mapping[str, Any]
                 if candidate in by_id:
                     break
         item["step_id"] = candidate if candidate in by_id else ""
+        item["requested_step_id"] = candidate if candidate and candidate not in by_id else ""
         if item["step_id"]:
             item["assigned_stage"] = item["step_id"]
         explicit_active = next((item[key] for key in ("is_active", "active", "enabled") if key in item), None)
@@ -673,6 +674,8 @@ class WorkflowConfigValidator:
         }
         for decision in config.get("decision_settings", []):
             decision_id = str(decision.get("id") or "")
+            if not decision.get("active"):
+                continue
             # Stale agreement decisions are inert when agreement handling or
             # the optional office-confirmation branch is off.
             # They can remain in imported JSON for round-trip compatibility, but
@@ -685,7 +688,31 @@ class WorkflowConfigValidator:
                 continue
             step_id = str(decision.get("step_id") or "").strip()
             if not step_id:
+                requested_step_id = str(decision.get("requested_step_id") or "").strip()
+                if requested_step_id:
+                    errors.append(
+                        f"Decyzja „{decision.get('label') or decision.get('id')}” wskazuje nieistniejący etap "
+                        f"„{requested_step_id}”. Wybierz istniejący etap albo ją dezaktywuj."
+                    )
+                else:
+                    errors.append(
+                        f"Aktywna decyzja „{decision.get('label') or decision.get('id')}” nie ma przypisanego etapu. "
+                        "Przypisz ją do etapu albo ją dezaktywuj."
+                    )
                 continue
+            has_real_transition = any(
+                str(decision.get(key) or "").strip()
+                for key in ("yes_status", "no_status", "correction_status")
+            ) or any(
+                str(outcome.get("target_status") or outcome.get("target_step") or "").strip()
+                for outcome in decision.get("outcomes") or []
+                if isinstance(outcome, Mapping)
+            )
+            if not has_real_transition:
+                errors.append(
+                    f"Aktywna decyzja „{decision.get('label') or decision.get('id')}” musi mieć "
+                    "przynajmniej jedno realne przejście."
+                )
             step = steps_by_id.get(step_id)
             if step is None:
                 if step_id in all_steps_by_id:

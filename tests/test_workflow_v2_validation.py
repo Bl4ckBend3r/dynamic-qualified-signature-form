@@ -102,9 +102,89 @@ def test_diagram_validation_can_focus_invalid_stage():
 
     assert "Element diagramu z błędem" in template
     assert "focusWorkflowNode" in template
-    assert "wybierz status po „Tak”" in template
-    assert "wybierz status po „Nie”" in template
+    assert "aktywna decyzja musi mieć przynajmniej jedno realne przejście" in template
     assert "brakuje etapu podpisu urzędu" in template
+
+
+def test_inactive_decision_without_assignment_or_transition_does_not_block_workflow():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "schema_version": 2,
+            "initial_step": "start",
+            "steps": [_step("start", next_step="completed"), _step("completed", final=True)],
+            "decision_settings": [
+                {
+                    "id": "draft",
+                    "label": "Szkic decyzji",
+                    "active": False,
+                    "step_id": "",
+                    "yes_status": "",
+                    "no_status": "",
+                }
+            ],
+        }
+    )
+
+    assert errors == []
+
+
+def test_active_decision_requires_assignment_and_real_transition():
+    base = {
+        "schema_version": 2,
+        "initial_step": "start",
+        "steps": [_step("start", next_step="completed"), _step("completed", final=True)],
+    }
+    missing_assignment = WorkflowConfigValidator().validate(
+        {
+            **base,
+            "decision_settings": [
+                {"id": "custom", "label": "Aktywna", "active": True, "yes_status": "COMPLETED"}
+            ],
+        }
+    )
+    missing_transition = WorkflowConfigValidator().validate(
+        {
+            **base,
+            "decision_settings": [
+                {"id": "custom", "label": "Aktywna", "active": True, "step_id": "start"}
+            ],
+        }
+    )
+
+    assert any("nie ma przypisanego etapu" in error for error in missing_assignment)
+    assert any("przynajmniej jedno realne przejście" in error for error in missing_transition)
+
+
+def test_active_decision_reports_nonexistent_assigned_stage():
+    errors = WorkflowConfigValidator().validate(
+        {
+            "schema_version": 2,
+            "initial_step": "start",
+            "steps": [_step("start", next_step="completed"), _step("completed", final=True)],
+            "decision_settings": [
+                {
+                    "id": "custom",
+                    "label": "Błędna decyzja",
+                    "active": True,
+                    "step_id": "missing_stage",
+                    "yes_status": "COMPLETED",
+                }
+            ],
+        }
+    )
+
+    assert any("wskazuje nieistniejący etap „missing_stage”" in error for error in errors)
+
+
+def test_admin_editor_collapses_inactive_decisions_and_adds_from_stage():
+    template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
+
+    assert "<details class=\"workflow-inactive-decisions\"" in template
+    assert "Zaawansowane: decyzje nieaktywne i nieprzypisane" in template
+    assert "Te decyzje nie są obecnie częścią aktywnego workflow." in template
+    assert "Dodaj decyzję do tego etapu" in template
+    assert "data-workflow-decision-template" in template
+    assert "decision_settings: allDecisionSettings()" in template
 
 
 def test_workflow_normalizer_preserves_valid_manual_layout():

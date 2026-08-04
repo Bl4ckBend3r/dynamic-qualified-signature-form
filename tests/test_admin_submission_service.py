@@ -60,6 +60,46 @@ def test_submission_filter_and_sort_use_flat_and_json_values():
     assert sort_submissions([first, second], "nazwisko", "asc") == [first, second]
 
 
+def test_submission_column_filters_combine_and_sort_whitelist_is_safe():
+    first = SimpleNamespace(
+        submission_id="ABC-123456",
+        imiona="Anna Maria",
+        nazwisko="Kowalska",
+        email="anna@example.com",
+        telefon="500600700",
+        form_slug="grant",
+        workflow_stage="OFFICER_REVIEW",
+        workflow_step=None,
+        process_status="FORM_SUBMITTED",
+        officer_decision="",
+        data_json={},
+        created_at=None,
+    )
+    second = SimpleNamespace(
+        submission_id="XYZ-999999",
+        imiona="Jan",
+        nazwisko="Nowak",
+        email="jan@example.com",
+        telefon="111222333",
+        form_slug="training",
+        workflow_stage="FINISHED",
+        workflow_step=None,
+        process_status="OFFICER_ACCEPTED",
+        officer_decision="accepted",
+        data_json={},
+        created_at=None,
+    )
+
+    result = filter_submissions(
+        [first, second],
+        {"submission_id": "abc", "full_name": "kowal", "email": "anna", "telefon": "600", "workflow_stage": "review"},
+    )
+
+    assert result == [first]
+    assert sort_submissions([second, first], "__unsafe_field", "asc") == [second, first]
+    assert sort_submissions([second, first], "full_name", "asc") == [first, second]
+
+
 def test_filter_fields_hide_internal_evaluation_metadata():
     fields = [SimpleNamespace(name="wiek", label="Wiek")]
     submissions = [SimpleNamespace(data_json={"custom": "value", "_qualification": {"passed": False}})]

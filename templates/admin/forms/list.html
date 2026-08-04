@@ -2,93 +2,103 @@
 {% block title %}Formularze{% endblock %}
 {% block content %}
 <div class="admin-page-title">
-    <div>
-        <p class="admin-eyebrow">Konfiguracja</p>
-        <h1>Formularze</h1>
-    </div>
+    <div><p class="admin-eyebrow">Konfiguracja</p><h1>Formularze</h1></div>
     {% if g.admin_user.role == "super_admin" %}<a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj formularz</a>{% endif %}
 </div>
+
+<form id="form-column-filters" method="get">
+    <input type="hidden" name="sort" value="{{ filters.get('sort', 'sort_order') }}">
+    <input type="hidden" name="direction" value="{{ filters.get('direction', 'asc') }}">
+</form>
+<div class="admin-filter-summary">
+    <span>Znaleziono: <strong>{{ pagination.total }}</strong></span>
+    <a href="{{ url_for('admin.forms_list') }}">Wyczyść filtry</a>
+</div>
+
+{% macro sortable(label, field) -%}
+<a class="admin-sort-link" href="{{ sort_urls[field] }}">{{ label }}{% if filters.get('sort', 'sort_order') == field %}<span class="admin-sort-indicator" aria-label="{{ 'rosnąco' if filters.get('direction', 'asc') == 'asc' else 'malejąco' }}">{{ '↑' if filters.get('direction', 'asc') == 'asc' else '↓' }}</span>{% endif %}</a>
+{%- endmacro %}
+
 {% if forms %}
-    <div class="admin-card admin-table-wrap">
-        <table class="admin-table">
-            <thead>
-                <tr>
-                    <th>Nazwa</th>
-                    <th>Slug</th>
-                    <th>Kolejność</th>
-                    <th>Status</th>
-                    <th>Publiczny</th>
-                    <th>Etykieta</th>
-                    <th>Liczba zgloszen</th>
-                    <th>Data utworzenia</th>
-                    <th>Akcje</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for form in forms %}
-                <tr>
-                    <td><strong>{{ form.name }}</strong></td>
-                    <td><code>{{ form.slug }}</code></td>
-                    <td>{{ form.sort_order }}</td>
-                    <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
-                    <td><span class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if form.is_public else "Nie" }}</span></td>
-                    <td>{% if form.label_text %}<span class="admin-project-label">{{ form.label_text }}</span>{% else %}-{% endif %}</td>
-                    <td>{{ submission_counts.get(form.slug, 0) }}</td>
-                    <td>{{ form.created_at.strftime("%Y-%m-%d") if form.created_at else "-" }}</td>
-                    <td>
-                        <div class="admin-actions">
-                            <a href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgloszenia</a>
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table admin-table--responsive">
+        <thead>
+            <tr>
+                <th>{{ sortable('Nazwa', 'name') }}</th>
+                <th>{{ sortable('Slug', 'slug') }}</th>
+                <th class="column-secondary">{{ sortable('Kolejność', 'sort_order') }}</th>
+                <th>{{ sortable('Status', 'status') }}</th>
+                <th class="column-secondary">{{ sortable('Publiczny', 'public') }}</th>
+                <th class="column-secondary">Etykieta</th>
+                <th class="column-secondary">{{ sortable('Zgłoszenia', 'submission_count') }}</th>
+                <th class="column-secondary">{{ sortable('Utworzono', 'created_at') }}</th>
+                <th class="actions-column">Akcje</th>
+            </tr>
+            <tr class="admin-column-filters">
+                <th><input form="form-column-filters" name="name" value="{{ filters.get('name', '') }}" aria-label="Filtruj po nazwie"></th>
+                <th><input form="form-column-filters" name="slug" value="{{ filters.get('slug', '') }}" aria-label="Filtruj po slugu"></th>
+                <th class="column-secondary"></th>
+                <th><select form="form-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option><option value="active" {% if filters.get('status') == 'active' %}selected{% endif %}>Aktywne</option><option value="inactive" {% if filters.get('status') == 'inactive' %}selected{% endif %}>Nieaktywne</option></select></th>
+                <th class="column-secondary"><select form="form-column-filters" name="public" aria-label="Filtruj publiczne"><option value="">Wszystkie</option><option value="yes" {% if filters.get('public') == 'yes' %}selected{% endif %}>Tak</option><option value="no" {% if filters.get('public') == 'no' %}selected{% endif %}>Nie</option></select></th>
+                <th class="column-secondary"><input form="form-column-filters" name="label" value="{{ filters.get('label', '') }}" aria-label="Filtruj po etykiecie"></th>
+                <th class="column-secondary"></th>
+                <th class="column-secondary"><div class="admin-date-filter"><input form="form-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Utworzone od"><input form="form-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Utworzone do"></div></th>
+                <th class="actions-column"><button class="admin-button-secondary compact" type="submit" form="form-column-filters">Filtruj</button></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for form in forms %}
+            <tr>
+                <td class="admin-form-name-cell"><strong>{{ form.name }}</strong></td>
+                <td><code>{{ form.slug }}</code></td>
+                <td class="column-secondary">{{ form.sort_order }}</td>
+                <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
+                <td class="column-secondary"><span class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if form.is_public else "Nie" }}</span></td>
+                <td class="column-secondary">{% if form.label_text %}<span class="admin-project-label">{{ form.label_text }}</span>{% else %}-{% endif %}</td>
+                <td class="column-secondary">{{ submission_counts.get(form.slug, 0) }}</td>
+                <td class="column-secondary">{{ form.created_at.strftime("%Y-%m-%d") if form.created_at else "-" }}</td>
+                <td class="actions-column">
+                    <div class="admin-action-dropdown">
+                        <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>
+                        <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
+                            <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
+                            {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
                             {% if g.admin_user.role in ["super_admin", "admin"] %}
-                            <a href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
-                            <a href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
-                            <a href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
-                            <a href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
-                            <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}">
-                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                                <button class="admin-link-button" type="submit">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
-                            </form>
-                            {% endif %}
-                            {% if g.admin_user.role == "super_admin" %}<a href="{{ url_for('admin.form_edit', form_id=form.id, tab='permissions') }}">Uprawnienia</a>{% endif %}
-                            {% if g.admin_user.role == "super_admin" %}
-                                <button class="admin-link-button admin-link-danger" type="button" data-admin-modal-target="delete-form-{{ form.id }}">Usuń</button>
-                                <dialog class="admin-modal admin-modal-backdrop" id="delete-form-{{ form.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-form-title-{{ form.id }}" data-admin-modal>
-                                    <form method="dialog" class="admin-modal__surface">
-                                        <header class="admin-modal__header"><h2 id="delete-form-title-{{ form.id }}">Usunąć formularz?</h2></header>
-                                        <div class="admin-modal__body"><p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane. Formularz nie będzie widoczny na liście aktywnych formularzy.</p></div>
-                                        <footer class="admin-modal__footer">
-                                            <button class="admin-button-secondary" value="cancel" type="submit" autofocus>Anuluj</button>
-                                            <button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button>
-                                        </footer>
-                                    </form>
-                                </dialog>
-                                <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}">Workflow</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Szkolenia</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='documents') }}">Dokumenty</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='emails') }}">E-mail</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='instructions') }}">Instrukcje</a>
+                                <a role="menuitem" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
+                                <a role="menuitem" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
+                                <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz zmienić aktywność formularza?">
                                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                    <button class="admin-link-button" type="submit" role="menuitem">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
                                 </form>
                             {% endif %}
+                            {% if g.admin_user.role == "super_admin" %}
+                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='permissions') }}">Uprawnienia</a>
+                                <button class="admin-link-button admin-link-danger" type="button" role="menuitem" data-admin-modal-target="delete-form-{{ form.id }}">Usuń</button>
+                            {% endif %}
                         </div>
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
+                    </div>
+                    {% if g.admin_user.role == "super_admin" %}
+                    <dialog class="admin-modal admin-modal-backdrop" id="delete-form-{{ form.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-form-title-{{ form.id }}" data-admin-modal>
+                        <form method="dialog" class="admin-modal__surface"><header class="admin-modal__header"><h2 id="delete-form-title-{{ form.id }}">Usunąć formularz?</h2></header><div class="admin-modal__body"><p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane.</p></div><footer class="admin-modal__footer"><button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button><button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button></footer></form>
+                    </dialog>
+                    <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"></form>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<nav class="admin-pagination" aria-label="Paginacja formularzy"><span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span><div class="admin-pagination__links">{% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}{% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}</div></nav>
 {% else %}
-    <div class="admin-empty-state">
-        <h2>Nie dodano jeszcze zadnego formularza.</h2>
-        {% if g.admin_user.role == "super_admin" %}
-            <p>Użyj przycisku poniżej, aby wgrać formularz. System automatycznie wykryje pola i zapisze konfigurację.</p>
-            <a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj pierwszy formularz</a>
-        {% else %}<p>Nie przypisano Ci jeszcze żadnego formularza.</p>{% endif %}
-    </div>
+<div class="admin-empty-state"><h2>Nie znaleziono formularzy.</h2><p>Zmień filtry lub wyczyść je, aby zobaczyć inne wyniki.</p></div>
 {% endif %}
-<script>
-document.querySelectorAll("[data-submit-delete]").forEach((button) => {
-    button.addEventListener("click", () => {
-        const form = document.getElementById(button.dataset.submitDelete);
-        if (form) {
-            form.submit();
-        }
-    });
-});
-</script>
+<script>document.querySelectorAll("[data-submit-delete]").forEach(button => button.addEventListener("click", () => { const form = document.getElementById(button.dataset.submitDelete); if (form) form.submit(); }));</script>
 {% endblock %}

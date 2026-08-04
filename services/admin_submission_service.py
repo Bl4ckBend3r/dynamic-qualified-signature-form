@@ -12,6 +12,20 @@ from services.workflow_service import workflow_status_label
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
+SUBMISSION_SORT_FIELDS = {
+    "submission_id",
+    "full_name",
+    "nazwisko",
+    "email",
+    "telefon",
+    "created_at",
+    "form_slug",
+    "process_status",
+    "officer_decision",
+    "workflow_stage",
+}
+
+
 def admin_status_label(status_id: str, form: Form | None = None) -> str:
     form_config = normalize_admin_form_definition(form.definition_json or {}) if form else {}
     return workflow_status_label(status_id, form_config)
@@ -355,9 +369,31 @@ def filter_submissions(
     value_to = str(args.get("value_to") or "").strip()
     date_from = parse_date_value(args.get("date_from"))
     date_to = parse_date_value(args.get("date_to"))
+    submission_id = str(args.get("submission_id") or "").strip().casefold()
+    full_name = str(args.get("full_name") or "").strip().casefold()
+    email = str(args.get("email") or "").strip().casefold()
+    phone = str(args.get("telefon") or args.get("phone") or "").strip().casefold()
+    form_slug = str(args.get("form_slug") or "").strip()
+    workflow_stage = str(args.get("workflow_stage") or "").strip().casefold()
 
     def matches(submission: FormSubmission) -> bool:
         if status and submission.process_status != status:
+            return False
+        if form_slug and submission.form_slug != form_slug:
+            return False
+        if submission_id and submission_id not in str(submission.submission_id or "").casefold():
+            return False
+        name_value = " ".join(
+            part for part in [str(getattr(submission, "imiona", "") or ""), str(getattr(submission, "nazwisko", "") or "")] if part
+        ).casefold()
+        if full_name and full_name not in name_value:
+            return False
+        if email and email not in str(submission.email or "").casefold():
+            return False
+        if phone and phone not in str(getattr(submission, "telefon", "") or "").casefold():
+            return False
+        stage_value = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or "").casefold()
+        if workflow_stage and workflow_stage not in stage_value:
             return False
         if (date_from or date_to) and not matches_created_at_range(
             submission.created_at,
@@ -454,10 +490,17 @@ def parse_date_value(value: Any):
 
 
 def sort_submissions(submissions: list[FormSubmission], sort_field: str, direction: str) -> list[FormSubmission]:
-    reverse = direction != "asc"
+    sort_field = sort_field if sort_field in SUBMISSION_SORT_FIELDS else "created_at"
+    direction = direction if direction in {"asc", "desc"} else "desc"
+    reverse = direction == "desc"
 
     def sort_key(submission: FormSubmission):
-        value = submission_value(submission, sort_field)
+        if sort_field == "full_name":
+            value = f"{getattr(submission, 'imiona', '') or ''} {getattr(submission, 'nazwisko', '') or ''}".strip()
+        elif sort_field == "workflow_stage":
+            value = getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or ""
+        else:
+            value = submission_value(submission, sort_field)
         return "" if value is None else str(value).lower()
 
     if sort_field == "created_at":

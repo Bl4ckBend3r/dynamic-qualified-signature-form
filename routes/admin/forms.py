@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
@@ -93,13 +94,102 @@ def forms_list():
     user = g.admin_user
     with db_session_factory()() as db:
         forms = list_accessible_forms(db, user)
+        available_forms = list(forms)
         counts = {
             slug: count
             for slug, count in db.execute(
                 select(FormSubmission.form_slug, func.count(FormSubmission.id)).group_by(FormSubmission.form_slug)
             ).all()
         }
-        return render_template("admin/forms/list.html", forms=forms, submission_counts=counts)
+        name_filter = str(request.args.get("name") or "").strip().casefold()
+        slug_filter = str(request.args.get("slug") or "").strip().casefold()
+        status_filter = str(request.args.get("status") or "").strip()
+        status_filter = status_filter if status_filter in {"active", "inactive"} else ""
+        public_filter = str(request.args.get("public") or "").strip()
+        public_filter = public_filter if public_filter in {"yes", "no"} else ""
+        label_filter = str(request.args.get("label") or "").strip().casefold()
+        date_from = _form_filter_date(request.args.get("date_from"))
+        date_to = _form_filter_date(request.args.get("date_to"))
+        forms = [
+            form for form in forms
+            if (not name_filter or name_filter in str(form.name or "").casefold())
+            and (not slug_filter or slug_filter in str(form.slug or "").casefold())
+            and (not status_filter or (form.is_active if status_filter == "active" else not form.is_active))
+            and (not public_filter or (form.is_public if public_filter == "yes" else not form.is_public))
+            and (not label_filter or label_filter in str(form.label_text or "").casefold())
+            and (not date_from or (form.created_at and form.created_at.date() >= date_from))
+            and (not date_to or (form.created_at and form.created_at.date() <= date_to))
+        ]
+        sort_field = request.args.get("sort") if request.args.get("sort") in {
+            "name", "slug", "sort_order", "status", "public", "submission_count", "created_at"
+        } else "sort_order"
+        direction = request.args.get("direction") if request.args.get("direction") in {"asc", "desc"} else "asc"
+        forms.sort(key=lambda form: _form_sort_value(form, sort_field, counts), reverse=direction == "desc")
+        total = len(forms)
+        try:
+            page = max(1, int(request.args.get("page") or 1))
+        except ValueError:
+            page = 1
+        per_page = 50
+        pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, pages)
+        forms = forms[(page - 1) * per_page : page * per_page]
+        pagination = {"page": page, "pages": pages, "total": total, "has_previous": page > 1, "has_next": page < pages}
+        pagination_urls = _form_pagination_urls(pagination)
+        sort_urls = _form_sort_urls(sort_field, direction)
+        return render_template(
+            "admin/forms/list.html",
+            forms=forms,
+            available_forms=available_forms,
+            submission_counts=counts,
+            filters=request.args,
+            pagination=pagination,
+            pagination_urls=pagination_urls,
+            sort_urls=sort_urls,
+        )
+
+
+def _form_filter_date(value):
+    try:
+        return datetime.fromisoformat(str(value or "").strip()).date() if value else None
+    except ValueError:
+        return None
+
+
+def _form_sort_value(form, field: str, counts: dict[str, int]):
+    if field == "status":
+        return int(bool(form.is_active))
+    if field == "public":
+        return int(bool(form.is_public))
+    if field == "submission_count":
+        return counts.get(form.slug, 0)
+    value = getattr(form, field, "")
+    if field == "created_at":
+        return value or datetime.min
+    if field in {"name", "slug"}:
+        return str(value or "").casefold()
+    return value or 0
+
+
+def _form_pagination_urls(pagination: dict) -> dict[str, str]:
+    values = request.args.to_dict(flat=True)
+    result = {"previous": "", "next": ""}
+    if pagination["has_previous"]:
+        result["previous"] = url_for("admin.forms_list", **{**values, "page": pagination["page"] - 1})
+    if pagination["has_next"]:
+        result["next"] = url_for("admin.forms_list", **{**values, "page": pagination["page"] + 1})
+    return result
+
+
+def _form_sort_urls(current_sort: str, current_direction: str) -> dict[str, str]:
+    result = {}
+    for field in ("name", "slug", "sort_order", "status", "public", "submission_count", "created_at"):
+        values = request.args.to_dict(flat=True)
+        values.pop("page", None)
+        values["sort"] = field
+        values["direction"] = "desc" if current_sort == field and current_direction == "asc" else "asc"
+        result[field] = url_for("admin.forms_list", **values)
+    return result
 
 
 @bp.post("/forms/<int:form_id>/delete")

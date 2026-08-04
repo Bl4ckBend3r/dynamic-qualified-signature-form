@@ -183,6 +183,60 @@
                 callback?.();
             });
             confirmDialog?.addEventListener("close", () => { pendingConfirmation = null; });
+            let openActionMenu = null;
+            const closeActionMenu = (restoreFocus = false) => {
+                if (!openActionMenu) return;
+                const button = document.querySelector(`[aria-controls="${openActionMenu.id}"]`);
+                openActionMenu.hidden = true;
+                button?.setAttribute("aria-expanded", "false");
+                if (restoreFocus) button?.focus();
+                openActionMenu = null;
+            };
+            const positionActionMenu = (button, menu) => {
+                const rect = button.getBoundingClientRect();
+                const width = Math.max(210, menu.offsetWidth || 210);
+                menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
+                const below = window.innerHeight - rect.bottom;
+                menu.style.top = below >= Math.min(menu.scrollHeight, 320) + 8
+                    ? `${rect.bottom + 6}px`
+                    : `${Math.max(8, rect.top - Math.min(menu.scrollHeight, 320) - 6)}px`;
+            };
+            document.addEventListener("click", (event) => {
+                const button = event.target.closest("[data-admin-action-toggle]");
+                if (button) {
+                    event.preventDefault();
+                    const menu = document.getElementById(button.getAttribute("aria-controls"));
+                    const wasOpen = menu && openActionMenu === menu && !menu.hidden;
+                    closeActionMenu();
+                    if (!menu || wasOpen) return;
+                    menu.hidden = false;
+                    button.setAttribute("aria-expanded", "true");
+                    openActionMenu = menu;
+                    positionActionMenu(button, menu);
+                    menu.querySelector("a, button:not([disabled])")?.focus();
+                    return;
+                }
+                if (openActionMenu && !event.target.closest("[data-admin-action-menu]")) closeActionMenu();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && openActionMenu) {
+                    event.preventDefault();
+                    closeActionMenu(true);
+                }
+            });
+            window.addEventListener("resize", () => closeActionMenu());
+            window.addEventListener("scroll", () => closeActionMenu(), true);
+            document.addEventListener("click", async (event) => {
+                const copyButton = event.target.closest("[data-copy-id]");
+                if (!copyButton) return;
+                try {
+                    await navigator.clipboard.writeText(copyButton.dataset.copyId || "");
+                    copyButton.title = "Skopiowano";
+                    copyButton.setAttribute("aria-label", "Skopiowano pełne ID");
+                } catch (_error) {
+                    copyButton.title = "Nie udało się skopiować";
+                }
+            });
             window.AdminModal = {open: openAdminModal, confirm: requestConfirmation};
         })();
     </script>

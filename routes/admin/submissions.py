@@ -71,6 +71,19 @@ def _pagination_urls(endpoint: str, pagination: dict, **route_values) -> dict[st
     return result
 
 
+def _submission_sort_urls(endpoint: str, **route_values) -> dict[str, str]:
+    current_sort = request.args.get("sort") or "created_at"
+    current_direction = request.args.get("direction") if request.args.get("direction") in {"asc", "desc"} else "desc"
+    result = {}
+    for field in ("submission_id", "full_name", "email", "telefon", "created_at", "form_slug", "process_status", "workflow_stage"):
+        values = request.args.to_dict(flat=True)
+        values.pop("page", None)
+        values["sort"] = field
+        values["direction"] = "desc" if current_sort == field and current_direction == "asc" else "asc"
+        result[field] = url_for(endpoint, **route_values, **values)
+    return result
+
+
 @bp.get("/submissions")
 @login_required
 def submissions_all():
@@ -86,9 +99,14 @@ def submissions_all():
             if user.role != ROLE_SUPER_ADMIN:
                 query = query.where(FormSubmission.form_slug.in_(slugs))
             submissions = db.execute(query).scalars().all()
+        requested_form_id = str(request.args.get("form_id") or "").strip()
+        selected_form = next((form for form in forms if str(form.id) == requested_form_id), None)
+        filter_args = request.args.to_dict(flat=True)
+        if requested_form_id:
+            filter_args["form_slug"] = selected_form.slug if selected_form else "__invalid_form__"
         submissions = filter_submissions(
             submissions,
-            request.args,
+            filter_args,
             timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
         )
         submissions = sort_submissions(
@@ -101,6 +119,7 @@ def submissions_all():
             submissions, request.args.get("page"), request.args.get("per_page")
         )
         pagination_urls = _pagination_urls("admin.submissions_all", pagination)
+        sort_urls = _submission_sort_urls("admin.submissions_all")
         return render_template(
             "admin/submissions/all.html",
             submissions=submissions,
@@ -111,6 +130,8 @@ def submissions_all():
             pagination=pagination,
             pagination_urls=pagination_urls,
             can_edit_application_decision=can_edit_application_decision,
+            forms=forms,
+            sort_urls=sort_urls,
         )
 
 
@@ -135,6 +156,7 @@ def submissions_list(form_id: int):
             submissions, request.args.get("page"), request.args.get("per_page")
         )
         pagination_urls = _pagination_urls("admin.submissions_list", pagination, form_id=form.id)
+        sort_urls = _submission_sort_urls("admin.submissions_list", form_id=form.id)
         return render_template(
             "admin/submissions/list.html",
             form=form,
@@ -149,6 +171,7 @@ def submissions_list(form_id: int):
             status_options=status_options,
             pagination=pagination,
             pagination_urls=pagination_urls,
+            sort_urls=sort_urls,
         )
 
 

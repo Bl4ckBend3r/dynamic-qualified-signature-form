@@ -322,7 +322,7 @@
         <tr><td colspan="7">Brak historii workflow.</td></tr>
     {% endfor %}</tbody>
 </table></div>
-<h2>Korespondencja</h2>
+<h2 id="correspondence">Korespondencja</h2>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
     <thead><tr><th>Data wysyłki</th><th>Odbiorca</th><th>Temat</th><th>Typ</th><th>Status</th><th>Nadawca</th><th>Szablon</th><th>Błąd</th><th>Treść</th></tr></thead>
     <tbody>{% for item in correspondence %}{% set log = item.log %}

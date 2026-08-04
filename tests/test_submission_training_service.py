@@ -76,6 +76,30 @@ def test_locked_training_cannot_be_removed_and_counts_towards_limit(db):
     assert json.loads(submission.selected_trainings)[0]["id"] == "python"
 
 
+def test_unselected_unsigned_training_stays_historical_and_is_not_reactivated_by_old_agreement(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python", "excel"])
+    service.associate_generated_agreements(
+        db, submission, [{"id": "agreement-python", "training_id": "python", "filename": "python.pdf"}]
+    )
+
+    summary = service.save(db, submission, FIELD, ["excel"])
+    service.associate_generated_agreements(
+        db, submission, [{"id": "agreement-python", "training_id": "python", "filename": "python.pdf"}]
+    )
+    row = db.query(SubmissionTraining).filter_by(training_id="python").one()
+    summary = service.summary(db, submission, FIELD)
+
+    assert row.status == "unselected"
+    assert row.is_locked is False
+    assert [item["id"] for item in summary["items"]] == ["excel"]
+    assert summary["limit_used"] == 0
+    assert summary["limit_pending"] == 2000
+    assert summary["history_items"][0]["status_label"] == "Odznaczone przed podpisaniem umowy"
+    assert summary["history_items"][0]["seat_occupied"] is False
+
+
 def test_limit_validation_includes_locked_training(db):
     submission = make_submission(db)
     service = SubmissionTrainingService()

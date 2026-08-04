@@ -84,6 +84,32 @@ def _submission_sort_urls(endpoint: str, **route_values) -> dict[str, str]:
     return result
 
 
+def _get_primary_agreement_number(submission) -> str:
+    agreements = getattr(submission, "training_agreements", None) or []
+
+    if isinstance(agreements, dict):
+        agreements = agreements.get("agreements", [])
+
+    if not isinstance(agreements, list):
+        return ""
+
+    for agreement in agreements:
+        if not isinstance(agreement, dict):
+            continue
+
+        number = (
+            agreement.get("agreement_number")
+            or agreement.get("number")
+            or agreement.get("agreementNo")
+            or ""
+        )
+
+        if number:
+            return str(number)
+
+    return ""
+
+
 @bp.get("/submissions")
 @login_required
 def submissions_all():
@@ -749,98 +775,349 @@ def _send_stage_rollback_email(db, form, submission, reason: str, target_status:
     )
 
 
-def _notify_beneficiary_agreement_decision(db, form, submission, decision_result) -> None:
+def _notify_beneficiary_agreement_decision(
+    db, form, submission, decision_result, *, force_resend: bool = False
+) -> None:
     decision_record = decision_result.decision_record
+
     if not str(submission.email or "").strip():
         flash("Decyzję zapisano, ale użytkownik nie ma adresu e-mail.", "warning")
         return
-    confirmed = decision_result.decision_status == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
-    template_type = "agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"
+
+    confirmed = (
+        decision_result.decision_status
+        == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
+    )
+
+    template_type = (
+        "agreement_signed_by_office"
+        if confirmed
+        else "agreement_rejected_by_office"
+    )
+
     template = db.execute(
         select(MailTemplate)
         .where(
             MailTemplate.form_id == form.id,
-            MailTemplate.template_type == template_type,
             MailTemplate.is_active.is_(True),
+            (
+                (MailTemplate.template_type == template_type)
+                | (MailTemplate.trigger_event == template_type)
+                | (
+                    MailTemplate.trigger_status
+                    == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
+                )
+            ),
         )
-        .order_by(MailTemplate.id.desc())
+        .order_by(
+            MailTemplate.is_default_for_status.desc(),
+            MailTemplate.id.desc(),
+        )
     ).scalars().first()
+
     if template is None:
         template = MailTemplate(
             form_id=form.id,
-            name="Umowa podpisana przez urząd" if confirmed else "Decyzja dotycząca podpisanej umowy",
-            template_type=template_type,
-            subject="Umowa została podpisana przez urząd" if confirmed else "Decyzja dotycząca umowy {{ submission_id }}",
-            content_html=(
-                "<p>Dzień dobry,</p><p>informujemy, że umowa dotycząca zgłoszenia {{ public_submission_id }} została podpisana przez urząd.</p>"
-                "<p>Formularz: {{ form_title }}</p>{% if signed_agreement_download_link %}<p><a href=\"{{ signed_agreement_download_link }}\">Pobierz podpisaną umowę</a></p>{% endif %}"
-                "<p>Pozdrawiamy,<br>zespół platformy</p>"
+            name=(
+                "Umowa podpisana przez urząd"
                 if confirmed
-                else "<p>Podpisana umowa wymaga poprawy.</p><p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
+                else "Decyzja dotycząca podpisanej umowy"
+            ),
+            template_type=template_type,
+            subject=(
+                "Umowa została podpisana przez urząd"
+                if confirmed
+                else "Decyzja dotycząca umowy {{ submission_id }}"
+            ),
+            content_html=(
+                (
+                    "<p>Dzień dobry,</p>"
+                    "<p>informujemy, że umowa dotycząca zgłoszenia "
+                    "{{ public_submission_id }} została podpisana przez urząd.</p>"
+                    "<p>Formularz: {{ form_title }}<br>"
+                    "Numer zgłoszenia: {{ public_submission_id }}</p>"
+                    "{{ signed_agreements_table }}"
+                    "{% if signed_agreement_download_link %}"
+                    "<p><a href=\"{{ signed_agreement_download_link }}\">"
+                    "Pobierz podpisaną umowę</a></p>"
+                    "{% endif %}"
+                    "<p>Pozdrawiamy,<br>zespół platformy</p>"
+                )
+                if confirmed
+                else (
+                    "<p>Podpisana umowa wymaga poprawy.</p>"
+                    "<p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
+                )
             ),
             content_text=(
-                "Dzień dobry,\n\ninformujemy, że umowa dotycząca zgłoszenia {{ public_submission_id }} została podpisana przez urząd.\n"
-                "Formularz: {{ form_title }}\n{{ signed_agreement_download_link }}\n\nPozdrawiamy,\nzespół platformy"
+                (
+                    "Dzień dobry,\n\n"
+                    "informujemy, że umowa dotycząca zgłoszenia "
+                    "{{ public_submission_id }} została podpisana przez urząd.\n"
+                    "Formularz: {{ form_title }}\n"
+                    "Numer zgłoszenia: {{ public_submission_id }}\n"
+                    "{{ signed_agreements_text }}\n"
+                    "{{ signed_agreement_download_link }}\n\n"
+                    "Pozdrawiamy,\n"
+                    "zespół platformy"
+                )
                 if confirmed
-                else "Podpisana umowa wymaga poprawy. Powód: {{ agreement_decision_reason_text }}"
+                else (
+                    "Podpisana umowa wymaga poprawy. "
+                    "Powód: {{ agreement_decision_reason_text }}"
+                )
             ),
             use_platform_layout=True,
             is_active=True,
         )
+
     footer = db.execute(
         select(MailFooter)
         .where(
             MailFooter.is_active.is_(True),
             (MailFooter.form_id == form.id) | (MailFooter.form_id.is_(None)),
         )
-        .order_by(MailFooter.form_id.desc(), MailFooter.is_default.desc(), MailFooter.id.desc())
+        .order_by(
+            MailFooter.form_id.desc(),
+            MailFooter.is_default.desc(),
+            MailFooter.id.desc(),
+        )
     ).scalars().first()
+
     services = current_app.extensions["services"]
-    signed_filename = str(submission.agreement_signed_filename or submission.agreement_filename or "").strip()
+
+    files = services.submission_document_service.list_documents(
+        submission.submission_id
+    )
+
+    final_records = []
+    attachments = []
+
+    training_ids = {
+        str(item)
+        for item in (getattr(decision_result, "training_ids", ()) or ())
+        if str(item).strip()
+    }
+
+    if confirmed:
+        final_records = db.execute(
+            select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.document_type == "agreement_signed_by_office",
+            )
+        ).scalars().all()
+
+        if training_ids:
+            final_records = [
+                item
+                for item in final_records
+                if str(getattr(item, "training_key", "") or "") in training_ids
+            ]
+
+        if not force_resend:
+            final_records = [
+                item
+                for item in final_records
+                if not bool(
+                    (item.signature_validation_result or {}).get(
+                        "office_signed_email_sent"
+                    )
+                )
+            ]
+
+        if not final_records:
+            if training_ids:
+                flash(
+                    "Wiadomość dla tej finalnej umowy została już wysłana "
+                    "albo nie znaleziono finalnego pliku.",
+                    "info",
+                )
+            else:
+                flash(
+                    "Nie znaleziono finalnej umowy podpisanej przez urząd. "
+                    "Mail nie został wysłany.",
+                    "warning",
+                )
+            return
+
+        final_names = {
+            str(
+                getattr(item, "filename", "")
+                or getattr(item, "original_filename", "")
+                or ""
+            )
+            for item in final_records
+        }
+
+        files = [
+            item
+            for item in files
+            if str(item.get("document_type") or "") == "agreement_signed_by_office"
+            and str(item.get("filename") or "") in final_names
+        ]
+
+        if not files:
+            files = [
+                {
+                    "filename": (
+                        getattr(item, "filename", "")
+                        or getattr(item, "original_filename", "")
+                    ),
+                    "document_type": item.document_type,
+                    "training_key": getattr(item, "training_key", ""),
+                    "signed": True,
+                }
+                for item in final_records
+            ]
+
+        storage = (
+            getattr(services, "storage", None)
+            or getattr(services, "nextcloud_storage", None)
+        )
+
+        if storage is None:
+            flash(
+                "Brak skonfigurowanego storage. "
+                "Mail z załącznikiem nie został wysłany.",
+                "warning",
+            )
+            return
+
+        for item in final_records:
+            storage_path = (
+                getattr(item, "storage_path", "")
+                or getattr(item, "path", "")
+                or getattr(item, "file_path", "")
+                or ""
+            )
+
+            filename = (
+                getattr(item, "original_filename", "")
+                or getattr(item, "filename", "")
+                or "umowa-podpisana-przez-urzad.pdf"
+            )
+
+            if not storage_path:
+                current_app.logger.warning(
+                    "office_signed_agreement_attachment_missing_path "
+                    "submission_id=%s file_id=%s",
+                    submission.id,
+                    item.id,
+                )
+                continue
+
+            try:
+                content = storage.read_bytes(storage_path)
+            except Exception as exc:
+                current_app.logger.exception(
+                    "office_signed_agreement_attachment_read_failed "
+                    "submission_id=%s file_id=%s path=%s error=%s",
+                    submission.id,
+                    item.id,
+                    storage_path,
+                    exc,
+                )
+                continue
+
+            attachments.append(
+                {
+                    "filename": filename,
+                    "content": content,
+                    "content_type": (
+                        getattr(item, "mime_type", None) or "application/pdf"
+                    ),
+                }
+            )
+
+        if not attachments:
+            flash(
+                "Nie udało się pobrać finalnej umowy podpisanej przez urząd "
+                "jako załącznika. Mail nie został wysłany.",
+                "warning",
+            )
+            return
+
+    signed_filename = str(
+        (
+            getattr(final_records[0], "original_filename", "")
+            or getattr(final_records[0], "filename", "")
+        )
+        if final_records
+        else ""
+    ).strip()
+
     signed_link = ""
+
     if signed_filename:
         signed_link = services.document_service.build_download_url(
-            {"form_slug": submission.form_slug, "submission_id": submission.submission_id, "access_token": submission.access_token},
+            {
+                "form_slug": submission.form_slug,
+                "submission_id": submission.submission_id,
+                "access_token": submission.access_token,
+            },
             signed_filename,
         )
+
     mail_result = services.mail_dispatch_service.dispatch_to_submission(
-        db=db,
-        form=form,
-        submission=submission,
-        template=template,
-        footer=footer,
-        to_email=submission.email,
-        subject_template=template.subject,
-        event_type=("agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"),
-        sent_by_id=g.admin_user.id,
-        files=services.submission_document_service.list_documents(submission.submission_id),
-        context_builders={
-            "document_url_builder": lambda item, filename: services.document_service.build_download_url(
-                {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token}, filename
-            ),
-        },
-        extra_context={
-            "agreement_decision_reason": html.escape(decision_record.justification or ""),
-            "agreement_decision_reason_text": decision_record.justification or "",
-            "signed_agreement_download_link": signed_link,
-            "signed_agreement_filename": signed_filename,
-            "agreement_number": submission.agreement_number or "",
-            "agreement_signed_by_office_at": decision_record.decided_at.isoformat() if decision_record.decided_at else "",
-        },
-    )
+    db=db,
+    form=form,
+    submission=submission,
+    template=template,
+    footer=footer,
+    to_email=submission.email,
+    subject_template=template.subject,
+    event_type=("agreement_signed_by_office" if confirmed else "agreement_rejected_by_office"),
+    sent_by_id=g.admin_user.id,
+    files=files,
+    attachments=attachments,
+    context_builders={
+        "document_url_builder": lambda item, filename: services.document_service.build_download_url(
+            {
+                "form_slug": item.form_slug,
+                "submission_id": item.submission_id,
+                "access_token": item.access_token,
+            },
+            filename,
+        ),
+    },
+    extra_context={
+        "agreement_decision_reason": html.escape(decision_record.justification or ""),
+        "agreement_decision_reason_text": decision_record.justification or "",
+        "signed_agreement_download_link": signed_link,
+        "signed_agreement_filename": signed_filename,
+        "agreement_number": _get_primary_agreement_number(submission),
+        "agreement_signed_by_office_at": decision_record.decided_at.isoformat() if decision_record.decided_at else "",
+    },
+)
+
     decision_record.email_sent = mail_result.sent
     decision_record.email_log_id = getattr(mail_result.log, "id", None)
+
     if confirmed and mail_result.sent:
         submission.office_agreement_signed_email_sent = "Tak"
-        submission.office_agreement_signed_email_sent_for = "agreement_signed_by_office"
+        submission.office_agreement_signed_email_sent_for = (
+            "agreement_signed_by_office"
+        )
+
+        sent_at = datetime.now(timezone.utc).isoformat()
+
+        for item in final_records:
+            metadata = dict(item.signature_validation_result or {})
+            metadata.update(
+                office_signed_email_sent=True,
+                office_signed_email_sent_at=sent_at,
+                office_signed_email_log_id=getattr(mail_result.log, "id", None),
+            )
+            item.signature_validation_result = metadata
+
     db.commit()
+
     if not mail_result.sent:
         flash(
             "Decyzję zapisano, ale e-mail nie został wysłany: "
             + (mail_result.error_message or "brak szczegółów błędu"),
             "warning",
         )
-
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")
 @login_required
@@ -920,21 +1197,122 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
             abort(404)
         try:
             result = current_app.extensions["services"].office_signed_agreement_service.check(
-                db, form, submission, actor=g.admin_user
+                db, form, submission, actor=g.admin_user,
+                training_key=request.form.get("training_key") or None,
+                email_requested=request.form.get("send_notification") == "on",
             )
         except OfficeSignedAgreementError as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         if not result.found:
-            db.rollback()
-            details = f" Oczekiwana nazwa: {', '.join(result.expected_filenames)}. Folder: {result.folder}."
-            flash(result.message + details, "warning")
+            details = f" Oczekiwane nazwy: {', '.join(result.expected_filenames)}. Folder: {result.folder}."
+            flash(result.message + details, "warning" if result.missing_filenames or result.errors else "info")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         db.commit()
-        _notify_beneficiary_agreement_decision(db, form, submission, result)
-        flash("Odnaleziono umowę podpisaną przez urząd w Nextcloud i zarejestrowano jej finalną wersję.", "success")
+        if request.form.get("send_notification") == "on":
+            _notify_beneficiary_agreement_decision(db, form, submission, result)
+        flash(result.message, "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+
+@bp.post("/forms/<int:form_id>/submissions/check-office-signed-agreements")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def check_office_signed_agreements_bulk(form_id: int):
+    checked_submissions = found = missing = already = checked_agreements = 0
+    errors = []
+    notifications = []
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        public_ids = list(dict.fromkeys(request.form.getlist("submission_ids")))
+        submissions = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.form_slug == form.slug,
+                FormSubmission.submission_id.in_(public_ids),
+            )
+        ).scalars().all() if public_ids else []
+        for submission in submissions:
+            checked_submissions += 1
+            try:
+                result = current_app.extensions["services"].office_signed_agreement_service.check(
+                    db,
+                    form,
+                    submission,
+                    actor=g.admin_user,
+                    email_requested=request.form.get("send_notification") == "on",
+                )
+            except OfficeSignedAgreementError as exc:
+                errors.append(f"{submission.submission_id}: {exc}")
+                continue
+            checked_agreements += result.checked_count
+            found += result.found_count
+            missing += len(result.missing_filenames)
+            already += len(result.already_confirmed)
+            errors.extend(f"{submission.submission_id}: {error}" for error in result.errors)
+            if result.found:
+                notifications.append((submission, result))
+        db.commit()
+        if request.form.get("send_notification") == "on":
+            for submission, result in notifications:
+                _notify_beneficiary_agreement_decision(db, form, submission, result)
+    flash(
+        f"Sprawdzono zgłoszenia: {checked_submissions}; umowy: {checked_agreements}; "
+        f"znalezione: {found}; brakujące: {missing}; już zatwierdzone: {already}; błędy: {len(errors)}.",
+        "success" if found and not errors else "warning" if missing or errors else "info",
+    )
+    for error in errors[:10]:
+        flash(error, "warning")
+    return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/send-office-signed-agreements")
+@login_required
+@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
+def send_office_signed_agreements(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        training_key = str(request.form.get("training_key") or "").strip()
+        query = select(SubmissionFile).where(
+            SubmissionFile.submission_id == submission.id,
+            SubmissionFile.document_type == "agreement_signed_by_office",
+        )
+        final_files = db.execute(query).scalars().all()
+        if training_key:
+            final_files = [item for item in final_files if str(item.training_key or "") == training_key]
+        if not final_files:
+            flash("Nie znaleziono finalnej umowy podpisanej przez urząd.", "warning")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        now = datetime.now(timezone.utc)
+        decision = SubmissionDecision(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            decision="office_agreement_email_resend",
+            justification="Administrator świadomie zlecił ponowną wysyłkę finalnej umowy.",
+            officer_id=g.admin_user.id,
+            officer_email=g.admin_user.email,
+            previous_status=submission.process_status,
+            target_status=submission.process_status,
+            email_requested=True,
+            email_sent=False,
+            decided_at=now,
+        )
+        db.add(decision)
+        db.flush()
+        result = type("OfficeMailResult", (), {
+            "decision_record": decision,
+            "decision_status": ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
+            "training_ids": tuple(str(item.training_key or "") for item in final_files),
+        })()
+        db.commit()
+        _notify_beneficiary_agreement_decision(db, form, submission, result, force_resend=True)
+        if decision.email_sent:
+            flash("Finalne umowy zostały ponownie wysłane do uczestnika.", "success")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
 
 
 @bp.post("/forms/<int:form_id>/submissions/decisions")

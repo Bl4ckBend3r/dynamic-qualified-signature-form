@@ -462,7 +462,6 @@ def test_agreement_flow_generates_only_new_training_and_preserves_previous_agree
 
 
 def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_trainings=None, row_extra=None):
-    selected_trainings = selected_trainings or []
     row = {
         "officer_decision": "TAK",
         "acceptance_required": "TAK",
@@ -472,7 +471,7 @@ def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_tra
         "agreement_generated": "Tak",
         "agreement_filename": items[0]["filename"],
         "training_agreements": json.dumps(items),
-        "selected_trainings": json.dumps(selected_trainings),
+        "selected_trainings": json.dumps(selected_trainings) if selected_trainings is not None else None,
         "process_status": process_status,
         **(row_extra or {}),
     }
@@ -511,6 +510,7 @@ def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and
         {"id": "downloaded", "filename": "downloaded.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True}
     ], process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE")["training_agreements"][0]
     assert downloaded["state_title"] == "Umowa oczekuje na podpis"
+    assert downloaded["status_label"] == "Umowa oczekuje na podpis beneficjenta"
     assert downloaded["download_label"] == "Pobierz ponownie umowę PDF"
     assert downloaded["can_upload"] is True
 
@@ -518,6 +518,7 @@ def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and
         {"id": "uploaded", "filename": "uploaded.pdf", "signed_filename": "uploaded-signed.pdf", "participant_status": "agreement_waiting_for_office_signature", "signature_valid": True, "is_locked": True}
     ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")["training_agreements"][0]
     assert uploaded["state_title"] == "Podpisana umowa została wgrana"
+    assert uploaded["status_label"] == "Umowa oczekuje na podpis urzędu"
     assert uploaded["can_upload"] is False
     assert uploaded["signed_url"] == "/signed/uploaded-signed.pdf"
 
@@ -525,6 +526,7 @@ def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and
         {"id": "office", "filename": "office.pdf", "signed_filename": "office-beneficiary.pdf", "office_signed_filename": "office-final.pdf", "participant_status": "agreement_signed_by_office", "signature_valid": True, "is_locked": True}
     ], process_status="AGREEMENT_SIGNED_BY_OFFICE")["training_agreements"][0]
     assert office["state_title"] == "Umowa została podpisana przez urząd"
+    assert office["status_label"] == "Umowa podpisana przez urząd"
     assert office["final_url"] == "/signed/office-final.pdf"
 
 
@@ -537,6 +539,7 @@ def test_multiple_training_agreements_keep_independent_actions():
 
     assert states["locked"]["can_upload"] is False
     assert states["locked"]["beneficiary_uploaded"] is True
+    assert states["locked"]["status_label"] == "Podpisana umowa wgrana"
     assert states["open"]["can_upload"] is True
     assert states["open"]["state_title"] == "Umowa oczekuje na podpis"
     assert [item["id"] for item in result["uploadable_training_agreements"]] == ["open"]
@@ -571,6 +574,20 @@ def test_signed_training_does_not_hide_generation_for_new_selected_training():
     assert states["excel"]["state"] == "selected"
     assert states["excel"]["state_title"] == "Umowa do wygenerowania"
     assert states["excel"]["can_generate"] is True
+
+
+def test_unselected_unsigned_training_agreement_is_hidden_from_public_items():
+    result = _agreement_view_for(
+        [
+            {"id": "python", "training_id": "python", "filename": "python.pdf", "participant_status": "unselected"},
+            {"id": "excel", "training_id": "excel", "filename": "excel.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True},
+        ],
+        selected_trainings=[{"id": "excel", "name": "Excel"}],
+        process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    )
+
+    assert [item["id"] for item in result["agreement_items"]] == ["excel"]
+    assert [item["id"] for item in result["uploadable_training_agreements"]] == ["excel"]
 
 
 def test_document_storage_uses_legacy_filename_fallback_only_without_metadata(caplog):

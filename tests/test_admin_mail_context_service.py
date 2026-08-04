@@ -37,6 +37,31 @@ def test_build_mail_context_adds_document_urls_when_builders_are_available():
     assert context["pobierz_url"] == "/download/abc.pdf"
 
 
+def test_office_signed_agreements_are_used_in_final_agreement_mail_list():
+    form = SimpleNamespace(name="Form", slug="formularz")
+    submission = FormSubmission(
+        submission_id="abc",
+        form_slug="formularz",
+        form_name="Form",
+        access_token="token",
+        data_json={},
+    )
+
+    context = build_mail_context(
+        form,
+        submission,
+        [{
+            "filename": "final-python.pdf",
+            "document_type": "agreement_signed_by_office",
+            "signed": True,
+        }],
+        document_url_builder=lambda item, filename: f"/download/{filename}",
+    )
+
+    assert "final-python.pdf" in context["signed_agreements_list"]
+    assert "/download/final-python.pdf" in context["signed_agreements_list"]
+
+
 def test_render_and_preview_mail_context_defaults():
     form = SimpleNamespace(name="Form", slug="formularz")
 

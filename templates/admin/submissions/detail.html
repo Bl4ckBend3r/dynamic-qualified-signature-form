@@ -159,7 +159,8 @@
                     <p><strong>Oczekiwana nazwa pliku:</strong> {{ office_signed_agreement_view.expected_filename or "Brak danych" }}</p>
                     <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                        <button class="admin-button" type="submit">Sprawdź podpisaną umowę przez urząd</button>
+                        <label class="admin-check"><input type="checkbox" name="send_notification" checked><span>Wyślij znalezione umowy do uczestnika</span></label>
+                        <button class="admin-button" type="submit">Sprawdź wszystkie umowy podpisane przez urząd dla tego zgłoszenia</button>
                     </form>
                 </section>
                 <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form" onsubmit="return confirm('Potwierdzasz podpisanie umowy przez urząd. Jeśli pozostawisz zaznaczoną opcję, uczestnik otrzyma e-mail.');">
@@ -236,7 +237,7 @@
         </p>
     {% endif %}
     <div class="admin-table-wrap"><table class="admin-table">
-        <thead><tr><th>Nazwa szkolenia</th><th>Cena</th><th>Status</th><th>Umowa</th><th>Pobrana</th><th>Podpisana wgrana</th><th>Zablokowane / miejsce</th><th>Data blokady</th><th>Pliki</th></tr></thead>
+        <thead><tr><th>Nazwa szkolenia</th><th>Cena</th><th>Status</th><th>Umowa</th><th>Pobrana</th><th>Podpisana wgrana</th><th>Zablokowane / miejsce</th><th>Data blokady</th><th>Pliki</th><th>Akcje urzędu</th></tr></thead>
         <tbody>
             {% set participant_trainings = participant_training_view["items"] if participant_training_view else [] %}
             {% for training in participant_trainings %}
@@ -253,12 +254,51 @@
                     <td>{{ "Tak" if training.is_locked else "Nie" }} / {{ "zajęte" if training.seat_occupied else "wolne" }}</td>
                     <td>{{ training.locked_at.strftime("%Y-%m-%d %H:%M") if training.locked_at else "-" }}</td>
                     <td>{% if training.agreement_url %}<a href="{{ training.agreement_url }}">Umowa wygenerowana</a>{% endif %}{% if training.signed_agreement_url %} · <a href="{{ training.signed_agreement_url }}">Podpisana przez beneficjenta</a>{% endif %}{% if training.office_signed_agreement_url %} · <a href="{{ training.office_signed_agreement_url }}">Finalna podpisana przez urząd</a>{% endif %}{% if not training.agreement_url and not training.signed_agreement_url and not training.office_signed_agreement_url %}-{% endif %}</td>
+                    <td>
+                        {% if training.signed_agreement_uploaded and not training.office_signed_agreement_filename and not read_only %}
+                            <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                <input type="hidden" name="training_key" value="{{ training.agreement_id or training.id }}">
+                                <label class="admin-check"><input type="checkbox" name="send_notification"><span>Wyślij e-mail</span></label>
+                                <button class="admin-button-secondary compact" type="submit">Sprawdź umowę podpisaną przez urząd</button>
+                            </form>
+                        {% elif training.office_signed_agreement_filename %}
+                            <span class="admin-badge">Zatwierdzona</span>
+                            <form method="post" action="{{ url_for('admin.send_office_signed_agreements', form_id=form.id, submission_pk=submission.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                <input type="hidden" name="training_key" value="{{ training.agreement_id or training.id }}">
+                                <button class="admin-button-secondary compact" type="submit">Wyślij ponownie</button>
+                            </form>
+                        {% else %}-{% endif %}
+                    </td>
                 </tr>
             {% else %}
-                <tr><td colspan="9">Brak danych o szkoleniach.</td></tr>
+                <tr><td colspan="10">Brak danych o szkoleniach.</td></tr>
             {% endfor %}
         </tbody>
     </table></div>
+    {% if participant_trainings | selectattr("office_signed_agreement_filename") | list %}
+        <form method="post" action="{{ url_for('admin.send_office_signed_agreements', form_id=form.id, submission_pk=submission.id) }}" class="admin-actions">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <button class="admin-button-secondary" type="submit">Wyślij podpisane umowy do uczestnika</button>
+        </form>
+    {% endif %}
+    {% set historical_trainings = participant_training_view["history_items"] if participant_training_view else [] %}
+    {% if historical_trainings %}
+        <h4>Odznaczone / anulowane szkolenia historyczne</h4>
+        <div class="admin-table-wrap"><table class="admin-table">
+            <thead><tr><th>Nazwa szkolenia</th><th>Cena snapshot</th><th>Status</th><th>Data odznaczenia</th><th>Limit i miejsce</th></tr></thead>
+            <tbody>{% for training in historical_trainings %}
+                <tr>
+                    <td>{{ training.name }}</td>
+                    <td>{{ training.price_formatted }}</td>
+                    <td>{{ training.status_label }}</td>
+                    <td>{{ training.unselected_at.strftime("%Y-%m-%d %H:%M") if training.unselected_at else "-" }}</td>
+                    <td>Nie zajmuje miejsca i nie liczy siÄ™ do wykorzystanego limitu.</td>
+                </tr>
+            {% endfor %}</tbody>
+        </table></div>
+    {% endif %}
     {% if not read_only %}
         <p><a class="admin-button-secondary compact" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Zarządzaj szkoleniami i naborem</a></p>
     {% endif %}

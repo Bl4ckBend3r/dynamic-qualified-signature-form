@@ -36,6 +36,7 @@ def _send_email(
     sender_name: str = "",
     reply_to: str = "",
     inline_images: list[dict] | None = None,
+    attachments=None,
 ) -> None:
     smtp_host = _normalize_smtp_host(smtp_host)
     smtp_user = str(smtp_user or "").strip()
@@ -106,4 +107,15 @@ def _send_email(
             smtp.starttls()
         if smtp_user and smtp_password:
             smtp.login(smtp_user, smtp_password)
+        
+        for attachment in attachments or []:
+            content_type = attachment.get("content_type") or "application/pdf"
+            maintype, _, subtype = content_type.partition("/")
+
+            message.add_attachment(
+                attachment["content"],
+                maintype=maintype or "application",
+                subtype=subtype or "pdf",
+                filename=attachment["filename"],
+            )
         smtp.send_message(message)

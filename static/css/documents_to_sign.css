@@ -214,6 +214,12 @@
 .agreement-upload-status-list { display: grid; gap: .75rem; margin-bottom: 1rem; }
 .agreement-upload-status-item { padding: .85rem 1rem; border: 1px solid var(--color-border, #d9dce3); border-radius: .65rem; background: var(--color-surface-muted, #f8f9fb); }
 .agreement-upload-status-item p { margin: .2rem 0; }
+.agreement-overview { margin: 1.25rem 0; }
+.agreement-overview__items { display: grid; gap: 1rem; margin: 1rem 0; }
+.agreement-overview__item { padding: 1rem; border: 1px solid var(--color-border, #d9dce3); border-radius: .75rem; background: var(--color-surface-muted, #f8f9fb); }
+.agreement-overview__item h4 { margin: 0 0 .65rem; }
+.agreement-overview__item p { margin: .3rem 0; }
+.agreement-overview__actions { margin-top: .85rem; }
 
 .bulk-agreement-matches { overflow-x: auto; }
 .bulk-agreement-row { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(15rem, 1.35fr) minmax(8rem, 1fr); gap: .75rem; align-items: center; padding: .65rem 0; border-bottom: 1px solid var(--color-border, #d9dce3); }

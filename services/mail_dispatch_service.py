@@ -264,6 +264,7 @@ class MailDispatchService:
         template=None,
         footer=None,
         sent_by_id: int | None = None,
+        attachments: list | None = None,
         inline_images: list[dict[str, Any]] | None = None,
     ) -> MailDispatchResult:
         recipient = str(recipient or "").strip()
@@ -346,6 +347,7 @@ class MailDispatchService:
                 html_body=html_body,
                 text_body=text_body or html_body,
                 inline_images=inline_images or [],
+                attachments=attachments or [],
             )
             log = self.log_email(
                 db,
@@ -398,6 +400,7 @@ class MailDispatchService:
         context_builders: dict[str, Any] | None = None,
         extra_context: dict[str, Any] | None = None,
         logo_url_builder=None,
+        attachments: list | None = None,
     ) -> MailDispatchResult:
         footer = self.mail_footer_resolver.resolve(
             db,
@@ -457,6 +460,7 @@ class MailDispatchService:
             footer=footer,
             sent_by_id=sent_by_id,
             inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
+            attachments=attachments or [],
         )
 
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:

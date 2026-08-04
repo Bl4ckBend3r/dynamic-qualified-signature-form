@@ -37,10 +37,12 @@ PARTICIPANT_STATUS_LABELS = {
     "agreement_downloaded": "Umowa pobrana",
     "agreement_waiting_for_beneficiary_signature": "Umowa oczekuje na podpis beneficjenta",
     "agreement_uploaded_by_beneficiary": "Podpisana umowa wgrana",
-    "agreement_waiting_for_office_signature": "Oczekuje na podpis urzędu",
-    "agreement_signed_by_office": "Podpisane przez urząd",
+    "agreement_waiting_for_office_signature": "Umowa oczekuje na podpis urzędu",
+    "agreement_signed_by_office": "Umowa podpisana przez urząd",
     "locked": "Zablokowane",
     "cancelled": "Dostępne",
+    "unselected": "Odznaczone przed podpisaniem umowy",
+    "cancelled_before_signed_agreement": "Odznaczone przed podpisaniem umowy",
 }
 
 
@@ -143,9 +145,8 @@ class SubmissionTrainingService:
             ).all()
         }
         items = []
+        history_items = []
         for row in rows:
-            if row.status not in ACTIVE_STATUSES and not row.is_locked:
-                continue
             price = parse_decimal_price(row.training_price_snapshot) or Decimal("0.00")
             source = {
                 **catalog.get(row.training_id, {}),
@@ -159,7 +160,7 @@ class SubmissionTrainingService:
             agreement = agreements.get(row.agreement_id) or agreements.get(row.training_id) or {}
             signed_file = db.get(SubmissionFile, row.agreement_file_id) if row.agreement_file_id else None
             signed_filename = str(agreement.get("signed_filename") or getattr(signed_file, "filename", "") or "")
-            items.append({
+            item = {
                 **source, "id": row.training_id, "name": row.training_name_snapshot or source.get("name"),
                 "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, currency),
                 "currency": currency,
@@ -167,7 +168,11 @@ class SubmissionTrainingService:
                 "is_locked": row.is_locked,
                 "agreement_id": row.agreement_id,
                 "agreement_file_id": row.agreement_file_id,
-                "agreement_generated": bool(row.agreement_generated_at or row.status != "selected"),
+                "agreement_generated": bool(
+                    row.agreement_generated_at
+                    or agreement.get("filename")
+                    or row.status in ACTIVE_STATUSES - {"selected"}
+                ),
                 "agreement_downloaded": bool(row.agreement_downloaded_at or row.status in {
                     "agreement_downloaded", "agreement_waiting_for_beneficiary_signature",
                     "agreement_uploaded_by_beneficiary", "agreement_waiting_for_office_signature",
@@ -183,7 +188,12 @@ class SubmissionTrainingService:
                     if signed_filename in office_signed_filenames
                     else ""
                 ),
-            })
+                "unselected_at": row.unselected_at,
+            }
+            if row.status in ACTIVE_STATUSES or row.is_locked:
+                items.append(item)
+            else:
+                history_items.append(item)
         maximum = TrainingCatalogService.financial_limit(field)
         locked_total = sum(
             (
@@ -198,7 +208,7 @@ class SubmissionTrainingService:
             Decimal("0.00"),
         )
         return {
-            "items": items, "limit_total": maximum, "limit_used": locked_total,
+            "items": items, "history_items": history_items, "limit_total": maximum, "limit_used": locked_total,
             "limit_remaining": max(Decimal("0.00"), maximum - locked_total) if maximum is not None else None,
             "limit_locked": locked_total,
             "limit_pending": pending_total,
@@ -351,7 +361,7 @@ class SubmissionTrainingService:
                     row.status, row.unselected_at = "selected", None
                 row.updated_at = now
             elif row is not None and not row.is_locked:
-                row.status, row.unselected_at, row.updated_at = "cancelled", now, now
+                row.status, row.unselected_at, row.updated_at = "unselected", now, now
         db.flush()
         submission.selected_trainings = json.dumps(
             [
@@ -396,7 +406,7 @@ class SubmissionTrainingService:
             if row is None:
                 continue
             row.agreement_id = str(agreement.get("id") or training_id)
-            if not row.is_locked and row.status in {"selected", "cancelled", "unselected"}:
+            if not row.is_locked and row.status == "selected":
                 row.status = "agreement_generated"
                 row.agreement_generated_at = row.agreement_generated_at or now
             row.updated_at = now

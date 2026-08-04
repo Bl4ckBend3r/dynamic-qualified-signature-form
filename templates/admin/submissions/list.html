@@ -53,6 +53,11 @@
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="compose" value="1">
 </form>
+<form id="bulk-office-agreements-form" method="post" action="{{ url_for('admin.check_office_signed_agreements_bulk', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div data-office-agreement-selection></div>
+</form>
 <form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
@@ -65,6 +70,8 @@
     </label>
     <div class="admin-actions">
         <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyślij mail do zaznaczonych</button>
+        <button class="admin-button-secondary" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź umowy podpisane przez urząd</button>
+        <label class="admin-check"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>
         <button class="admin-button-secondary" type="submit" form="bulk-delete-form" data-delete-button hidden disabled>Usuń</button>
         <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
     </div>
@@ -199,6 +206,8 @@ document.addEventListener("DOMContentLoaded", function () {
     const deleteForm = document.getElementById("bulk-delete-form");
     const deleteButton = document.querySelector("[data-delete-button]");
     const deleteSelection = document.querySelector("[data-delete-selection]");
+    const officeAgreementButton = document.querySelector("[data-office-agreement-button]");
+    const officeAgreementSelection = document.querySelector("[data-office-agreement-selection]");
 
     function syncDeleteButton() {
         const selected = Array.from(checks).filter(item => item.checked);
@@ -214,6 +223,17 @@ document.addEventListener("DOMContentLoaded", function () {
                 input.name = "submission_pk_ids";
                 input.value = item.dataset.submissionPk || "";
                 deleteSelection.appendChild(input);
+            });
+        }
+        if (officeAgreementButton) officeAgreementButton.disabled = selected.length === 0;
+        if (officeAgreementSelection) {
+            officeAgreementSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_ids";
+                input.value = item.value;
+                officeAgreementSelection.appendChild(input);
             });
         }
     }

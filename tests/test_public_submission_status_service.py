@@ -52,7 +52,7 @@ def accepted_row(**updates):
                 agreement_filename="umowa.pdf",
             ),
             "Umowa oczekuje na podpis beneficjenta",
-            "Wgraj podpisaną umowę. Dopiero wtedy szkolenie i miejsce zostaną zablokowane.",
+            "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
         ),
         (
             accepted_row(

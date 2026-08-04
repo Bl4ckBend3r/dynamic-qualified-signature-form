@@ -424,7 +424,10 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
         "agreement_required": "Tak",
         "agreement_generated": "Tak",
         "agreement_generated_at": "2026-05-25",
-        "selected_trainings": json.dumps([{"id": "excel", "name": "Excel", "price": 1200}]),
+        "selected_trainings": json.dumps([
+            {"id": "excel", "name": "Excel", "price": 1200},
+            {"id": "english", "name": "English", "price": 900},
+        ]),
         "training_agreements": json.dumps(
             [
                 {
@@ -466,6 +469,14 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert "excel-umowa.pdf" in agreement_html
     assert "english-umowa.pdf" in agreement_html
     assert "token=secret-token" in agreement_html
+    assert agreement_html.count('data-agreement-overview') == 1
+    assert agreement_html.count('data-agreement-item=') == 2
+    assert '<h3 id="agreement-overview-title">Umowy</h3>' in agreement_html
+    assert agreement_html.count("Pobierz ponownie umowę PDF") == 2
+    assert "Umowa oczekuje na podpis beneficjenta" in agreement_html
+    assert "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”." in agreement_html
+    assert "Pobierz deklarację, podpisz" not in agreement_html
+    assert "signing-document-card--spaced" not in agreement_html
     assert agreement_html.count("data-bulk-agreement-upload") == 1
     assert "data-bulk-agreement-files" in agreement_html
     assert "signed_agreement_pdf_1" not in agreement_html

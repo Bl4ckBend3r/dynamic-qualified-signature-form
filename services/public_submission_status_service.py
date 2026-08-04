@@ -69,7 +69,7 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
     declaration_completed = is_declaration_signature_valid(row) or (
         bool(explicit_status) and status in DECLARATION_COMPLETED_STATUSES
     )
-    training_agreements = _training_agreements(row.get("training_agreements"))
+    training_agreements = _active_training_agreements(row)
     pending_training_agreements = [
         item for item in training_agreements
         if item.get("filename") and not bool(item.get("signature_valid"))
@@ -293,7 +293,7 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
         return (
             "Umowa oczekuje na podpis beneficjenta",
             "Umowa została pobrana. Podpisz dokument i wgraj podpisaną umowę.",
-            "Wgraj podpisaną umowę. Dopiero wtedy szkolenie i miejsce zostaną zablokowane.",
+            "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
             "success",
         )
     if state["agreement_required"] and state["declaration_completed"]:
@@ -301,7 +301,7 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
             return (
                 "Umowa jest gotowa do podpisania",
                 "Pobierz umowę, podpisz ją elektronicznie i wgraj podpisany plik.",
-                "Podpisz i wgraj umowę.",
+                "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
                 "success",
             )
         return (
@@ -356,3 +356,28 @@ def _training_agreements(value) -> list[dict]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _active_training_agreements(row: Mapping[str, Any]) -> list[dict]:
+    agreements = _training_agreements(row.get("training_agreements"))
+    selected = _training_agreements(row.get("selected_trainings"))
+    selected_ids = {str(item.get("id") or item.get("training_id") or "").strip() for item in selected}
+    raw_selection = row.get("selected_trainings")
+    snapshot_present = raw_selection is not None and str(raw_selection).strip() not in {"", "null", "None"}
+    inactive = {
+        "unselected", "cancelled", "cancelled_before_signed_agreement",
+        "rejected", "inactive_without_signed_agreement",
+    }
+    result = []
+    for agreement in agreements:
+        nested = agreement.get("training") if isinstance(agreement.get("training"), dict) else {}
+        training_id = str(nested.get("id") or agreement.get("training_id") or agreement.get("id") or "").strip()
+        status = str(agreement.get("participant_status") or "")
+        if status in inactive:
+            continue
+        if snapshot_present and training_id not in selected_ids and not (
+            agreement.get("is_locked") or agreement.get("signature_valid")
+        ):
+            continue
+        result.append(agreement)
+    return result

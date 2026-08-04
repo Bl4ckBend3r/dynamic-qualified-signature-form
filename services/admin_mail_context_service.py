@@ -7,6 +7,25 @@ from services.mail_template_service import build_mail_context as build_platform_
 from services.mail_template_service import render_template_text
 from services.mail_training_context_service import build_training_mail_context
 
+def _get_primary_agreement_number(submission) -> str:
+    agreements = getattr(submission, "training_agreements", None) or []
+
+    if isinstance(agreements, dict):
+        agreements = agreements.get("agreements", [])
+
+    if not isinstance(agreements, list):
+        return ""
+
+    for agreement in agreements:
+        if not isinstance(agreement, dict):
+            continue
+
+        number = agreement.get("agreement_number") or agreement.get("number") or ""
+
+        if number:
+            return str(number)
+
+    return ""
 
 def build_mail_context(
     form,
@@ -33,7 +52,11 @@ def build_mail_context(
             item for item in (files or [])
             if isinstance(item, dict)
             and item.get("signed")
-            and str(item.get("document_type") or "") in {"signed_agreement", "signed_training_agreement"}
+            and str(item.get("document_type") or "") in {
+                "signed_agreement",
+                "signed_training_agreement",
+                "agreement_signed_by_office",
+            }
         ]
         signed_rows = []
         signed_text = []
@@ -53,7 +76,7 @@ def build_mail_context(
         context["signed_agreements_table"] = context["signed_agreements_list"]
         context["signed_agreements_text"] = "\n".join(signed_text)
         context.setdefault("signed_agreement_filename", str(getattr(submission, "agreement_signed_filename", "") or ""))
-        context.setdefault("agreement_number", str(getattr(submission, "agreement_number", "") or ""))
+        context.setdefault("agreement_number", _get_primary_agreement_number(submission))
         context.setdefault("signed_agreement_download_link", "")
         context.setdefault("agreement_signed_by_office_at", "")
     context.update(context_extra)

@@ -104,7 +104,8 @@
         {% set agreement_completed = result.agreement_completed|default(result.agreement_signature_valid|default(false)) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
-        {% set training_agreements = result.training_agreements|default([]) %}
+        {% set agreement_items = result.agreement_items|default(result.training_agreements|default([])) %}
+        {% set training_agreements = agreement_items %}
 
         {% set show_declaration_stage = result.can_fill_declaration|default(false) or result.can_download_declaration|default(false) %}
         {% set show_declaration_upload = result.can_upload_signed_declaration|default(false) and result.declaration_upload_url %}
@@ -128,6 +129,7 @@
             {% if result.blocking_reason %}<p><strong>Powód blokady:</strong> {{ result.blocking_reason }}</p>{% endif %}
             {% if result.status_reason and not result.blocking_reason %}<p><strong>Powód:</strong> {{ result.status_reason }}</p>{% endif %}
             {% if result.next_action %}<p><strong>Co dalej?</strong> {{ result.next_action }}</p>{% endif %}
+            {% include "_training_agreements_overview.html" %}
             {% if result.training_selection_url %}
                 <p>
                     <a class="btn-primary" href="{{ result.training_selection_url }}">
@@ -277,7 +279,7 @@
                 </div>
             {% endif %}
 
-            {% if show_agreement_stage %}
+            {% if show_agreement_stage and not agreement_items %}
                 <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
                         {% if training_agreements %}

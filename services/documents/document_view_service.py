@@ -13,6 +13,21 @@ from services.public_submission_status_service import build_public_submission_st
 
 logger = logging.getLogger(__name__)
 
+_AGREEMENT_STATUS_LABELS = {
+    "selected": "Umowa do wygenerowania",
+    "agreement_generated": "Umowa wygenerowana",
+    "agreement_downloaded": "Umowa pobrana",
+    "agreement_waiting_for_beneficiary_signature": "Umowa oczekuje na podpis beneficjenta",
+    "agreement_uploaded_by_beneficiary": "Podpisana umowa wgrana",
+    "agreement_waiting_for_office_signature": "Umowa oczekuje na podpis urzędu",
+    "agreement_signed_by_office": "Umowa podpisana przez urząd",
+    "locked": "Umowa zablokowana",
+}
+
+
+def _agreement_status_label(status: str) -> str:
+    return _AGREEMENT_STATUS_LABELS.get(str(status or ""), "Status umowy niedostępny")
+
 
 class DocumentViewService:
     def build_documents_view(
@@ -195,6 +210,23 @@ class DocumentViewService:
             nested = item.get("training") if isinstance(item.get("training"), Mapping) else {}
             return str(nested.get("id") or item.get("training_id") or item.get("id") or "").strip()
 
+        inactive_statuses = {
+            "unselected", "cancelled", "cancelled_before_signed_agreement",
+            "rejected", "inactive_without_signed_agreement",
+        }
+        selected_training_ids = {training_key(item) for item in selected_trainings if training_key(item)}
+        raw_selection = row.get("selected_trainings")
+        selection_snapshot_present = raw_selection is not None and str(raw_selection).strip() not in {"", "null", "None"}
+        training_agreements = [
+            agreement for agreement in training_agreements
+            if str(agreement.get("participant_status") or "") not in inactive_statuses
+            and (
+                not selection_snapshot_present
+                or training_key(agreement) in selected_training_ids
+                or bool(agreement.get("is_locked") or agreement.get("signature_valid"))
+            )
+        ]
+
         generated_training_ids = {
             training_key(item)
             for item in training_agreements
@@ -260,6 +292,7 @@ class DocumentViewService:
                 agreement_view = {
                     **agreement,
                     "state": status,
+                    "status_label": str(agreement.get("participant_status_label") or _agreement_status_label(status)),
                     "state_title": title,
                     "state_description": description,
                     "beneficiary_uploaded": beneficiary_uploaded,
@@ -291,6 +324,7 @@ class DocumentViewService:
                     "number": "",
                     "filename": "",
                     "state": "selected",
+                    "status_label": _agreement_status_label("selected"),
                     "state_title": "Umowa do wygenerowania",
                     "state_description": "Dla tego szkolenia nie wygenerowano jeszcze umowy.",
                     "participant_status_label": "Wybrane",
@@ -390,6 +424,7 @@ class DocumentViewService:
                 else None
             ),
             "training_agreements": training_agreement_views,
+            "agreement_items": training_agreement_views,
             "uploadable_training_agreements": [item for item in training_agreement_views if item["can_upload"]],
         }
 

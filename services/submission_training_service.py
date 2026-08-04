@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Mapping
 
-from models import Form, FormSubmission, SubmissionTraining, SubmissionWorkflowEvent
+from models import Form, FormSubmission, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.process_service import ProcessStatus
 from services.training_catalog_service import TrainingCatalogService
 from services.training_service import (
@@ -110,6 +110,10 @@ class SubmissionTrainingService:
             row.signed_agreement_uploaded_at = now
             row.locked_by_event = "legacy_signed_agreement"
             row.agreement_id = str(agreement.get("id") or training_id)
+        if str(submission.process_status or "") == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value:
+            for row in rows.values():
+                if row.is_locked:
+                    row.status = "agreement_signed_by_office"
         db.flush()
 
     def summary(self, db, submission, field: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,6 +134,13 @@ class SubmissionTrainingService:
             str(item.get("id") or item.get("training_id") or ""): item
             for item in raw_agreements
             if isinstance(item, Mapping)
+        }
+        office_signed_filenames = {
+            filename for (filename,) in db.query(SubmissionFile.filename).filter(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.document_type == "agreement_signed_by_office",
+                SubmissionFile.status == "signed",
+            ).all()
         }
         items = []
         for row in rows:
@@ -165,6 +176,11 @@ class SubmissionTrainingService:
                 "seat_occupied": bool(row.is_locked or row.status in LOCKING_STATUSES),
                 "agreement_filename": str(agreement.get("filename") or ""),
                 "signed_agreement_filename": str(agreement.get("signed_filename") or ""),
+                "office_signed_agreement_filename": (
+                    str(agreement.get("signed_filename") or "")
+                    if str(agreement.get("signed_filename") or "") in office_signed_filenames
+                    else ""
+                ),
             })
         maximum = TrainingCatalogService.financial_limit(field)
         locked_total = sum(

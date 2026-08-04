@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
-from models import SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
+from models import SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.nextcloud_storage import NextcloudStorageError
 from services.process_service import ProcessStatus
 
@@ -79,6 +79,12 @@ class OfficeSignedAgreementService:
         submission.workflow_step = "agreement_signed_by_office"
         submission.agreement_signed_filename = expected[0]
         submission.updated_at = now
+        for training in db.query(SubmissionTraining).filter(
+            SubmissionTraining.submission_id == submission.id,
+            SubmissionTraining.is_locked.is_(True),
+        ):
+            training.status = "agreement_signed_by_office"
+            training.updated_at = now
         db.add(SubmissionWorkflowEvent(
             submission_id=submission.id,
             public_submission_id=submission.submission_id,

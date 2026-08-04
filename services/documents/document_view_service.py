@@ -201,6 +201,64 @@ class DocumentViewService:
         def is_available(filename: str) -> bool:
             return bool(filename) and (available is None or filename in available)
 
+        training_agreement_views = []
+        if agreement_template_configured and public_status["can_download_agreement"]:
+            for agreement in training_agreements:
+                status = str(agreement.get("participant_status") or "agreement_generated")
+                office_signed = status == "agreement_signed_by_office"
+                beneficiary_uploaded = bool(
+                    agreement.get("signature_valid")
+                    or agreement.get("is_locked")
+                    or status in {
+                        "agreement_uploaded_by_beneficiary",
+                        "agreement_waiting_for_office_signature",
+                        "agreement_signed_by_office",
+                    }
+                )
+                downloaded = bool(
+                    agreement.get("agreement_downloaded")
+                    or status in {"agreement_downloaded", "agreement_waiting_for_beneficiary_signature"}
+                )
+                if office_signed:
+                    title = "Umowa została podpisana przez urząd"
+                    description = "Finalna umowa jest dostępna do pobrania."
+                elif beneficiary_uploaded:
+                    title = "Podpisana umowa została wgrana"
+                    description = "Szkolenie zostało zablokowane. Umowa oczekuje na podpis i potwierdzenie po stronie urzędu."
+                elif downloaded:
+                    title = "Umowa oczekuje na podpis"
+                    description = "Podpisz pobraną umowę i wgraj podpisany plik."
+                else:
+                    title = "Umowa do podpisania"
+                    description = "Pobierz umowę, podpisz ją i wgraj podpisany plik PDF."
+                filename = str(agreement.get("filename") or "")
+                signed_filename = str(agreement.get("signed_filename") or "")
+                final_filename = str(agreement.get("office_signed_filename") or "")
+                agreement_view = {
+                    **agreement,
+                    "state": status,
+                    "state_title": title,
+                    "state_description": description,
+                    "beneficiary_uploaded": beneficiary_uploaded,
+                    "office_signed": office_signed,
+                    "downloaded": downloaded,
+                    "can_upload": bool(
+                        not beneficiary_uploaded
+                        and filename
+                        and status in {
+                            "agreement_generated",
+                            "agreement_downloaded",
+                            "agreement_waiting_for_beneficiary_signature",
+                        }
+                    ),
+                    "download_label": "Pobierz ponownie umowę PDF" if downloaded else "Pobierz umowę PDF",
+                    "url": download_url_builder(filename, False) if is_available(filename) else "",
+                    "signed_url": download_url_builder(signed_filename, True) if signed_filename else "",
+                    "final_url": download_url_builder(final_filename, True) if final_filename else "",
+                    "upload_url": agreement_upload_url_builder(agreement.get("id", "")),
+                }
+                training_agreement_views.append(agreement_view)
+
         return {
             "submission_id": submission_id,
             "form_slug": submission["form_slug"],
@@ -287,22 +345,8 @@ class DocumentViewService:
                 if agreement_template_configured and public_status["can_upload_signed_agreement"]
                 else None
             ),
-            "training_agreements": [
-                {
-                    **agreement,
-                    "url": (
-                        download_url_builder(agreement.get("filename", ""), False)
-                        if is_available(str(agreement.get("filename") or ""))
-                        else ""
-                    ),
-                    "upload_url": agreement_upload_url_builder(agreement.get("id", "")),
-                }
-                for agreement in (
-                    training_agreements
-                    if agreement_template_configured and public_status["can_download_agreement"]
-                    else []
-                )
-            ],
+            "training_agreements": training_agreement_views,
+            "uploadable_training_agreements": [item for item in training_agreement_views if item["can_upload"]],
             **public_status,
         }
 

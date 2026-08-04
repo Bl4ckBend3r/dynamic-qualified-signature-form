@@ -252,7 +252,7 @@
                     <td>{{ "Tak" if training.signed_agreement_uploaded else "Nie" }}</td>
                     <td>{{ "Tak" if training.is_locked else "Nie" }} / {{ "zajęte" if training.seat_occupied else "wolne" }}</td>
                     <td>{{ training.locked_at.strftime("%Y-%m-%d %H:%M") if training.locked_at else "-" }}</td>
-                    <td>{% if training.agreement_url %}<a href="{{ training.agreement_url }}">Umowa</a>{% endif %}{% if training.signed_agreement_url %} · <a href="{{ training.signed_agreement_url }}">Podpisana umowa</a>{% endif %}{% if not training.agreement_url and not training.signed_agreement_url %}-{% endif %}</td>
+                    <td>{% if training.agreement_url %}<a href="{{ training.agreement_url }}">Umowa wygenerowana</a>{% endif %}{% if training.signed_agreement_url %} · <a href="{{ training.signed_agreement_url }}">Podpisana przez beneficjenta</a>{% endif %}{% if training.office_signed_agreement_url %} · <a href="{{ training.office_signed_agreement_url }}">Finalna podpisana przez urząd</a>{% endif %}{% if not training.agreement_url and not training.signed_agreement_url and not training.office_signed_agreement_url %}-{% endif %}</td>
                 </tr>
             {% else %}
                 <tr><td colspan="9">Brak danych o szkoleniach.</td></tr>

@@ -108,9 +108,9 @@
 
         {% set show_declaration_stage = result.can_fill_declaration|default(false) or result.can_download_declaration|default(false) %}
         {% set show_declaration_upload = result.can_upload_signed_declaration|default(false) and result.declaration_upload_url %}
-        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and not agreement_completed %}
-        {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
+        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_completed %}
+        {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and (not agreement_completed or training_agreements) %}
+        {% set show_agreement_stage = show_agreement_generate or show_agreement_upload or training_agreements %}
 
         <div class="result-box" id="signing-result-box">
             {% if result.status_title %}<h3>{{ result.status_title }}</h3>{% endif %}
@@ -280,8 +280,13 @@
             {% if show_agreement_stage %}
                 <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
-                        <h3>Umowa do podpisania</h3>
-                        <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
+                        {% if training_agreements %}
+                            <h3>Umowy szkoleniowe</h3>
+                            <p>Każde szkolenie ma własny status umowy i zestaw dostępnych czynności.</p>
+                        {% else %}
+                            <h3>Umowa do wygenerowania</h3>
+                            <p>Deklaracja została poprawnie zweryfikowana. Wygeneruj umowę dla wybranego szkolenia.</p>
+                        {% endif %}
                     </div>
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
@@ -294,7 +299,7 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
-                            {% if training_agreements|length > 1 and result.can_upload_signed_agreement %}
+                            {% if result.uploadable_training_agreements|length > 1 %}
                                 <form
                                     method="post"
                                     action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
@@ -321,35 +326,37 @@
                                     </div>
                                     <div class="bulk-agreement-summary" data-bulk-agreement-summary aria-live="polite"></div>
                                     <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij wszystko</button></div>
-                                    <script type="application/json" data-bulk-agreements>{{ training_agreements|tojson }}</script>
+                                    <script type="application/json" data-bulk-agreements>{{ result.uploadable_training_agreements|tojson }}</script>
                                 </form>
                             {% endif %}
                             {% for agreement in training_agreements %}
                                 <div class="signing-document-card signing-document-card--spaced">
+                                    <div class="card-header">
+                                        <h4>{{ agreement.state_title }}</h4>
+                                        <p>{{ agreement.state_description }}</p>
+                                    </div>
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
                                     <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
                                     <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+                                    <p><strong>Status:</strong> {{ agreement.participant_status_label or agreement.state_title }}</p>
+                                    {% if agreement.is_locked %}<p><span class="badge badge-success">Zablokowane</span>{% if agreement.locked_at %} · {{ agreement.locked_at }}{% endif %}</p>{% endif %}
 
                                     {% if agreement.generated_at %}
                                         <p><strong>Data wygenerowania umowy:</strong> {{ agreement.generated_at }}</p>
                                     {% endif %}
 
-                                    {% if agreement.url %}
-                                        <div class="download-links download-links--spaced">
-                                            <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
-                                        </div>
-                                    {% endif %}
-
-                                    {% if agreement.signature_valid %}
-                                        <p class="document-status-line"><strong>Status podpisu:</strong> poprawny</p>
-                                        <p class="status-message status-message--success">Podpisana umowa wgrana. To szkolenie zostało zablokowane i nie może zostać usunięte z wyboru.</p>
-                                    {% else %}
-                                        {% if agreement.signature_error %}
-                                            <p class="document-status-line"><strong>Status podpisu:</strong> niepoprawny</p>
-                                            <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
+                                    <div class="download-links download-links--spaced">
+                                        {% if agreement.office_signed and agreement.final_url %}
+                                            <a class="btn-primary" href="{{ agreement.final_url }}">Pobierz finalną umowę podpisaną przez urząd</a>
+                                        {% elif agreement.beneficiary_uploaded %}
+                                            {% if agreement.url %}<a class="btn-secondary" href="{{ agreement.url }}">Pobierz wygenerowaną umowę PDF</a>{% endif %}
+                                            {% if agreement.signed_url %}<a class="btn-primary" href="{{ agreement.signed_url }}">Pobierz wgraną podpisaną umowę</a>{% endif %}
+                                        {% elif agreement.url %}
+                                            <a class="btn-primary" href="{{ agreement.url }}">{{ agreement.download_label }}</a>
                                         {% endif %}
+                                    </div>
 
-                                        {% if result.can_upload_signed_agreement and not agreement.signature_valid %}
+                                    {% if agreement.can_upload %}
                                         <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                             <div class="form-row width-full">
                                                 <label class="upload-dropzone" data-upload-dropzone>
@@ -375,9 +382,8 @@
                                                 <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
                                             </div>
                                         </form>
-                                        {% endif %}
-                                        <p><strong>Status:</strong> {{ agreement.participant_status_label or "Umowa gotowa do pobrania" }}</p>
-                                        <p class="form-help">Podpisz pobraną umowę i wgraj podpisany plik. Dopiero po wgraniu podpisanej umowy szkolenie zostanie zablokowane.</p>
+                                    {% elif agreement.beneficiary_uploaded and not agreement.office_signed %}
+                                        <p class="status-message status-message--success">Podpisana umowa została wgrana. Szkolenie jest zablokowane i nie może zostać usunięte z wyboru.</p>
                                     {% endif %}
                                 </div>
                             {% endfor %}

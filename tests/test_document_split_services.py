@@ -461,6 +461,84 @@ def test_agreement_flow_generates_only_new_training_and_preserves_previous_agree
     assert [item["id"] for item in json.loads(updates[0][1]["training_agreements"])] == ["python", "excel"]
 
 
+def _agreement_view_for(items, *, process_status="AGREEMENT_READY"):
+    row = {
+        "officer_decision": "TAK",
+        "acceptance_required": "TAK",
+        "declaration_required": "Tak",
+        "declaration_signature_valid": "Tak",
+        "agreement_required": "Tak",
+        "agreement_generated": "Tak",
+        "agreement_filename": items[0]["filename"],
+        "training_agreements": json.dumps(items),
+        "process_status": process_status,
+    }
+    return DocumentViewService().build_documents_to_sign_result(
+        submission_id="abc",
+        submission={"submission_id": "abc", "form_slug": "sample", "form_title": "Sample", "row": row},
+        form_config={},
+        declaration={"enabled": False},
+        process_state=SimpleNamespace(status=SimpleNamespace(value=process_status), can_generate_agreement=False),
+        current_step=process_status,
+        available_actions=[],
+        documents_view={"documents": []},
+        download_url_builder=lambda filename, signed=False: f"/{'signed' if signed else 'generated'}/{filename}",
+        declaration_upload_url=None,
+        generate_agreement_url="/generate",
+        agreement_upload_url_builder=lambda agreement_id: f"/upload/{agreement_id}",
+        agreement_upload_url="/upload",
+        agreement_required=True,
+        agreement_template_configured=True,
+        status_labeler=lambda status, form: status,
+        available_filenames={
+            item.get(key) for item in items for key in ("filename", "signed_filename", "office_signed_filename") if item.get(key)
+        },
+    )
+
+
+def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and_office_states():
+    generated = _agreement_view_for([
+        {"id": "generated", "filename": "generated.pdf", "participant_status": "agreement_generated"}
+    ])["training_agreements"][0]
+    assert generated["state_title"] == "Umowa do podpisania"
+    assert generated["download_label"] == "Pobierz umowę PDF"
+    assert generated["can_upload"] is True
+
+    downloaded = _agreement_view_for([
+        {"id": "downloaded", "filename": "downloaded.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True}
+    ], process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE")["training_agreements"][0]
+    assert downloaded["state_title"] == "Umowa oczekuje na podpis"
+    assert downloaded["download_label"] == "Pobierz ponownie umowę PDF"
+    assert downloaded["can_upload"] is True
+
+    uploaded = _agreement_view_for([
+        {"id": "uploaded", "filename": "uploaded.pdf", "signed_filename": "uploaded-signed.pdf", "participant_status": "agreement_waiting_for_office_signature", "signature_valid": True, "is_locked": True}
+    ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")["training_agreements"][0]
+    assert uploaded["state_title"] == "Podpisana umowa została wgrana"
+    assert uploaded["can_upload"] is False
+    assert uploaded["signed_url"] == "/signed/uploaded-signed.pdf"
+
+    office = _agreement_view_for([
+        {"id": "office", "filename": "office.pdf", "signed_filename": "office-beneficiary.pdf", "office_signed_filename": "office-final.pdf", "participant_status": "agreement_signed_by_office", "signature_valid": True, "is_locked": True}
+    ], process_status="AGREEMENT_SIGNED_BY_OFFICE")["training_agreements"][0]
+    assert office["state_title"] == "Umowa została podpisana przez urząd"
+    assert office["final_url"] == "/signed/office-final.pdf"
+
+
+def test_multiple_training_agreements_keep_independent_actions():
+    result = _agreement_view_for([
+        {"id": "locked", "filename": "locked.pdf", "signed_filename": "locked-signed.pdf", "participant_status": "agreement_uploaded_by_beneficiary", "signature_valid": True, "is_locked": True},
+        {"id": "open", "filename": "open.pdf", "participant_status": "agreement_generated"},
+    ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")
+    states = {item["id"]: item for item in result["training_agreements"]}
+
+    assert states["locked"]["can_upload"] is False
+    assert states["locked"]["beneficiary_uploaded"] is True
+    assert states["open"]["can_upload"] is True
+    assert states["open"]["state_title"] == "Umowa do podpisania"
+    assert [item["id"] for item in result["uploadable_training_agreements"]] == ["open"]
+
+
 def test_document_storage_uses_legacy_filename_fallback_only_without_metadata(caplog):
     storage = DummyStorage()
     service = DocumentStorageService()

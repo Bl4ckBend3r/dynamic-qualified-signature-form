@@ -80,7 +80,7 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         if not normalized_training_states
         or bool(item.get("agreement_downloaded"))
         or str(item.get("participant_status") or "") in {
-            "agreement_downloaded", "agreement_waiting_for_beneficiary_signature"
+            "agreement_generated", "agreement_downloaded", "agreement_waiting_for_beneficiary_signature"
         }
     ]
     agreement_completed = status in COMPLETED_STATUSES and not pending_training_agreements

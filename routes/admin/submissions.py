@@ -235,6 +235,10 @@ def submission_detail(form_id: int, submission_pk: int):
                     url_for("documents.download_signed_pdf", slug=form.slug, filename=item["signed_agreement_filename"], token=submission.access_token)
                     if item.get("signed_agreement_filename") else ""
                 )
+                item["office_signed_agreement_url"] = (
+                    url_for("documents.download_signed_pdf", slug=form.slug, filename=item["office_signed_agreement_filename"], token=submission.access_token)
+                    if item.get("office_signed_agreement_filename") else ""
+                )
             currency = str(training_field.get("currency") or "PLN")
             participant_training_view.update(
                 limit_total_formatted=format_price_pln(

@@ -29,6 +29,19 @@ def test_public_training_picker_uses_full_training_cards():
     assert "training_selection.js" in template
 
 
+def test_public_agreement_cards_render_actions_from_per_training_state():
+    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
+
+    assert "{{ agreement.state_title }}" in template
+    assert "{{ agreement.state_description }}" in template
+    assert "{% if agreement.can_upload %}" in template
+    assert "agreement.beneficiary_uploaded" in template
+    assert "Pobierz wygenerowaną umowę PDF" in template
+    assert "Pobierz wgraną podpisaną umowę" in template
+    assert "Pobierz finalną umowę podpisaną przez urząd" in template
+    assert "Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF." not in template
+
+
 def test_training_picker_styles_are_wide_and_responsive():
     stylesheet = Path("static/css/training_selection.css").read_text(encoding="utf-8")
 

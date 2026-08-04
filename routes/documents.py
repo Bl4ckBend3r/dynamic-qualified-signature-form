@@ -223,9 +223,18 @@ def _enrich_training_agreement_states(submission: dict) -> None:
         ).scalar_one_or_none()
         if not model:
             return
+        get_services().submission_training_service.synchronize_legacy(db, model)
         rows = db.execute(
             select(SubmissionTraining).where(SubmissionTraining.submission_id == model.id)
         ).scalars().all()
+        office_files = db.execute(
+            select(SubmissionFile).where(
+                SubmissionFile.submission_id == model.id,
+                SubmissionFile.document_type == "agreement_signed_by_office",
+                SubmissionFile.status == "signed",
+            )
+        ).scalars().all()
+        office_filenames = {item.filename for item in office_files}
         by_key = {
             key: row
             for row in rows
@@ -245,7 +254,13 @@ def _enrich_training_agreement_states(submission: dict) -> None:
                 is_locked=bool(row.is_locked),
                 locked_at=row.locked_at.isoformat() if row.locked_at else "",
                 agreement_downloaded=bool(row.agreement_downloaded_at),
+                office_signed_filename=(
+                    str(agreement.get("signed_filename") or "")
+                    if str(agreement.get("signed_filename") or "") in office_filenames
+                    else ""
+                ),
             )
+        db.commit()
         submission["row"]["training_agreements"] = agreements
 
 
@@ -1021,6 +1036,7 @@ def download_pdf(slug: str, filename: str):
             SubmissionDocumentType.TRAINING_AGREEMENT,
             SubmissionDocumentType.SIGNED_AGREEMENT,
             SubmissionDocumentType.SIGNED_TRAINING_AGREEMENT,
+            "agreement_signed_by_office",
         }
         if metadata and str(metadata.get("document_type") or "") not in allowed_types:
             abort(404)

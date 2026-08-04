@@ -123,7 +123,7 @@ def test_blocked_agreement_overrides_stale_positive_status_and_disables_actions(
     assert "podpis" not in status["next_action"].lower()
 
 
-def test_training_agreement_upload_is_enabled_only_after_its_download():
+def test_training_agreement_upload_is_available_for_generated_and_downloaded_states():
     agreement = {
         "id": "python",
         "filename": "python.pdf",
@@ -138,7 +138,7 @@ def test_training_agreement_upload_is_enabled_only_after_its_download():
         agreement_filename="python.pdf",
         training_agreements=json.dumps([agreement]),
     )
-    assert build_public_submission_status(row)["can_upload_signed_agreement"] is False
+    assert build_public_submission_status(row)["can_upload_signed_agreement"] is True
 
     agreement.update(participant_status="agreement_waiting_for_beneficiary_signature", agreement_downloaded=True)
     row["training_agreements"] = json.dumps([agreement])

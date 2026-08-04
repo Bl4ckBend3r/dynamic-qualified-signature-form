@@ -157,6 +157,7 @@ def test_correspondence_migration_adds_columns_without_touching_existing_rows(mo
         connection.execute(templates.insert().values(id=9))
         monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
         migration.upgrade()
+        migration.upgrade()
         assert connection.execute(Table("email_logs", MetaData(), autoload_with=connection).select()).mappings().one()["id"] == 7
         assert connection.execute(Table("mail_templates", MetaData(), autoload_with=connection).select()).mappings().one()["id"] == 9
         assert {"html_body", "text_body"} <= {item["name"] for item in inspect(connection).get_columns("email_logs")}

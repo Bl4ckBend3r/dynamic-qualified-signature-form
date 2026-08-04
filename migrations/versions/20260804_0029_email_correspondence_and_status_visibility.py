@@ -15,15 +15,26 @@ branch_labels = None
 depends_on = None
 
 
-def _columns(table_name: str) -> set[str]:
-    return {item["name"] for item in sa.inspect(op.get_bind()).get_columns(table_name)}
+def _column_names(table_name: str) -> set[str]:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return {column["name"] for column in inspector.get_columns(table_name)}
 
 
 def upgrade() -> None:
-    if "show_process_status" not in _columns("mail_templates"):
-        with op.batch_alter_table("mail_templates") as batch:
-            batch.add_column(sa.Column("show_process_status", sa.Boolean(), nullable=False, server_default=sa.true()))
-    email_log_columns = _columns("email_logs")
+    mail_template_columns = _column_names("mail_templates")
+    if "show_process_status" not in mail_template_columns:
+        op.add_column(
+            "mail_templates",
+            sa.Column(
+                "show_process_status",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            ),
+        )
+
+    email_log_columns = _column_names("email_logs")
     with op.batch_alter_table("email_logs") as batch:
         if "html_body" not in email_log_columns:
             batch.add_column(sa.Column("html_body", sa.Text(), nullable=False, server_default=""))
@@ -32,12 +43,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    email_log_columns = _columns("email_logs")
+    email_log_columns = _column_names("email_logs")
     with op.batch_alter_table("email_logs") as batch:
         if "text_body" in email_log_columns:
             batch.drop_column("text_body")
         if "html_body" in email_log_columns:
             batch.drop_column("html_body")
-    if "show_process_status" in _columns("mail_templates"):
-        with op.batch_alter_table("mail_templates") as batch:
-            batch.drop_column("show_process_status")
+    mail_template_columns = _column_names("mail_templates")
+    if "show_process_status" in mail_template_columns:
+        op.drop_column("mail_templates", "show_process_status")

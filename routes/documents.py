@@ -15,7 +15,7 @@ from flask import Blueprint, abort, current_app, flash, jsonify, redirect, rende
 from werkzeug.exceptions import HTTPException
 from sqlalchemy import select
 from database import create_session_factory
-from models import Form, FormSubmission, SubmissionFile
+from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
@@ -117,10 +117,10 @@ def _training_access_token(submission: dict) -> str:
     return str((submission.get("row") or {}).get("access_token") or "").strip()
 
 
-def _lock_submission_training(submission_id: str, agreement_id: str) -> None:
+def _lock_submission_training(submission_id: str, agreement_id: str) -> bool:
     database_url = current_app.config.get("DATABASE_URL")
     if not database_url:
-        return
+        return True
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
         submission = db.execute(
@@ -136,13 +136,52 @@ def _lock_submission_training(submission_id: str, agreement_id: str) -> None:
             .order_by(SubmissionFile.id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if submission and get_services().submission_training_service.lock_for_agreement(
+        if not submission:
+            return False
+        try:
+            locked = get_services().submission_training_service.lock_for_agreement(
+                db,
+                submission,
+                agreement_id,
+                agreement_file_id=agreement_file_id,
+            )
+            db.commit()
+            return locked
+        except TrainingSelectionError:
+            db.rollback()
+            if agreement_file_id:
+                rejected_file = db.get(SubmissionFile, agreement_file_id)
+                if rejected_file:
+                    rejected_file.status = "rejected_no_capacity"
+                    rejected_file.signed = False
+                    db.commit()
+            raise
+
+
+def _mark_training_agreement_downloaded(
+    submission_id: str,
+    agreement_key: str,
+    filename: str,
+) -> bool:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        return False
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if not submission:
+            return False
+        changed = get_services().submission_training_service.mark_agreement_downloaded(
             db,
             submission,
-            agreement_id,
-            agreement_file_id=agreement_file_id,
-        ):
+            agreement_key,
+            filename=filename,
+        )
+        if changed:
             db.commit()
+        return changed
 
 
 def _associate_generated_training_agreements(
@@ -161,6 +200,53 @@ def _associate_generated_training_agreements(
                 db, submission, agreements
             )
             db.commit()
+
+
+def _enrich_training_agreement_states(submission: dict) -> None:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        return
+    raw = (submission.get("row") or {}).get("training_agreements")
+    if isinstance(raw, str):
+        try:
+            agreements = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+    else:
+        agreements = raw
+    if not isinstance(agreements, list):
+        return
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        model = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission.get("submission_id"))
+        ).scalar_one_or_none()
+        if not model:
+            return
+        rows = db.execute(
+            select(SubmissionTraining).where(SubmissionTraining.submission_id == model.id)
+        ).scalars().all()
+        by_key = {
+            key: row
+            for row in rows
+            for key in {str(row.agreement_id or ""), str(row.training_id or "")}
+            if key
+        }
+        for agreement in agreements:
+            if not isinstance(agreement, dict):
+                continue
+            key = str(agreement.get("id") or agreement.get("training_id") or "")
+            row = by_key.get(key)
+            if not row:
+                continue
+            agreement.update(
+                participant_status=row.status,
+                participant_status_label=get_services().submission_training_service.status_label(row.status, row.is_locked),
+                is_locked=bool(row.is_locked),
+                locked_at=row.locked_at.isoformat() if row.locked_at else "",
+                agreement_downloaded=bool(row.agreement_downloaded_at),
+            )
+        submission["row"]["training_agreements"] = agreements
 
 
 def _open_training_selection_stage(submission_id: str, slug: str) -> bool:
@@ -285,6 +371,10 @@ def training_selection(submission_id: str):
                 if summary["limit_remaining"] is not None
                 else None,
                 limit_locked_formatted=format_price_pln(summary["limit_locked"], currency),
+                limit_pending_formatted=format_price_pln(summary["limit_pending"], currency),
+                limit_remaining_after_selection_formatted=format_price_pln(
+                    summary["limit_remaining_after_selection"], currency
+                ) if summary["limit_remaining_after_selection"] is not None else None,
                 error=error,
                 action_url=url_for(
                     "documents.training_selection",
@@ -511,8 +601,9 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
         elif not result["is_valid"]:
             flash("Podpis umowy nie jest dopuszczalnym podpisem.", "error")
         else:
-            _lock_submission_training(submission_id, agreement_id)
-            flash("Podpisana umowa została poprawnie zweryfikowana.", "success")
+            if not _lock_submission_training(submission_id, agreement_id):
+                raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+            flash("Podpisana umowa została wgrana. Szkolenie i miejsce zostały zablokowane.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
     except Exception as exc:
@@ -572,8 +663,9 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             elif not verification["is_valid"]:
                 item["message"] = "Podpis umowy nie jest dopuszczalnym podpisem."
             else:
-                _lock_submission_training(submission_id, agreement_id)
-                item.update(status="uploaded", message="Wgrano i zweryfikowano.")
+                if not _lock_submission_training(submission_id, agreement_id):
+                    raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+                item.update(status="uploaded", message="Wgrano, zweryfikowano i zablokowano szkolenie.")
         except ValueError as exc:
             item["message"] = str(exc)
         except Exception:
@@ -726,6 +818,7 @@ def build_documents_to_sign_result(
     declaration = build_existing_declaration_result(services, submission, form_config)
 
     refreshed_submission = get_submission_context(submission_id) or submission
+    _enrich_training_agreement_states(refreshed_submission)
     row = refreshed_submission["row"]
     process_state = build_process_state(row)
     current_step = services.workflow_service.get_current_step(row, form_config)
@@ -963,6 +1056,43 @@ def download_pdf(slug: str, filename: str):
             slug,
             metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
         )
+        raw_training_agreements = submission.get("training_agreements")
+        if isinstance(raw_training_agreements, str):
+            try:
+                raw_training_agreements = json.loads(raw_training_agreements)
+            except json.JSONDecodeError:
+                raw_training_agreements = []
+        matching_training_agreement = next(
+            (
+                item for item in (raw_training_agreements or [])
+                if isinstance(item, dict) and str(item.get("filename") or "") == clean_filename
+            ),
+            None,
+        )
+        if (
+            str((metadata or {}).get("document_type") or "") == SubmissionDocumentType.TRAINING_AGREEMENT
+            or matching_training_agreement is not None
+        ):
+            agreement_key = str(
+                (metadata or {}).get("training_key")
+                or (matching_training_agreement or {}).get("id")
+                or (matching_training_agreement or {}).get("training_id")
+                or ""
+            )
+            if _mark_training_agreement_downloaded(
+                str(submission.get("submission_id") or ""),
+                agreement_key,
+                clean_filename,
+            ):
+                services.audit_log_service.log_event(
+                    "agreement_downloaded_by_beneficiary",
+                    submission.get("submission_id", ""),
+                    slug,
+                    metadata={
+                        "filename": clean_filename,
+                        "training_key": agreement_key,
+                    },
+                )
     except HTTPException:
         raise
     except Exception:

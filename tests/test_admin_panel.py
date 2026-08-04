@@ -2937,13 +2937,13 @@ def test_mail_template_live_preview_renders_available_training_formats_from_form
     assert response.status_code == 200
     assert payload["ok"] is True
     assert "1 234,50 zł" in payload["html"]
-    assert "Dostępne: 1" in payload["html"]
+    assert "Dostępne: 2" in payload["html"]
     assert "01.08.2026" in payload["html"]
     assert "Zielona Góra" in payload["html"]
     assert "<script>alert(1)</script>" not in payload["html"]
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in payload["html"]
     assert "Dostępne szkolenia:" in payload["text"]
-    assert "Dostępne miejsca: 1" in payload["text"]
+    assert "Dostępne miejsca: 2" in payload["text"]
 
 
 def test_simple_html_full_document_extracts_body_and_sanitizes():

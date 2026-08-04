@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
 from services.document_service import DocumentType
+from services.process_service import ProcessStatus
 
 
 @dataclass
@@ -70,6 +72,32 @@ class AgreementFlowService:
                 error_code="agreement_template_missing",
             )
         resolved_date = generated_date or date.today().isoformat()
+        existing_agreements = _json_list(submission["row"].get("training_agreements"))
+        existing_training_ids = {
+            str(item.get("training_id") or item.get("id") or "").strip()
+            for item in existing_agreements
+            if str(item.get("filename") or "").strip()
+        }
+        selected_trainings = _json_list(submission["row"].get("selected_trainings"))
+        pending_trainings = [
+            item for item in selected_trainings
+            if str(item.get("id") or item.get("training_id") or "").strip() not in existing_training_ids
+        ]
+        if existing_agreements and not pending_trainings:
+            return AgreementFlowResult(
+                success=True,
+                message="Wszystkie wybrane szkolenia mają już wygenerowane umowy.",
+                agreements=existing_agreements,
+            )
+        generation_submission = submission
+        if existing_agreements:
+            generation_submission = {
+                **submission,
+                "row": {
+                    **submission["row"],
+                    "selected_trainings": json.dumps(pending_trainings, ensure_ascii=False),
+                },
+            }
         # Training agreements are always generated one file per selected training.
         generation_mode = "per_training"
         uses_explicit_training_document = bool(
@@ -96,19 +124,28 @@ class AgreementFlowService:
             document_service=document_service,
         )
         agreements = document_service.generate_documents_for_collection(
-            submission,
+            generation_submission,
             resolved_form_config,
             document["id"],
             document.get("repeat_over") or "selected_trainings",
             document.get("repeat_item_alias") or "training",
             context_extra={"generated_date": resolved_date},
         )
+        agreements = [*existing_agreements, *agreements]
+        if existing_agreements:
+            updates = {
+                "training_agreements": json.dumps(agreements, ensure_ascii=False),
+                "agreement_filename": str(agreements[0].get("filename") or ""),
+                "agreement_generated": "Tak",
+                "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
+            }
+            document_service.submission_repository.update(submission["submission_id"], updates)
+            submission["row"].update(updates)
         return AgreementFlowResult(
             success=True,
             message=f"Wygenerowano umowy: {len(agreements)}.",
             agreements=agreements,
         )
-
     @staticmethod
     def form_config_with_participant_agreement_notification(form_config: dict) -> tuple[dict, str]:
         return form_config, "AGREEMENT_SIGNED"
@@ -125,3 +162,14 @@ class AgreementFlowService:
         get_form_config,
     ) -> list[dict]:
         return []
+
+
+def _json_list(value) -> list[dict]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]

@@ -93,9 +93,9 @@ def test_available_trainings_table_list_and_text_render_one_training_with_all_de
         assert "01.08.2026, 09:00–12:00" in rendered
         assert "Dostępne" in rendered
     assert "Limit: 5" in context["available_trainings_table"]
-    assert "Zajęte: 1" in context["available_trainings_table"]
-    assert "Dostępne: 4" in context["available_trainings_table"]
-    assert "Dostępne miejsca: 4" in context["available_trainings_text"]
+    assert "Zajęte: 0" in context["available_trainings_table"]
+    assert "Dostępne: 5" in context["available_trainings_table"]
+    assert "Dostępne miejsca: 5" in context["available_trainings_text"]
     assert "Terminy: 01.08.2026, 09:00–12:00" in context["available_trainings_text"]
 
 

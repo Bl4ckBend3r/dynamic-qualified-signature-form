@@ -1,10 +1,12 @@
 import importlib
+from datetime import datetime, timezone
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import (
     Boolean,
     Column,
+    DateTime,
     Integer,
     JSON,
     MetaData,
@@ -15,17 +17,15 @@ from sqlalchemy import (
     inspect,
     select,
 )
-from sqlalchemy.orm import Session
-
-from models import SubmissionTraining
-
-
 SMTP_MIGRATION = "migrations.versions.20260727_0023_smtp_test_diagnostics"
 SCHEMA_MIGRATION = (
     "migrations.versions.20260727_0024_ensure_extended_application_schema"
 )
 TRAINING_SNAPSHOT_MIGRATION = (
     "migrations.versions.20260729_0027_training_snapshot_details"
+)
+TRAINING_LIFECYCLE_MIGRATION = (
+    "migrations.versions.20260804_0030_training_agreement_lifecycle"
 )
 
 
@@ -235,10 +235,6 @@ def test_training_snapshot_migration_is_idempotent_and_preserves_rows(monkeypatc
             )
         }
         row = connection.execute(select(reflected)).mappings().one()
-        with Session(bind=connection) as session:
-            model_row = session.query(SubmissionTraining).one()
-            assert model_row.training_id == "stable-id"
-            assert model_row.training_snapshot is None
         migration.downgrade()
         migration.downgrade()
         columns_after_downgrade = {
@@ -252,6 +248,42 @@ def test_training_snapshot_migration_is_idempotent_and_preserves_rows(monkeypatc
     assert row["training_id"] == "stable-id"
     assert row["training_snapshot"] is None
     assert "training_snapshot" not in columns_after_downgrade
+
+
+def test_training_lifecycle_migration_is_idempotent_and_locks_only_binding_history(monkeypatch):
+    migration = importlib.import_module(TRAINING_LIFECYCLE_MIGRATION)
+    engine = create_engine("sqlite:///:memory:")
+    metadata = MetaData()
+    trainings = Table(
+        "submission_trainings",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("status", String(64), nullable=False),
+        Column("is_locked", Boolean, nullable=False),
+        Column("locked_by_event", String(128), nullable=False),
+        Column("locked_at", DateTime(timezone=True), nullable=True),
+        Column("updated_at", DateTime(timezone=True), nullable=True),
+        Column("agreement_file_id", Integer, nullable=True),
+    )
+    metadata.create_all(engine)
+    now = datetime.now(timezone.utc)
+
+    with engine.begin() as connection:
+        connection.execute(trainings.insert(), [
+            {"id": 1, "status": "selected", "is_locked": False, "locked_by_event": "", "updated_at": now},
+            {"id": 2, "status": "agreement_uploaded_by_beneficiary", "is_locked": False, "locked_by_event": "", "updated_at": now},
+        ])
+        monkeypatch.setattr(migration, "op", _operations(connection))
+        migration.upgrade()
+        migration.upgrade()
+        reflected = Table("submission_trainings", MetaData(), autoload_with=connection)
+        rows = {row["id"]: row for row in connection.execute(select(reflected)).mappings()}
+        columns = {column["name"] for column in inspect(connection).get_columns("submission_trainings")}
+
+    assert {"agreement_generated_at", "agreement_downloaded_at", "signed_agreement_uploaded_at"} <= columns
+    assert rows[1]["is_locked"] is False
+    assert rows[2]["is_locked"] is True
+    assert rows[2]["locked_by_event"] == "historical_binding_agreement"
 
 
 def test_training_snapshot_json_type_uses_jsonb_only_for_postgresql(monkeypatch):

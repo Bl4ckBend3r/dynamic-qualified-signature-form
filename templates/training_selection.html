@@ -38,6 +38,7 @@
         class="training-picker__form"
         data-training-picker
         data-training-limit="{{ summary.limit_total if summary.limit_total is not none else '' }}"
+        data-training-locked-total="{{ summary.limit_locked }}"
         data-training-currency="{{ field.get('currency') or 'PLN' }}"
         novalidate
     >
@@ -47,19 +48,21 @@
                 <strong data-training-limit-label>{{ limit_total_formatted or "Bez limitu" }}</strong>
             </div>
             <div class="training-summary__item is-used">
-                <span>Wykorzystano</span>
+                <span>Zablokowane umowami</span>
                 <strong data-training-used>{{ limit_used_formatted }}</strong>
             </div>
+            <div class="training-summary__item">
+                <span>Aktualnie wybrane, niepotwierdzone umową</span>
+                <strong data-training-pending>{{ limit_pending_formatted }}</strong>
+            </div>
             <div class="training-summary__item is-remaining">
-                <span>Pozostało</span>
+                <span>Pozostało po zablokowanych</span>
                 <strong data-training-remaining>{{ limit_remaining_formatted or "Bez limitu" }}</strong>
             </div>
-            {% if summary.limit_locked %}
-                <div class="training-summary__item is-locked">
-                    <span>Już zablokowane umowami</span>
-                    <strong>{{ limit_locked_formatted }}</strong>
-                </div>
-            {% endif %}
+            <div class="training-summary__item is-remaining">
+                <span>Pozostało po aktualnym wyborze</span>
+                <strong data-training-remaining-selection>{{ limit_remaining_after_selection_formatted or "Bez limitu" }}</strong>
+            </div>
         </section>
 
         <div class="training-picker__limit-alert" data-training-limit-alert role="alert" tabindex="-1" hidden></div>
@@ -146,7 +149,7 @@
 
                     {% if is_locked %}
                         <div class="training-card__lock">
-                            Zablokowane — podpisana umowa została wgrana. Cena jest wliczona do wykorzystanego limitu.
+                            Podpisana umowa wgrana. To szkolenie zostało zablokowane i nie może zostać usunięte z wyboru.
                         </div>
                     {% endif %}
 

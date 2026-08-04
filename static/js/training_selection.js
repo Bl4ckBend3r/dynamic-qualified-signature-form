@@ -4,7 +4,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const inputs = [...picker.querySelectorAll("[data-training-price]")];
     const usedNode = picker.querySelector("[data-training-used]");
+    const pendingNode = picker.querySelector("[data-training-pending]");
     const remainingNode = picker.querySelector("[data-training-remaining]");
+    const remainingSelectionNode = picker.querySelector("[data-training-remaining-selection]");
     const alertNode = picker.querySelector("[data-training-limit-alert]");
     const submitButton = picker.querySelector("[data-training-submit]");
     const currency = picker.dataset.trainingCurrency || "PLN";
@@ -17,19 +19,25 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const update = () => {
-        const used = inputs
+        const selected = inputs
             .filter(input => input.checked)
             .reduce((total, input) => total + Number(input.dataset.trainingPrice || 0), 0);
-        const exceeded = limit !== null && used > limit;
+        const locked = Number(picker.dataset.trainingLockedTotal || 0);
+        const pending = Math.max(0, selected - locked);
+        const exceeded = limit !== null && selected > limit;
 
-        if (usedNode) usedNode.textContent = formatter.format(used);
+        if (usedNode) usedNode.textContent = formatter.format(locked);
+        if (pendingNode) pendingNode.textContent = formatter.format(pending);
         if (remainingNode && limit !== null) {
-            remainingNode.textContent = formatter.format(Math.max(0, limit - used));
+            remainingNode.textContent = formatter.format(Math.max(0, limit - locked));
+        }
+        if (remainingSelectionNode && limit !== null) {
+            remainingSelectionNode.textContent = formatter.format(Math.max(0, limit - selected));
         }
         if (alertNode) {
             alertNode.hidden = !exceeded;
             alertNode.textContent = exceeded
-                ? `Wybrane szkolenia przekraczają limit o ${formatter.format(used - limit)}. Odznacz szkolenie, aby zapisać wybór.`
+                ? `Wybrane szkolenia przekraczają limit o ${formatter.format(selected - limit)}. Odznacz szkolenie, aby zapisać wybór.`
                 : "";
         }
         if (submitButton) {

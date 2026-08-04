@@ -23,7 +23,7 @@ def test_public_training_picker_uses_full_training_cards():
     assert "Komentarz administratora" in template
     assert "Mało miejsc" in template
     assert "Brak terminów" in template
-    assert "Zablokowane — podpisana umowa została wgrana." in template
+    assert "Podpisana umowa wgrana. To szkolenie zostało zablokowane" in template
     assert "Zapisz wybór szkoleń" in template
     assert "training_selection.css" in template
     assert "training_selection.js" in template

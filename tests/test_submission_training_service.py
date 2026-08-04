@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from models import Base, Form, FormSubmission, SubmissionTraining
+from models import Base, Form, FormSubmission, SubmissionTraining, SubmissionWorkflowEvent
 from services.submission_training_service import (
     SubmissionTrainingService,
     TrainingSelectionError,
@@ -123,6 +123,68 @@ def test_generated_agreement_is_associated_with_one_training(db):
     assert rows["excel"].status == "selected"
 
 
+def test_downloaded_agreement_moves_only_its_training_to_upload_stage_without_locking(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python", "excel"])
+    service.associate_generated_agreements(
+        db,
+        submission,
+        [
+            {"id": "agreement-python", "training_id": "python", "filename": "python.pdf"},
+            {"id": "agreement-excel", "training_id": "excel", "filename": "excel.pdf"},
+        ],
+    )
+
+    assert service.mark_agreement_downloaded(db, submission, "agreement-python", filename="python.pdf") is True
+    assert service.mark_agreement_downloaded(db, submission, "agreement-python", filename="python.pdf") is False
+
+    rows = {row.training_id: row for row in db.query(SubmissionTraining).all()}
+    assert rows["python"].status == "agreement_waiting_for_beneficiary_signature"
+    assert rows["python"].agreement_downloaded_at is not None
+    assert rows["python"].is_locked is False
+    assert rows["excel"].status == "agreement_generated"
+    assert submission.process_status == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    assert db.query(SubmissionWorkflowEvent).filter_by(source="agreement_downloaded_by_beneficiary").count() == 1
+
+
+def test_selection_and_generated_or_downloaded_agreements_do_not_use_locked_limit(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    row = db.query(SubmissionTraining).one()
+    assert service.summary(db, submission, FIELD)["limit_used"] == 0
+
+    service.associate_generated_agreements(db, submission, [{"id": "python", "training_id": "python"}])
+    service.mark_agreement_downloaded(db, submission, "python")
+    summary = service.summary(db, submission, FIELD)
+
+    assert row.is_locked is False
+    assert summary["limit_used"] == 0
+    assert summary["limit_pending"] == 3000
+
+
+def test_upload_rejects_lock_when_training_capacity_is_exhausted(db):
+    field = {**FIELD, "catalog": [{**FIELD["catalog"][0], "capacity": 1}]}
+    service = SubmissionTrainingService()
+    first = make_submission(db)
+    first.submission_id = "first"
+    second = make_submission(db)
+    second.submission_id = "second"
+    for submission, agreement_id in ((first, "first-python"), (second, "second-python")):
+        service.save(db, submission, field, ["python"])
+        submission.training_agreements = json.dumps([
+            {"id": agreement_id, "training": {"id": "python", "name": "Python", "price": "3000", "capacity": 1}}
+        ])
+
+    assert service.lock_for_agreement(db, first, "first-python") is True
+    with pytest.raises(TrainingSelectionError, match="Brak dostępnych miejsc"):
+        service.lock_for_agreement(db, second, "second-python")
+
+    second_row = db.query(SubmissionTraining).filter_by(submission_id=second.id).one()
+    assert second_row.is_locked is False
+
+
 def test_legacy_signed_agreement_is_backfilled_as_locked(db):
     submission = make_submission(db)
     submission.selected_trainings = json.dumps(
@@ -136,6 +198,22 @@ def test_legacy_signed_agreement_is_backfilled_as_locked(db):
 
     assert summary["items"][0]["is_locked"] is True
     row = db.query(SubmissionTraining).one()
+    assert row.locked_by_event == "legacy_signed_agreement"
+
+
+def test_existing_selected_normalized_row_is_backfilled_when_legacy_agreement_is_signed(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    submission.training_agreements = json.dumps([
+        {"id": "python", "training_id": "python", "signature_valid": True}
+    ])
+
+    service.synchronize_legacy(db, submission)
+
+    row = db.query(SubmissionTraining).one()
+    assert row.is_locked is True
+    assert row.status == "agreement_uploaded_by_beneficiary"
     assert row.locked_by_event == "legacy_signed_agreement"
 
 
@@ -160,7 +238,7 @@ def test_selection_view_contains_full_catalog_status_and_place_counts(db):
     python = next(item for item in view["catalog"] if item["id"] == "python")
     excel = next(item for item in view["catalog"] if item["id"] == "excel")
     assert python["participant_status_label"] == "Wybrane"
-    assert python["display_occupied_seats"] == 3
+    assert python["display_occupied_seats"] == 2
     assert excel["participant_status_label"] == "Dostępne"
 
 
@@ -280,6 +358,7 @@ def test_archived_locked_training_remains_in_limit_without_catalog_record(db):
     summary = service.summary(db, submission, field_without_archived_training)
 
     assert summary["limit_used"] == 3000
+    assert summary["limit_pending"] == 0
     assert summary["limit_locked"] == 3000
     assert summary["items"][0]["id"] == "python"
     assert summary["items"][0]["name"] == "Python"
@@ -302,6 +381,7 @@ def test_previously_selected_archived_training_is_preserved_on_save(db):
     row = db.query(SubmissionTraining).one()
 
     assert row.status == "selected"
-    assert summary["limit_used"] == 3000
+    assert summary["limit_used"] == 0
+    assert summary["limit_pending"] == 3000
     assert summary["items"][0]["id"] == "python"
     assert json.loads(submission.selected_trainings)[0]["id"] == "python"

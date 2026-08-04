@@ -420,6 +420,47 @@ def test_agreement_flow_blocks_generation_until_declaration_is_signed():
     assert result.error_code == "declaration_signature_required"
 
 
+def test_agreement_flow_generates_only_new_training_and_preserves_previous_agreement():
+    document_service = FakeDocumentService()
+    updates = []
+    document_service.submission_repository = SimpleNamespace(
+        update=lambda submission_id, values: updates.append((submission_id, values)) or True
+    )
+    document_service.generate_documents_for_collection = lambda *args, **kwargs: [
+        {"id": "excel", "training_id": "excel", "filename": "excel.pdf"}
+    ]
+    previous = {
+        "id": "python",
+        "training_id": "python",
+        "filename": "python.pdf",
+        "signed_filename": "python-signed.pdf",
+        "signature_valid": True,
+    }
+    submission = {
+        "submission_id": "abc",
+        "form_slug": "sample",
+        "row": {
+            "declaration_signature_valid": "Tak",
+            "selected_trainings": json.dumps([
+                {"id": "python", "name": "Python"},
+                {"id": "excel", "name": "Excel"},
+            ]),
+            "training_agreements": json.dumps([previous]),
+        },
+    }
+
+    result = AgreementFlowService().generate_training_agreements(
+        submission=submission,
+        form_config={"documents": []},
+        document_service=document_service,
+    )
+
+    assert [item["id"] for item in result.agreements] == ["python", "excel"]
+    assert result.agreements[0]["signed_filename"] == "python-signed.pdf"
+    assert updates[0][0] == "abc"
+    assert [item["id"] for item in json.loads(updates[0][1]["training_agreements"])] == ["python", "excel"]
+
+
 def test_document_storage_uses_legacy_filename_fallback_only_without_metadata(caplog):
     storage = DummyStorage()
     service = DocumentStorageService()

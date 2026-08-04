@@ -245,7 +245,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def list_by_form(self, form_slug: str) -> list[dict]:
         from sqlalchemy import select
-        from models import FormSubmission
+        from models import FormSubmission, SubmissionTraining
 
         with self.session_factory() as session:
             rows = session.execute(
@@ -253,7 +253,24 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 .where(FormSubmission.form_slug == form_slug)
                 .order_by(FormSubmission.created_at.desc())
             ).scalars().all()
-            return [self._to_dict(row) for row in rows]
+            training_rows = session.execute(
+                select(SubmissionTraining)
+                .join(FormSubmission, FormSubmission.id == SubmissionTraining.submission_id)
+                .where(FormSubmission.form_slug == form_slug)
+            ).scalars().all()
+            by_submission: dict[int, list[dict]] = {}
+            for training in training_rows:
+                by_submission.setdefault(training.submission_id, []).append({
+                    "training_id": training.training_id,
+                    "status": training.status,
+                    "is_locked": bool(training.is_locked),
+                })
+            result = []
+            for row in rows:
+                item = self._to_dict(row)
+                item["_submission_trainings"] = by_submission.get(row.id, [])
+                result.append(item)
+            return result
 
     def find_by_pdf(self, form_slug: str, filename: str) -> dict | None:
         from sqlalchemy import or_, select

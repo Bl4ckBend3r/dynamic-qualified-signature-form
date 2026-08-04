@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 from services.process_service import (
@@ -68,8 +69,24 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
     declaration_completed = is_declaration_signature_valid(row) or (
         bool(explicit_status) and status in DECLARATION_COMPLETED_STATUSES
     )
-    agreement_completed = status in COMPLETED_STATUSES
-    beneficiary_signed = is_agreement_signature_valid(row) or status in AGREEMENT_WAITING_FOR_OFFICE_STATUSES
+    training_agreements = _training_agreements(row.get("training_agreements"))
+    pending_training_agreements = [
+        item for item in training_agreements
+        if item.get("filename") and not bool(item.get("signature_valid"))
+    ]
+    normalized_training_states = any("participant_status" in item for item in training_agreements)
+    uploadable_training_agreements = [
+        item for item in pending_training_agreements
+        if not normalized_training_states
+        or bool(item.get("agreement_downloaded"))
+        or str(item.get("participant_status") or "") in {
+            "agreement_downloaded", "agreement_waiting_for_beneficiary_signature"
+        }
+    ]
+    agreement_completed = status in COMPLETED_STATUSES and not pending_training_agreements
+    beneficiary_signed = (
+        is_agreement_signature_valid(row) or status in AGREEMENT_WAITING_FOR_OFFICE_STATUSES
+    ) and not pending_training_agreements
 
     application_status = _application_status(status, decision)
     declaration_status = _declaration_status(
@@ -118,7 +135,10 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
     )
     can_upload_signed_agreement = (
         can_download_agreement
-        and not beneficiary_signed
+        and (
+            bool(uploadable_training_agreements)
+            or (not training_agreements and not beneficiary_signed)
+        )
         and not agreement_completed
     )
     can_fill_declaration = (
@@ -269,6 +289,13 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
             "Poczekaj na podpis i potwierdzenie urzędu.",
             "neutral",
         )
+    if state["status"] == ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE:
+        return (
+            "Umowa oczekuje na podpis beneficjenta",
+            "Umowa została pobrana. Podpisz dokument i wgraj podpisaną umowę.",
+            "Wgraj podpisaną umowę. Dopiero wtedy szkolenie i miejsce zostaną zablokowane.",
+            "success",
+        )
     if state["agreement_required"] and state["declaration_completed"]:
         if state["agreement_generated"]:
             return (
@@ -318,3 +345,14 @@ def _deduplicate_messages(items) -> list[dict[str, str]]:
         seen.add(key)
         result.append({"type": message_type, "text": text})
     return result
+
+
+def _training_agreements(value) -> list[dict]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]

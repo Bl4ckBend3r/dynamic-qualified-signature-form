@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from services.public_submission_status_service import build_public_submission_status
@@ -49,8 +51,8 @@ def accepted_row(**updates):
                 agreement_generated="Tak",
                 agreement_filename="umowa.pdf",
             ),
-            "Umowa jest gotowa do podpisania",
-            "Podpisz i wgraj umowę.",
+            "Umowa oczekuje na podpis beneficjenta",
+            "Wgraj podpisaną umowę. Dopiero wtedy szkolenie i miejsce zostaną zablokowane.",
         ),
         (
             accepted_row(
@@ -119,6 +121,29 @@ def test_blocked_agreement_overrides_stale_positive_status_and_disables_actions(
     assert status["can_download_agreement"] is False
     assert status["can_upload_signed_agreement"] is False
     assert "podpis" not in status["next_action"].lower()
+
+
+def test_training_agreement_upload_is_enabled_only_after_its_download():
+    agreement = {
+        "id": "python",
+        "filename": "python.pdf",
+        "signature_valid": False,
+        "participant_status": "agreement_generated",
+        "agreement_downloaded": False,
+    }
+    row = accepted_row(
+        process_status="AGREEMENT_READY",
+        declaration_signature_valid="Tak",
+        agreement_generated="Tak",
+        agreement_filename="python.pdf",
+        training_agreements=json.dumps([agreement]),
+    )
+    assert build_public_submission_status(row)["can_upload_signed_agreement"] is False
+
+    agreement.update(participant_status="agreement_waiting_for_beneficiary_signature", agreement_downloaded=True)
+    row["training_agreements"] = json.dumps([agreement])
+    row["process_status"] = "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    assert build_public_submission_status(row)["can_upload_signed_agreement"] is True
 
 
 def test_status_messages_are_deduplicated_and_follow_business_order():

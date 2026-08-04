@@ -17,7 +17,7 @@ class FakeRepository:
         return list(self.rows)
 
 
-def test_training_availability_counts_active_and_excludes_rejected_rows():
+def test_training_availability_counts_only_locked_or_binding_training_rows():
     field = {
         "catalog": [
             {"id": "excel", "name": "Excel", "price": "1200.00", "capacity": 2},
@@ -25,9 +25,9 @@ def test_training_availability_counts_active_and_excludes_rejected_rows():
         ]
     }
     rows = [
-        {"submission_id": "a", "process_status": "DECLARATION_WAITING_FOR_SIGNATURE", "selected_trainings": json.dumps([{"id": "excel", "name": "Excel"}])},
-        {"submission_id": "b", "process_status": "OFFICER_REJECTED", "selected_trainings": json.dumps([{"id": "excel", "name": "Excel"}])},
-        {"submission_id": "c", "process_status": "FORM_SUBMITTED", "selected_trainings": json.dumps([{"id": "python", "name": "Python"}])},
+        {"submission_id": "a", "_submission_trainings": [{"training_id": "excel", "status": "agreement_uploaded_by_beneficiary", "is_locked": True}]},
+        {"submission_id": "b", "_submission_trainings": [{"training_id": "excel", "status": "selected", "is_locked": False}]},
+        {"submission_id": "c", "_submission_trainings": [{"training_id": "python", "status": "agreement_waiting_for_beneficiary_signature", "is_locked": False}]},
     ]
 
     availability = TrainingAvailabilityService(FakeRepository(rows)).availability_for_field(
@@ -37,9 +37,8 @@ def test_training_availability_counts_active_and_excludes_rejected_rows():
     )
 
     assert availability["excel"]["available_seats"] == 1
-    assert availability["python"]["available_seats"] == 0
-    assert availability["python"]["is_available"] is False
-    assert availability["python"]["available_seats_label"] == "Brak wolnych miejsc"
+    assert availability["python"]["available_seats"] == 1
+    assert availability["python"]["is_available"] is True
 
 
 def test_training_selection_rejects_training_without_available_seats():

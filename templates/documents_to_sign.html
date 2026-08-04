@@ -342,13 +342,14 @@
 
                                     {% if agreement.signature_valid %}
                                         <p class="document-status-line"><strong>Status podpisu:</strong> poprawny</p>
+                                        <p class="status-message status-message--success">Podpisana umowa wgrana. To szkolenie zostało zablokowane i nie może zostać usunięte z wyboru.</p>
                                     {% else %}
                                         {% if agreement.signature_error %}
                                             <p class="document-status-line"><strong>Status podpisu:</strong> niepoprawny</p>
                                             <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
                                         {% endif %}
 
-                                        {% if result.can_upload_signed_agreement %}
+                                        {% if result.can_upload_signed_agreement and not agreement.signature_valid %}
                                         <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
                                             <div class="form-row width-full">
                                                 <label class="upload-dropzone" data-upload-dropzone>
@@ -375,6 +376,8 @@
                                             </div>
                                         </form>
                                         {% endif %}
+                                        <p><strong>Status:</strong> {{ agreement.participant_status_label or "Umowa gotowa do pobrania" }}</p>
+                                        <p class="form-help">Podpisz pobraną umowę i wgraj podpisany plik. Dopiero po wgraniu podpisanej umowy szkolenie zostanie zablokowane.</p>
                                     {% endif %}
                                 </div>
                             {% endfor %}

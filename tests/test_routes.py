@@ -464,10 +464,17 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert "token=secret-token" in agreement_html
 
 
-def test_all_training_agreement_downloads_return_pdf(client, app):
+def test_all_training_agreement_downloads_return_pdf(client, app, monkeypatch):
     import json
+    import routes.documents as document_routes
 
     filenames = ["Jan_Kowalski-excel-umowa.pdf", "Jan_Kowalski-english-umowa.pdf"]
+    marked_downloads = []
+    monkeypatch.setattr(
+        document_routes,
+        "_mark_training_agreement_downloaded",
+        lambda submission_id, agreement_key, filename: marked_downloads.append((submission_id, agreement_key, filename)) or True,
+    )
     app.testing_storage.csv_rows = [
         {
             "submission_id": "training-download",
@@ -492,6 +499,7 @@ def test_all_training_agreement_downloads_return_pdf(client, app):
         )
         assert response.status_code == 200
         assert response.data.startswith(b"%PDF-1.4")
+    assert [item[2] for item in marked_downloads] == filenames
 
 
 def test_documents_to_sign_does_not_render_dead_training_agreement_link(client, app):

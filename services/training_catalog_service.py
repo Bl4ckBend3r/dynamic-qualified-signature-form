@@ -381,6 +381,7 @@ class TrainingCatalogService:
                 or "0.00"
             ),
             "currency": str(training.get("currency") or "PLN").strip() or "PLN",
+            "capacity": training.get("capacity"),
             "description": str(training.get("description") or "").strip(),
             "dates": dates,
             "location": locations[0] if locations else "",

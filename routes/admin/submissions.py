@@ -226,6 +226,15 @@ def submission_detail(form_id: int, submission_pk: int):
             )
             participant_training_view = training_selection_view["summary"]
             participant_training_view["catalog"] = training_selection_view["catalog"]
+            for item in participant_training_view["items"]:
+                item["agreement_url"] = (
+                    url_for("documents.download_pdf", slug=form.slug, filename=item["agreement_filename"], token=submission.access_token)
+                    if item.get("agreement_filename") else ""
+                )
+                item["signed_agreement_url"] = (
+                    url_for("documents.download_signed_pdf", slug=form.slug, filename=item["signed_agreement_filename"], token=submission.access_token)
+                    if item.get("signed_agreement_filename") else ""
+                )
             currency = str(training_field.get("currency") or "PLN")
             participant_training_view.update(
                 limit_total_formatted=format_price_pln(
@@ -241,6 +250,9 @@ def submission_detail(form_id: int, submission_pk: int):
                 )
                 if participant_training_view["limit_remaining"] is not None
                 else None,
+                limit_pending_formatted=format_price_pln(
+                    participant_training_view["limit_pending"], currency
+                ),
             )
             db.commit()
         can_manage = can_manage_form(db, g.admin_user, form.id)

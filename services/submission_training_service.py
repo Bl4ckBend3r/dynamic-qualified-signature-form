@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Mapping
 
-from models import SubmissionTraining
+from models import Form, FormSubmission, SubmissionTraining, SubmissionWorkflowEvent
 from services.process_service import ProcessStatus
 from services.training_catalog_service import TrainingCatalogService
 from services.training_service import (
@@ -15,11 +15,29 @@ from services.training_service import (
 )
 
 
-ACTIVE_STATUSES = {"selected", "agreement_generated", "agreement_uploaded_by_beneficiary", "agreement_signed_by_office", "locked"}
+ACTIVE_STATUSES = {
+    "selected",
+    "agreement_generated",
+    "agreement_downloaded",
+    "agreement_waiting_for_beneficiary_signature",
+    "agreement_uploaded_by_beneficiary",
+    "agreement_waiting_for_office_signature",
+    "agreement_signed_by_office",
+    "locked",
+}
+LOCKING_STATUSES = {
+    "agreement_uploaded_by_beneficiary",
+    "agreement_waiting_for_office_signature",
+    "agreement_signed_by_office",
+    "locked",
+}
 PARTICIPANT_STATUS_LABELS = {
     "selected": "Wybrane",
     "agreement_generated": "Umowa wygenerowana",
+    "agreement_downloaded": "Umowa pobrana",
+    "agreement_waiting_for_beneficiary_signature": "Umowa oczekuje na podpis beneficjenta",
     "agreement_uploaded_by_beneficiary": "Podpisana umowa wgrana",
+    "agreement_waiting_for_office_signature": "Oczekuje na podpis urzędu",
     "agreement_signed_by_office": "Podpisane przez urząd",
     "locked": "Zablokowane",
     "cancelled": "Dostępne",
@@ -59,10 +77,16 @@ class SubmissionTrainingService:
         )
 
     def synchronize_legacy(self, db, submission) -> None:
-        if db.query(SubmissionTraining.id).filter(SubmissionTraining.submission_id == submission.id).first():
-            return
-        rows = {}
+        rows = {
+            row.training_id: row
+            for row in db.query(SubmissionTraining)
+            .filter(SubmissionTraining.submission_id == submission.id)
+            .all()
+        }
         for snapshot in parse_training_snapshots(submission.selected_trainings):
+            training_id = str(snapshot.get("id") or "").strip()
+            if training_id in rows:
+                continue
             row = self._new_row(submission.id, snapshot)
             rows[row.training_id] = row
             db.add(row)
@@ -78,11 +102,12 @@ class SubmissionTrainingService:
                 agreement.get("training_id") or agreement.get("id") or ""
             ).strip()
             row = rows.get(training_id)
-            if row is None:
+            if row is None or row.is_locked:
                 continue
             row.status = "agreement_uploaded_by_beneficiary"
             row.is_locked = True
             row.locked_at = now
+            row.signed_agreement_uploaded_at = now
             row.locked_by_event = "legacy_signed_agreement"
             row.agreement_id = str(agreement.get("id") or training_id)
         db.flush()
@@ -97,12 +122,20 @@ class SubmissionTrainingService:
                 active_only=False,
             )
         }
-        items, used = [], Decimal("0.00")
+        try:
+            raw_agreements = json.loads(str(submission.training_agreements or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            raw_agreements = []
+        agreements = {
+            str(item.get("id") or item.get("training_id") or ""): item
+            for item in raw_agreements
+            if isinstance(item, Mapping)
+        }
+        items = []
         for row in rows:
             if row.status not in ACTIVE_STATUSES and not row.is_locked:
                 continue
             price = parse_decimal_price(row.training_price_snapshot) or Decimal("0.00")
-            used += price
             source = {
                 **catalog.get(row.training_id, {}),
                 **dict(row.training_snapshot or {}),
@@ -112,12 +145,26 @@ class SubmissionTrainingService:
                 or field.get("currency")
                 or "PLN"
             )
+            agreement = agreements.get(row.agreement_id) or agreements.get(row.training_id) or {}
             items.append({
                 **source, "id": row.training_id, "name": row.training_name_snapshot or source.get("name"),
                 "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, currency),
                 "currency": currency,
                 "status": row.status, "status_label": self.status_label(row.status, row.is_locked),
                 "is_locked": row.is_locked,
+                "agreement_id": row.agreement_id,
+                "agreement_file_id": row.agreement_file_id,
+                "agreement_generated": bool(row.agreement_generated_at or row.status != "selected"),
+                "agreement_downloaded": bool(row.agreement_downloaded_at or row.status in {
+                    "agreement_downloaded", "agreement_waiting_for_beneficiary_signature",
+                    "agreement_uploaded_by_beneficiary", "agreement_waiting_for_office_signature",
+                    "agreement_signed_by_office", "locked",
+                }),
+                "signed_agreement_uploaded": bool(row.signed_agreement_uploaded_at or row.agreement_file_id or row.is_locked),
+                "locked_at": row.locked_at,
+                "seat_occupied": bool(row.is_locked or row.status in LOCKING_STATUSES),
+                "agreement_filename": str(agreement.get("filename") or ""),
+                "signed_agreement_filename": str(agreement.get("signed_filename") or ""),
             })
         maximum = TrainingCatalogService.financial_limit(field)
         locked_total = sum(
@@ -128,10 +175,16 @@ class SubmissionTrainingService:
             ),
             Decimal("0.00"),
         )
+        pending_total = sum(
+            (parse_decimal_price(row.training_price_snapshot) or Decimal("0.00") for row in rows if row.status in ACTIVE_STATUSES and not row.is_locked),
+            Decimal("0.00"),
+        )
         return {
-            "items": items, "limit_total": maximum, "limit_used": used,
-            "limit_remaining": max(Decimal("0.00"), maximum - used) if maximum is not None else None,
+            "items": items, "limit_total": maximum, "limit_used": locked_total,
+            "limit_remaining": max(Decimal("0.00"), maximum - locked_total) if maximum is not None else None,
             "limit_locked": locked_total,
+            "limit_pending": pending_total,
+            "limit_remaining_after_selection": max(Decimal("0.00"), maximum - locked_total - pending_total) if maximum is not None else None,
         }
 
     def selection_view(
@@ -181,7 +234,8 @@ class SubmissionTrainingService:
                 row and (row.status in ACTIVE_STATUSES or row.is_locked)
             )
             is_locked = bool(row and row.is_locked)
-            occupied = int(item.get("occupied_seats") or 0) + (1 if is_selected else 0)
+            seat_occupied = bool(row and (row.is_locked or row.status in LOCKING_STATUSES))
+            occupied = int(item.get("occupied_seats") or 0) + (1 if seat_occupied else 0)
             capacity = item.get("capacity")
             display_available = (
                 max(int(capacity) - occupied, 0) if capacity is not None else None
@@ -192,6 +246,7 @@ class SubmissionTrainingService:
                     **item,
                     "is_selected": is_selected,
                     "is_locked": is_locked,
+                    "seat_occupied": seat_occupied,
                     "participant_status": status,
                     "participant_status_label": self.status_label(status, is_locked),
                     "display_occupied_seats": occupied,
@@ -274,7 +329,7 @@ class SubmissionTrainingService:
                     row = self._new_row(submission.id, training)
                     db.add(row)
                     rows[training_id] = row
-                elif not row.is_locked:
+                elif not row.is_locked and row.status in {"cancelled", "unselected"}:
                     row.status, row.unselected_at = "selected", None
                 row.updated_at = now
             elif row is not None and not row.is_locked:
@@ -323,10 +378,64 @@ class SubmissionTrainingService:
             if row is None:
                 continue
             row.agreement_id = str(agreement.get("id") or training_id)
-            if not row.is_locked:
+            if not row.is_locked and row.status in {"selected", "cancelled", "unselected"}:
                 row.status = "agreement_generated"
+                row.agreement_generated_at = row.agreement_generated_at or now
             row.updated_at = now
+        if any(not row.is_locked and row.status == "agreement_generated" for row in rows.values()):
+            submission.process_status = ProcessStatus.AGREEMENT_READY.value
+            submission.workflow_step = submission.process_status
         db.flush()
+
+    def mark_agreement_downloaded(
+        self,
+        db,
+        submission,
+        agreement_key: str,
+        *,
+        filename: str = "",
+    ) -> bool:
+        self.synchronize_legacy(db, submission)
+        key = str(agreement_key or "").strip()
+        wanted_filename = str(filename or "").strip()
+        rows = db.query(SubmissionTraining).filter(SubmissionTraining.submission_id == submission.id).all()
+        row = next((item for item in rows if key and key in {item.agreement_id, item.training_id}), None)
+        if row is None and wanted_filename:
+            try:
+                agreements = json.loads(str(submission.training_agreements or "[]"))
+            except (TypeError, json.JSONDecodeError):
+                agreements = []
+            agreement = next((item for item in agreements if isinstance(item, Mapping) and str(item.get("filename") or "") == wanted_filename), None)
+            if agreement:
+                resolved = str(agreement.get("id") or agreement.get("training_id") or "").strip()
+                row = next((item for item in rows if resolved in {item.agreement_id, item.training_id}), None)
+        if row is None or row.is_locked or row.status in LOCKING_STATUSES:
+            return False
+        if row.status == "agreement_waiting_for_beneficiary_signature" and row.agreement_downloaded_at:
+            return False
+        now = datetime.now(timezone.utc)
+        previous_status = str(submission.process_status or "")
+        previous_step = str(submission.workflow_step or "")
+        row.status = "agreement_waiting_for_beneficiary_signature"
+        row.agreement_downloaded_at = row.agreement_downloaded_at or now
+        row.updated_at = now
+        submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value
+        submission.workflow_step = submission.process_status
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            previous_status=previous_status,
+            new_status=submission.process_status,
+            previous_step=previous_step,
+            new_step=submission.workflow_step,
+            actor_role="participant",
+            reason="Umowa została pobrana przez beneficjenta.",
+            source="agreement_downloaded_by_beneficiary",
+            side_effects={"submission_training_id": row.id, "training_id": row.training_id, "agreement_id": row.agreement_id},
+        ))
+        db.flush()
+        return True
 
     def lock_for_agreement(
         self,
@@ -336,6 +445,7 @@ class SubmissionTrainingService:
         *,
         agreement_file_id: int | None = None,
     ) -> bool:
+        db.query(Form).filter(Form.slug == submission.form_slug).with_for_update().one_or_none()
         try:
             agreements = json.loads(str(submission.training_agreements or "[]"))
         except (TypeError, json.JSONDecodeError):
@@ -357,10 +467,30 @@ class SubmissionTrainingService:
             row.training_snapshot = TrainingCatalogService.build_snapshot(
                 training
             )
+        if row.is_locked:
+            return True
+        capacity = (row.training_snapshot or {}).get("capacity")
+        if capacity not in (None, ""):
+            occupied = (
+                db.query(SubmissionTraining.id)
+                .join(FormSubmission, FormSubmission.id == SubmissionTraining.submission_id)
+                .filter(
+                    FormSubmission.form_slug == submission.form_slug,
+                    SubmissionTraining.training_id == training_id,
+                    SubmissionTraining.id != row.id,
+                    (SubmissionTraining.is_locked.is_(True) | SubmissionTraining.status.in_(LOCKING_STATUSES)),
+                )
+                .count()
+            )
+            if occupied >= int(capacity):
+                raise TrainingSelectionError("Brak dostępnych miejsc dla tego szkolenia. Skontaktuj się z administratorem.")
         now = datetime.now(timezone.utc)
         row.status, row.is_locked, row.locked_at = "agreement_uploaded_by_beneficiary", True, now
         row.locked_by_event, row.agreement_id, row.updated_at = "agreement_uploaded_by_beneficiary", str(agreement_id), now
         row.agreement_file_id = agreement_file_id
+        row.signed_agreement_uploaded_at = now
+        submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
+        submission.workflow_step = submission.process_status
         db.flush()
         return True
 

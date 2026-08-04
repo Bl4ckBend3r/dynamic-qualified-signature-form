@@ -189,9 +189,32 @@ class DocumentViewService:
         row = submission["row"]
         status_view = build_status_view(process_state.status.value)
         public_status = build_public_submission_status(row)
-        action_targets = {action.get("target_step") for action in available_actions}
         training_agreements = _parse_json_list(row.get("training_agreements"))
         selected_trainings = _parse_json_list(row.get("selected_trainings"))
+        def training_key(item: Mapping[str, Any]) -> str:
+            nested = item.get("training") if isinstance(item.get("training"), Mapping) else {}
+            return str(nested.get("id") or item.get("training_id") or item.get("id") or "").strip()
+
+        generated_training_ids = {
+            training_key(item)
+            for item in training_agreements
+            if training_key(item) and str(item.get("filename") or "").strip()
+        }
+        pending_trainings = [
+            item for item in selected_trainings
+            if training_key(item) and training_key(item) not in generated_training_ids
+        ]
+        agreement_actions_allowed = bool(
+            public_status["declaration_completed"]
+            and str(process_state.status.value) not in {
+                ProcessStatus.AUTO_REJECTED.value,
+                ProcessStatus.OFFICER_REJECTED.value,
+                ProcessStatus.PARTICIPANT_REJECTED.value,
+                ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE.value,
+                ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
+            }
+        )
         today_iso = date.today().isoformat()
         declaration_enabled = bool(declaration.get("enabled"))
         declaration_filename = declaration.get("filename", "")
@@ -202,7 +225,7 @@ class DocumentViewService:
             return bool(filename) and (available is None or filename in available)
 
         training_agreement_views = []
-        if agreement_template_configured and public_status["can_download_agreement"]:
+        if agreement_template_configured:
             for agreement in training_agreements:
                 status = str(agreement.get("participant_status") or "agreement_generated")
                 office_signed = status == "agreement_signed_by_office"
@@ -243,10 +266,11 @@ class DocumentViewService:
                     "office_signed": office_signed,
                     "downloaded": downloaded,
                     "can_upload": bool(
+                        agreement_actions_allowed
+                        and
                         not beneficiary_uploaded
                         and filename
                         and status in {
-                            "agreement_generated",
                             "agreement_downloaded",
                             "agreement_waiting_for_beneficiary_signature",
                         }
@@ -258,8 +282,33 @@ class DocumentViewService:
                     "upload_url": agreement_upload_url_builder(agreement.get("id", "")),
                 }
                 training_agreement_views.append(agreement_view)
+            for training in pending_trainings:
+                key = training_key(training)
+                training_agreement_views.append({
+                    "id": key,
+                    "training_id": key,
+                    "training_name": str(training.get("name") or key),
+                    "number": "",
+                    "filename": "",
+                    "state": "selected",
+                    "state_title": "Umowa do wygenerowania",
+                    "state_description": "Dla tego szkolenia nie wygenerowano jeszcze umowy.",
+                    "participant_status_label": "Wybrane",
+                    "beneficiary_uploaded": False,
+                    "office_signed": False,
+                    "downloaded": False,
+                    "can_upload": False,
+                    "can_generate": agreement_actions_allowed,
+                    "is_pending_generation": True,
+                    "is_locked": False,
+                    "url": "",
+                    "signed_url": "",
+                    "final_url": "",
+                    "upload_url": "",
+                })
 
         return {
+            **public_status,
             "submission_id": submission_id,
             "form_slug": submission["form_slug"],
             "form_title": submission["form_title"],
@@ -285,7 +334,7 @@ class DocumentViewService:
                 for step, visible in {
                     "declaration": declaration_enabled,
                     "agreement": agreement_template_configured
-                    and (process_state.can_generate_agreement or bool(training_agreements)),
+                    and (bool(pending_trainings) or bool(training_agreements)),
                 }.items()
                 if visible
             ],
@@ -306,16 +355,11 @@ class DocumentViewService:
             "declaration_signature_valid": str(row.get("declaration_signature_valid", "")).strip().lower() == "tak",
             "agreement_blocked": public_status["agreement_blocked"],
             "agreement_block_reason": public_status["blocking_reason"],
-            "can_generate_agreement": public_status["can_generate_agreement"] and (
-                "agreement" in action_targets
-                or "training_agreements" in action_targets
-                or process_state.can_generate_agreement
-                or (
-                    str(row.get("declaration_signature_valid", "")).strip().lower() == "tak"
-                    and str(row.get("agreement_generated", "")).strip().lower() != "tak"
-                    and str(row.get("agreement_blocked", "")).strip().lower() != "tak"
-                )
-            ) and bool(selected_trainings),
+            "can_generate_agreement": bool(
+                agreement_template_configured
+                and agreement_actions_allowed
+                and pending_trainings
+            ),
             "generate_agreement_url": generate_agreement_url,
             "agreement_required": agreement_required,
             "agreement_template_configured": agreement_template_configured,
@@ -347,7 +391,6 @@ class DocumentViewService:
             ),
             "training_agreements": training_agreement_views,
             "uploadable_training_agreements": [item for item in training_agreement_views if item["can_upload"]],
-            **public_status,
         }
 
 

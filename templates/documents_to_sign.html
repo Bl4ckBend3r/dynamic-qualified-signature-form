@@ -108,7 +108,7 @@
 
         {% set show_declaration_stage = result.can_fill_declaration|default(false) or result.can_download_declaration|default(false) %}
         {% set show_declaration_upload = result.can_upload_signed_declaration|default(false) and result.declaration_upload_url %}
-        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_completed %}
+        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement %}
         {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and (not agreement_completed or training_agreements) %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload or training_agreements %}
 
@@ -336,8 +336,8 @@
                                         <p>{{ agreement.state_description }}</p>
                                     </div>
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
-                                    <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
-                                    <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+                                    {% if agreement.number %}<p><strong>Numer umowy:</strong> {{ agreement.number }}</p>{% endif %}
+                                    {% if agreement.filename %}<p><strong>Plik:</strong> {{ agreement.filename }}</p>{% endif %}
                                     <p><strong>Status:</strong> {{ agreement.participant_status_label or agreement.state_title }}</p>
                                     {% if agreement.is_locked %}<p><span class="badge badge-success">Zablokowane</span>{% if agreement.locked_at %} · {{ agreement.locked_at }}{% endif %}</p>{% endif %}
 

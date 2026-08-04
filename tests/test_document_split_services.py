@@ -461,7 +461,8 @@ def test_agreement_flow_generates_only_new_training_and_preserves_previous_agree
     assert [item["id"] for item in json.loads(updates[0][1]["training_agreements"])] == ["python", "excel"]
 
 
-def _agreement_view_for(items, *, process_status="AGREEMENT_READY"):
+def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_trainings=None, row_extra=None):
+    selected_trainings = selected_trainings or []
     row = {
         "officer_decision": "TAK",
         "acceptance_required": "TAK",
@@ -471,7 +472,9 @@ def _agreement_view_for(items, *, process_status="AGREEMENT_READY"):
         "agreement_generated": "Tak",
         "agreement_filename": items[0]["filename"],
         "training_agreements": json.dumps(items),
+        "selected_trainings": json.dumps(selected_trainings),
         "process_status": process_status,
+        **(row_extra or {}),
     }
     return DocumentViewService().build_documents_to_sign_result(
         submission_id="abc",
@@ -502,7 +505,7 @@ def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and
     ])["training_agreements"][0]
     assert generated["state_title"] == "Umowa do podpisania"
     assert generated["download_label"] == "Pobierz umowę PDF"
-    assert generated["can_upload"] is True
+    assert generated["can_upload"] is False
 
     downloaded = _agreement_view_for([
         {"id": "downloaded", "filename": "downloaded.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True}
@@ -528,15 +531,46 @@ def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and
 def test_multiple_training_agreements_keep_independent_actions():
     result = _agreement_view_for([
         {"id": "locked", "filename": "locked.pdf", "signed_filename": "locked-signed.pdf", "participant_status": "agreement_uploaded_by_beneficiary", "signature_valid": True, "is_locked": True},
-        {"id": "open", "filename": "open.pdf", "participant_status": "agreement_generated"},
+        {"id": "open", "filename": "open.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True},
     ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")
     states = {item["id"]: item for item in result["training_agreements"]}
 
     assert states["locked"]["can_upload"] is False
     assert states["locked"]["beneficiary_uploaded"] is True
     assert states["open"]["can_upload"] is True
-    assert states["open"]["state_title"] == "Umowa do podpisania"
+    assert states["open"]["state_title"] == "Umowa oczekuje na podpis"
     assert [item["id"] for item in result["uploadable_training_agreements"]] == ["open"]
+
+
+def test_signed_training_does_not_hide_generation_for_new_selected_training():
+    result = _agreement_view_for(
+        [{
+            "id": "python",
+            "training_id": "python",
+            "training_name": "Python",
+            "filename": "python.pdf",
+            "signed_filename": "python-signed.pdf",
+            "participant_status": "agreement_uploaded_by_beneficiary",
+            "signature_valid": True,
+            "is_locked": True,
+        }],
+        process_status="AGREEMENT_SIGNED_BY_OFFICE",
+        selected_trainings=[
+            {"id": "python", "name": "Python"},
+            {"id": "excel", "name": "Excel"},
+        ],
+        row_extra={
+            "agreement_signature_valid": "Tak",
+            "agreement_blocked": "Tak",
+        },
+    )
+    states = {item["training_id"]: item for item in result["training_agreements"]}
+
+    assert result["can_generate_agreement"] is True
+    assert states["python"]["beneficiary_uploaded"] is True
+    assert states["excel"]["state"] == "selected"
+    assert states["excel"]["state_title"] == "Umowa do wygenerowania"
+    assert states["excel"]["can_generate"] is True
 
 
 def test_document_storage_uses_legacy_filename_fallback_only_without_metadata(caplog):

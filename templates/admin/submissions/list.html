@@ -139,7 +139,7 @@
                     </td>{% endif %}
                     <td class="actions-column">
                         <div class="admin-action-dropdown">
-                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-expanded="false" aria-controls="submission-actions-{{ submission.id }}">Akcje</button>
+                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="submission-actions-{{ submission.id }}">Akcje</button>
                             <div id="submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
                             {% if not read_only and g.admin_user.role in ['super_admin', 'admin'] and submission.process_status not in ['FORM_SUBMITTED', 'WAITING_FOR_OFFICER_DECISION'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#rollback-stage-dialog">Cofnij etap</a>{% endif %}

@@ -68,7 +68,7 @@
                 <td class="actions-column">
                     {% if form %}
                         <div class="admin-action-dropdown">
-                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-expanded="false" aria-controls="all-submission-actions-{{ submission.id }}">Akcje</button>
+                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="all-submission-actions-{{ submission.id }}">Akcje</button>
                             <div id="all-submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
                             {% if g.admin_user.role in ['super_admin', 'admin'] %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}

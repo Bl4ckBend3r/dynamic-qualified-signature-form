@@ -59,7 +59,7 @@
                 <td class="column-secondary">{{ form.created_at.strftime("%Y-%m-%d") if form.created_at else "-" }}</td>
                 <td class="actions-column">
                     <div class="admin-action-dropdown">
-                        <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>
+                        <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>
                         <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
                             {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}

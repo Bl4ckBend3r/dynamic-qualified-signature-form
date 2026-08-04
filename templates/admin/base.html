@@ -184,11 +184,17 @@
             });
             confirmDialog?.addEventListener("close", () => { pendingConfirmation = null; });
             let openActionMenu = null;
+            const actionMenuItems = (menu) => Array.from(
+                menu.querySelectorAll('[role="menuitem"]:not([disabled]), a:not([disabled]), button:not([disabled])')
+            ).filter((item) => item.getClientRects().length);
             const closeActionMenu = (restoreFocus = false) => {
                 if (!openActionMenu) return;
-                const button = document.querySelector(`[aria-controls="${openActionMenu.id}"]`);
-                openActionMenu.hidden = true;
-                button?.setAttribute("aria-expanded", "false");
+                const {button, menu, placeholder} = openActionMenu;
+                menu.hidden = true;
+                menu.style.removeProperty("left");
+                menu.style.removeProperty("top");
+                if (placeholder.parentNode) placeholder.replaceWith(menu);
+                button.setAttribute("aria-expanded", "false");
                 if (restoreFocus) button?.focus();
                 openActionMenu = null;
             };
@@ -206,26 +212,47 @@
                 if (button) {
                     event.preventDefault();
                     const menu = document.getElementById(button.getAttribute("aria-controls"));
-                    const wasOpen = menu && openActionMenu === menu && !menu.hidden;
+                    const wasOpen = menu && openActionMenu?.menu === menu && !menu.hidden;
                     closeActionMenu();
                     if (!menu || wasOpen) return;
+                    const placeholder = document.createComment(`admin-action-menu:${menu.id}`);
+                    menu.replaceWith(placeholder);
+                    document.body.appendChild(menu);
                     menu.hidden = false;
                     button.setAttribute("aria-expanded", "true");
-                    openActionMenu = menu;
+                    openActionMenu = {button, menu, placeholder};
                     positionActionMenu(button, menu);
-                    menu.querySelector("a, button:not([disabled])")?.focus();
+                    actionMenuItems(menu)[0]?.focus({preventScroll: true});
                     return;
                 }
-                if (openActionMenu && !event.target.closest("[data-admin-action-menu]")) closeActionMenu();
+                if (openActionMenu && !openActionMenu.menu.contains(event.target)) closeActionMenu();
             });
             document.addEventListener("keydown", (event) => {
                 if (event.key === "Escape" && openActionMenu) {
                     event.preventDefault();
                     closeActionMenu(true);
+                    return;
                 }
+                if (!openActionMenu || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                const items = actionMenuItems(openActionMenu.menu);
+                if (!items.length) return;
+                event.preventDefault();
+                const current = items.indexOf(document.activeElement);
+                const target = event.key === "Home" ? 0
+                    : event.key === "End" ? items.length - 1
+                    : event.key === "ArrowDown" ? (current + 1 + items.length) % items.length
+                    : (current - 1 + items.length) % items.length;
+                items[target].focus({preventScroll: true});
             });
             window.addEventListener("resize", () => closeActionMenu());
             window.addEventListener("scroll", () => closeActionMenu(), true);
+            window.addEventListener("pagehide", () => closeActionMenu());
+            document.querySelectorAll("[data-admin-action-toggle]").forEach((button) => {
+                button.setAttribute("aria-haspopup", "menu");
+            });
+            document.querySelectorAll("[data-admin-action-menu]").forEach((menu) => {
+                menu.querySelectorAll("a, button").forEach((item) => item.setAttribute("role", "menuitem"));
+            });
             document.addEventListener("click", async (event) => {
                 const copyButton = event.target.closest("[data-copy-id]");
                 if (!copyButton) return;

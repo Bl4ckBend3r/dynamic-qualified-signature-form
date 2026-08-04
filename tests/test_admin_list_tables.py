@@ -38,10 +38,17 @@ def test_admin_action_menu_is_accessible_and_not_clipped_by_table_scroll():
     css = (PROJECT_ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
 
     assert 'event.key === "Escape"' in base
+    assert 'event.key === "ArrowDown"' in base
     assert 'aria-expanded' in base
+    assert 'aria-haspopup="menu"' in _template("forms/list.html")
+    assert "document.body.appendChild(menu)" in base
+    assert "menu.replaceWith(placeholder)" in base
+    assert 'window.addEventListener("scroll", () => closeActionMenu(), true)' in base
     assert "navigator.clipboard.writeText" in base
     action_rule = css.split(".admin-action-menu {", 1)[1].split("}", 1)[0]
     assert "position: fixed" in action_rule
+    assert "z-index: 10000" in action_rule
+    assert "overflow-x: visible" in action_rule
     action_column_rule = css.split(".admin-table .actions-column {", 1)[1].split("}", 1)[0]
     assert "position: sticky" in action_column_rule
     assert "right: 0" in action_column_rule

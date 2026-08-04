@@ -123,7 +123,7 @@ class AgreementFlowService:
             form_config=form_config,
             document_service=document_service,
         )
-        agreements = document_service.generate_documents_for_collection(
+        generated_agreements = document_service.generate_documents_for_collection(
             generation_submission,
             resolved_form_config,
             document["id"],
@@ -131,7 +131,7 @@ class AgreementFlowService:
             document.get("repeat_item_alias") or "training",
             context_extra={"generated_date": resolved_date},
         )
-        agreements = [*existing_agreements, *agreements]
+        agreements = [*existing_agreements, *generated_agreements]
         if existing_agreements:
             updates = {
                 "training_agreements": json.dumps(agreements, ensure_ascii=False),
@@ -143,7 +143,7 @@ class AgreementFlowService:
             submission["row"].update(updates)
         return AgreementFlowResult(
             success=True,
-            message=f"Wygenerowano umowy: {len(agreements)}.",
+            message=f"Wygenerowano umowy: {len(generated_agreements)}.",
             agreements=agreements,
         )
     @staticmethod

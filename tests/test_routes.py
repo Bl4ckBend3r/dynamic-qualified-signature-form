@@ -432,12 +432,16 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
                     "training_name": "Excel",
                     "filename": "excel-umowa.pdf",
                     "signature_valid": False,
+                    "participant_status": "agreement_waiting_for_beneficiary_signature",
+                    "agreement_downloaded": True,
                 },
                 {
                     "id": "english",
                     "training_name": "English",
                     "filename": "english-umowa.pdf",
                     "signature_valid": False,
+                    "participant_status": "agreement_waiting_for_beneficiary_signature",
+                    "agreement_downloaded": True,
                 },
             ]
         ),
@@ -462,6 +466,10 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert "excel-umowa.pdf" in agreement_html
     assert "english-umowa.pdf" in agreement_html
     assert "token=secret-token" in agreement_html
+    assert agreement_html.count("data-bulk-agreement-upload") == 1
+    assert "data-bulk-agreement-files" in agreement_html
+    assert "signed_agreement_pdf_1" not in agreement_html
+    assert "signed_agreement_pdf_2" not in agreement_html
 
 
 def test_all_training_agreement_downloads_return_pdf(client, app, monkeypatch):
@@ -770,7 +778,7 @@ def test_upload_participant_signed_training_agreement_notifies_with_default_next
     assert notified == []
 
 
-def test_upload_all_training_agreements_supports_manual_mapping_and_partial_success(client, app, monkeypatch):
+def test_upload_all_training_agreements_matches_filenames_and_supports_partial_success(client, app, monkeypatch):
     row = {
         "submission_id": "batch-abc",
         "form_slug": "formularz_zgloszeniowy",
@@ -800,10 +808,10 @@ def test_upload_all_training_agreements_supports_manual_mapping_and_partial_succ
     response = client.post(
         "/agreements/formularz_zgloszeniowy/batch-abc/upload-all",
         data={
-            "agreement_ids": ["kadry", "excel"],
+            "access_token": "secret-token",
             "signed_agreement_files": [
-                (io.BytesIO(b"%PDF-1.4 kadry"), "podpis-kadry.pdf"),
-                (io.BytesIO(b"%PDF-1.4 excel"), "podpis-excel.pdf"),
+                (io.BytesIO(b"%PDF-1.4 kadry"), "kadry-umowa_signed.pdf"),
+                (io.BytesIO(b"%PDF-1.4 excel"), "excel-umowa.pdf"),
             ],
         },
         content_type="multipart/form-data",
@@ -812,10 +820,106 @@ def test_upload_all_training_agreements_supports_manual_mapping_and_partial_succ
 
     payload = response.get_json()
     assert response.status_code == 200
-    assert calls == [("kadry", "podpis-kadry.pdf"), ("excel", "podpis-excel.pdf")]
+    assert calls == [("kadry", "kadry-umowa_signed.pdf"), ("excel", "excel-umowa.pdf")]
     assert payload["uploaded"] == 1
     assert payload["failed"] == 1
-    assert [item["status"] for item in payload["results"]] == ["error", "uploaded"]
+    assert [item["status"] for item in payload["results"]] == ["rejected", "uploaded"]
+    assert payload["pending_agreements"] == [{"filename": "kadry-umowa.pdf", "id": "kadry", "training_name": "Kadry"}]
+
+
+def test_upload_all_training_agreements_reports_unmatched_and_existing_signed_file(client, app, monkeypatch):
+    row = {
+        "submission_id": "batch-existing",
+        "form_slug": "formularz_zgloszeniowy",
+        "access_token": "token-existing",
+        "training_agreements": json.dumps([
+            {"id": "excel", "filename": "excel-umowa.pdf", "signed_filename": "excel-umowa-signed.pdf", "signature_valid": True},
+        ]),
+    }
+    app.testing_storage.csv_rows = [row]
+    calls = []
+    monkeypatch.setattr(
+        app.extensions["services"].document_signing_service,
+        "upload_signed_document",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    response = client.post(
+        "/agreements/formularz_zgloszeniowy/batch-existing/upload-all",
+        data={
+            "access_token": "token-existing",
+            "signed_agreement_files": [
+                (io.BytesIO(b"%PDF-1.4 unknown"), "unknown.pdf"),
+                (io.BytesIO(b"%PDF-1.4 excel"), "excel-umowa-podpisana.pdf"),
+            ],
+        },
+        content_type="multipart/form-data",
+        headers={"Accept": "application/json"},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert calls == []
+    assert [item["status"] for item in payload["results"]] == ["unmatched", "rejected"]
+    assert payload["results"][1]["message"] == "Podpisany plik dla tej umowy został już wgrany."
+
+
+def test_upload_all_training_agreements_accepts_one_matching_file(client, app, monkeypatch):
+    app.testing_storage.csv_rows = [{
+        "submission_id": "batch-single",
+        "form_slug": "formularz_zgloszeniowy",
+        "access_token": "single-token",
+        "officer_decision": "TAK",
+        "declaration_signature_valid": "Tak",
+        "training_agreements": json.dumps([{
+            "id": "excel",
+            "training_name": "Excel",
+            "filename": "excel-umowa.pdf",
+            "participant_status": "agreement_waiting_for_beneficiary_signature",
+            "agreement_downloaded": True,
+        }]),
+    }]
+    calls = []
+
+    def fake_upload(**kwargs):
+        calls.append((kwargs["instance_id"], kwargs["uploaded_file"].filename))
+        return {"is_signed": True, "is_valid": True}
+
+    monkeypatch.setattr(app.extensions["services"].document_signing_service, "upload_signed_document", fake_upload)
+    response = client.post(
+        "/agreements/formularz_zgloszeniowy/batch-single/upload-all",
+        data={
+            "access_token": "single-token",
+            "signed_agreement_files": [(io.BytesIO(b"%PDF-1.4 excel"), "excel-umowa-podpisana.pdf")],
+        },
+        content_type="multipart/form-data",
+        headers={"Accept": "application/json"},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert calls == [("excel", "excel-umowa-podpisana.pdf")]
+    assert payload["uploaded"] == 1
+    assert payload["failed"] == 0
+    assert payload["pending_agreements"] == []
+
+
+def test_upload_all_training_agreements_requires_public_access_token(client, app):
+    app.testing_storage.csv_rows = [{
+        "submission_id": "batch-token",
+        "form_slug": "formularz_zgloszeniowy",
+        "access_token": "required-token",
+        "training_agreements": "[]",
+    }]
+
+    response = client.post(
+        "/agreements/formularz_zgloszeniowy/batch-token/upload-all",
+        data={"signed_agreement_files": [(io.BytesIO(b"%PDF-1.4"), "umowa.pdf")]},
+        content_type="multipart/form-data",
+        headers={"Accept": "application/json"},
+    )
+
+    assert response.status_code == 403
 
 
 def test_acceptance_status_missing_submission(client):

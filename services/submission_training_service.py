@@ -509,12 +509,32 @@ class SubmissionTrainingService:
             if occupied >= int(capacity):
                 raise TrainingSelectionError("Brak dostępnych miejsc dla tego szkolenia. Skontaktuj się z administratorem.")
         now = datetime.now(timezone.utc)
+        previous_status = str(submission.process_status or "")
+        previous_step = str(submission.workflow_step or "")
         row.status, row.is_locked, row.locked_at = "agreement_uploaded_by_beneficiary", True, now
         row.locked_by_event, row.agreement_id, row.updated_at = "agreement_uploaded_by_beneficiary", str(agreement_id), now
         row.agreement_file_id = agreement_file_id
         row.signed_agreement_uploaded_at = now
         submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
         submission.workflow_step = submission.process_status
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            previous_status=previous_status,
+            new_status=submission.process_status,
+            previous_step=previous_step,
+            new_step=submission.workflow_step,
+            actor_role="participant",
+            reason="Podpisana umowa zostaĹ‚a wgrana przez beneficjenta.",
+            source="agreement_uploaded_by_beneficiary",
+            side_effects={
+                "submission_training_id": row.id,
+                "training_id": row.training_id,
+                "agreement_id": row.agreement_id,
+                "agreement_file_id": row.agreement_file_id,
+            },
+        ))
         db.flush()
         return True
 

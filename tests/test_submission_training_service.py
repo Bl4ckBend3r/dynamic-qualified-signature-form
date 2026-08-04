@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -103,6 +104,17 @@ def test_uploading_agreement_locks_only_its_training(db):
     assert rows["python"].is_locked is True
     assert rows["python"].agreement_id == "agreement-python"
     assert rows["excel"].is_locked is False
+    event = db.query(SubmissionWorkflowEvent).filter_by(source="agreement_uploaded_by_beneficiary").one()
+    assert event.side_effects["submission_training_id"] == rows["python"].id
+
+
+def test_public_template_uses_one_bulk_uploader_even_for_single_training():
+    template = (Path(__file__).resolve().parents[1] / "templates" / "documents_to_sign.html").read_text(encoding="utf-8")
+
+    assert "result.uploadable_training_agreements|length > 1" not in template
+    assert template.count("data-bulk-agreement-upload") == 1
+    assert "signed_agreement_pdf_{{ loop.index }}" not in template
+    assert "Wgraj podpisane umowy" in template
 
 
 def test_locked_training_uses_associated_signed_file_when_legacy_json_is_stale(db):

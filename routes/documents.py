@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import tempfile
+import unicodedata
 from io import BytesIO
 from pathlib import Path
 
@@ -29,6 +31,16 @@ from signature_verifier import verify_signed_pdf
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("documents", __name__)
+
+_SIGNED_AGREEMENT_SUFFIX = re.compile(r"(?:podpisana|podpisany|signed)$")
+
+
+def _agreement_filename_key(filename: str) -> str:
+    stem = Path(Path(str(filename or "").replace("\\", "/")).name).stem
+    normalized = unicodedata.normalize("NFD", stem.casefold())
+    normalized = "".join(character for character in normalized if unicodedata.category(character) != "Mn")
+    compact = re.sub(r"[^a-z0-9]+", "", normalized)
+    return _SIGNED_AGREEMENT_SUFFIX.sub("", compact)
 
 def get_services():
     return current_app.extensions["services"]
@@ -156,6 +168,43 @@ def _lock_submission_training(submission_id: str, agreement_id: str) -> bool:
                     rejected_file.signed = False
                     db.commit()
             raise
+
+
+def _training_agreement_upload_state(submission_id: str, agreement_id: str) -> tuple[str, bool]:
+    database_url = current_app.config.get("DATABASE_URL")
+    if not database_url:
+        return "", False
+    session_factory = create_session_factory(database_url)
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+        ).scalar_one_or_none()
+        if not submission:
+            return "", False
+        rows = db.execute(
+            select(SubmissionTraining).where(SubmissionTraining.submission_id == submission.id)
+        ).scalars().all()
+        row = next(
+            (
+                item for item in rows
+                if str(agreement_id) in {str(item.agreement_id or ""), str(item.training_id or "")}
+            ),
+            None,
+        )
+        if not row:
+            return "", False
+        already_uploaded = bool(
+            row.is_locked
+            or row.agreement_file_id
+            or row.signed_agreement_uploaded_at
+            or row.status in {
+                "agreement_uploaded_by_beneficiary",
+                "agreement_waiting_for_office_signature",
+                "agreement_signed_by_office",
+                "locked",
+            }
+        )
+        return str(row.status or ""), already_uploaded
 
 
 def _mark_training_agreement_downloaded(
@@ -650,27 +699,55 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
     if not submission or submission["form_slug"] != slug:
         return jsonify({"ok": False, "error": "Nie znaleziono wniosku dla podpisanych umów."}), 404
 
-    files = request.files.getlist("signed_agreement_files")
-    agreement_ids = request.form.getlist("agreement_ids")
-    if not files or len(files) != len(agreement_ids):
-        return jsonify({"ok": False, "error": "Każdy plik musi być przypisany do jednej umowy."}), 400
+    row = submission.get("row") or {}
+    expected_token = str(row.get("access_token") or "").strip()
+    provided_token = str(request.form.get("access_token") or "").strip()
+    if expected_token and not secrets.compare_digest(provided_token, expected_token):
+        return jsonify({"ok": False, "error": "Nieprawidłowy token dostępu."}), 403
+    if str(row.get("officer_decision") or "").strip().lower() in {"nie", "rejected"}:
+        return jsonify({"ok": False, "error": "Zgłoszenie nie pozwala na wgrywanie umów."}), 403
+    declaration_status = str(row.get("declaration_signature_valid") or "").strip().lower()
+    if declaration_status and declaration_status != "tak":
+        return jsonify({"ok": False, "error": "Najpierw wgraj poprawną podpisaną deklarację."}), 403
 
-    raw_agreements = (submission.get("row") or {}).get("training_agreements", [])
+    files = request.files.getlist("signed_agreement_files")
+    if not files:
+        return jsonify({"ok": False, "error": "Nie wybrano podpisanych plików PDF."}), 400
+
+    raw_agreements = row.get("training_agreements", [])
     if isinstance(raw_agreements, str):
         try:
             raw_agreements = json.loads(raw_agreements)
         except json.JSONDecodeError:
             raw_agreements = []
+    agreements = [item for item in raw_agreements if isinstance(item, dict)]
+    agreements_by_filename = {}
+    for agreement in agreements:
+        key = _agreement_filename_key(str(agreement.get("filename") or ""))
+        if key:
+            agreements_by_filename.setdefault(key, []).append(agreement)
     known_ids = {
         str(item.get("id") or item.get("agreement_id") or "")
-        for item in raw_agreements
-        if isinstance(item, dict)
+        for item in agreements
     }
     results = []
     assigned_ids = set()
-    for agreement_id, uploaded_file in zip(agreement_ids, files, strict=True):
+    uploaded_ids = set()
+    for uploaded_file in files:
         filename = Path(uploaded_file.filename or "").name
-        item = {"agreement_id": agreement_id, "filename": filename, "status": "error", "message": ""}
+        matches = agreements_by_filename.get(_agreement_filename_key(filename), [])
+        item = {"agreement_id": "", "filename": filename, "status": "unmatched", "message": ""}
+        if not filename or len(matches) != 1:
+            item["message"] = (
+                "Nazwa pliku nie pasuje do żadnej wygenerowanej umowy."
+                if not matches
+                else "Nazwa pliku pasuje do więcej niż jednej umowy."
+            )
+            results.append(item)
+            continue
+        agreement = matches[0]
+        agreement_id = str(agreement.get("id") or agreement.get("agreement_id") or "")
+        item.update(agreement_id=agreement_id, status="rejected")
         if not agreement_id or agreement_id not in known_ids:
             item["message"] = "Nieprawidłowe przypisanie pliku do umowy."
             results.append(item)
@@ -680,6 +757,23 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             results.append(item)
             continue
         assigned_ids.add(agreement_id)
+        normalized_status, normalized_uploaded = _training_agreement_upload_state(submission_id, agreement_id)
+        if normalized_uploaded or agreement.get("signature_valid") or str(agreement.get("signed_filename") or "").strip():
+            item["message"] = "Podpisany plik dla tej umowy został już wgrany."
+            results.append(item)
+            continue
+        participant_status = normalized_status or str(agreement.get("participant_status") or "").strip()
+        if participant_status == "agreement_generated" and not agreement.get("agreement_downloaded"):
+            item["message"] = "Najpierw pobierz wygenerowaną umowę."
+            results.append(item)
+            continue
+        if participant_status and participant_status not in {
+            "agreement_downloaded",
+            "agreement_waiting_for_beneficiary_signature",
+        }:
+            item["message"] = "Ta umowa nie oczekuje na podpisany plik."
+            results.append(item)
+            continue
         try:
             verification = services.document_signing_service.upload_signed_document(
                 submission=submission,
@@ -695,6 +789,7 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
                 if not _lock_submission_training(submission_id, agreement_id):
                     raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
                 item.update(status="uploaded", message="Wgrano, zweryfikowano i zablokowano szkolenie.")
+                uploaded_ids.add(agreement_id)
         except ValueError as exc:
             item["message"] = str(exc)
         except Exception:
@@ -708,12 +803,27 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
         results.append(item)
 
     uploaded_count = sum(item["status"] == "uploaded" for item in results)
+    pending_agreements = [
+        {
+            "id": str(agreement.get("id") or agreement.get("agreement_id") or ""),
+            "training_name": str(agreement.get("training_name") or ""),
+            "filename": str(agreement.get("filename") or ""),
+        }
+        for agreement in agreements
+        if str(agreement.get("filename") or "").strip()
+        and not agreement.get("signature_valid")
+        and not str(agreement.get("signed_filename") or "").strip()
+        and str(agreement.get("id") or agreement.get("agreement_id") or "") not in uploaded_ids
+    ]
     return jsonify(
         {
             "ok": uploaded_count == len(results),
             "uploaded": uploaded_count,
             "failed": len(results) - uploaded_count,
             "results": results,
+            "unmatched": [item for item in results if item["status"] == "unmatched"],
+            "rejected": [item for item in results if item["status"] == "rejected"],
+            "pending_agreements": pending_agreements,
         }
     ), 200
 
@@ -911,6 +1021,7 @@ def build_documents_to_sign_result(
         available_filenames=documents_view.get("available_filenames", set()),
     )
     token = _training_access_token(refreshed_submission)
+    result["access_token"] = token
     training_field = get_training_selection_field(form_config)
     result["training_selection_url"] = (
         url_for(

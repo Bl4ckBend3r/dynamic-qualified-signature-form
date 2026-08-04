@@ -299,7 +299,20 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
-                            {% if result.uploadable_training_agreements|length > 1 %}
+                            <div class="card-header">
+                                <h4>Umowy oczekujące na podpisany plik</h4>
+                            </div>
+                            <div class="agreement-upload-status-list">
+                                {% for agreement in training_agreements if agreement.filename %}
+                                    <div class="agreement-upload-status-item">
+                                        <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
+                                        {% if agreement.number %}<p><strong>Numer umowy:</strong> {{ agreement.number }}</p>{% endif %}
+                                        <p><strong>Oczekiwany plik:</strong> {{ agreement.filename }}</p>
+                                        <p><strong>Status:</strong> {{ "podpisany plik wgrany" if agreement.beneficiary_uploaded else "oczekuje na podpisany plik" }}</p>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                            {% if result.uploadable_training_agreements %}
                                 <form
                                     method="post"
                                     action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
@@ -307,16 +320,17 @@
                                     class="bulk-agreement-upload"
                                     data-bulk-agreement-upload
                                 >
+                                    <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}" data-bulk-agreement-token>
                                     <div class="card-header">
-                                        <h4>Wgraj wszystkie podpisane umowy</h4>
-                                        <p>Wybierz kilka plików jednocześnie. System zaproponuje dopasowanie, które możesz zmienić przed wysłaniem.</p>
+                                        <h4>Wgraj podpisane umowy</h4>
+                                        <p>Przeciągnij i upuść podpisane pliki PDF albo wybierz je z dysku. Pliki zostaną dopasowane do umów na podstawie nazwy pliku.</p>
                                     </div>
                                     <label class="upload-dropzone" data-upload-dropzone>
                                         <input type="file" name="signed_agreement_files" accept="application/pdf" multiple required class="upload-dropzone__input" data-bulk-agreement-files>
                                         <span class="upload-dropzone__inner">
                                             <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
-                                            <span class="upload-dropzone__title">Wybierz wszystkie podpisane umowy</span>
-                                            <span class="upload-dropzone__description">Możesz wskazać wiele plików PDF w jednym oknie</span>
+                                            <span class="upload-dropzone__title">Wybierz podpisane umowy</span>
+                                            <span class="upload-dropzone__description">Możesz wskazać jeden lub wiele plików PDF</span>
                                             <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano plików</span>
                                         </span>
                                     </label>
@@ -325,9 +339,11 @@
                                         <div data-bulk-agreement-rows></div>
                                     </div>
                                     <div class="bulk-agreement-summary" data-bulk-agreement-summary aria-live="polite"></div>
-                                    <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij wszystko</button></div>
+                                    <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij podpisane umowy</button></div>
                                     <script type="application/json" data-bulk-agreements>{{ result.uploadable_training_agreements|tojson }}</script>
                                 </form>
+                            {% else %}
+                                <p class="status-message status-message--success">Wszystkie wymagane podpisane umowy zostały wgrane.</p>
                             {% endif %}
                             {% for agreement in training_agreements %}
                                 <div class="signing-document-card signing-document-card--spaced">
@@ -356,33 +372,7 @@
                                         {% endif %}
                                     </div>
 
-                                    {% if agreement.can_upload %}
-                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
-                                            <div class="form-row width-full">
-                                                <label class="upload-dropzone" data-upload-dropzone>
-                                                    <input
-                                                        type="file"
-                                                        id="signed_agreement_pdf_{{ loop.index }}"
-                                                        name="signed_agreement_pdf"
-                                                        accept="application/pdf"
-                                                        required
-                                                        class="upload-dropzone__input"
-                                                        data-upload-input
-                                                    >
-                                                    <span class="upload-dropzone__inner">
-                                                        <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
-                                                        <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
-                                                        <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
-                                                        <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
-                                                    </span>
-                                                </label>
-                                            </div>
-
-                                            <div class="submit-row">
-                                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
-                                            </div>
-                                        </form>
-                                    {% elif agreement.beneficiary_uploaded and not agreement.office_signed %}
+                                    {% if agreement.beneficiary_uploaded and not agreement.office_signed %}
                                         <p class="status-message status-message--success">Podpisana umowa została wgrana. Szkolenie jest zablokowane i nie może zostać usunięte z wyboru.</p>
                                     {% endif %}
                                 </div>

@@ -157,6 +157,8 @@ class SubmissionTrainingService:
                 or "PLN"
             )
             agreement = agreements.get(row.agreement_id) or agreements.get(row.training_id) or {}
+            signed_file = db.get(SubmissionFile, row.agreement_file_id) if row.agreement_file_id else None
+            signed_filename = str(agreement.get("signed_filename") or getattr(signed_file, "filename", "") or "")
             items.append({
                 **source, "id": row.training_id, "name": row.training_name_snapshot or source.get("name"),
                 "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, currency),
@@ -175,10 +177,10 @@ class SubmissionTrainingService:
                 "locked_at": row.locked_at,
                 "seat_occupied": bool(row.is_locked or row.status in LOCKING_STATUSES),
                 "agreement_filename": str(agreement.get("filename") or ""),
-                "signed_agreement_filename": str(agreement.get("signed_filename") or ""),
+                "signed_agreement_filename": signed_filename,
                 "office_signed_agreement_filename": (
-                    str(agreement.get("signed_filename") or "")
-                    if str(agreement.get("signed_filename") or "") in office_signed_filenames
+                    signed_filename
+                    if signed_filename in office_signed_filenames
                     else ""
                 ),
             })
@@ -469,10 +471,16 @@ class SubmissionTrainingService:
         agreement = next((item for item in agreements if isinstance(item, dict) and str(item.get("id") or "") == str(agreement_id)), None)
         if not agreement:
             return False
-        training = agreement.get("training") if isinstance(agreement.get("training"), dict) else agreement
-        training_id = str(training.get("id") or training.get("training_id") or agreement.get("training_id") or "").strip()
+        nested_training = agreement.get("training") if isinstance(agreement.get("training"), dict) else None
+        training_id = str(
+            (nested_training or {}).get("id")
+            or agreement.get("training_id")
+            or agreement.get("id")
+            or ""
+        ).strip()
         if not training_id:
             return False
+        training = {**agreement, **(nested_training or {}), "id": training_id}
         row = db.query(SubmissionTraining).filter(
             SubmissionTraining.submission_id == submission.id, SubmissionTraining.training_id == training_id
         ).one_or_none()

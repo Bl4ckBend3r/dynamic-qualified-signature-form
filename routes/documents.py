@@ -235,6 +235,14 @@ def _enrich_training_agreement_states(submission: dict) -> None:
             )
         ).scalars().all()
         office_filenames = {item.filename for item in office_files}
+        associated_files = {
+            item.id: item
+            for item in db.execute(
+                select(SubmissionFile).where(
+                    SubmissionFile.id.in_([row.agreement_file_id for row in rows if row.agreement_file_id])
+                )
+            ).scalars().all()
+        } if any(row.agreement_file_id for row in rows) else {}
         by_key = {
             key: row
             for row in rows
@@ -248,15 +256,21 @@ def _enrich_training_agreement_states(submission: dict) -> None:
             row = by_key.get(key)
             if not row:
                 continue
+            signed_file = associated_files.get(row.agreement_file_id)
+            signed_filename = str(agreement.get("signed_filename") or getattr(signed_file, "filename", "") or "")
             agreement.update(
                 participant_status=row.status,
                 participant_status_label=get_services().submission_training_service.status_label(row.status, row.is_locked),
                 is_locked=bool(row.is_locked),
                 locked_at=row.locked_at.isoformat() if row.locked_at else "",
                 agreement_downloaded=bool(row.agreement_downloaded_at),
+                signature_valid=bool(agreement.get("signature_valid") or row.is_locked or row.status in {
+                    "agreement_uploaded_by_beneficiary", "agreement_waiting_for_office_signature", "agreement_signed_by_office"
+                }),
+                signed_filename=signed_filename,
                 office_signed_filename=(
-                    str(agreement.get("signed_filename") or "")
-                    if str(agreement.get("signed_filename") or "") in office_filenames
+                    signed_filename
+                    if signed_filename in office_filenames
                     else ""
                 ),
             )

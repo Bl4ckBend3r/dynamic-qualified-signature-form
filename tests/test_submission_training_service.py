@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from models import Base, Form, FormSubmission, SubmissionTraining, SubmissionWorkflowEvent
+from models import Base, Form, FormSubmission, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.submission_training_service import (
     SubmissionTrainingService,
     TrainingSelectionError,
@@ -103,6 +103,35 @@ def test_uploading_agreement_locks_only_its_training(db):
     assert rows["python"].is_locked is True
     assert rows["python"].agreement_id == "agreement-python"
     assert rows["excel"].is_locked is False
+
+
+def test_locked_training_uses_associated_signed_file_when_legacy_json_is_stale(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    submission.training_agreements = json.dumps([
+        {"id": "agreement-python", "training_id": "python", "filename": "python.pdf", "signature_valid": False}
+    ])
+    signed_file = SubmissionFile(
+        submission_id=submission.id,
+        public_submission_id=submission.submission_id,
+        form_slug=submission.form_slug,
+        document_id="training_agreement",
+        document_type="signed_training_agreement",
+        file_role="participant_signed",
+        storage_provider="local",
+        filename="python-signed.pdf",
+        storage_path="output/sample/python-signed.pdf",
+        signed=True,
+    )
+    db.add(signed_file)
+    db.flush()
+
+    assert service.lock_for_agreement(db, submission, "agreement-python", agreement_file_id=signed_file.id) is True
+    summary = service.summary(db, submission, FIELD)
+
+    assert summary["items"][0]["signed_agreement_filename"] == "python-signed.pdf"
+    assert summary["items"][0]["is_locked"] is True
 
 
 def test_generated_agreement_is_associated_with_one_training(db):

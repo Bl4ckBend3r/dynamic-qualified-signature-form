@@ -1545,6 +1545,46 @@ body.admin-modal-open {
     color: #344054;
     font-size: .82rem;
     font-weight: 800;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.admin-table--submissions {
+    min-width: 1380px;
+}
+
+.admin-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.admin-pagination__links {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.admin-link-button {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--navy);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.admin-mail-body {
+    max-height: 28rem;
+    overflow: auto;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
 }
 .workflow-diagram-mode.is-manual { background: #fff1d6; color: #7a4b00; }
 .workflow-diagram__viewport {

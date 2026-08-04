@@ -591,6 +591,7 @@ class MailTemplate(Base):
     trigger_decision: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     is_default_for_status: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     use_platform_layout: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    show_process_status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -746,6 +747,8 @@ class EmailLog(Base):
     public_submission_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
     to_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     subject: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    html_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    text_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("mail_templates.id", ondelete="SET NULL"), nullable=True)
     footer_id: Mapped[int | None] = mapped_column(ForeignKey("mail_footers.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(64), default="sent", nullable=False)

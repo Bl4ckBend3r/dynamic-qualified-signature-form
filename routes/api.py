@@ -117,6 +117,8 @@ def empty_instruction_payload() -> dict:
             "current_stage_label": None,
             "current_stage_description": "",
             "next_action": "",
+            "next_stage_key": None,
+            "next_stage_label": None,
             "stages": [],
         },
         "form_instruction": None,
@@ -125,6 +127,7 @@ def empty_instruction_payload() -> dict:
         "current_step_label": None,
         "next_action": "",
         "next_action_label": "Co dalej?",
+        "next_stage_label": None,
         "instruction_steps": [],
         "instruction_version": None,
     }

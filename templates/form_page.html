@@ -77,16 +77,17 @@
                             </label>
                         {% endif %}
 
-                        {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
+                        {% if field.type in ["text", "email", "number", "date", "tel", "phone", "pesel"] %}
                             <input
                                 class="{% if has_error %}has-error{% endif %}"
-                                type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}"
+                                type="{% if field.type == 'pesel' %}text{% elif field.type == 'phone' or field.name|lower == 'telefon' %}tel{% else %}{{ field.type }}{% endif %}"
                                 id="{{ field.name }}"
                                 name="{{ field.name }}"
                                 data-field-name="{{ field.name }}"
                                 data-field-type="{{ field.type }}"
                                 value="{{ value }}"
                                 placeholder="{{ field.placeholder }}"
+                                {% if field.type in ['tel', 'phone'] or field.name|lower == 'telefon' %}pattern="(?:\+48\s?)?[0-9]{3}\s?[0-9]{3}\s?[0-9]{3}" title="Podaj poprawny numer telefonu." inputmode="tel"{% endif %}
                                 {% if field.readonly %}readonly{% endif %}
                                 {% if field.required %}required aria-required="true"{% endif %}
                                 {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
@@ -596,6 +597,26 @@
                 el.addEventListener("blur", updateFromPesel);
             });
             updateFromPesel();
+        }
+
+        const dynamicForm = document.querySelector("form.dynamic-form");
+        const phoneFields = Array.from(document.querySelectorAll('input[type="tel"]'));
+        const polishPhonePattern = /^(?:\+48\s?)?\d{3}\s?\d{3}\s?\d{3}$/;
+        phoneFields.forEach(field => field.addEventListener("input", () => field.setCustomValidity("")));
+        if (dynamicForm && phoneFields.length) {
+            dynamicForm.addEventListener("submit", event => {
+                const invalidPhone = phoneFields.find(field => {
+                    const value = field.value.trim();
+                    const invalid = Boolean(value) && !polishPhonePattern.test(value);
+                    field.setCustomValidity(invalid ? "Podaj poprawny numer telefonu." : "");
+                    return invalid;
+                });
+                if (invalidPhone) {
+                    event.preventDefault();
+                    invalidPhone.reportValidity();
+                    invalidPhone.focus();
+                }
+            });
         }
 
         updateVisibility();

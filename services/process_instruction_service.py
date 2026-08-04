@@ -181,6 +181,10 @@ def build_process_instruction_view(
         stages.append(fallback)
         current_stage = fallback
 
+    next_stage = None
+    if current_index is not None:
+        next_stage = next((item for item in stages[current_index + 1 :] if item.get("active", True)), None)
+
     instruction = {
         "title": config["title"] or (DEFAULT_INSTRUCTION_TITLE if has_instruction else ""),
         "description": config["description"],
@@ -189,6 +193,8 @@ def build_process_instruction_view(
         "current_stage_label": current_stage["label"] if current_stage else None,
         "current_stage_description": current_stage["description"] if current_stage else "",
         "next_action": current_stage["next_action"] if current_stage else "",
+        "next_stage_key": next_stage["key"] if next_stage else None,
+        "next_stage_label": next_stage["label"] if next_stage else None,
         "stages": stages,
     }
     # Keep the original flat keys until existing API clients migrate to `instruction`.
@@ -200,6 +206,7 @@ def build_process_instruction_view(
         "current_step_label": instruction["current_stage_label"],
         "next_action": instruction["next_action"],
         "next_action_label": "Co dalej?",
+        "next_stage_label": instruction["next_stage_label"],
         "instruction_steps": instruction["stages"],
     }
 

@@ -11,8 +11,8 @@
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
         <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "AUTO_REJECTED", "RETURNED_FOR_CORRECTION", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
-            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
+        {% for option in status_options %}
+            <option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
     </select>
     <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
@@ -29,15 +29,12 @@
     <button class="admin-button-secondary" type="submit">Filtruj</button>
 </form>
 <div class="admin-card admin-table-wrap">
-    <table class="admin-table">
+    <table class="admin-table admin-table--submissions">
         <thead>
             <tr>
                 <th>ID</th>
-                <th>Formularz</th>
-                <th>Data</th>
-                <th>Nazwisko</th>
-                <th>Email</th>
-                <th>Status</th>
+                <th>Imię i nazwisko</th><th>E-mail</th><th>Telefon</th><th>Data złożenia</th>
+                <th>Formularz</th><th>Aktualny status</th><th>Etap workflow</th><th>Decyzja urzędnika</th>
                 <th>Akcje</th>
             </tr>
         </thead>
@@ -46,15 +43,17 @@
             {% set form = form_by_slug.get(submission.form_slug) %}
             <tr>
                 <td><code>{{ submission.submission_id }}</code></td>
-                <td>{{ form.name if form else submission.form_slug }}</td>
+                <td>{{ ((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-" }}</td>
+                <td>{{ submission.email or "-" }}</td><td>{{ submission.telefon or "-" }}</td>
                 <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
-                <td>{{ submission.nazwisko or "-" }}</td>
-                <td>{{ submission.email or "-" }}</td>
+                <td>{{ form.name if form else submission.form_slug }}</td>
                 <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
+                <td>{{ status_label(submission.workflow_stage or submission.workflow_step, form) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
+                <td>{{ {"accepted": "Zaakceptowano", "rejected": "Odrzucono", "correction": "Do poprawy", "TAK": "Zaakceptowano", "NIE": "Odrzucono"}.get(submission.officer_decision, submission.officer_decision or "-") }}</td>
                 <td>
                     {% if form %}
                         <div class="admin-actions">
-                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
                             {% if g.admin_user.role in ['super_admin', 'admin'] %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                         </div>
                     {% else %}
@@ -63,9 +62,16 @@
                 </td>
             </tr>
         {% else %}
-            <tr><td colspan="7">Brak zgloszen.</td></tr>
+            <tr><td colspan="10">Brak zgłoszeń.</td></tr>
         {% endfor %}
         </tbody>
     </table>
 </div>
+<nav class="admin-pagination" aria-label="Paginacja zgłoszeń">
+    <span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span>
+    <div class="admin-pagination__links">
+        {% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+        {% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+    </div>
+</nav>
 {% endblock %}

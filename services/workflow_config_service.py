@@ -708,6 +708,14 @@ class WorkflowConfigValidator:
                 for outcome in decision.get("outcomes") or []
                 if isinstance(outcome, Mapping)
             )
+            if (
+                not has_real_transition
+                and decision_id in AGREEMENT_DECISION_IDS
+                and (steps_by_id.get(step_id) or {}).get("status") in ACTIVE_AGREEMENT_CONFIRMATION_STATUSES
+            ):
+                # The office agreement confirmation uses the built-in service
+                # transitions when an administrator has not overridden them.
+                has_real_transition = True
             if not has_real_transition:
                 errors.append(
                     f"Aktywna decyzja „{decision.get('label') or decision.get('id')}” musi mieć "

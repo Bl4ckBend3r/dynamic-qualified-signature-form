@@ -698,7 +698,7 @@ class DocumentService:
         raise RuntimeError("Brak szablonu dokumentu dla tego formularza.")
 
     def resolve_pdf_image_url(self, form_definition: dict) -> str | None:
-        image_value = form_definition.get("header_image") or form_definition.get("logo_url")
+        image_value = form_definition.get("logo_url") or form_definition.get("header_image")
         if not image_value:
             return None
         normalized = str(image_value).replace("\\", "/").lstrip("/")
@@ -1142,6 +1142,9 @@ def build_document_pdf_context(
         "consents_view": consents_view,
         "pdf_image_url": pdf_image_url,
         "pdf_image_alt": form_definition.get("title", ""),
+        "pdf_image_alignment": form_definition.get("logo_alignment", "left"),
+        "pdf_image_width": form_definition.get("logo_width"),
+        "pdf_image_is_logo": bool(form_definition.get("logo_url")),
         "document_type": document_type,
         "selected_trainings": selected_trainings,
         "selected_trainings_total": selected_trainings_total,

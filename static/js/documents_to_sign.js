@@ -12,10 +12,14 @@ const formInstructionSection = document.getElementById("form-instruction-section
 const formInstructionContent = document.getElementById("form-instruction-content");
 const instructionStagesSection = document.getElementById("instruction-stages-section");
 const instructionSteps = document.getElementById("instruction-steps");
+const currentStageLabelSection = document.getElementById("current-stage-label-section");
+const currentStageLabel = document.getElementById("current-stage-label");
 const currentStageDescriptionSection = document.getElementById("current-stage-description-section");
 const currentStageDescription = document.getElementById("current-stage-description");
 const nextActionSection = document.getElementById("next-action-section");
 const nextActionContent = document.getElementById("next-action-content");
+const nextStageSection = document.getElementById("next-stage-section");
+const nextStageLabel = document.getElementById("next-stage-label");
 const instructionMinimizeButton = document.getElementById("user-instruction-minimize");
 const instructionCloseButton = document.getElementById("user-instruction-close");
 const instructionRestoreButton = document.getElementById("user-instruction-restore");
@@ -219,6 +223,8 @@ function showUserInstruction(data, submissionId) {
     const instruction = String(nested?.description ?? data.form_instruction ?? "").trim();
     const nextAction = String(nested?.next_action ?? data.next_action ?? "").trim();
     const stageDescription = String(nested?.current_stage_description ?? "").trim();
+    const stageLabel = String(nested?.current_stage_label ?? data.current_step_label ?? "").trim();
+    const followingStageLabel = String(nested?.next_stage_label ?? data.next_stage_label ?? "").trim();
     const stages = Array.isArray(nested?.stages) ? nested.stages : data.instruction_steps;
     const hasInstruction = nested ? Boolean(nested.has_instruction) : Boolean(instruction || nextAction || (Array.isArray(stages) && stages.length));
     if (!hasInstruction || !submissionId) {
@@ -260,6 +266,8 @@ function showUserInstruction(data, submissionId) {
     } else {
         hideElement(currentStageDescriptionSection);
     }
+    if (currentStageLabel) currentStageLabel.textContent = stageLabel;
+    if (stageLabel) showElement(currentStageLabelSection); else hideElement(currentStageLabelSection);
     if (nextActionContent) {
         nextActionContent.innerHTML = nextAction;
     }
@@ -268,6 +276,8 @@ function showUserInstruction(data, submissionId) {
     } else {
         hideElement(nextActionSection);
     }
+    if (nextStageLabel) nextStageLabel.textContent = followingStageLabel;
+    if (followingStageLabel) showElement(nextStageSection); else hideElement(nextStageSection);
     if (readInstructionSession("minimized", submissionId, status) === version) {
         hideElement(instructionWindow);
         showElement(instructionRestoreButton);

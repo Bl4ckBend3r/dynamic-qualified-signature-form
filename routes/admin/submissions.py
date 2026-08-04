@@ -16,6 +16,7 @@ from models import (
     SubmissionDecision,
     SubmissionFile,
     SubmissionWorkflowEvent,
+    User,
 )
 from services.admin_form_service import form_has_additional_fields
 from services.admin_workflow_view_service import build_admin_workflow_view
@@ -27,9 +28,11 @@ from services.beneficiary_agreement_service import (
 from services.blocked_agreement_admin_service import BlockedAgreementActionError
 from services.admin_submission_service import (
     admin_status_label,
+    build_status_filter_options,
     build_submission_detail_sections,
     build_filter_fields,
     filter_submissions,
+    paginate_submissions,
     sort_submissions,
     submission_value,
 )
@@ -58,6 +61,16 @@ from . import (
 )
 
 
+def _pagination_urls(endpoint: str, pagination: dict, **route_values) -> dict[str, str]:
+    values = request.args.to_dict(flat=True)
+    result = {"previous": "", "next": ""}
+    if pagination["has_previous"]:
+        result["previous"] = url_for(endpoint, **route_values, **{**values, "page": pagination["page"] - 1})
+    if pagination["has_next"]:
+        result["next"] = url_for(endpoint, **route_values, **{**values, "page": pagination["page"] + 1})
+    return result
+
+
 @bp.get("/submissions")
 @login_required
 def submissions_all():
@@ -83,12 +96,21 @@ def submissions_all():
             request.args.get("sort") or "created_at",
             request.args.get("direction") or "desc",
         )
+        status_options = build_status_filter_options(forms, submissions)
+        submissions, pagination = paginate_submissions(
+            submissions, request.args.get("page"), request.args.get("per_page")
+        )
+        pagination_urls = _pagination_urls("admin.submissions_all", pagination)
         return render_template(
             "admin/submissions/all.html",
             submissions=submissions,
             form_by_slug=form_by_slug,
             filters=request.args,
             status_label=admin_status_label,
+            status_options=status_options,
+            pagination=pagination,
+            pagination_urls=pagination_urls,
+            can_edit_application_decision=can_edit_application_decision,
         )
 
 
@@ -107,6 +129,12 @@ def submissions_list(form_id: int):
             timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
         )
         submissions = sort_submissions(submissions, request.args.get("sort") or "created_at", request.args.get("direction") or "desc")
+        status_options = build_status_filter_options(form, submissions)
+        filter_fields = build_filter_fields(fields, submissions)
+        submissions, pagination = paginate_submissions(
+            submissions, request.args.get("page"), request.args.get("per_page")
+        )
+        pagination_urls = _pagination_urls("admin.submissions_list", pagination, form_id=form.id)
         return render_template(
             "admin/submissions/list.html",
             form=form,
@@ -114,10 +142,13 @@ def submissions_list(form_id: int):
             submissions=submissions,
             filters=request.args,
             submission_value=submission_value,
-            filter_fields=build_filter_fields(fields, submissions),
+            filter_fields=filter_fields,
             officer_decisions=OFFICER_DECISIONS,
             can_edit_application_decision=can_edit_application_decision,
             status_label=lambda status: admin_status_label(status, form),
+            status_options=status_options,
+            pagination=pagination,
+            pagination_urls=pagination_urls,
         )
 
 
@@ -212,6 +243,32 @@ def submission_detail(form_id: int, submission_pk: int):
                 actor_role=g.admin_user.role,
                 form_config=form.definition_json or {},
             )
+        correspondence_logs = db.execute(
+            select(EmailLog)
+            .where(
+                (EmailLog.submission_id == submission.id)
+                | (EmailLog.public_submission_id == submission.submission_id)
+            )
+            .order_by(EmailLog.created_at.desc(), EmailLog.id.desc())
+        ).scalars().all()
+        template_ids = {item.template_id for item in correspondence_logs if item.template_id}
+        sender_ids = {item.sent_by_id for item in correspondence_logs if item.sent_by_id}
+        template_names = {
+            item.id: item.name
+            for item in db.execute(select(MailTemplate).where(MailTemplate.id.in_(template_ids))).scalars().all()
+        } if template_ids else {}
+        sender_names = {
+            item.id: item.email
+            for item in db.execute(select(User).where(User.id.in_(sender_ids))).scalars().all()
+        } if sender_ids else {}
+        correspondence = [
+            {
+                "log": item,
+                "template_name": template_names.get(item.template_id, "System / bez szablonu"),
+                "sender_name": sender_names.get(item.sent_by_id, "System"),
+            }
+            for item in correspondence_logs
+        ]
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -225,6 +282,7 @@ def submission_detail(form_id: int, submission_pk: int):
             blocked_agreement_view=blocked_agreement_view,
             office_signed_agreement_view=office_signed_agreement_view,
             participant_training_view=participant_training_view,
+            correspondence=correspondence,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
         )
@@ -313,7 +371,7 @@ def submission_stage_rollback(submission_id: str):
             f"Cofnięto etap zgłoszenia do: {admin_status_label(result.new_status, form)}.",
             "success",
         )
-        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        return redirect(request.form.get("next") or url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 
 @bp.post("/submissions/<submission_id>/agreement/unblock")
@@ -559,7 +617,7 @@ def submission_return_for_correction(submission_id: str):
         if send_email and mail_status not in {"sent", "queued"}:
             flash("Zgłoszenie wysłano do poprawy, ale wiadomość e-mail nie została wysłana.", "warning")
         flash("Zgłoszenie zostało wysłane do ponownego uzupełnienia.", "success")
-        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        return redirect(request.form.get("next") or url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 
 def _request_bool(payload, key: str, *, default: bool) -> bool:
@@ -950,6 +1008,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     previous_decision = submission.officer_decision or ""
     previous_reason = submission.officer_decision_reason or ""
     previous_status = submission.process_status
+    accepted_after_correction = decision == "accepted" and bool(submission.correction_completed_at)
     public_submission_id = submission.submission_id
     if skip_unchanged and decision == previous_decision and reason == previous_reason:
         return {"invalid_stage": False, "missing_reason": False, "skipped": True, "schema_warning": False, "send_mail": False}
@@ -1013,12 +1072,25 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             exc_info=True,
         )
 
+    mail_result = None
+    if accepted_after_correction:
+        try:
+            mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_correction_accepted(
+                public_submission_id
+            )
+        except Exception as exc:
+            current_app.logger.exception(
+                "correction_accepted_mail_failed public_submission_id=%s error=%s",
+                public_submission_id,
+                exc.__class__.__name__,
+            )
+
     return {
         "decision": decision,
         "invalid_stage": False,
         "missing_reason": False,
         "public_submission_id": public_submission_id,
         "schema_warning": schema_warning,
-        "send_mail": False,
+        "send_mail": bool(mail_result and mail_result.sent),
         "skipped": False,
     }

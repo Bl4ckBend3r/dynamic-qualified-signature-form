@@ -322,6 +322,19 @@
         <tr><td colspan="7">Brak historii workflow.</td></tr>
     {% endfor %}</tbody>
 </table></div>
+<h2>Korespondencja</h2>
+<div class="admin-card admin-table-wrap"><table class="admin-table">
+    <thead><tr><th>Data wysyłki</th><th>Odbiorca</th><th>Temat</th><th>Typ</th><th>Status</th><th>Nadawca</th><th>Szablon</th><th>Błąd</th><th>Treść</th></tr></thead>
+    <tbody>{% for item in correspondence %}{% set log = item.log %}
+        <tr>
+            <td>{{ log.created_at.strftime("%Y-%m-%d %H:%M") if log.created_at else "-" }}</td>
+            <td>{{ log.to_email or "-" }}</td><td>{{ log.subject or "-" }}</td>
+            <td>{{ log.event_type or "email_delivery" }}</td><td><span class="admin-badge">{{ log.status }}</span></td>
+            <td>{{ item.sender_name }}</td><td>{{ item.template_name }}</td><td>{{ log.error_message or "-" }}</td>
+            <td>{% if log.text_body or log.html_body %}<details><summary>Pokaż treść</summary><pre class="admin-mail-body">{{ log.text_body or log.html_body }}</pre></details>{% else %}-{% endif %}</td>
+        </tr>
+    {% else %}<tr><td colspan="9">Brak zapisanej korespondencji.</td></tr>{% endfor %}</tbody>
+</table></div>
 <h2>Historia decyzji</h2>
 <p><small>Źródło: {{ decision_history.source }}</small></p>
 <div class="admin-card admin-table-wrap"><table class="admin-table">

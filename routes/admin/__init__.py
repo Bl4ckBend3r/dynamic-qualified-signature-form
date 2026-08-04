@@ -98,6 +98,7 @@ MAIL_TEMPLATE_TYPES = [
     "auto_rejected_by_condition",
     "returned_for_correction",
     "custom",
+    "correction_accepted",
 ]
 
 

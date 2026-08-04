@@ -25,6 +25,7 @@
                     <label class="admin-field"><span>Typ maila</span><select name="mail_type"><option value="html_text" {% if template.mail_type == "html_text" %}selected{% endif %}>HTML + TXT</option></select><small class="admin-field-help">Wiadomość zawiera wersję wizualną i tekstową.</small></label>
                     <label class="admin-field"><span>Typ szablonu</span><select name="template_type">{% for option in template_types %}<option value="{{ option }}" {% if template.template_type == option or (not template.template_type and option == "custom") %}selected{% endif %}>{{ template_labels.get(option, option) }}</option>{% endfor %}</select><small class="admin-field-help">Określa rolę wiadomości w procesie.</small></label>
                     <label class="admin-check mail-editor-check"><input type="checkbox" name="is_active" {% if template.is_active %}checked{% endif %}><span>Szablon aktywny</span></label>
+                    <label class="admin-check mail-editor-check"><input type="checkbox" name="show_process_status" {% if template.show_process_status %}checked{% endif %}><span>Pokazuj status procesu w wiadomości <small>(odznacz: ukryj status procesu)</small></span></label>
                 </div>
             </section>
 

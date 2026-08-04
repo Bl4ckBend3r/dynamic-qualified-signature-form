@@ -79,18 +79,17 @@
             <section id="form-instruction-section" class="instruction-window__section is-hidden">
                 <div id="form-instruction-content" class="instruction-window__general"></div>
             </section>
-            <section id="instruction-stages-section" class="instruction-window__section is-hidden">
-                <h4>Etapy</h4>
-                <ol id="instruction-steps" class="instruction-steps"></ol>
-            </section>
+            <section id="current-stage-label-section" class="instruction-window__section is-hidden"><h4>Aktualny etap</h4><strong id="current-stage-label"></strong></section>
             <section id="current-stage-description-section" class="instruction-window__section is-hidden">
                 <h4>Opis aktualnego etapu</h4>
                 <div id="current-stage-description" class="instruction-window__general"></div>
             </section>
             <section id="next-action-section" class="instruction-window__section is-hidden">
-                <h4>Co dalej?</h4>
+                <h4>Co masz zrobić teraz?</h4>
                 <div id="next-action-content" class="instruction-window__next-action"></div>
             </section>
+            <section id="next-stage-section" class="instruction-window__section is-hidden"><h4>Następny etap w razie powodzenia</h4><strong id="next-stage-label"></strong></section>
+            <details id="instruction-stages-section" class="instruction-window__section is-hidden"><summary>Pokaż cały przebieg procesu</summary><ol id="instruction-steps" class="instruction-steps"></ol></details>
         </div>
     </aside>
     <button type="button" id="user-instruction-restore" class="instruction-window__restore is-hidden">Instrukcja</button>

@@ -19,6 +19,7 @@ SUPPORTED_FIELD_TYPES = {
     "radio",
     "checkbox",
     "tel",
+    "phone",
     "pesel",
     "section",
     "static_text",
@@ -55,7 +56,7 @@ DEFAULT_SIGNATURE_CONFIG = {
 }
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-TEL_REGEX = re.compile(r"^[0-9+\s\-()]{7,20}$")
+TEL_REGEX = re.compile(r"^(?:\+48\s?)?\d{3}\s?\d{3}\s?\d{3}$")
 PESEL_REGEX = re.compile(r"^\d{11}$")
 PESEL_ERROR_MESSAGE = "Podany numer PESEL jest nieprawidłowy."
 
@@ -397,7 +398,10 @@ def validate_submission(
         if field_type == "email" and not EMAIL_REGEX.match(value):
             errors[field_name] = "Podaj poprawny adres e-mail."
 
-        if field_type == "tel" and not TEL_REGEX.match(value):
+        is_phone_field = field_type in {"tel", "phone"} or (
+            str(field_name or "").strip().casefold() == "telefon" and field_type in {"text", "number"}
+        )
+        if is_phone_field and not TEL_REGEX.fullmatch(str(value).strip()):
             errors[field_name] = "Podaj poprawny numer telefonu."
 
         if field_type == "pesel" and not validate_pesel(value):

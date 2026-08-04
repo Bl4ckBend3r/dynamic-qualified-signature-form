@@ -30,7 +30,11 @@ def workflow_status_label(status_id: str, form_config: dict | None = None) -> st
                 labels[str(status["id"])] = str(status.get("label") or status.get("name") or status["id"])
     for step in workflow.get("steps") or []:
         if isinstance(step, dict) and step.get("id"):
-            labels.setdefault(str(step["id"]), str(step.get("label") or step.get("name") or step["id"]))
+            label = str(step.get("admin_label") or step.get("user_label") or step.get("label") or step.get("name") or step["id"])
+            labels.setdefault(str(step["id"]), label)
+            status_code = str(step.get("status") or step.get("status_code") or "").strip()
+            if status_code:
+                labels.setdefault(status_code, label)
     if status_id in labels:
         return labels[status_id]
     return get_status_label(status_id)

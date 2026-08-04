@@ -358,6 +358,8 @@ class MailDispatchService:
                 sent_by_id=sent_by_id,
                 status="sent",
                 event_type=event_type,
+                html_body=html_body,
+                text_body=text_body,
             )
             return MailDispatchResult("sent", recipient, subject, log=log)
         except Exception as exc:
@@ -375,6 +377,8 @@ class MailDispatchService:
                 status="failed",
                 event_type=event_type,
                 error_message=error_message,
+                html_body=html_body,
+                text_body=text_body,
             )
             return MailDispatchResult("failed", recipient, subject, error_message, log)
 
@@ -423,6 +427,14 @@ class MailDispatchService:
             )
         context = self.build_context_for_submission(form, submission, files or [], **(context_builders or {}))
         context.update(extra_context or {})
+        if getattr(template, "show_process_status", True) is False:
+            context.update(
+                process_status="",
+                process_status_label="",
+                current_stage="",
+                current_stage_label="",
+                status_label="",
+            )
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         footer_logo_url, footer_inline_images = self.footer_logo_for_email(db, footer)
         footer_html = self.build_footer(footer, logo_url=footer_logo_url)
@@ -450,6 +462,58 @@ class MailDispatchService:
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:
         current_app.logger.info("mail_skipped reason=automatic_decision_email_disabled submission_id=%s", submission_id)
         return MailDispatchResult("skipped", error_message="Automatyczny mail decyzji jest wyłączony.")
+
+    def dispatch_correction_accepted(self, submission_id: str) -> MailDispatchResult:
+        """Send the configured, idempotent acceptance notification after correction."""
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from models import EmailLog, Form, FormSubmission, MailTemplate
+        from sqlalchemy import or_, select
+
+        with create_session_factory(database_url)() as db:
+            submission = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if submission is None or not getattr(submission, "correction_completed_at", None):
+                return MailDispatchResult("skipped", error_message="Zgłoszenie nie jest zaakceptowaną korektą.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            workflow = ((getattr(form, "definition_json", {}) or {}).get("workflow") or {}) if form else {}
+            if form is None or not workflow.get("send_email_notifications"):
+                return MailDispatchResult("skipped", error_message="Powiadomienia formularza są wyłączone.")
+            if not str(submission.email or "").strip():
+                return MailDispatchResult("skipped", error_message="Brak odbiorcy.")
+            duplicate = db.execute(
+                select(EmailLog.id).where(
+                    EmailLog.submission_id == submission.id,
+                    EmailLog.event_type == "correction_accepted",
+                    EmailLog.status.in_(("sent", "queued")),
+                )
+            ).first()
+            if duplicate:
+                return MailDispatchResult("skipped", error_message="Wiadomość dla tego zdarzenia została już wysłana.")
+            template = db.execute(
+                select(MailTemplate)
+                .where(
+                    MailTemplate.form_id == form.id,
+                    MailTemplate.is_active.is_(True),
+                    or_(MailTemplate.template_type == "correction_accepted", MailTemplate.trigger_event == "correction_accepted"),
+                )
+                .order_by(MailTemplate.id.desc())
+            ).scalars().first()
+            if template is None:
+                return MailDispatchResult("skipped", error_message="Brak aktywnego szablonu correction_accepted.")
+            result = self.dispatch_to_submission(
+                db=db,
+                form=form,
+                submission=submission,
+                template=template,
+                event_type="correction_accepted",
+                files=self.submission_repository.list_submission_files(submission_id),
+            )
+            self._commit_email_log(db)
+            return result
 
     def dispatch_submission_received(self, submission_id: str) -> MailDispatchResult:
         database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
@@ -706,6 +770,8 @@ class MailDispatchService:
         status: str = "sent",
         event_type: str = "email_delivery",
         error_message: str = "",
+        html_body: str = "",
+        text_body: str = "",
     ):
         if db is None:
             return None
@@ -718,6 +784,8 @@ class MailDispatchService:
                 public_submission_id=getattr(submission, "submission_id", "") or "",
                 to_email=to_email or "",
                 subject=subject or "",
+                html_body=html_body or "",
+                text_body=text_body or "",
                 template_id=getattr(template, "id", None),
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,
@@ -734,6 +802,8 @@ class MailDispatchService:
                 public_submission_id=getattr(submission, "submission_id", "") or "",
                 to_email=to_email or "",
                 subject=subject or "",
+                html_body=html_body or "",
+                text_body=text_body or "",
                 template_id=getattr(template, "id", None),
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,

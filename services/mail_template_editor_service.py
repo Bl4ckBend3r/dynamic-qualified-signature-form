@@ -35,6 +35,8 @@ VARIABLE_GROUPS = (
             ("updated_at", "Data ostatniej aktualizacji", "28.07.2026 11:15"),
             ("process_status", "Techniczny status procesu", "SUBMITTED"),
             ("process_status_label", "Czytelna nazwa statusu procesu", "Wniosek złożony"),
+            ("current_stage", "Techniczny identyfikator bieżącego etapu", "officer_review"),
+            ("current_stage_label", "Czytelna nazwa bieżącego etapu", "Weryfikacja przez urzędnika"),
             ("status_label", "Czytelna nazwa statusu (alias)", "Wniosek złożony"),
         ),
     ),

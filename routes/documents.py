@@ -245,12 +245,11 @@ def training_selection(submission_id: str):
                         availability=availability,
                     )
                     db.commit()
-                    flash("Wybór szkoleń został zapisany.", "success")
+                    flash("Wybór szkoleń został zapisany. Możesz przejść do umów.", "success")
                     return redirect(
                         url_for(
-                            "documents.training_selection",
+                            "documents.documents_to_sign",
                             submission_id=submission.submission_id,
-                            token=token,
                         )
                     )
                 except TrainingSelectionError as exc:

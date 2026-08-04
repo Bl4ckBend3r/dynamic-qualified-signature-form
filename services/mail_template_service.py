@@ -14,6 +14,9 @@ from typing import Any
 from jinja2 import TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
+from services.status_catalog import get_status_label
+from services.workflow_service import workflow_status_label
+
 
 logger = logging.getLogger(__name__)
 
@@ -576,6 +579,20 @@ def build_mail_context(form, submission, files: list | None = None, extra: dict 
     if not context.get("imie") and context.get("imiona"):
         context["imie"] = context["imiona"]
     context["status_label"] = build_status_label(str(context.get("process_status") or ""))
+    process_status_label = get_status_label(str(context.get("process_status") or ""))
+    context["process_status_label"] = (
+        "Status procesu niedostępny"
+        if process_status_label.startswith("Nieznany status:")
+        else process_status_label
+    )
+    context["status_label"] = context["process_status_label"]
+    current_stage = str(context.get("workflow_stage") or context.get("workflow_step") or "")
+    context["current_stage"] = current_stage
+    context["current_stage_label"] = (
+        workflow_status_label(current_stage, getattr(form, "definition_json", {}) if form else {})
+        if current_stage
+        else ""
+    )
     context.setdefault("podpisz_url", "")
     context.setdefault("pobierz_url", "")
     context.setdefault("document_url", "")

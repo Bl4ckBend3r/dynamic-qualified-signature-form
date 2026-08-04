@@ -67,7 +67,7 @@ def test_trigger_catalog_uses_only_active_workflow_steps_events_and_decisions():
 
     assert catalog["has_workflow"] is True
     assert [item["value"] for item in catalog["statuses"]] == ["FORM_SUBMITTED", "OFFICER_REVIEW"]
-    assert [item["value"] for item in catalog["events"]] == ["application_submitted"]
+    assert [item["value"] for item in catalog["events"]] == ["correction_accepted", "application_submitted"]
     assert [item["value"] for item in catalog["decisions"]] == ["accepted", "rejected"]
     assert all(item["source"] == "workflow" for item in catalog["statuses"])
     assert all(item["stage_id"] in {"submission", "review"} for item in catalog["statuses"])

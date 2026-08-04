@@ -13,8 +13,8 @@
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
         <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "AUTO_REJECTED", "RETURNED_FOR_CORRECTION", "WAITING_FOR_OFFICER_DECISION", "OFFICER_ACCEPTED", "DECLARATION_SIGNED", "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE", "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_REJECTED_BY_OFFICE", "AGREEMENT_SIGNED_BY_OFFICE", "PROCESS_COMPLETED"] %}
-            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
+        {% for option in status_options %}
+            <option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
     </select>
     <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
@@ -70,36 +70,36 @@
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div class="admin-card admin-table-wrap">
-        <table class="admin-table">
+        <table class="admin-table admin-table--submissions">
             <thead>
                 <tr>
                     {% if not read_only %}<th>Wybierz</th>{% endif %}
                     <th>ID</th>
-                    <th>Data</th>
-                    <th>Nazwisko</th>
-                    <th>Email</th>
-                    {% for field in fields[:6] %}
-                        <th>{{ field.label or field.name }}</th>
-                    {% endfor %}
-                    <th>Status</th>
-                    <th>Decyzja urzednika</th>
+                    <th>Imię i nazwisko</th>
+                    <th>E-mail</th>
+                    <th>Telefon</th>
+                    <th>Data złożenia</th>
+                    <th>Formularz</th>
+                    <th>Aktualny status</th>
+                    <th>Etap workflow</th>
+                    <th>Decyzja urzędnika</th>
                     <th>Akcje</th>
                 </tr>
             </thead>
             <tbody>{% for submission in submissions %}
                 <tr>
-                    <td>
+                    {% if not read_only %}<td>
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
                         <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" data-submission-pk="{{ submission.id }}" form="bulk-mail-form">
-                    </td>
+                    </td>{% endif %}
                     <td><code>{{ submission.submission_id }}</code></td>
-                    <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
-                    <td>{{ submission.nazwisko or "-" }}</td>
+                    <td>{{ ((submission.imiona or submission_value(submission, 'imie') or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-" }}</td>
                     <td>{{ submission.email or "-" }}</td>
-                    {% for field in fields[:6] %}
-                        <td>{{ submission_value(submission, field.name) or "-" }}</td>
-                    {% endfor %}
+                    <td>{{ submission.telefon or "-" }}</td>
+                    <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
+                    <td>{{ form.name }}</td>
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
+                    <td>{{ status_label(submission.workflow_stage or submission.workflow_step) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
                     {% if not read_only %}<td>
                         {% if not read_only and can_edit_application_decision(submission) %}
                             <div class="admin-decision-controls">
@@ -123,13 +123,18 @@
                     </td>{% endif %}
                     <td>
                         <div class="admin-actions">
-                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
+                            {% if not read_only and can_edit_application_decision(submission) %}
+                                <button type="button" class="admin-link-button" data-quick-decision="accepted" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Zaakceptuj</button>
+                                <button type="button" class="admin-link-button" data-quick-decision="rejected" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Odrzuć</button>
+                                <button type="button" class="admin-link-button" data-quick-decision="correction" data-action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" data-submission-id="{{ submission.submission_id }}">Wyślij do poprawy</button>
+                            {% endif %}
                             {% if not read_only %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                         </div>
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="{{ 9 + fields[:6]|length }}">Brak zgloszen.</td></tr>
+                <tr><td colspan="{{ 11 if not read_only else 10 }}">Brak zgłoszeń.</td></tr>
             {% endfor %}</tbody>
         </table>
     </div>
@@ -138,6 +143,29 @@
         <button class="admin-button" type="submit">Zapisz decyzje</button>
     </div>{% endif %}
 </form>
+<nav class="admin-pagination" aria-label="Paginacja zgłoszeń">
+    <span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span>
+    <div class="admin-pagination__links">
+        {% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+        {% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+    </div>
+</nav>
+{% if not read_only %}
+<dialog class="admin-modal admin-modal-backdrop" id="quick-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-decision-title" data-admin-modal>
+    <form method="post" class="admin-modal__surface admin-form" id="quick-decision-form">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <input type="hidden" name="officer_decision" id="quick-decision-value">
+        <input type="hidden" name="send_email" value="on" id="quick-decision-send-email" disabled>
+        <header class="admin-modal__header"><h2 id="quick-decision-title">Potwierdź decyzję</h2></header>
+        <div class="admin-modal__body">
+            <p id="quick-decision-message"></p>
+            <label id="quick-decision-reason-wrap"><span>Uzasadnienie <span class="required-marker">*</span></span><textarea name="officer_decision_reason" id="quick-decision-reason" rows="4"></textarea></label>
+        </div>
+        <footer class="admin-modal__footer"><button type="button" class="admin-button-secondary" data-admin-modal-close>Anuluj</button><button type="submit" class="admin-button" id="quick-decision-submit">Potwierdź</button></footer>
+    </form>
+</dialog>
+{% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const selectAll = document.getElementById("select-all-submissions");
@@ -199,6 +227,26 @@ document.addEventListener("DOMContentLoaded", function () {
         syncReason(select);
         select.addEventListener("change", function () {
             syncReason(select);
+        });
+    });
+
+    const quickDialog = document.getElementById("quick-decision-dialog");
+    const quickForm = document.getElementById("quick-decision-form");
+    document.querySelectorAll("[data-quick-decision]").forEach(button => {
+        button.addEventListener("click", function () {
+            const decision = button.dataset.quickDecision;
+            const needsReason = decision === "rejected" || decision === "correction";
+            quickForm.action = button.dataset.action;
+            document.getElementById("quick-decision-value").value = decision;
+            document.getElementById("quick-decision-reason-wrap").hidden = !needsReason;
+            document.getElementById("quick-decision-reason").required = needsReason;
+            document.getElementById("quick-decision-reason").name = decision === "correction" ? "reason" : "officer_decision_reason";
+            document.getElementById("quick-decision-value").disabled = decision === "correction";
+            document.getElementById("quick-decision-send-email").disabled = decision !== "correction";
+            document.getElementById("quick-decision-reason").value = "";
+            document.getElementById("quick-decision-message").textContent = `Zgłoszenie ${button.dataset.submissionId}: ${button.textContent.trim()}?`;
+            document.getElementById("quick-decision-title").textContent = button.textContent.trim();
+            quickDialog.showModal();
         });
     });
 });

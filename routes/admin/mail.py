@@ -44,6 +44,7 @@ from . import (
 
 
 MAIL_TEMPLATE_LABELS = {
+    "correction_accepted": "Akceptacja poprawionego wniosku",
     "confirmation": "Złożenie wniosku",
     "accepted": "Akceptacja",
     "rejected": "Odrzucenie",
@@ -200,7 +201,9 @@ def mail_templates_index():
 def mail_template_edit(form_id: int, template_id: int | None = None):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
-        template = db.get(MailTemplate, template_id) if template_id else MailTemplate(form_id=form.id, name="", subject="", html_body="")
+        template = db.get(MailTemplate, template_id) if template_id else MailTemplate(
+            form_id=form.id, name="", subject="", html_body="", show_process_status=True
+        )
         if not template or template.form_id != form.id:
             abort(404)
         if request.method == "POST":
@@ -224,6 +227,7 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             template.instruction_text = request.form.get("instruction_text", "").strip()
             template.footer_note = request.form.get("footer_note", "").strip()
             template.use_platform_layout = request.form.get("use_platform_layout", "on") == "on"
+            template.show_process_status = request.form.get("show_process_status") == "on"
             if parsed and not template.content_title:
                 template.content_title = parsed.title
             if parsed and not template.instruction_text and not template.instruction_html:

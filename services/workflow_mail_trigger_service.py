@@ -12,6 +12,7 @@ from services.workflow_config_service import (
 
 
 EVENT_LABELS = {
+    "correction_accepted": "Poprawiony wniosek zaakceptowany",
     "manual": "Wiadomość wysyłana ręcznie",
     "manual_bulk": "Wiadomość zbiorcza",
     "application_submitted": "Wniosek złożony",
@@ -80,6 +81,8 @@ class WorkflowMailTriggerService:
         events: list[dict[str, str]] = []
         statuses: list[dict[str, str]] = []
         decisions: list[dict[str, str]] = []
+        if workflow.get("allow_correction"):
+            events.append(self._event("correction_accepted", source="workflow"))
 
         for step in steps:
             stage_id = str(step.get("id") or "").strip()

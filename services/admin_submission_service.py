@@ -9,11 +9,88 @@ from services.admin_form_service import normalize_admin_form_definition
 from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
 from services.workflow_service import workflow_status_label
+from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
 def admin_status_label(status_id: str, form: Form | None = None) -> str:
     form_config = normalize_admin_form_definition(form.definition_json or {}) if form else {}
     return workflow_status_label(status_id, form_config)
+
+
+def build_status_filter_options(
+    forms: list[Form] | Form | None,
+    submissions: list[FormSubmission] | None = None,
+) -> list[dict[str, str]]:
+    """Build stable Polish status choices from each form workflow and stored rows."""
+    form_list = [] if forms is None else (forms if isinstance(forms, list) else [forms])
+    labels: dict[str, str] = {}
+    for form in form_list:
+        raw_definition = form.definition_json or {}
+        definition = normalize_admin_form_definition({**raw_definition, "fields": raw_definition.get("fields") or []})
+        workflow = definition.get("workflow") or {}
+        raw_statuses = workflow.get("statuses") or []
+        if isinstance(raw_statuses, dict):
+            raw_statuses = [
+                {"id": key, **(value if isinstance(value, dict) else {"label": value})}
+                for key, value in raw_statuses.items()
+            ]
+        for status in raw_statuses if isinstance(raw_statuses, list) else []:
+            if not isinstance(status, dict):
+                continue
+            code = str(status.get("id") or status.get("value") or "").strip()
+            if code:
+                labels.setdefault(code, str(status.get("label") or status.get("name") or admin_status_label(code, form)))
+        for step in workflow.get("steps") or []:
+            if not isinstance(step, dict) or step.get("active") is False:
+                continue
+            code = str(step.get("status") or step.get("status_code") or step.get("id") or "").strip()
+            if code:
+                labels.setdefault(
+                    code,
+                    str(step.get("admin_label") or step.get("user_label") or step.get("label") or step.get("name") or admin_status_label(code, form)),
+                )
+
+    # Forms without an explicit workflow use the complete platform catalog.
+    # Custom workflows remain intentionally limited to their configured stages.
+    if not labels:
+        labels.update(WORKFLOW_STATUS_LABELS)
+    for submission in submissions or []:
+        code = str(submission.process_status or "").strip()
+        if code:
+            form = next((item for item in form_list if item.slug == submission.form_slug), None)
+            labels.setdefault(code, admin_status_label(code, form))
+    return [
+        {"value": code, "label": label}
+        for code, label in sorted(labels.items(), key=lambda item: (item[1].casefold(), item[0]))
+    ]
+
+
+def paginate_submissions(
+    submissions: list[FormSubmission],
+    page_value: Any,
+    per_page_value: Any,
+) -> tuple[list[FormSubmission], dict[str, int | bool]]:
+    try:
+        page = max(1, int(page_value or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(per_page_value or 50)
+    except (TypeError, ValueError):
+        per_page = 50
+    per_page = min(200, max(10, per_page))
+    total = len(submissions)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+    start = (page - 1) * per_page
+    return submissions[start : start + per_page], {
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": pages,
+        "has_previous": page > 1,
+        "has_next": page < pages,
+    }
 
 
 def submission_value(submission: FormSubmission, field_name: str) -> Any:

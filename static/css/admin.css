@@ -2787,3 +2787,14 @@ body.admin-modal-open {
         padding: var(--admin-space-3);
     }
 }
+.agreement-template-source { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-bottom: 1rem; }
+.agreement-template-source legend { font-weight: 700; margin-bottom: .5rem; }
+.agreement-docx-panel, .agreement-variable-browser { margin-top: 1rem; padding: 1rem; border: 1px solid #d7deea; border-radius: 10px; background: #f8fafc; }
+.agreement-template-status { display: grid; gap: .3rem; margin-top: 1rem; padding: .8rem; border-left: 4px solid #b45309; background: #fff; }
+.agreement-template-status.is-valid { border-left-color: #15803d; }
+.agreement-template-status.is-invalid { border-left-color: #b91c1c; }
+.agreement-docx-preview { width: 100%; min-height: 520px; margin-top: .75rem; border: 1px solid #cbd5e1; background: #fff; }
+.agreement-variable-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .5rem; margin: .75rem 0; }
+.agreement-variable-item { display: grid; gap: .2rem; padding: .65rem; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; text-align: left; cursor: pointer; }
+.agreement-variable-item:hover, .agreement-variable-item.is-copied { border-color: #1d4ed8; background: #eff6ff; }
+.agreement-variable-item small { color: #64748b; }

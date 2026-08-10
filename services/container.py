@@ -12,6 +12,7 @@ from services.beneficiary_agreement_service import BeneficiaryAgreementService
 from services.blocked_agreement_admin_service import BlockedAgreementAdminService
 from services.document_service import DocumentService
 from services.documents.agreement_flow_service import AgreementFlowService
+from services.documents.agreement_docx_template_service import AgreementDocxTemplateService
 from services.documents.declaration_flow_service import DeclarationFlowService
 from services.documents.document_access_service import DocumentAccessService
 from services.documents.document_download_service import DocumentDownloadService
@@ -53,6 +54,7 @@ class ServiceContainer:
     document_signing_service: DocumentSigningService
     declaration_flow_service: DeclarationFlowService
     agreement_flow_service: AgreementFlowService
+    agreement_docx_template_service: AgreementDocxTemplateService
     notification_service: NotificationService
     mail_dispatch_service: MailDispatchService
     mail_settings_service: MailSettingsService
@@ -149,6 +151,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     rules_service = RulesService()
     declaration_flow_service = DeclarationFlowService()
     agreement_flow_service = AgreementFlowService()
+    agreement_docx_template_service = AgreementDocxTemplateService(storage)
     document_access_service = DocumentAccessService()
     document_download_service = DocumentDownloadService(access_service=document_access_service)
     document_service = DocumentService(
@@ -196,6 +199,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         document_signing_service=document_signing_service,
         declaration_flow_service=declaration_flow_service,
         agreement_flow_service=agreement_flow_service,
+        agreement_docx_template_service=agreement_docx_template_service,
         notification_service=notification_service,
         mail_dispatch_service=mail_dispatch_service,
         mail_settings_service=mail_settings_service,

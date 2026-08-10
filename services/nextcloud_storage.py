@@ -383,6 +383,11 @@ class NextcloudStorage:
 
         self._check_status(response, (200, 201, 204), f"Cannot write file '{path}'")
 
+    def delete(self, path: str, *, missing_ok: bool = False) -> None:
+        response = self._request("DELETE", path)
+        expected = (200, 204, 404) if missing_ok else (200, 204)
+        self._check_status(response, expected, f"Cannot delete file '{path}'")
+
     def append_csv_row(self, slug: str, row: dict) -> None:
         self.ensure_form_output_structure(slug)
 

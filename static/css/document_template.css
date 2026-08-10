@@ -85,6 +85,17 @@ body {
     margin: 0 0 10px;
 }
 
+.document--docx { width: 100%; }
+.document--docx .document-paragraph { widows: 2; orphans: 2; }
+.document--docx .document-paragraph--empty { min-height: 1em; margin-bottom: 4px; }
+.document--docx .document-align-left { text-align: left !important; text-justify: auto; }
+.document--docx .document-align-center { text-align: center !important; text-justify: auto; }
+.document--docx .document-align-right { text-align: right !important; text-justify: auto; }
+.document--docx .document-align-justify { text-align: justify !important; }
+.document--docx h1, .document--docx h2, .document--docx h3 { break-after: avoid; page-break-after: avoid; }
+.document--docx .document-table--docx tr { break-inside: avoid; page-break-inside: avoid; }
+.document--docx .document-list { margin: 6px 0 12px 22px; padding: 0; }
+
 .document-section,
 .document .document-section {
     margin: 0 0 18px;

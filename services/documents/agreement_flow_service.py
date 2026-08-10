@@ -71,6 +71,13 @@ class AgreementFlowService:
                 message="Brak szablonu umowy dla tego formularza.",
                 error_code="agreement_template_missing",
             )
+        if source_document.get("template_source") == "docx" and source_document.get("template_valid") is False:
+            variables = ", ".join(source_document.get("template_unknown_variables") or [])
+            return AgreementFlowResult(
+                success=False,
+                message=("Szablon DOCX zawiera nieznane zmienne" + (f": {variables}." if variables else ".")),
+                error_code="agreement_template_invalid",
+            )
         resolved_date = generated_date or date.today().isoformat()
         existing_agreements = _json_list(submission["row"].get("training_agreements"))
         existing_training_ids = {

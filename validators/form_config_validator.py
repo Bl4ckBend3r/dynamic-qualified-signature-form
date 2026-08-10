@@ -133,8 +133,22 @@ class FormConfigValidator:
                 errors.append(f"workflow.steps[{index}].repeat_over requires document_id")
         if workflow.get("requires_declaration") and not str(workflow.get("declaration_template_html") or "").strip():
             errors.append("workflow.declaration_template_html is required when declaration is required")
-        if workflow.get("requires_contract") and not str(workflow.get("contract_template_html") or "").strip():
-            errors.append("Brak szablonu umowy dla tego formularza.")
+        if workflow.get("requires_contract"):
+            source = str(workflow.get("contract_template_source") or "html")
+            docx_metadata = workflow.get("contract_docx_template") or {}
+            has_template = (
+                bool(str(docx_metadata.get("html") or "").strip())
+                if source == "docx"
+                else bool(str(workflow.get("contract_template_html") or "").strip())
+            )
+            if not has_template:
+                errors.append("Brak szablonu umowy dla tego formularza.")
+            if source == "docx" and docx_metadata.get("unknown_variables"):
+                errors.append(
+                    "Szablon DOCX zawiera nieznane zmienne: "
+                    + ", ".join(str(item) for item in docx_metadata["unknown_variables"])
+                    + "."
+                )
         signature_step = next(
             (step for step in active_steps if step.get("id") == "training_agreements_signature"),
             None,

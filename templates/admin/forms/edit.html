@@ -469,10 +469,45 @@
                     <p class="workflow-help">Deklaracja jest generowana jako jeden dokument dla zgłoszenia.</p>
                 </div>
                 <div data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
+                    <fieldset class="admin-form-wide agreement-template-source">
+                        <legend>Źródło szablonu umowy</legend>
+                        <label class="admin-check"><input type="radio" name="contract_template_source" value="html" {% if workflow.get('contract_template_source', 'html') == 'html' %}checked{% endif %}><span>Edytor HTML</span></label>
+                        <label class="admin-check"><input type="radio" name="contract_template_source" value="docx" {% if workflow.get('contract_template_source') == 'docx' %}checked{% endif %}><span>Plik Word (.docx)</span></label>
+                    </fieldset>
                     <label class="admin-form-wide admin-code-field"><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie. W każdej sekcji umieszczaj najpierw numer paragrafu (np. „§ 1”), a pod nim nazwę sekcji; istniejące szablony pozostają niezmienione.</small></label>
                     <p class="workflow-help">W każdej umowie <code>selected_trainings</code> zawiera jedno aktualne szkolenie. Cenę tej pozycji udostępniają <code>agreement_training_price</code> i <code>agreement_training_price_formatted</code>, a sumę całego zgłoszenia — <code>all_selected_trainings_total</code> i <code>all_selected_trainings_total_formatted</code>.</p>
                     <label class="admin-check"><input type="checkbox" name="contract_show_all_trainings_total" {% if workflow.get('contract_show_all_trainings_total', true) %}checked{% endif %}><span>Pokazuj w umowie łączną wartość wszystkich wybranych szkoleń</span><small>Włączone: tabela nadal zawiera jedno aktualne szkolenie, lecz pole łącznej wartości pokazuje sumę całego zgłoszenia. Wyłączone: pokazuje cenę aktualnego szkolenia.</small></label>
                     <label><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
+                    <section class="admin-form-wide agreement-docx-panel">
+                        <h3>Szablon Word</h3>
+                        <p>Wpisuj zmienne jako <code>{{ '{{ agreement_number }}' }}</code>. Znacznik może być podzielony na fragmenty formatowania w Wordzie. Parser przenosi akapity, nagłówki 1–3, wyrównanie, tabele, listy i puste akapity. Obrazy, pola tekstowe, przypisy i złożone formatowanie mogą zostać pominięte.</p>
+                        <label><span>Plik DOCX</span><input type="file" name="agreement_docx_template" accept="application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"></label>
+                        <div class="admin-actions">
+                            <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.agreement_docx_template_upload', form_id=form.id) }}" formmethod="post" formnovalidate>Wgraj lub zastąp DOCX</button>
+                            <a class="admin-button-secondary" href="{{ url_for('admin.agreement_docx_template_sample', form_id=form.id) }}">Pobierz przykładowy DOCX</a>
+                            {% if agreement_docx_metadata|default({}) %}<a class="admin-button-secondary" href="{{ url_for('admin.agreement_docx_template_download', form_id=form.id) }}">Pobierz oryginał</a><button class="admin-button-danger" type="submit" formaction="{{ url_for('admin.agreement_docx_template_delete', form_id=form.id) }}" formmethod="post" formnovalidate>Usuń DOCX</button>{% endif %}
+                        </div>
+                        {% if agreement_docx_metadata|default({}) %}
+                            <div class="agreement-template-status {% if agreement_docx_metadata.get('valid') %}is-valid{% else %}is-invalid{% endif %}">
+                                <strong>{{ agreement_docx_metadata.get('original_filename') }}</strong>
+                                <span>{% if agreement_docx_metadata.get('valid') %}Szablon poprawny{% else %}Szablon wymaga poprawy{% endif %}</span>
+                                <small>Parser {{ agreement_docx_metadata.get('parser_version') }}, zapis: {{ agreement_docx_metadata.get('uploaded_at', '') }}</small>
+                                {% if agreement_docx_metadata.get('unknown_variables') %}<p>Nieznane zmienne: <code>{{ agreement_docx_metadata.get('unknown_variables')|join(', ') }}</code></p>{% endif %}
+                                {% for warning in agreement_docx_metadata.get('warnings', []) %}<p class="workflow-help">{{ warning }}</p>{% endfor %}
+                            </div>
+                            {% if agreement_docx_preview_html|default('') %}<details open><summary>Podgląd z przykładowymi danymi</summary><iframe class="agreement-docx-preview" title="Podgląd szablonu DOCX" srcdoc="{{ agreement_docx_preview_html|e }}"></iframe></details>{% endif %}
+                        {% endif %}
+                    </section>
+                    <section class="admin-form-wide agreement-variable-browser" data-agreement-variable-browser>
+                        <h3>Dostępne zmienne</h3>
+                        <p>Lista pochodzi z kontekstu używanego przy generowaniu umowy oraz aktywnych pól formularza. Kliknij zmienną, aby ją skopiować.</p>
+                        <label><span>Szukaj</span><input type="search" placeholder="np. szkolenie, PESEL, numer umowy" data-agreement-variable-search></label>
+                        {% for category, variables in (agreement_template_variables|default([]))|groupby('category') %}
+                            <details open data-variable-category><summary>{{ category }}</summary>
+                                <div class="agreement-variable-list">{% for variable in variables %}<button type="button" class="agreement-variable-item" data-variable-item data-variable-search-text="{{ (variable.name ~ ' ' ~ variable.label)|lower }}" data-copy-variable="{{ variable.placeholder }}"><code>{{ variable.placeholder }}</code><span>{{ variable.label }}</span><small>{{ variable.example }}</small></button>{% endfor %}</div>
+                            </details>
+                        {% endfor %}
+                    </section>
                 </div>
                 <div class="admin-form-grid" data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
                     <input type="hidden" name="contract_generation_mode" value="per_training">
@@ -2927,5 +2962,24 @@ if (/szkol|training/i.test(trainingList?.dataset.trainingServerErrors || "")) {
 }
 syncTrainingIndexes();
 enhanceRichTextFields();
+document.querySelectorAll("[data-agreement-variable-browser]").forEach((browser) => {
+    const search = browser.querySelector("[data-agreement-variable-search]");
+    search?.addEventListener("input", () => {
+        const query = search.value.trim().toLocaleLowerCase("pl");
+        browser.querySelectorAll("[data-variable-item]").forEach((item) => {
+            item.hidden = Boolean(query) && !item.dataset.variableSearchText.includes(query);
+        });
+        browser.querySelectorAll("[data-variable-category]").forEach((category) => {
+            category.hidden = !category.querySelector("[data-variable-item]:not([hidden])");
+        });
+    });
+    browser.addEventListener("click", async (event) => {
+        const item = event.target.closest("[data-copy-variable]");
+        if (!item) return;
+        await navigator.clipboard.writeText(item.dataset.copyVariable);
+        item.classList.add("is-copied");
+        window.setTimeout(() => item.classList.remove("is-copied"), 900);
+    });
+});
 </script>
 {% endblock %}

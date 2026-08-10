@@ -131,6 +131,9 @@ def build_form_definition_from_admin_form(
     )
     workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
+    template_source = str(form_data.get("contract_template_source") or workflow.get("contract_template_source") or "html").strip().casefold()
+    workflow["contract_template_source"] = template_source if template_source in {"html", "docx"} else "html"
+    workflow["contract_docx_template"] = dict(workflow.get("contract_docx_template") or {})
     workflow["contract_generation_mode"] = "per_training"
     workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
     workflow["contract_filename_pattern"] = (
@@ -147,6 +150,7 @@ def build_form_definition_from_admin_form(
         or form_data.get("requires_contract")
         or form_data.get("declaration_template_html")
         or form_data.get("contract_template_html")
+        or workflow.get("contract_docx_template")
     )
     workflow["decision_settings"] = _workflow_decision_settings(form_data, workflow.get("decision_settings") or [])
     workflow["email_notifications"] = _workflow_email_notifications(form_data, workflow.get("email_notifications") or [])

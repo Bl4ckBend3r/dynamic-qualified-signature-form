@@ -288,6 +288,9 @@ class FormConfigService:
         normalized["requires_contract"] = bool(normalized.get("requires_contract", False))
         normalized.setdefault("declaration_template_html", "")
         normalized.setdefault("contract_template_html", "")
+        source = str(normalized.get("contract_template_source") or "html").strip().casefold()
+        normalized["contract_template_source"] = source if source in {"html", "docx"} else "html"
+        normalized["contract_docx_template"] = dict(normalized.get("contract_docx_template") or {})
         normalized["contract_generation_mode"] = "per_training"
         normalized["contract_show_all_trainings_total"] = bool(
             normalized.get("contract_show_all_trainings_total", True)
@@ -327,12 +330,27 @@ class FormConfigService:
                     documents_by_id[document_id]["enabled"] = bool(workflow.get(flag))
                 else:
                     documents_by_id[document_id]["enabled"] = bool(documents_by_id[document_id].get("enabled", True))
-                template_html = str(workflow.get(html_key) or "").strip()
+                template_source = "html"
+                template_metadata: dict = {}
+                if document_id == "agreement":
+                    template_source = str(workflow.get("contract_template_source") or "html")
+                    template_metadata = dict(workflow.get("contract_docx_template") or {})
+                template_html = (
+                    str(template_metadata.get("html") or "").strip()
+                    if template_source == "docx"
+                    else str(workflow.get(html_key) or "").strip()
+                )
                 if template_html:
                     documents_by_id[document_id]["template_html"] = template_html
                 elif workflow.get("managed_documents"):
                     documents_by_id[document_id].pop("template_html", None)
                 if document_id == "agreement":
+                    documents_by_id[document_id]["template_source"] = template_source
+                    if template_source == "docx":
+                        documents_by_id[document_id]["template_valid"] = bool(template_metadata.get("valid"))
+                        documents_by_id[document_id]["template_unknown_variables"] = list(
+                            template_metadata.get("unknown_variables") or []
+                        )
                     documents_by_id[document_id]["generation_mode"] = "per_training"
                     documents_by_id[document_id]["show_all_trainings_total"] = bool(
                         workflow.get("contract_show_all_trainings_total", True)

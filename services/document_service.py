@@ -16,6 +16,7 @@ from services.agreement_context_service import (
     build_training_agreement_value_context,
     upgrade_training_agreement_total_placeholder,
 )
+from services.documents.agreement_template_context_service import build_agreement_template_context
 from services import document_naming_service as naming
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.document_view_service import DocumentViewService
@@ -404,6 +405,11 @@ class DocumentService:
             )
             context.update(render_row)
             self._add_collection_context(context, render_row)
+            context = build_agreement_template_context(
+                context,
+                form_definition=form_config,
+                training=render_row.get("training") or item,
+            )
             document_bytes = self.pdf_render_service.render_document_pdf_bytes(
                 app=current_app._get_current_object(),
                 template_name="declaration_template.html",

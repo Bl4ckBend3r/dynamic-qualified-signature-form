@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 from sqlalchemy import func, select
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
@@ -27,6 +29,8 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.documents.agreement_template_context_service import agreement_variable_catalog
+from services.documents.docx_template_parser import DocxTemplateParseError
 from services.process_instruction_service import (
     instruction_status_options,
     normalize_instruction_config,
@@ -45,6 +49,7 @@ from services.workflow_config_service import (
     repair_agreement_confirmation_path,
     workflow_status_options,
 )
+from pdf_generator import inject_pdf_styles
 
 from . import (
     ROLE_ADMIN,
@@ -550,7 +555,100 @@ def form_edit(form_id: int):
                 (form.definition_json or {}).get("workflow") or {},
                 instruction_config=form.user_instruction_config,
             ),
+            **_agreement_docx_editor_context(form, fields),
         )
+
+
+@bp.post("/forms/<int:form_id>/agreement-template/docx")
+@login_required
+def agreement_docx_template_upload(form_id: int):
+    uploaded = request.files.get("agreement_docx_template")
+    if not uploaded or not uploaded.filename:
+        flash("Wybierz plik DOCX z szablonem umowy.", "error")
+        return redirect(url_for("admin.form_edit", form_id=form_id, tab="agreement"))
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            metadata = current_app.extensions["services"].agreement_docx_template_service.upload(
+                form_slug=form.slug,
+                filename=uploaded.filename,
+                content=uploaded.read(),
+                fields=fields,
+                uploaded_by_user_id=g.admin_user.id,
+            )
+        except (DocxTemplateParseError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        workflow["contract_docx_template"] = metadata
+        workflow["contract_template_source"] = "docx"
+        workflow["managed_documents"] = True
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        if metadata["unknown_variables"]:
+            flash("DOCX zapisano, ale wymaga poprawy nieznanych zmiennych: " + ", ".join(metadata["unknown_variables"]), "warning")
+        else:
+            flash("Szablon DOCX zapisano i ustawiono jako aktywne źródło umowy.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+
+
+@bp.get("/forms/<int:form_id>/agreement-template/docx")
+@login_required
+def agreement_docx_template_download(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        metadata = ((form.definition_json or {}).get("workflow") or {}).get("contract_docx_template") or {}
+        try:
+            content = current_app.extensions["services"].agreement_docx_template_service.download(metadata)
+        except Exception:
+            current_app.logger.warning("Nie udało się pobrać szablonu DOCX formularza %s.", form.slug, exc_info=True)
+            abort(404)
+        return send_file(BytesIO(content), mimetype=metadata.get("mime_type"), as_attachment=True, download_name=metadata.get("original_filename") or "szablon-umowy.docx")
+
+
+@bp.post("/forms/<int:form_id>/agreement-template/docx/delete")
+@login_required
+def agreement_docx_template_delete(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        metadata = workflow.get("contract_docx_template") or {}
+        current_app.extensions["services"].agreement_docx_template_service.delete(metadata)
+        workflow.pop("contract_docx_template", None)
+        workflow["contract_template_source"] = "html"
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        flash("Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+
+
+@bp.get("/forms/<int:form_id>/agreement-template/docx/sample")
+@login_required
+def agreement_docx_template_sample(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        content = current_app.extensions["services"].agreement_docx_template_service.sample_docx(active_fields_for_form(db, form.id))
+        return send_file(BytesIO(content), mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document", as_attachment=True, download_name="przykladowy-szablon-umowy.docx")
+
+
+def _agreement_docx_editor_context(form: Form, fields: list[FormField]) -> dict:
+    definition = form.definition_json or {}
+    workflow = definition.get("workflow") or {}
+    metadata = workflow.get("contract_docx_template") or {}
+    preview = ""
+    if metadata.get("html"):
+        preview = current_app.extensions["services"].agreement_docx_template_service.preview_html(metadata, fields, definition)
+        preview = inject_pdf_styles(current_app._get_current_object(), preview)
+    return {
+        "agreement_template_variables": agreement_variable_catalog(fields),
+        "agreement_docx_metadata": metadata,
+        "agreement_docx_preview_html": preview,
+    }
 
 
 def _audit_training_catalog_actions(

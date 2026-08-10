@@ -1,271 +1,456 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Admin{% endblock %} - {{ app_name }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
-    <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
-<link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
-</head>
-<body class="admin-body">
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/admin.css') }}"
+    />
+    <link
+      rel="icon"
+      href="{{ url_for('static', filename='images/favicon.ico') }}?v=2"
+      type="image/x-icon"
+    />
+    <link
+      rel="shortcut icon"
+      href="{{ url_for('static', filename='images/favicon.ico') }}?v=2"
+      type="image/x-icon"
+    />
+    <style>
+      .admin-nav-dropdown {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+
+      .admin-nav-dropdown-toggle {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        padding: 14px 12px;
+        border-radius: 8px;
+      }
+
+      .admin-nav-dropdown-toggle.is-active,
+      .admin-nav-dropdown-toggle:hover,
+      .admin-nav-dropdown-toggle:focus-visible {
+        background: rgba(255, 255, 255, 0.12);
+        outline: none;
+      }
+
+      .admin-nav-dropdown-menu {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        z-index: 10000;
+        min-width: 260px;
+        padding: 8px;
+        background: #fff;
+        color: #0b285f;
+        border: 1px solid #d8cfbf;
+        border-radius: 10px;
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+      }
+
+      .admin-nav-dropdown-menu a {
+        display: block;
+        padding: 10px 12px;
+        color: #0b285f;
+        text-decoration: none;
+        border-radius: 8px;
+        white-space: nowrap;
+      }
+
+      .admin-nav-dropdown-menu a:hover,
+      .admin-nav-dropdown-menu a:focus-visible {
+        background: #c8a35c;
+      }
+    </style>
+  </head>
+  <body class="admin-body">
     <div class="admin-layout">
-        <header class="admin-header">
-            <div class="admin-header-inner">
-                <a class="admin-brand" href="{{ url_for('admin.dashboard') }}">
-                    <span>Admin</span>
-                    <small>{{ app_name }}</small>
-                </a>
-                {% if g.admin_user %}
-                    <nav class="admin-nav" aria-label="Menu administracyjne">
-                        <a class="{% if admin_is_active('admin.dashboard') %}is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
-                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.form') %}is-active{% endif %}" href="{{ url_for('admin.forms_list') }}">Formularze</a>
-                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.submission') %}is-active{% endif %}" href="{{ url_for('admin.submissions_all') }}">Zgłoszenia</a>
-                        <a class="{% if request.endpoint and request.endpoint.startswith('admin.mail_template') %}is-active{% endif %}" href="{{ url_for('admin.mail_templates_index') }}">Szablony maili</a>
-                        {% if g.admin_user.role == "super_admin" %}
-                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.system_mail_settings') %}is-active{% endif %}" href="{{ url_for('admin.system_mail_settings') }}">Poczta systemowa</a>
-                            <a class="{% if request.endpoint == 'admin.global_mail_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.global_mail_footer_edit') }}">Stopka ogólna</a>
-                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.logo') %}is-active{% endif %}" href="{{ url_for('admin.logos_list') }}">Logo</a>
-                            <a class="{% if request.endpoint == 'admin.contact_page_edit' %}is-active{% endif %}" href="{{ url_for('admin.contact_page_edit') }}">Strona kontaktowa</a>
-                            <a class="{% if request.endpoint == 'admin.site_footer_edit' %}is-active{% endif %}" href="{{ url_for('admin.site_footer_edit') }}">Stopka strony</a>
-                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.service_document') %}is-active{% endif %}" href="{{ url_for('admin.service_documents_edit') }}">Dokumenty serwisu</a>
-                            <a class="{% if request.endpoint and request.endpoint.startswith('admin.user') %}is-active{% endif %}" href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
-                        {% endif %}
-                        <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
-                    </nav>
-                {% endif %}
+      <header class="admin-header">
+        <div class="admin-header-inner">
+          <a class="admin-brand" href="{{ url_for('admin.dashboard') }}">
+            <span>Admin</span>
+            <small>{{ app_name }}</small>
+          </a>
+          {% if g.admin_user %}
+          <nav class="admin-nav" aria-label="Menu administracyjne">
+            <a
+              class="{% if admin_is_active('admin.dashboard') %}is-active{% endif %}"
+              href="{{ url_for('admin.dashboard') }}"
+              >Dashboard</a
+            >
+
+            <a
+              class="{% if request.endpoint and request.endpoint.startswith('admin.form') %}is-active{% endif %}"
+              href="{{ url_for('admin.forms_list') }}"
+              >Formularze</a
+            >
+
+            <a
+              class="{% if request.endpoint and request.endpoint.startswith('admin.submission') %}is-active{% endif %}"
+              href="{{ url_for('admin.submissions_all') }}"
+              >Zgłoszenia</a
+            >
+
+            <a
+              class="{% if request.endpoint and request.endpoint.startswith('admin.mail_template') %}is-active{% endif %}"
+              href="{{ url_for('admin.mail_templates_index') }}"
+              >Szablony maili</a
+            >
+
+            {% if g.admin_user.role == "super_admin" %}
+            <div class="admin-nav-dropdown">
+              <button
+                type="button"
+                class="admin-nav-dropdown-toggle {% if request.endpoint in [ 'admin.site_administration', 'admin.system_mail_settings', 'admin.global_mail_footer_edit', 'admin.logos_list', 'admin.logo_edit', 'admin.site_footer_edit', 'admin.contact_page_edit', 'admin.service_documents_edit', 'admin.service_document_admin_file', 'admin.users_list', 'admin.user_create', 'admin.user_edit' ] %}is-active{% endif %}"
+                aria-haspopup="true"
+                aria-expanded="false"
+              >
+                Administracja stroną
+              </button>
+
+              <div class="admin-nav-dropdown-menu" hidden>
+                
+                <a href="{{ url_for('admin.system_mail_settings') }}"
+                  >Poczta systemowa</a
+                >
+                <a href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
+                <a href="{{ url_for('admin.global_mail_footer_edit') }}"
+                  >Stopka ogólna maili</a
+                >
+                <a href="{{ url_for('admin.logos_list') }}">Logo</a>
+                <a href="{{ url_for('admin.contact_page_edit') }}"
+                  >Strona kontaktowa</a
+                >
+                <a href="{{ url_for('admin.site_footer_edit') }}"
+                  >Stopka strony</a
+                >
+                <a href="{{ url_for('admin.service_documents_edit') }}"
+                  >Dokumenty serwisu</a
+                >
+              </div>
             </div>
-        </header>
-        <main class="admin-main">
-            <div class="admin-container">
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        <div class="admin-flash-stack">
-                            {% for category, message in messages %}
-                                <div class="admin-flash admin-flash-{{ category }}">{{ message }}</div>
-                            {% endfor %}
-                        </div>
-                    {% endif %}
-                {% endwith %}
-                {% block content %}{% endblock %}
+            {% endif %}
+
+            <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
+          </nav>
+          {% endif %}
+        </div>
+      </header>
+      <main class="admin-main">
+        <div class="admin-container">
+          {% with messages = get_flashed_messages(with_categories=true) %} {% if
+          messages %}
+          <div class="admin-flash-stack">
+            {% for category, message in messages %}
+            <div class="admin-flash admin-flash-{{ category }}">
+              {{ message }}
             </div>
-        </main>
+            {% endfor %}
+          </div>
+          {% endif %} {% endwith %} {% block content %}{% endblock %}
+        </div>
+      </main>
     </div>
     {% if g.admin_user %}
-    <dialog class="admin-modal admin-modal-backdrop" id="admin-global-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-global-confirm-title" data-admin-modal>
-        <div class="admin-modal__surface">
-            <header class="admin-modal__header"><h2 id="admin-global-confirm-title">Potwierdź operację</h2></header>
-            <div class="admin-modal__body"><p data-admin-confirm-message></p></div>
-            <footer class="admin-modal__footer">
-                <button class="admin-button-secondary" type="button" data-admin-modal-close>Anuluj</button>
-                <button class="admin-button-danger" type="button" data-admin-confirm-accept>Potwierdź</button>
-            </footer>
-        </div>
+    <dialog
+      class="admin-modal admin-modal-backdrop"
+      id="admin-global-confirm-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admin-global-confirm-title"
+      data-admin-modal
+    >
+      <div class="admin-modal__surface">
+        <header class="admin-modal__header">
+          <h2 id="admin-global-confirm-title">Potwierdź operację</h2>
+        </header>
+        <div class="admin-modal__body"><p data-admin-confirm-message></p></div>
+        <footer class="admin-modal__footer">
+          <button
+            class="admin-button-secondary"
+            type="button"
+            data-admin-modal-close
+          >
+            Anuluj
+          </button>
+          <button
+            class="admin-button-danger"
+            type="button"
+            data-admin-confirm-accept
+          >
+            Potwierdź
+          </button>
+        </footer>
+      </div>
     </dialog>
     {% endif %}
     <script>
-        window.APP_BASE_PATH = {{ app_base_path|tojson }};
-        (() => {
-            const enhanceRequiredFields = () => {
-                document.querySelectorAll("form").forEach((form) => {
-                    const requiredFields = Array.from(form.querySelectorAll("input[required], select[required], textarea[required]"));
-                    if (!requiredFields.length) return;
-                    requiredFields.forEach((field) => {
-                        field.setAttribute("aria-required", "true");
-                        const escapedId = field.id && window.CSS?.escape ? CSS.escape(field.id) : "";
-                        const label = field.closest("label") || (escapedId ? form.querySelector(`label[for="${escapedId}"]`) : null);
-                        const labelText = label?.querySelector(":scope > span");
-                        if (labelText && !labelText.querySelector(".required-marker")) {
-                            const marker = document.createElement("span");
-                            marker.className = "required-marker";
-                            marker.setAttribute("aria-hidden", "true");
-                            marker.textContent = "*";
-                            labelText.append(" ", marker);
-                        }
-                    });
-                    if (!form.querySelector(".admin-required-note")) {
-                        const note = document.createElement("p");
-                        note.className = "admin-required-note";
-                        note.append("Pola oznaczone ");
-                        const marker = document.createElement("span");
-                        marker.className = "required-marker";
-                        marker.setAttribute("aria-hidden", "true");
-                        marker.textContent = "*";
-                        note.append(marker, " są obowiązkowe.");
-                        const firstContent = Array.from(form.children).find((element) => (
-                            !element.matches("input[type='hidden']")
-                        ));
-                        form.insertBefore(note, firstContent || null);
-                    }
-                });
-            };
-            enhanceRequiredFields();
-            const focusableSelector = "button:not([disabled]), [href], input:not([type='hidden']):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
-            const syncModalScrollLock = () => {
-                document.body.classList.toggle("admin-modal-open", Boolean(document.querySelector("[data-admin-modal][open]")));
-            };
-            const openAdminModal = (dialog, trigger) => {
-                if (!dialog || typeof dialog.showModal !== "function" || dialog.open) return;
-                dialog.returnFocusTarget = trigger || document.activeElement;
-                dialog.showModal();
-                syncModalScrollLock();
-                window.requestAnimationFrame(() => {
-                    dialog.querySelector("[autofocus], input:not([type='hidden']), textarea, select, button")?.focus();
-                });
-            };
-            document.querySelectorAll("[data-admin-modal]").forEach((dialog) => {
-                dialog.addEventListener("keydown", (event) => {
-                    if (event.key === "Escape") {
-                        event.preventDefault();
-                        dialog.close();
-                        return;
-                    }
-                    if (event.key !== "Tab") return;
-                    const focusable = Array.from(dialog.querySelectorAll(focusableSelector)).filter((item) => !item.hidden && item.getClientRects().length);
-                    if (!focusable.length) return;
-                    const first = focusable[0];
-                    const last = focusable[focusable.length - 1];
-                    if (event.shiftKey && document.activeElement === first) {
-                        event.preventDefault();
-                        last.focus();
-                    } else if (!event.shiftKey && document.activeElement === last) {
-                        event.preventDefault();
-                        first.focus();
-                    }
-                });
-                dialog.addEventListener("close", () => {
-                    syncModalScrollLock();
-                    dialog.returnFocusTarget?.focus();
-                    dialog.returnFocusTarget = null;
-                });
-            });
-            document.addEventListener("click", (event) => {
-                const trigger = event.target.closest("[data-admin-modal-target]");
-                if (trigger) openAdminModal(document.getElementById(trigger.dataset.adminModalTarget), trigger);
-                const closer = event.target.closest("[data-admin-modal-close]");
-                if (closer) closer.closest("dialog")?.close();
-            });
+                    window.APP_BASE_PATH = {{ app_base_path|tojson }};
+                    (() => {
+                        const enhanceRequiredFields = () => {
+                            document.querySelectorAll("form").forEach((form) => {
+                                const requiredFields = Array.from(form.querySelectorAll("input[required], select[required], textarea[required]"));
+                                if (!requiredFields.length) return;
+                                requiredFields.forEach((field) => {
+                                    field.setAttribute("aria-required", "true");
+                                    const escapedId = field.id && window.CSS?.escape ? CSS.escape(field.id) : "";
+                                    const label = field.closest("label") || (escapedId ? form.querySelector(`label[for="${escapedId}"]`) : null);
+                                    const labelText = label?.querySelector(":scope > span");
+                                    if (labelText && !labelText.querySelector(".required-marker")) {
+                                        const marker = document.createElement("span");
+                                        marker.className = "required-marker";
+                                        marker.setAttribute("aria-hidden", "true");
+                                        marker.textContent = "*";
+                                        labelText.append(" ", marker);
+                                    }
+                                });
+                                if (!form.querySelector(".admin-required-note")) {
+                                    const note = document.createElement("p");
+                                    note.className = "admin-required-note";
+                                    note.append("Pola oznaczone ");
+                                    const marker = document.createElement("span");
+                                    marker.className = "required-marker";
+                                    marker.setAttribute("aria-hidden", "true");
+                                    marker.textContent = "*";
+                                    note.append(marker, " są obowiązkowe.");
+                                    const firstContent = Array.from(form.children).find((element) => (
+                                        !element.matches("input[type='hidden']")
+                                    ));
+                                    form.insertBefore(note, firstContent || null);
+                                }
+                            });
+                        };
+                        enhanceRequiredFields();
+                        const focusableSelector = "button:not([disabled]), [href], input:not([type='hidden']):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+                        const syncModalScrollLock = () => {
+                            document.body.classList.toggle("admin-modal-open", Boolean(document.querySelector("[data-admin-modal][open]")));
+                        };
+                        const openAdminModal = (dialog, trigger) => {
+                            if (!dialog || typeof dialog.showModal !== "function" || dialog.open) return;
+                            dialog.returnFocusTarget = trigger || document.activeElement;
+                            dialog.showModal();
+                            syncModalScrollLock();
+                            window.requestAnimationFrame(() => {
+                                dialog.querySelector("[autofocus], input:not([type='hidden']), textarea, select, button")?.focus();
+                            });
+                        };
+                        document.querySelectorAll("[data-admin-modal]").forEach((dialog) => {
+                            dialog.addEventListener("keydown", (event) => {
+                                if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    dialog.close();
+                                    return;
+                                }
+                                if (event.key !== "Tab") return;
+                                const focusable = Array.from(dialog.querySelectorAll(focusableSelector)).filter((item) => !item.hidden && item.getClientRects().length);
+                                if (!focusable.length) return;
+                                const first = focusable[0];
+                                const last = focusable[focusable.length - 1];
+                                if (event.shiftKey && document.activeElement === first) {
+                                    event.preventDefault();
+                                    last.focus();
+                                } else if (!event.shiftKey && document.activeElement === last) {
+                                    event.preventDefault();
+                                    first.focus();
+                                }
+                            });
+                            dialog.addEventListener("close", () => {
+                                syncModalScrollLock();
+                                dialog.returnFocusTarget?.focus();
+                                dialog.returnFocusTarget = null;
+                            });
+                        });
+                        document.addEventListener("click", (event) => {
+                            const trigger = event.target.closest("[data-admin-modal-target]");
+                            if (trigger) openAdminModal(document.getElementById(trigger.dataset.adminModalTarget), trigger);
+                            const closer = event.target.closest("[data-admin-modal-close]");
+                            if (closer) closer.closest("dialog")?.close();
+                        });
 
-            const confirmDialog = document.getElementById("admin-global-confirm-dialog");
-            let pendingConfirmation = null;
-            const requestConfirmation = (message, trigger, callback) => {
-                if (!confirmDialog) return callback();
-                const messageHolder = confirmDialog.querySelector("[data-admin-confirm-message]");
-                if (messageHolder) messageHolder.textContent = message;
-                pendingConfirmation = callback;
-                openAdminModal(confirmDialog, trigger);
-            };
-            document.addEventListener("submit", (event) => {
-                const form = event.target.closest("form[data-admin-confirm-message]");
-                if (!form || form.dataset.adminConfirmed === "1") return;
-                event.preventDefault();
-                const submitter = event.submitter;
-                requestConfirmation(form.dataset.adminConfirmMessage, submitter || form, () => {
-                    form.dataset.adminConfirmed = "1";
-                    if (submitter) form.requestSubmit(submitter);
-                    else form.requestSubmit();
-                    window.setTimeout(() => { delete form.dataset.adminConfirmed; }, 0);
-                });
-            });
-            document.addEventListener("click", (event) => {
-                const trigger = event.target.closest("[data-admin-confirm-action]");
-                if (!trigger) return;
-                event.preventDefault();
-                requestConfirmation(trigger.dataset.adminConfirmMessage || "Czy kontynuować?", trigger, () => {
-                    trigger.dispatchEvent(new CustomEvent("admin:confirmed", {bubbles: true}));
-                });
-            });
-            confirmDialog?.querySelector("[data-admin-confirm-accept]")?.addEventListener("click", () => {
-                const callback = pendingConfirmation;
-                pendingConfirmation = null;
-                confirmDialog.close();
-                callback?.();
-            });
-            confirmDialog?.addEventListener("close", () => { pendingConfirmation = null; });
-            let openActionMenu = null;
-            const actionMenuItems = (menu) => Array.from(
-                menu.querySelectorAll('[role="menuitem"]:not([disabled]), a:not([disabled]), button:not([disabled])')
-            ).filter((item) => item.getClientRects().length);
-            const closeActionMenu = (restoreFocus = false) => {
+                        const confirmDialog = document.getElementById("admin-global-confirm-dialog");
+                        let pendingConfirmation = null;
+                        const requestConfirmation = (message, trigger, callback) => {
+                            if (!confirmDialog) return callback();
+                            const messageHolder = confirmDialog.querySelector("[data-admin-confirm-message]");
+                            if (messageHolder) messageHolder.textContent = message;
+                            pendingConfirmation = callback;
+                            openAdminModal(confirmDialog, trigger);
+                        };
+                        document.addEventListener("submit", (event) => {
+                            const form = event.target.closest("form[data-admin-confirm-message]");
+                            if (!form || form.dataset.adminConfirmed === "1") return;
+                            event.preventDefault();
+                            const submitter = event.submitter;
+                            requestConfirmation(form.dataset.adminConfirmMessage, submitter || form, () => {
+                                form.dataset.adminConfirmed = "1";
+                                if (submitter) form.requestSubmit(submitter);
+                                else form.requestSubmit();
+                                window.setTimeout(() => { delete form.dataset.adminConfirmed; }, 0);
+                            });
+                        });
+                        document.addEventListener("click", (event) => {
+                            const trigger = event.target.closest("[data-admin-confirm-action]");
+                            if (!trigger) return;
+                            event.preventDefault();
+                            requestConfirmation(trigger.dataset.adminConfirmMessage || "Czy kontynuować?", trigger, () => {
+                                trigger.dispatchEvent(new CustomEvent("admin:confirmed", {bubbles: true}));
+                            });
+                        });
+                        confirmDialog?.querySelector("[data-admin-confirm-accept]")?.addEventListener("click", () => {
+                            const callback = pendingConfirmation;
+                            pendingConfirmation = null;
+                            confirmDialog.close();
+                            callback?.();
+                        });
+                        confirmDialog?.addEventListener("close", () => { pendingConfirmation = null; });
+                        let openActionMenu = null;
+                        const actionMenuItems = (menu) => Array.from(
+                            menu.querySelectorAll('[role="menuitem"]:not([disabled]), a:not([disabled]), button:not([disabled])')
+                        ).filter((item) => item.getClientRects().length);
+                        const closeActionMenu = (restoreFocus = false) => {
+                            if (!openActionMenu) return;
+                            const {button, menu, placeholder} = openActionMenu;
+                            menu.hidden = true;
+                            menu.style.removeProperty("left");
+                            menu.style.removeProperty("top");
+                            if (placeholder.parentNode) placeholder.replaceWith(menu);
+                            button.setAttribute("aria-expanded", "false");
+                            if (restoreFocus) button?.focus();
+                            openActionMenu = null;
+                        };
+                        const positionActionMenu = (button, menu) => {
+                            const rect = button.getBoundingClientRect();
+                            const width = Math.max(210, menu.offsetWidth || 210);
+                            menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
+                            const below = window.innerHeight - rect.bottom;
+                            menu.style.top = below >= Math.min(menu.scrollHeight, 320) + 8
+                                ? `${rect.bottom + 6}px`
+                                : `${Math.max(8, rect.top - Math.min(menu.scrollHeight, 320) - 6)}px`;
+                        };
+                        document.addEventListener("click", (event) => {
+                            const button = event.target.closest("[data-admin-action-toggle]");
+                            if (button) {
+                                event.preventDefault();
+                                const menu = document.getElementById(button.getAttribute("aria-controls"));
+                                const wasOpen = menu && openActionMenu?.menu === menu && !menu.hidden;
+                                closeActionMenu();
+                                if (!menu || wasOpen) return;
+                                const placeholder = document.createComment(`admin-action-menu:${menu.id}`);
+                                menu.replaceWith(placeholder);
+                                document.body.appendChild(menu);
+                                menu.hidden = false;
+                                button.setAttribute("aria-expanded", "true");
+                                openActionMenu = {button, menu, placeholder};
+                                positionActionMenu(button, menu);
+                                actionMenuItems(menu)[0]?.focus({preventScroll: true});
+                                return;
+                            }
+                            if (openActionMenu && !openActionMenu.menu.contains(event.target)) closeActionMenu();
+                        });
+                        document.addEventListener("keydown", (event) => {
+                            if (event.key === "Escape" && openActionMenu) {
+                                event.preventDefault();
+                                closeActionMenu(true);
+                                return;
+                            }
+                            if (!openActionMenu || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                            const items = actionMenuItems(openActionMenu.menu);
+                            if (!items.length) return;
+                            event.preventDefault();
+                            const current = items.indexOf(document.activeElement);
+                            const target = event.key === "Home" ? 0
+                                : event.key === "End" ? items.length - 1
+                                : event.key === "ArrowDown" ? (current + 1 + items.length) % items.length
+                                : (current - 1 + items.length) % items.length;
+                            items[target].focus({preventScroll: true});
+                        });
+                        window.addEventListener("resize", () => closeActionMenu());
+                       window.addEventListener("scroll", (event) => {
                 if (!openActionMenu) return;
-                const {button, menu, placeholder} = openActionMenu;
-                menu.hidden = true;
-                menu.style.removeProperty("left");
-                menu.style.removeProperty("top");
-                if (placeholder.parentNode) placeholder.replaceWith(menu);
-                button.setAttribute("aria-expanded", "false");
-                if (restoreFocus) button?.focus();
-                openActionMenu = null;
-            };
-            const positionActionMenu = (button, menu) => {
-                const rect = button.getBoundingClientRect();
-                const width = Math.max(210, menu.offsetWidth || 210);
-                menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
-                const below = window.innerHeight - rect.bottom;
-                menu.style.top = below >= Math.min(menu.scrollHeight, 320) + 8
-                    ? `${rect.bottom + 6}px`
-                    : `${Math.max(8, rect.top - Math.min(menu.scrollHeight, 320) - 6)}px`;
-            };
-            document.addEventListener("click", (event) => {
-                const button = event.target.closest("[data-admin-action-toggle]");
-                if (button) {
-                    event.preventDefault();
-                    const menu = document.getElementById(button.getAttribute("aria-controls"));
-                    const wasOpen = menu && openActionMenu?.menu === menu && !menu.hidden;
-                    closeActionMenu();
-                    if (!menu || wasOpen) return;
-                    const placeholder = document.createComment(`admin-action-menu:${menu.id}`);
-                    menu.replaceWith(placeholder);
-                    document.body.appendChild(menu);
-                    menu.hidden = false;
-                    button.setAttribute("aria-expanded", "true");
-                    openActionMenu = {button, menu, placeholder};
-                    positionActionMenu(button, menu);
-                    actionMenuItems(menu)[0]?.focus({preventScroll: true});
+
+                const target = event.target;
+
+                if (
+                    target === openActionMenu.menu ||
+                    openActionMenu.menu.contains(target)
+                ) {
                     return;
                 }
-                if (openActionMenu && !openActionMenu.menu.contains(event.target)) closeActionMenu();
-            });
-            document.addEventListener("keydown", (event) => {
-                if (event.key === "Escape" && openActionMenu) {
-                    event.preventDefault();
-                    closeActionMenu(true);
-                    return;
-                }
-                if (!openActionMenu || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-                const items = actionMenuItems(openActionMenu.menu);
-                if (!items.length) return;
-                event.preventDefault();
-                const current = items.indexOf(document.activeElement);
-                const target = event.key === "Home" ? 0
-                    : event.key === "End" ? items.length - 1
-                    : event.key === "ArrowDown" ? (current + 1 + items.length) % items.length
-                    : (current - 1 + items.length) % items.length;
-                items[target].focus({preventScroll: true});
-            });
-            window.addEventListener("resize", () => closeActionMenu());
-            window.addEventListener("scroll", () => closeActionMenu(), true);
-            window.addEventListener("pagehide", () => closeActionMenu());
-            document.querySelectorAll("[data-admin-action-toggle]").forEach((button) => {
-                button.setAttribute("aria-haspopup", "menu");
-            });
-            document.querySelectorAll("[data-admin-action-menu]").forEach((menu) => {
-                menu.querySelectorAll("a, button").forEach((item) => item.setAttribute("role", "menuitem"));
-            });
-            document.addEventListener("click", async (event) => {
-                const copyButton = event.target.closest("[data-copy-id]");
-                if (!copyButton) return;
-                try {
-                    await navigator.clipboard.writeText(copyButton.dataset.copyId || "");
-                    copyButton.title = "Skopiowano";
-                    copyButton.setAttribute("aria-label", "Skopiowano pełne ID");
-                } catch (_error) {
-                    copyButton.title = "Nie udało się skopiować";
-                }
-            });
-            window.AdminModal = {open: openAdminModal, confirm: requestConfirmation};
-        })();
+
+                closeActionMenu();
+            }, true);
+                        window.addEventListener("pagehide", () => closeActionMenu());
+                        document.querySelectorAll("[data-admin-action-toggle]").forEach((button) => {
+                            button.setAttribute("aria-haspopup", "menu");
+                        });
+                        document.querySelectorAll("[data-admin-action-menu]").forEach((menu) => {
+                            menu.querySelectorAll("a, button").forEach((item) => item.setAttribute("role", "menuitem"));
+                        });
+                        document.addEventListener("click", async (event) => {
+                            const copyButton = event.target.closest("[data-copy-id]");
+                            if (!copyButton) return;
+                            try {
+                                await navigator.clipboard.writeText(copyButton.dataset.copyId || "");
+                                copyButton.title = "Skopiowano";
+                                copyButton.setAttribute("aria-label", "Skopiowano pełne ID");
+                            } catch (_error) {
+                                copyButton.title = "Nie udało się skopiować";
+                            }
+                        });
+                        document.addEventListener("click", (event) => {
+          const toggle = event.target.closest(".admin-nav-dropdown-toggle");
+
+          document.querySelectorAll(".admin-nav-dropdown").forEach((dropdown) => {
+              const button = dropdown.querySelector(".admin-nav-dropdown-toggle");
+              const menu = dropdown.querySelector(".admin-nav-dropdown-menu");
+
+              if (!button || !menu) {
+                  return;
+              }
+
+              if (toggle && dropdown.contains(toggle)) {
+                  const willOpen = menu.hidden;
+                  menu.hidden = !willOpen;
+                  button.setAttribute("aria-expanded", willOpen ? "true" : "false");
+                  return;
+              }
+
+              if (!dropdown.contains(event.target)) {
+                  menu.hidden = true;
+                  button.setAttribute("aria-expanded", "false");
+              }
+          });
+      });
+
+      document.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") {
+              return;
+          }
+
+          document.querySelectorAll(".admin-nav-dropdown-menu").forEach((menu) => {
+              menu.hidden = true;
+          });
+
+          document.querySelectorAll(".admin-nav-dropdown-toggle").forEach((button) => {
+              button.setAttribute("aria-expanded", "false");
+          });
+      });
+                        window.AdminModal = {open: openAdminModal, confirm: requestConfirmation};
+                    })();
     </script>
-</body>
+  </body>
 </html>

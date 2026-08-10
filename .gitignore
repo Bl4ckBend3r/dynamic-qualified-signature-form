@@ -26,6 +26,7 @@ htmlcov/
 data/
 docs/admin
 docs/archive
+docs/agent
 docs/database
 docs/deployment
 docs/forms
@@ -40,6 +41,7 @@ storage/*
 !storage/archive/
 storage/archive/*
 !storage/archive/.gitkeep
+scripts/qa
 output/*
 !output/.gitkeep
 !output/archive/
@@ -71,3 +73,5 @@ tmp/archive/*
 # Operating-system metadata
 .DS_Store
 Thumbs.db
+
+AGENTS.md

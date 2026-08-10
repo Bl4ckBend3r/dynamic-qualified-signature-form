@@ -64,8 +64,28 @@
                 <td>{{ form.name if form else submission.form_slug }}</td>
                 <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
                 <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step, form) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
-                <td class="column-secondary">{{ {"accepted": "Zaakceptowano", "rejected": "Odrzucono", "correction": "Do poprawy", "TAK": "Zaakceptowano", "NIE": "Odrzucono"}.get(submission.officer_decision, submission.officer_decision or "-") }}</td>
-                <td class="actions-column">
+<td class="column-secondary">
+  <div class="admin-decision-cell">
+    <span class="admin-decision-current">
+      {{ {
+        "accepted": "Zaakceptowano",
+        "rejected": "Odrzucono",
+        "correction": "Do poprawy",
+        "TAK": "Zaakceptowano",
+        "NIE": "Odrzucono"
+      }.get(submission.officer_decision, submission.officer_decision or "-") }}
+    </span>
+
+    {% if form and g.admin_user.role in ["admin", "super_admin"] %}
+      <div class="admin-decision-actions">
+        <a class="admin-link-button"
+           href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#officer-decision">
+          Decyzja
+        </a>
+      </div>
+    {% endif %}
+  </div>
+</td>              <td class="actions-column">
                     {% if form %}
                         <div class="admin-action-dropdown">
                             <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="all-submission-actions-{{ submission.id }}">Akcje</button>

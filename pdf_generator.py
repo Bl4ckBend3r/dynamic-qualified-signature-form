@@ -187,12 +187,16 @@ def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> P
 
 
 def generate_pdf_from_html(app, template_html: str, context: dict, output_path: Path) -> Path:
-    with app.app_context():
-        html_string = render_template_string(template_html, **context)
-        html_string = inject_pdf_styles(app, html_string)
+    html_string = render_document_html(app, template_html, context)
 
     return write_pdf_from_html(
         html_string,
         output_path,
         footer_image_url=get_footer_image_url(context),
     )
+
+
+def render_document_html(app, template_html: str, context: dict) -> str:
+    """Render the same Jinja and CSS pipeline used by final HTML-based PDFs."""
+    with app.app_context():
+        return inject_pdf_styles(app, render_template_string(template_html, **context))

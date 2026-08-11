@@ -114,6 +114,7 @@ def build_form_definition_from_admin_form(
     else:
         workflow = dict(definition.get("workflow") or {})
     workflow = normalizer.normalize(workflow)
+    previous_contract_template_source = str(workflow.get("contract_template_source") or "")
     workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
     requested_initial_step = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
     workflow["initial_step"] = requested_initial_step
@@ -131,9 +132,28 @@ def build_form_definition_from_admin_form(
     )
     workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
-    template_source = str(form_data.get("contract_template_source") or workflow.get("contract_template_source") or "html").strip().casefold()
-    workflow["contract_template_source"] = template_source if template_source in {"html", "docx"} else "html"
+    requested_template_source = str(form_data.get("contract_template_source") or "").strip().casefold()
+    # Starsze formularze administracyjne i integracje przesyłały sam HTML,
+    # zanim wybór źródła stał się jawnym polem.
+    if not requested_template_source and workflow["contract_template_html"]:
+        requested_template_source = "html"
+    template_source = requested_template_source or str(workflow.get("contract_template_source") or "builder").strip().casefold()
+    workflow["contract_template_source"] = template_source if template_source in {"builder", "html", "docx"} else "builder"
     workflow["contract_docx_template"] = dict(workflow.get("contract_docx_template") or {})
+    builder_json = str(form_data.get("contract_builder_json") or "").strip()
+    if builder_json:
+        from services.documents.agreement_builder_service import normalize_agreement_builder_document
+
+        parsed_builder = json.loads(builder_json)
+        if not isinstance(parsed_builder, dict):
+            raise ValueError("Konfiguracja kreatora umowy musi być obiektem JSON.")
+        workflow["contract_builder_document"] = normalize_agreement_builder_document(parsed_builder)
+    if (
+        workflow["contract_template_source"] == "builder"
+        and isinstance(workflow.get("contract_builder_document"), dict)
+        and (bool(builder_json) or previous_contract_template_source != "builder" or not workflow.get("contract_builder_active_document"))
+    ):
+        workflow["contract_builder_active_document"] = normalize_agreement_builder_document(workflow["contract_builder_document"])
     workflow["contract_generation_mode"] = "per_training"
     workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
     workflow["contract_filename_pattern"] = (

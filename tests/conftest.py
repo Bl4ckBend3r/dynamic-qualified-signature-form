@@ -111,6 +111,23 @@ class InMemoryStorage:
     def ensure_form_output_structure(self, slug):
         return None
 
+    def mkdir(self, path):
+        return None
+
+    def write_bytes(self, path, content, content_type=None):
+        self.direct_files[path] = bytes(content)
+
+    def read_bytes(self, path):
+        if path not in self.direct_files:
+            raise FileNotFoundError(path)
+        return self.direct_files[path]
+
+    def delete(self, path, missing_ok=False):
+        if path in self.direct_files:
+            del self.direct_files[path]
+        elif not missing_ok:
+            raise FileNotFoundError(path)
+
     def list_form_files(self):
         return [self.form_filename]
 

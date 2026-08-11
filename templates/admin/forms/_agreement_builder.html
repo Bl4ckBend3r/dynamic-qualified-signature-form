@@ -1,0 +1,91 @@
+{% set builder_document = agreement_builder_document|default(workflow.get('contract_builder_document', {'version': 1, 'blocks': []})) %}
+<section
+    class="agreement-builder{% if agreement_builder_standalone|default(false) %} agreement-builder--standalone{% endif %}"
+    data-agreement-builder
+    data-form-id="{{ form.id }}"
+    data-save-url="{{ url_for('admin.agreement_builder_save', form_id=form.id) }}"
+    data-preview-url="{{ url_for('admin.agreement_template_preview', form_id=form.id) }}"
+    data-pdf-url="{{ url_for('admin.agreement_template_example_pdf', form_id=form.id) }}"
+    data-storage-key="agreement-builder-draft-{{ form.id }}"
+    data-view-mode="split"
+    data-layout="balanced"
+    data-variables-visible="true"
+    data-fit-width="false"
+>
+    <textarea name="contract_builder_json" data-agreement-builder-json hidden>{{ builder_document|tojson }}</textarea>
+    <script type="application/json" data-agreement-builder-initial>{{ builder_document|tojson }}</script>
+    <script type="application/json" data-agreement-builder-variables>{{ agreement_template_variables|default([])|tojson }}</script>
+    <script type="application/json" data-agreement-builder-submissions>{{ agreement_preview_submissions|default([])|tojson }}</script>
+
+    <header class="agreement-builder__header">
+        <div><h1>Umowa: {{ form.title or form.name }}</h1><p>Jedna umowa nadal odpowiada jednemu konkretnemu szkoleniu.</p></div>
+        <div class="agreement-builder__header-actions">
+            <span class="agreement-builder__status" data-agreement-builder-status role="status">Gotowy</span>
+            <button type="button" class="admin-button-secondary" data-builder-save="draft">Zapisz</button>
+            <button type="button" class="admin-button-primary" data-builder-save="activate">Aktywuj</button>
+            <button type="button" class="admin-button-secondary" data-builder-close>Zamknij kreator</button>
+        </div>
+    </header>
+
+    <div class="agreement-builder__toolbar" role="toolbar" aria-label="Narzędzia kreatora umowy">
+        <div class="agreement-builder__toolbar-group">
+            <button type="button" title="Cofnij" data-builder-action="undo">↶ <span>Cofnij</span></button><button type="button" title="Ponów" data-builder-action="redo">↷ <span>Ponów</span></button>
+            <button type="button" data-builder-add="heading">Nagłówek</button><button type="button" data-builder-add="paragraph">Akapit</button>
+            <button type="button" data-builder-format="bold"><strong>B</strong></button><button type="button" data-builder-format="italic"><em>I</em></button><button type="button" data-builder-format="underline"><u>U</u></button>
+            <button type="button" data-builder-align="left">Do lewej</button><button type="button" data-builder-align="center">Wyśrodkuj</button><button type="button" data-builder-align="right">Do prawej</button><button type="button" data-builder-align="justify">Wyjustuj</button>
+            <button type="button" data-builder-add="ordered_list">Lista numerowana</button><button type="button" data-builder-add="bullet_list">Lista punktowana</button><button type="button" data-builder-add="table">Tabela</button>
+            <button type="button" data-builder-add="agreement_section">Paragraf §</button><button type="button" data-builder-action="variables">Zmienna</button><button type="button" data-builder-add="page_break">Podział strony</button>
+        </div>
+        <div class="agreement-builder__toolbar-group agreement-builder__toolbar-group--views">
+            <button type="button" class="is-active" data-builder-view-mode="split" aria-pressed="true">Widok podzielony</button><button type="button" data-builder-view-mode="editor" aria-pressed="false">Tryb edycji</button><button type="button" data-builder-view-mode="preview" aria-pressed="false">Tryb podglądu</button>
+            <button type="button" data-builder-variables-toggle aria-pressed="true">Zmienne</button>
+            <button type="button" data-builder-size-mode="editor-wide" aria-pressed="false">Edytor szerzej</button><button type="button" data-builder-size-mode="preview-wide" aria-pressed="false">Podgląd szerzej</button>
+        </div>
+        <div class="agreement-builder__toolbar-group agreement-builder__toolbar-group--preview">
+            <label><span>Dane</span><select data-builder-preview-data><option value="">Przykładowe dane</option>{% for submission in agreement_preview_submissions|default([]) %}<option value="{{ submission.submission_id }}">{{ submission.label }}</option>{% endfor %}</select></label>
+            <label data-builder-preview-training-field hidden><span>Szkolenie</span><select data-builder-preview-training><option value="">Wybierz szkolenie</option></select></label>
+            <button type="button" data-builder-preview-now>Podgląd</button><button type="button" data-builder-download-pdf>Pobierz PDF</button><button type="button" data-builder-save="draft">Zapisz</button>
+            <span class="agreement-builder__zoom"><button type="button" data-builder-zoom="out" aria-label="Pomniejsz podgląd">−</button><output data-builder-zoom-value>80%</output><button type="button" data-builder-zoom="in" aria-label="Powiększ podgląd">+</button><button type="button" data-builder-zoom="fit" aria-pressed="false">Dopasuj szerokość</button><button type="button" data-builder-zoom="100">100%</button></span>
+            {% if agreement_docx_metadata|default({}) %}<button type="submit" formaction="{{ url_for('admin.agreement_docx_import_builder', form_id=form.id) }}" formmethod="post" formnovalidate>Importuj Word</button>{% endif %}
+        </div>
+    </div>
+
+    <div class="agreement-builder__workspace">
+        <section class="agreement-builder__editor-pane agreement-builder__editor" data-builder-editor-pane aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Edytor</strong><small>Edytuj treść, kolejność i proste warunki.</small></div>
+            <div class="agreement-builder__blocks" data-agreement-builder-blocks aria-label="Bloki umowy"></div>
+            <div class="agreement-builder__insert-menu" aria-label="Gotowe komponenty"><strong>Wstaw gotowy blok</strong><button type="button" data-builder-add="participant_data">Dane uczestnika</button><button type="button" data-builder-add="training_table">Tabela wybranych szkoleń</button><button type="button" data-builder-add="signatures">Sekcja podpisów</button><button type="button" data-builder-add="project_info">Informacje o projekcie</button></div>
+        </section>
+        <section class="agreement-builder__preview-pane agreement-builder__preview" data-builder-preview-pane aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Podgląd A4</strong><small>LIVE, bez skutków biznesowych.</small></div>
+            <div class="agreement-preview-viewport" data-builder-preview-viewport>
+                <div class="agreement-builder__preview-state" data-agreement-builder-preview-state role="status">Generowanie podglądu…</div>
+                <div class="agreement-preview-canvas" data-builder-preview-canvas hidden>
+                    <div class="agreement-preview-page agreement-builder__a4" data-agreement-builder-preview-page><iframe title="Podgląd LIVE kreatora umowy" data-agreement-builder-preview></iframe></div>
+                </div>
+            </div>
+        </section>
+        <aside class="agreement-builder__variables" data-agreement-builder-variable-panel aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Zmienne</strong><small>Kliknij albo przeciągnij.</small></div>
+            <label><span>Szukaj zmiennej…</span><input type="search" data-builder-variable-search placeholder="Nazwa, etykieta lub opis"></label>
+            <div data-builder-recent-variables hidden><strong>Ostatnio używane</strong><div data-builder-recent-list></div></div>
+            <div class="agreement-builder__variable-list">
+                {% for category, variables in (agreement_template_variables|default([]))|groupby('category') %}<details open data-builder-variable-category><summary>{{ category }}</summary>
+                    {% for variable in variables %}<article class="agreement-builder__variable" draggable="true" data-builder-variable="{{ variable.name }}" data-builder-variable-search-text="{{ (variable.name ~ ' ' ~ variable.label ~ ' ' ~ variable.description)|lower }}"><strong>{{ variable.label }}</strong><code>{{ variable.placeholder }}</code><small>{{ variable.description }}</small><span>Przykład: {{ variable.example }}</span><div><button type="button" data-builder-insert-variable="{{ variable.name }}">Wstaw</button><button type="button" data-builder-copy-variable="{{ variable.name }}">Kopiuj</button></div></article>{% endfor %}
+                </details>{% endfor %}
+            </div>
+        </aside>
+    </div>
+
+    <footer class="agreement-builder__footer">
+        <div class="agreement-builder__errors" data-agreement-builder-errors hidden></div>
+        <span>Podgląd używa wspólnego renderer’a Jinja, CSS dokumentów i generatora PDF.</span>
+        {% if agreement_builder_can_show_html|default(false) %}<details class="agreement-builder__html-preview"><summary>Pokaż wygenerowany HTML</summary><textarea rows="10" readonly data-agreement-builder-html></textarea></details>{% endif %}
+    </footer>
+
+    <dialog class="admin-modal agreement-builder-close-dialog" data-builder-close-dialog data-admin-modal role="dialog" aria-modal="true" aria-labelledby="agreement-builder-close-title">
+        <h2 id="agreement-builder-close-title">Masz niezapisane zmiany.</h2>
+        <p>Co chcesz zrobić przed zamknięciem kreatora?</p>
+        <div><button type="button" class="admin-button-primary" data-builder-close-save>Zapisz i zamknij</button><button type="button" class="admin-button-danger" data-builder-close-discard>Zamknij bez zapisywania</button><button type="button" class="admin-button-secondary" data-builder-close-cancel>Anuluj</button></div>
+    </dialog>
+</section>

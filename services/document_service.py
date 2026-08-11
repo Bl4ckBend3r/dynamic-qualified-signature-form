@@ -16,7 +16,8 @@ from services.agreement_context_service import (
     build_training_agreement_value_context,
     upgrade_training_agreement_total_placeholder,
 )
-from services.documents.agreement_template_context_service import build_agreement_template_context
+from services.documents.agreement_template_context_service import build_agreement_render_context
+from services.documents.agreement_docx_template_service import parse_stored_agreement_docx
 from services import document_naming_service as naming
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.document_view_service import DocumentViewService
@@ -394,6 +395,7 @@ class DocumentService:
             record["number"] = agreement_number
             record["agreement_number"] = agreement_number
             render_row["agreement_number"] = agreement_number
+            render_row["agreement_filename"] = filename
             context = build_document_pdf_context(
                 form_definition=form_config,
                 submission_id=submission_id,
@@ -405,10 +407,11 @@ class DocumentService:
             )
             context.update(render_row)
             self._add_collection_context(context, render_row)
-            context = build_agreement_template_context(
+            context = build_agreement_render_context(
                 context,
                 form_definition=form_config,
                 training=render_row.get("training") or item,
+                all_trainings=render_row.get("all_selected_trainings") or [item],
             )
             document_bytes = self.pdf_render_service.render_document_pdf_bytes(
                 app=current_app._get_current_object(),
@@ -690,6 +693,15 @@ class DocumentService:
         return template_html
 
     def resolve_document_template(self, document: Mapping[str, Any]) -> str:
+        if document.get("template_source") == "builder":
+            from services.documents.agreement_builder_service import render_agreement_builder_template
+
+            return render_agreement_builder_template(document.get("builder_document") or {})
+        if document.get("template_source") == "docx":
+            try:
+                return parse_stored_agreement_docx(self.storage, document.get("template_metadata") or {}).html
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
         inline_template = str(document.get("template_html") or "").strip()
         if inline_template:
             return inline_template

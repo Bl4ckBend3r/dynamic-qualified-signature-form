@@ -469,16 +469,22 @@
                     <p class="workflow-help">Deklaracja jest generowana jako jeden dokument dla zgłoszenia.</p>
                 </div>
                 <div data-form-tab-only="agreement" data-workflow-template="contract" {% if not workflow.get('requires_contract') %}hidden{% endif %}>
-                    <fieldset class="admin-form-wide agreement-template-source">
-                        <legend>Źródło szablonu umowy</legend>
-                        <label class="admin-check"><input type="radio" name="contract_template_source" value="html" {% if workflow.get('contract_template_source', 'html') == 'html' %}checked{% endif %}><span>Edytor HTML</span></label>
-                        <label class="admin-check"><input type="radio" name="contract_template_source" value="docx" {% if workflow.get('contract_template_source') == 'docx' %}checked{% endif %}><span>Plik Word (.docx)</span></label>
+                    <fieldset class="admin-form-wide agreement-template-source" data-agreement-template-source>
+                        <legend>Sposób przygotowania szablonu</legend>
+                        <label class="admin-check"><input type="radio" name="contract_template_source" value="builder" {% if workflow.get('contract_template_source', 'builder') == 'builder' %}checked{% endif %}><span>Kreator wizualny</span><small>Preferowany tryb bez znajomości HTML i Jinja.</small></label>
+                        <label class="admin-check"><input type="radio" name="contract_template_source" value="docx" {% if workflow.get('contract_template_source') == 'docx' %}checked{% endif %}><span>Microsoft Word (.docx)</span></label>
+                        <label class="admin-check"><input type="radio" name="contract_template_source" value="html" {% if workflow.get('contract_template_source') == 'html' %}checked{% endif %}><span>HTML — tryb zaawansowany</span></label>
                     </fieldset>
-                    <label class="admin-form-wide admin-code-field"><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="8" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>System wygeneruje osobną umowę dla każdego wybranego szkolenia. Wspólny CSS dokumentów zostanie dołączony automatycznie. W każdej sekcji umieszczaj najpierw numer paragrafu (np. „§ 1”), a pod nim nazwę sekcji; istniejące szablony pozostają niezmienione.</small></label>
+                    <section class="admin-form-wide agreement-builder-launcher" data-source-panel="builder" {% if workflow.get('contract_template_source', 'builder') != 'builder' %}hidden{% endif %}>
+                        <div><h3>Kreator wizualny</h3><p>Kreator otwiera się w osobnym, dużym oknie roboczym bez menu panelu administracyjnego. Blok umowy układa najpierw numer paragrafu, a pod nim nazwę sekcji.</p><small data-agreement-builder-parent-status>{% if workflow.get('contract_builder_updated_at') %}Ostatni zapis: {{ workflow.get('contract_builder_updated_at') }}{% else %}Szablon nie był jeszcze zapisywany.{% endif %}</small></div>
+                        <button type="button" class="admin-button-primary" data-agreement-builder-popup data-builder-url="{{ url_for('admin.agreement_builder_view', form_id=form.id) }}" data-form-id="{{ form.id }}">Otwórz kreator wizualny</button>
+                        <p class="agreement-builder-popup-error" data-agreement-builder-popup-error role="alert" hidden></p>
+                    </section>
+                    <label class="admin-form-wide admin-code-field" data-source-panel="html" {% if workflow.get('contract_template_source', 'builder') != 'html' %}hidden{% endif %}><span>Szablon umowy HTML</span><textarea name="contract_template_html" data-template-content="agreement" rows="16" spellcheck="false">{{ workflow.get('contract_template_html', '') }}</textarea><small>Tryb zaawansowany i kompatybilności. Wspólny CSS dokumentów zostanie dołączony automatycznie. System generuje osobną umowę dla każdego szkolenia.</small></label>
                     <p class="workflow-help">W każdej umowie <code>selected_trainings</code> zawiera jedno aktualne szkolenie. Cenę tej pozycji udostępniają <code>agreement_training_price</code> i <code>agreement_training_price_formatted</code>, a sumę całego zgłoszenia — <code>all_selected_trainings_total</code> i <code>all_selected_trainings_total_formatted</code>.</p>
                     <label class="admin-check"><input type="checkbox" name="contract_show_all_trainings_total" {% if workflow.get('contract_show_all_trainings_total', true) %}checked{% endif %}><span>Pokazuj w umowie łączną wartość wszystkich wybranych szkoleń</span><small>Włączone: tabela nadal zawiera jedno aktualne szkolenie, lecz pole łącznej wartości pokazuje sumę całego zgłoszenia. Wyłączone: pokazuje cenę aktualnego szkolenia.</small></label>
-                    <label><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
-                    <section class="admin-form-wide agreement-docx-panel">
+                    <label data-source-panel="html" {% if workflow.get('contract_template_source', 'builder') != 'html' %}hidden{% endif %}><span>Wgraj szablon umowy HTML</span><input type="file" accept="text/html,.html" data-template-file="agreement"></label>
+                    <section class="admin-form-wide agreement-docx-panel" data-source-panel="docx" {% if workflow.get('contract_template_source') != 'docx' %}hidden{% endif %}>
                         <h3>Szablon Word</h3>
                         <p>Wpisuj zmienne jako <code>{{ '{{ agreement_number }}' }}</code>. Znacznik może być podzielony na fragmenty formatowania w Wordzie. Parser przenosi akapity, nagłówki 1–3, wyrównanie, tabele, listy i puste akapity. Obrazy, pola tekstowe, przypisy i złożone formatowanie mogą zostać pominięte.</p>
                         <label><span>Plik DOCX</span><input type="file" name="agreement_docx_template" accept="application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"></label>
@@ -495,9 +501,29 @@
                                 {% if agreement_docx_metadata.get('unknown_variables') %}<p>Nieznane zmienne: <code>{{ agreement_docx_metadata.get('unknown_variables')|join(', ') }}</code></p>{% endif %}
                                 {% for warning in agreement_docx_metadata.get('warnings', []) %}<p class="workflow-help">{{ warning }}</p>{% endfor %}
                             </div>
-                            {% if agreement_docx_preview_html|default('') %}<details open><summary>Podgląd z przykładowymi danymi</summary><iframe class="agreement-docx-preview" title="Podgląd szablonu DOCX" srcdoc="{{ agreement_docx_preview_html|e }}"></iframe></details>{% endif %}
                         {% endif %}
                     </section>
+                    <section class="admin-form-wide agreement-template-test" data-agreement-template-test data-preview-url="{{ url_for('admin.agreement_template_preview', form_id=form.id) }}" data-pdf-url="{{ url_for('admin.agreement_template_example_pdf', form_id=form.id) }}">
+                        <h3>Test szablonu</h3>
+                        <p>Sprawdź, jak umowa będzie wyglądała przed użyciem jej dla prawdziwych zgłoszeń. Test nie zapisuje dokumentu i nie zmienia workflow.</p>
+                        {% if agreement_preview_error|default('') %}<div class="agreement-template-status is-invalid"><strong>Podgląd jest obecnie niedostępny.</strong><span>{{ agreement_preview_error }}</span></div>{% endif %}
+                        <p class="workflow-help" data-agreement-unsaved-warning hidden>Najpierw zapisz szablon Word, aby wygenerować podgląd aktualnie wybranego pliku.</p>
+                        <label><span>Dane podglądu</span><select data-agreement-preview-data><option value="">Przykładowe dane</option>{% for submission in agreement_preview_submissions|default([]) %}<option value="{{ submission.submission_id }}">Konkretne zgłoszenie: {{ submission.label }}</option>{% endfor %}</select></label>
+                        <label data-agreement-preview-training-field hidden><span>Szkolenie / umowa</span><select data-agreement-preview-training><option value="">Wybierz szkolenie</option></select></label>
+                        <script type="application/json" data-agreement-preview-submissions>{{ agreement_preview_submissions|default([])|tojson }}</script>
+                        <div class="admin-actions">
+                            <button type="button" class="admin-button-secondary" data-admin-modal-target="agreement-preview-dialog" data-agreement-preview-open {% if not agreement_preview_available|default(false) %}disabled{% endif %}>Podgląd generowanej umowy</button>
+                            <a class="admin-button-secondary" data-agreement-preview-pdf href="{{ url_for('admin.agreement_template_example_pdf', form_id=form.id) }}" {% if not agreement_preview_available|default(false) %}aria-disabled="true" tabindex="-1"{% endif %}>Pobierz przykładową umowę PDF</a>
+                            <a class="admin-button-secondary" href="{{ url_for('admin.agreement_docx_template_sample', form_id=form.id) }}">Pobierz przykładowy szablon Word</a>
+                        </div>
+                    </section>
+                    <dialog class="admin-modal admin-modal-backdrop agreement-preview-dialog" id="agreement-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="agreement-preview-title" data-admin-modal>
+                        <div class="admin-modal__surface agreement-preview-dialog__surface">
+                            <header class="admin-modal__header agreement-preview-dialog__header"><h2 id="agreement-preview-title">Podgląd generowanej umowy</h2><button type="button" class="agreement-preview-dialog__close" aria-label="Zamknij podgląd" data-admin-modal-close>×</button></header>
+                            <div class="admin-modal__body agreement-preview-dialog__body"><div class="agreement-preview-state" data-agreement-preview-state>Wybierz dane i kliknij „Odśwież podgląd”.</div><div class="document-preview" data-agreement-preview-page hidden><div class="document-preview__page agreement-preview-page"><iframe title="Podgląd generowanej umowy" data-agreement-preview-frame></iframe></div></div></div>
+                            <footer class="admin-modal__footer agreement-preview-dialog__footer"><button type="button" class="admin-button-secondary" data-agreement-preview-refresh>Odśwież podgląd</button><a class="admin-button-secondary" data-agreement-preview-modal-pdf href="{{ url_for('admin.agreement_template_example_pdf', form_id=form.id) }}">Pobierz PDF</a><button type="button" class="admin-button-secondary" data-admin-modal-close>Zamknij</button></footer>
+                        </div>
+                    </dialog>
                     <section class="admin-form-wide agreement-variable-browser" data-agreement-variable-browser>
                         <h3>Dostępne zmienne</h3>
                         <p>Lista pochodzi z kontekstu używanego przy generowaniu umowy oraz aktywnych pól formularza. Kliknij zmienną, aby ją skopiować.</p>
@@ -2981,5 +3007,82 @@ document.querySelectorAll("[data-agreement-variable-browser]").forEach((browser)
         window.setTimeout(() => item.classList.remove("is-copied"), 900);
     });
 });
+document.querySelectorAll("[data-agreement-template-test]").forEach((tester) => {
+    const select = tester.querySelector("[data-agreement-preview-data]");
+    const trainingField = tester.querySelector("[data-agreement-preview-training-field]");
+    const trainingSelect = tester.querySelector("[data-agreement-preview-training]");
+    const submissions = JSON.parse(tester.querySelector("[data-agreement-preview-submissions]")?.textContent || "[]");
+    const previewButton = tester.querySelector("[data-agreement-preview-open]");
+    const templateAvailable = !previewButton?.hasAttribute("disabled");
+    const dialog = document.getElementById("agreement-preview-dialog");
+    const frame = dialog?.querySelector("[data-agreement-preview-frame]");
+    const previewPage = dialog?.querySelector("[data-agreement-preview-page]");
+    const previewState = dialog?.querySelector("[data-agreement-preview-state]");
+    const links = [tester.querySelector("[data-agreement-preview-pdf]"), dialog?.querySelector("[data-agreement-preview-modal-pdf]")].filter(Boolean);
+    const resizePreviewFrame = () => {
+        if (!frame?.contentDocument) return;
+        const contentHeight = Math.max(
+            frame.contentDocument.documentElement?.scrollHeight || 0,
+            frame.contentDocument.body?.scrollHeight || 0,
+        );
+        frame.style.height = `${Math.max(contentHeight, 1123)}px`;
+    };
+    const selectionReady = () => !select?.value || Boolean(trainingSelect?.value);
+    const selectedQuery = () => {
+        const params = new URLSearchParams();
+        params.set("preview_mode", select?.value ? "submission" : "example");
+        if (select?.value) params.set("submission_id", select.value);
+        if (trainingSelect?.value) params.set("training_id", trainingSelect.value);
+        const query = params.toString();
+        return query ? `?${query}` : "";
+    };
+    const syncLinks = () => {
+        const enabled = templateAvailable && selectionReady();
+        previewButton.disabled = !enabled;
+        links.forEach((link) => {
+            link.href = tester.dataset.pdfUrl + selectedQuery();
+            link.setAttribute("aria-disabled", enabled ? "false" : "true");
+            link.tabIndex = enabled ? 0 : -1;
+        });
+    };
+    const syncTrainings = () => {
+        const submission = submissions.find((item) => item.submission_id === select?.value);
+        const trainings = submission?.trainings || [];
+        const placeholder = new Option("Wybierz szkolenie", "");
+        trainingSelect.replaceChildren(placeholder, ...trainings.map((item) => new Option(item.label, item.id)));
+        trainingField.hidden = !select?.value;
+        if (trainings.length === 1) trainingSelect.value = trainings[0].id;
+        syncLinks();
+    };
+    const refresh = async () => {
+        if (!frame || !previewPage || !previewState) return;
+        previewPage.hidden = true;
+        previewState.hidden = false;
+        previewState.classList.remove("is-error", "document-preview-error");
+        previewState.textContent = "Generowanie podglądu...";
+        syncLinks();
+        try {
+            const response = await fetch(tester.dataset.previewUrl + selectedQuery(), {headers: {Accept: "application/json"}});
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "Nie udało się wygenerować podglądu umowy.");
+            frame.srcdoc = payload.html;
+            previewState.hidden = true;
+            previewPage.hidden = false;
+        } catch (error) {
+            previewState.textContent = error.message || "Nie udało się wygenerować podglądu umowy.";
+            previewState.classList.add("is-error", "document-preview-error");
+        }
+    };
+    select?.addEventListener("change", syncTrainings);
+    trainingSelect?.addEventListener("change", syncLinks);
+    tester.querySelector("[data-agreement-preview-open]")?.addEventListener("click", refresh);
+    dialog?.querySelector("[data-agreement-preview-refresh]")?.addEventListener("click", refresh);
+    frame?.addEventListener("load", resizePreviewFrame);
+    syncTrainings();
+});
+document.querySelector('input[name="agreement_docx_template"]')?.addEventListener("change", (event) => {
+    document.querySelector("[data-agreement-unsaved-warning]")?.toggleAttribute("hidden", !event.target.files?.length);
+});
 </script>
+<script src="{{ url_for('static', filename='js/agreement_builder.js') }}"></script>
 {% endblock %}

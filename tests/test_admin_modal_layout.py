@@ -33,6 +33,20 @@ def test_admin_modal_keeps_all_structural_surfaces_opaque():
         assert "background: #fff;" in rule
 
 
+def test_agreement_preview_modal_keeps_a4_page_and_actions_inside_viewport():
+    css = (PROJECT_ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
+
+    assert ".agreement-preview-dialog__close {" in css
+    assert "width: min(1100px, calc(100vw - 40px));" in css
+    assert "max-height: 92dvh;" in css
+    assert ".agreement-preview-dialog__body {" in css
+    assert "overflow: auto;" in css
+    assert ".document-preview__page {" in css
+    assert "width: 210mm;" in css
+    assert "min-height: 297mm;" in css
+    assert ".document-preview-error" in css
+
+
 def test_every_admin_dialog_uses_shared_accessible_structure():
     templates_root = PROJECT_ROOT / "templates" / "admin"
     dialog_count = 0
@@ -61,6 +75,7 @@ def test_admin_modal_script_locks_body_handles_escape_and_traps_tab_focus():
     assert "document.activeElement === first" in base
     assert "document.activeElement === last" in base
     assert "dialog.returnFocusTarget?.focus()" in base
+    assert "if (event.target === dialog) dialog.close();" in base
 
 
 def test_correction_modal_contains_fields_checks_and_actions_inside_surface():

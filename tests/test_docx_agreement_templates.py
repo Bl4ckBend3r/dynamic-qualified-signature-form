@@ -46,6 +46,47 @@ def test_parser_escapes_word_text_but_keeps_jinja_placeholder():
     assert parsed.warnings
 
 
+def test_parser_renders_legal_paragraph_and_following_title_outside_lists():
+    def build(document):
+        document.add_paragraph("§ 2.", style="List Number")
+        document.add_paragraph("Przedmiot umowy")
+
+    parsed = parse_docx_template(_docx_bytes(build))
+
+    assert '<div class="document-section-number">§ 2.</div>' in parsed.html
+    assert '<div class="document-section-title">Przedmiot umowy</div>' in parsed.html
+    assert "<li" not in parsed.html
+
+
+def test_parser_closes_numbered_list_before_legal_paragraph():
+    def build(document):
+        document.add_paragraph("Punkt pierwszy", style="List Number")
+        document.add_paragraph("Punkt drugi", style="List Number")
+        document.add_paragraph("§ 3.", style="List Number")
+        document.add_paragraph("Prawa i obowiązki")
+
+    parsed = parse_docx_template(_docx_bytes(build))
+
+    assert parsed.html.count("<li ") == 2
+    assert parsed.html.count('<ol class="document-list">') == 1
+    assert parsed.html.index("</ol>") < parsed.html.index("document-section-number")
+    assert '<div class="document-section-title">Prawa i obowiązki</div>' in parsed.html
+
+
+def test_parser_skips_empty_numbered_paragraph_and_groups_same_num_id():
+    def build(document):
+        document.add_paragraph("Pierwszy", style="List Number")
+        document.add_paragraph("", style="List Number")
+        document.add_paragraph("Drugi", style="List Number")
+
+    parsed = parse_docx_template(_docx_bytes(build))
+
+    assert parsed.html.count('<ol class="document-list">') == 1
+    assert parsed.html.count("<li ") == 2
+    assert "<li></li>" not in parsed.html
+    assert "<li>&nbsp;</li>" not in parsed.html
+
+
 def test_parser_rejects_empty_and_invalid_documents():
     with pytest.raises(DocxTemplateParseError):
         parse_docx_template(b"")
@@ -91,6 +132,18 @@ def test_upload_marks_unknown_variables_without_crashing_and_supports_replace_do
     assert service.download(metadata) == content
     service.delete(metadata)
     assert storage.files == {}
+
+
+def test_preview_reloads_current_docx_bytes_from_storage():
+    storage = _MemoryStorage()
+    service = AgreementDocxTemplateService(storage)
+    path = service.storage_path("sample")
+    storage.files[path] = _docx_bytes(lambda document: document.add_paragraph("Aktualny {{ agreement_number }}"))
+
+    parsed = service.parse_stored_template({"storage_path": path, "html": "<p>stary</p>"})
+
+    assert "Aktualny {{ agreement_number }}" in parsed.html
+    assert "stary" not in parsed.html
 
 
 def test_form_config_selects_docx_html_without_changing_legacy_html_source():

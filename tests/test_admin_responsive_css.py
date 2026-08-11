@@ -4,6 +4,8 @@ import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ADMIN_CSS = PROJECT_ROOT / "static" / "css" / "admin.css"
+AGREEMENT_BUILDER_JS = PROJECT_ROOT / "static" / "js" / "agreement_builder.js"
+AGREEMENT_BUILDER_TEMPLATE = PROJECT_ROOT / "templates" / "admin" / "forms" / "_agreement_builder.html"
 ADMIN_TEMPLATES = PROJECT_ROOT / "templates" / "admin"
 
 
@@ -64,3 +66,41 @@ def test_static_admin_preview_layout_is_class_based():
     assert "max-width: 180px" not in form_edit
     assert 'class="admin-preview-logo admin-align-' in footer_edit
     assert "style=\"text-align:" not in footer_edit
+
+
+def test_standalone_agreement_builder_has_bounded_panels_and_a4_viewport():
+    css = ADMIN_CSS.read_text(encoding="utf-8")
+    template = AGREEMENT_BUILDER_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "grid-template-rows: auto auto auto minmax(0, 1fr);" in css
+    assert ".agreement-builder--standalone .agreement-builder__workspace" in css
+    assert "overflow: hidden;" in css
+    assert "scrollbar-gutter: stable;" in css
+    assert ".agreement-preview-viewport" in css
+    assert "width: max-content;" in css
+    assert ".agreement-preview-page" in css
+    assert "width: 210mm;" in css
+    assert "min-height: 297mm;" in css
+    assert 'data-builder-preview-viewport' in template
+    assert 'data-builder-preview-canvas' in template
+    assert 'data-agreement-builder-preview-page' in template
+
+
+def test_agreement_builder_uses_one_ui_state_for_modes_panels_and_zoom():
+    script = AGREEMENT_BUILDER_JS.read_text(encoding="utf-8")
+    template = AGREEMENT_BUILDER_TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'viewMode: "split"' in script
+    assert "variablesVisible: true" in script
+    assert 'workspaceSizeMode: "balanced"' in script
+    assert "previewZoom: 0.8" in script
+    assert "fitWidth: false" in script
+    assert "function applyBuilderLayout" in script
+    assert 'data-builder-view-mode="split"' in template
+    assert 'data-builder-view-mode="editor"' in template
+    assert 'data-builder-view-mode="preview"' in template
+    assert 'data-builder-variables-toggle' in template
+    assert 'data-builder-size-mode="editor-wide"' in template
+    assert 'data-builder-size-mode="preview-wide"' in template
+    assert 'data-builder-view="variables"' not in template
+    assert 'data-builder-toggle-variables' not in template

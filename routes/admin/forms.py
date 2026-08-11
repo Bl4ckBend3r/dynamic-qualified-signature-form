@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
+from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
+from jinja2 import UndefinedError, meta
 from sqlalchemy import func, select
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
@@ -29,7 +31,13 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
-from services.documents.agreement_template_context_service import agreement_variable_catalog
+from services.documents.agreement_builder_service import (
+    default_agreement_builder_document,
+    normalize_agreement_builder_document,
+    render_agreement_builder_template,
+    validate_agreement_builder_document,
+)
+from services.documents.agreement_template_context_service import AgreementVariableCatalog, agreement_preview_context, agreement_variable_catalog
 from services.documents.docx_template_parser import DocxTemplateParseError
 from services.process_instruction_service import (
     instruction_status_options,
@@ -49,7 +57,7 @@ from services.workflow_config_service import (
     repair_agreement_confirmation_path,
     workflow_status_options,
 )
-from pdf_generator import inject_pdf_styles
+from pdf_generator import render_document_html
 
 from . import (
     ROLE_ADMIN,
@@ -356,6 +364,14 @@ def form_edit(form_id: int):
                     request.form,
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
+                updated_workflow = updated_definition.get("workflow") or {}
+                if updated_workflow.get("requires_contract") and updated_workflow.get("contract_template_source") == "builder":
+                    builder_errors = validate_agreement_builder_document(
+                        updated_workflow.get("contract_builder_document"),
+                        active_fields_for_form(db, form.id),
+                    )
+                    if builder_errors:
+                        raise ValueError("Nie można aktywować szablonu. " + " ".join(error.message for error in builder_errors))
                 used_training_ids = _used_training_ids_for_form(db, form.slug)
                 removed_ids = request.form.getlist("training_removed_id")
                 removed_reasons = request.form.getlist(
@@ -582,7 +598,10 @@ def agreement_docx_template_upload(form_id: int):
             return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
         definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
+        imported_builder = metadata.pop("builder_document", None)
         workflow["contract_docx_template"] = metadata
+        if imported_builder:
+            workflow["contract_builder_document"] = imported_builder
         workflow["contract_template_source"] = "docx"
         workflow["managed_documents"] = True
         definition["workflow"] = workflow
@@ -592,6 +611,100 @@ def agreement_docx_template_upload(form_id: int):
             flash("DOCX zapisano, ale wymaga poprawy nieznanych zmiennych: " + ", ".join(metadata["unknown_variables"]), "warning")
         else:
             flash("Szablon DOCX zapisano i ustawiono jako aktywne źródło umowy.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+
+
+@bp.post("/forms/<int:form_id>/agreement-template/builder")
+@login_required
+def agreement_builder_save(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            document = _builder_document_from_request()
+        except ValueError as exc:
+            return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
+        errors = validate_agreement_builder_document(document, fields)
+        if errors:
+            return jsonify({"ok": False, "errors": [error.as_dict() for error in errors]}), 422
+
+        action = str(request.form.get("action") or "draft").strip().casefold()
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        if workflow.get("contract_template_source") == "builder" and not workflow.get("contract_builder_active_document"):
+            workflow["contract_builder_active_document"] = normalize_agreement_builder_document(
+                workflow.get("contract_builder_document") or default_agreement_builder_document()
+            )
+        workflow["contract_builder_document"] = document
+        workflow["contract_builder_updated_at"] = datetime.now().astimezone().isoformat()
+        workflow["contract_builder_updated_by"] = g.admin_user.id
+        workflow["contract_builder_status"] = "active" if action == "activate" else "draft"
+        if action == "activate":
+            workflow["contract_builder_active_document"] = document
+            workflow["contract_template_source"] = "builder"
+            workflow["contract_template_updated_at"] = workflow["contract_builder_updated_at"]
+            workflow["contract_template_updated_by"] = g.admin_user.id
+            workflow["contract_template_updated_source"] = "builder"
+            workflow["managed_documents"] = True
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        return jsonify({
+            "ok": True,
+            "status": workflow["contract_builder_status"],
+            "message": "Kreator zapisano jako aktywny szablon." if action == "activate" else "Wersja robocza kreatora została zapisana.",
+        })
+
+
+@bp.get("/forms/<int:form_id>/documents/agreement/builder")
+@login_required
+def agreement_builder_view(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        form.definition_json = normalize_admin_form_definition(form.definition_json or {})
+        workflow = (form.definition_json or {}).get("workflow") or {}
+        return render_template(
+            "admin/documents/agreement_builder.html",
+            form=form,
+            workflow=workflow,
+            agreement_builder_standalone=True,
+            **_agreement_docx_editor_context(form, fields),
+        )
+
+
+@bp.post("/forms/<int:form_id>/agreement-template/docx/import-builder")
+@login_required
+def agreement_docx_import_builder(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        metadata = workflow.get("contract_docx_template") or {}
+        try:
+            parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        document = parsed.builder_document
+        if not document:
+            flash("Tego szablonu DOCX nie można przekonwertować do kreatora.", "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        errors = validate_agreement_builder_document(document, active_fields_for_form(db, form.id))
+        if errors:
+            flash("Import DOCX wymaga poprawy: " + " ".join(error.message for error in errors), "warning")
+        if workflow.get("contract_template_source") == "builder" and not workflow.get("contract_builder_active_document"):
+            workflow["contract_builder_active_document"] = normalize_agreement_builder_document(
+                workflow.get("contract_builder_document") or default_agreement_builder_document()
+            )
+        workflow["contract_builder_document"] = document
+        workflow["contract_builder_status"] = "draft"
+        workflow["contract_builder_updated_at"] = datetime.now().astimezone().isoformat()
+        workflow["contract_builder_updated_by"] = g.admin_user.id
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        flash("Szablon Word zaimportowano do wersji roboczej kreatora.", "success")
         return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
 
 
@@ -619,7 +732,7 @@ def agreement_docx_template_delete(form_id: int):
         metadata = workflow.get("contract_docx_template") or {}
         current_app.extensions["services"].agreement_docx_template_service.delete(metadata)
         workflow.pop("contract_docx_template", None)
-        workflow["contract_template_source"] = "html"
+        workflow["contract_template_source"] = "builder" if workflow.get("contract_builder_active_document") else "html"
         definition["workflow"] = workflow
         form.definition_json = definition
         db.commit()
@@ -628,6 +741,7 @@ def agreement_docx_template_delete(form_id: int):
 
 
 @bp.get("/forms/<int:form_id>/agreement-template/docx/sample")
+@bp.get("/forms/<int:form_id>/documents/agreement/example.docx")
 @login_required
 def agreement_docx_template_sample(form_id: int):
     with db_session_factory()() as db:
@@ -636,19 +750,291 @@ def agreement_docx_template_sample(form_id: int):
         return send_file(BytesIO(content), mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document", as_attachment=True, download_name="przykladowy-szablon-umowy.docx")
 
 
+@bp.route("/forms/<int:form_id>/documents/agreement/preview", methods=["GET", "POST"])
+@login_required
+def agreement_template_preview(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        mode = str(request.args.get("preview_mode") or "example").strip().casefold()
+        try:
+            template_override = None
+            if request.method == "POST":
+                document = _builder_document_from_request()
+                builder_errors = validate_agreement_builder_document(document, fields)
+                if builder_errors:
+                    return jsonify({"ok": False, "errors": [error.as_dict() for error in builder_errors], "error": builder_errors[0].message}), 422
+                template_override = render_agreement_builder_template(document)
+                mode = str(request.form.get("preview_mode") or mode).strip().casefold()
+            template_html, context, _ = _agreement_preview_material(
+                form,
+                fields,
+                mode,
+                request.form.get("submission_id") if request.method == "POST" else request.args.get("submission_id"),
+                request.form.get("training_id") if request.method == "POST" else request.args.get("training_id"),
+                template_override=template_override,
+            )
+        except ValueError as exc:
+            current_app.logger.warning(
+                "agreement_preview_validation_failed form_id=%s preview_mode=%s reason=%s",
+                form.id,
+                mode,
+                str(exc),
+            )
+            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            return jsonify({"ok": False, "error": str(exc)}), 422
+        try:
+            rendered_html = render_document_html(current_app._get_current_object(), template_html, context)
+            return jsonify({"ok": True, "html": rendered_html})
+        except UndefinedError as exc:
+            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            missing = _undefined_variable_name(exc)
+            message = _missing_variables_message([missing]) if missing else "Szablon używa zmiennej, dla której nie znaleziono danych."
+            return jsonify({"ok": False, "error": message}), 422
+        except Exception as exc:
+            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            return jsonify({"ok": False, "error": "Nie udało się wygenerować podglądu umowy."}), 500
+
+
+@bp.route("/forms/<int:form_id>/documents/agreement/example.pdf", methods=["GET", "POST"])
+@login_required
+def agreement_template_example_pdf(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        mode = str(request.args.get("preview_mode") or "example").strip().casefold()
+        try:
+            template_override = None
+            if request.method == "POST":
+                document = _builder_document_from_request()
+                builder_errors = validate_agreement_builder_document(document, fields)
+                if builder_errors:
+                    return jsonify({"ok": False, "errors": [error.as_dict() for error in builder_errors], "error": builder_errors[0].message}), 422
+                template_override = render_agreement_builder_template(document)
+                mode = str(request.form.get("preview_mode") or mode).strip().casefold()
+            template_html, context, training = _agreement_preview_material(
+                form,
+                fields,
+                mode,
+                request.form.get("submission_id") if request.method == "POST" else request.args.get("submission_id"),
+                request.form.get("training_id") if request.method == "POST" else request.args.get("training_id"),
+                template_override=template_override,
+            )
+        except ValueError as exc:
+            current_app.logger.warning(
+                "agreement_preview_validation_failed form_id=%s preview_mode=%s reason=%s",
+                form.id,
+                mode,
+                str(exc),
+            )
+            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            if request.method == "POST":
+                return jsonify({"ok": False, "error": str(exc)}), 422
+            flash(str(exc), "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        try:
+            pdf = current_app.extensions["services"].document_service.pdf_render_service.render_document_pdf_bytes(
+                app=current_app._get_current_object(),
+                template_name="declaration_template.html",
+                template_html=template_html,
+                context=context,
+            )
+        except Exception as exc:
+            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            if request.method == "POST":
+                return jsonify({"ok": False, "error": "Nie udało się wygenerować PDF."}), 500
+            flash("Nie udało się wygenerować PDF.", "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        training_suffix = ""
+        if mode == "submission" and training:
+            training_suffix = "_" + normalize_slug(str(training.get("id") or training.get("training_id") or training.get("name") or "szkolenie"))
+        return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name=f"przykladowa_umowa_{form.slug}{training_suffix}.pdf")
+
+
+def _agreement_preview_material(
+    form: Form,
+    fields: list[FormField],
+    preview_mode: str,
+    submission_id: str | None,
+    training_id: str | None = None,
+    *,
+    template_override: str | None = None,
+) -> tuple[str, dict, dict]:
+    definition = form.definition_json or {}
+    if preview_mode not in {"example", "submission"}:
+        raise ValueError("Nieznany tryb danych podglądu.")
+    template_html, template_error = (template_override, None) if template_override else _resolve_agreement_preview_template(definition, fields)
+    if template_error:
+        raise template_error
+    submission = None
+    selected_training: dict = {}
+    if preview_mode == "submission":
+        if not submission_id:
+            raise ValueError("Wybierz zgłoszenie do podglądu umowy.")
+        submission = current_app.extensions["services"].submission_repository.get_by_id(submission_id)
+        if not submission or str(submission.get("form_slug") or "") != form.slug:
+            raise ValueError("Wybrane zgłoszenie nie należy do tego formularza lub jest niedostępne.")
+        trainings = parse_training_snapshots(submission.get("selected_trainings"))
+        if not trainings:
+            raise ValueError("Wybrane zgłoszenie nie posiada szkolenia, dla którego można wygenerować umowę.")
+        if training_id:
+            selected_training = next(
+                (item for item in trainings if str(item.get("id") or item.get("training_id") or "") == str(training_id)),
+                {},
+            )
+            if not selected_training:
+                raise ValueError("Wybrane szkolenie nie należy do tego zgłoszenia.")
+        elif len(trainings) > 1:
+            raise ValueError("Wybierz konkretne szkolenie do podglądu umowy.")
+        else:
+            selected_training = trainings[0]
+    context = agreement_preview_context(fields, form_definition=definition, submission=submission, training=selected_training or None)
+    context["pdf_image_url"] = current_app.extensions["services"].document_service.resolve_pdf_image_url(definition)
+    context["pdf_image_alt"] = definition.get("title", "")
+    missing_variables = _missing_agreement_template_variables(template_html, context)
+    if missing_variables:
+        raise ValueError(_missing_variables_message(missing_variables))
+    return template_html, context, selected_training
+
+
+def _missing_agreement_template_variables(template_html: str, context: dict) -> list[str]:
+    parsed_template = current_app.jinja_env.parse(template_html)
+    available = set(context) | set(current_app.jinja_env.globals)
+    return sorted(meta.find_undeclared_variables(parsed_template) - available)
+
+
+def _missing_variables_message(variable_names: list[str]) -> str:
+    formatted = ", ".join("{{ " + name + " }}" for name in variable_names if name)
+    if not formatted:
+        return "Szablon używa zmiennej, dla której nie znaleziono danych."
+    return "Szablon używa zmiennej, dla której nie znaleziono danych: " + formatted + "."
+
+
+def _undefined_variable_name(exception: UndefinedError) -> str | None:
+    match = re.search(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]\s+is undefined", str(exception))
+    return match.group(1) if match else None
+
+
+def _resolve_agreement_preview_template(definition: dict, fields: list[FormField] | tuple = ()) -> tuple[str, ValueError | None]:
+    workflow = definition.get("workflow") or {}
+    source = str(workflow.get("contract_template_source") or "").casefold()
+    metadata = workflow.get("contract_docx_template") or {}
+    if not source:
+        source = "html" if str(workflow.get("contract_template_html") or "").strip() else ("docx" if metadata else "builder")
+    if source == "builder":
+        document = workflow.get("contract_builder_active_document") or workflow.get("contract_builder_document") or default_agreement_builder_document()
+        errors = validate_agreement_builder_document(document, fields)
+        if errors:
+            return "", ValueError(errors[0].message)
+        return render_agreement_builder_template(document), None
+    if source == "docx":
+        try:
+            parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
+        except ValueError as exc:
+            return "", exc
+        parsed_metadata = {**metadata, "variables": list(parsed.variables)}
+        unknown = _current_docx_unknown_variables(parsed_metadata, fields)
+        if unknown:
+            formatted = ", ".join("{{ " + str(name) + " }}" for name in unknown)
+            return "", ValueError("Szablon zawiera nieznane zmienne: " + formatted + ".")
+        docx_html = str(parsed.html or "").strip()
+        if docx_html:
+            return docx_html, None
+        return "", ValueError("Nie wgrano szablonu umowy Word lub nie udało się go odczytać.")
+    html_template = str(workflow.get("contract_template_html") or "").strip()
+    if html_template:
+        return html_template, None
+    return "", ValueError("Nie wgrano szablonu umowy Word ani szablonu HTML.")
+
+
+def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tuple) -> list[str]:
+    variables = {str(name) for name in metadata.get("variables") or [] if str(name).strip()}
+    if not variables:
+        return sorted({str(name) for name in metadata.get("unknown_variables") or [] if str(name).strip()})
+    available = AgreementVariableCatalog.context_names(fields)
+    return sorted(variables - available)
+
+
+def _log_agreement_preview_failure(
+    form: Form,
+    preview_mode: str,
+    submission_id: str | None,
+    training_id: str | None,
+    exc: Exception,
+    *,
+    traceback: bool = False,
+) -> None:
+    workflow = (form.definition_json or {}).get("workflow") or {}
+    metadata = workflow.get("contract_docx_template") or {}
+    message = (
+        "agreement_template_preview_failed form_id=%s form_slug=%s preview_mode=%s "
+        "submission_id=%s submission_training_id=%s template_source=%s docx_storage_path=%s "
+        "exception_type=%s exception_message=%s"
+    )
+    args = (
+        form.id,
+        form.slug,
+        preview_mode,
+        submission_id or "",
+        training_id or "",
+        workflow.get("contract_template_source") or "html",
+        metadata.get("storage_path") or "",
+        type(exc).__name__,
+        str(exc),
+    )
+    if traceback:
+        current_app.logger.exception(message, *args)
+    else:
+        current_app.logger.warning(message, *args)
+
+
 def _agreement_docx_editor_context(form: Form, fields: list[FormField]) -> dict:
     definition = form.definition_json or {}
     workflow = definition.get("workflow") or {}
-    metadata = workflow.get("contract_docx_template") or {}
-    preview = ""
-    if metadata.get("html"):
-        preview = current_app.extensions["services"].agreement_docx_template_service.preview_html(metadata, fields, definition)
-        preview = inject_pdf_styles(current_app._get_current_object(), preview)
+    metadata = dict(workflow.get("contract_docx_template") or {})
+    current_unknown = _current_docx_unknown_variables(metadata, fields)
+    metadata["unknown_variables"] = current_unknown
+    metadata["valid"] = bool(metadata.get("html")) and not current_unknown
+    submissions = current_app.extensions["services"].submission_repository.list_by_form(form.slug)
+    _, preview_error = _resolve_agreement_preview_template(definition, fields)
     return {
         "agreement_template_variables": agreement_variable_catalog(fields),
         "agreement_docx_metadata": metadata,
-        "agreement_docx_preview_html": preview,
+        "agreement_preview_available": not preview_error,
+        "agreement_preview_error": str(preview_error or ""),
+        "agreement_preview_submissions": [
+            {
+                "submission_id": str(row.get("submission_id") or ""),
+                "label": " — ".join(filter(None, [str(row.get("submission_id") or ""), " ".join(filter(None, [str(row.get("imiona") or row.get("first_name") or ""), str(row.get("nazwisko") or row.get("last_name") or "")]))])),
+                "trainings": [
+                    {
+                        "id": str(training.get("id") or training.get("training_id") or ""),
+                        "label": str(training.get("name") or training.get("label") or training.get("id") or "Szkolenie"),
+                    }
+                    for training in parse_training_snapshots(row.get("selected_trainings"))
+                ],
+            }
+            for row in submissions[:100]
+            if row.get("submission_id")
+        ],
+        "agreement_builder_document": normalize_agreement_builder_document(
+            workflow.get("contract_builder_document") or default_agreement_builder_document()
+        ),
+        "agreement_builder_can_show_html": g.admin_user.role == ROLE_SUPER_ADMIN,
     }
+
+
+def _builder_document_from_request() -> dict:
+    raw = str(request.form.get("builder_json") or request.form.get("contract_builder_json") or "").strip()
+    if not raw:
+        raise ValueError("Brak danych kreatora umowy.")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Konfiguracja kreatora nie jest poprawnym JSON-em.") from exc
+    if not isinstance(value, dict):
+        raise ValueError("Konfiguracja kreatora musi być obiektem JSON.")
+    return normalize_agreement_builder_document(value)
 
 
 def _audit_training_catalog_actions(

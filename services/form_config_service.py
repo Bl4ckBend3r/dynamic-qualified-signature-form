@@ -288,9 +288,30 @@ class FormConfigService:
         normalized["requires_contract"] = bool(normalized.get("requires_contract", False))
         normalized.setdefault("declaration_template_html", "")
         normalized.setdefault("contract_template_html", "")
-        source = str(normalized.get("contract_template_source") or "html").strip().casefold()
-        normalized["contract_template_source"] = source if source in {"html", "docx"} else "html"
+        source = str(normalized.get("contract_template_source") or "").strip().casefold()
+        if not source:
+            if str(normalized.get("contract_template_html") or "").strip():
+                source = "html"
+            elif normalized.get("contract_docx_template"):
+                source = "docx"
+            else:
+                source = "builder"
+        normalized["contract_template_source"] = source if source in {"builder", "html", "docx"} else "builder"
         normalized["contract_docx_template"] = dict(normalized.get("contract_docx_template") or {})
+        from services.documents.agreement_builder_service import default_agreement_builder_document, normalize_agreement_builder_document
+
+        builder_document = normalized.get("contract_builder_document")
+        normalized["contract_builder_document"] = (
+            normalize_agreement_builder_document(builder_document)
+            if isinstance(builder_document, Mapping)
+            else default_agreement_builder_document()
+        )
+        active_builder_document = normalized.get("contract_builder_active_document")
+        normalized["contract_builder_active_document"] = (
+            normalize_agreement_builder_document(active_builder_document)
+            if isinstance(active_builder_document, Mapping)
+            else normalize_agreement_builder_document(normalized["contract_builder_document"])
+        )
         normalized["contract_generation_mode"] = "per_training"
         normalized["contract_show_all_trainings_total"] = bool(
             normalized.get("contract_show_all_trainings_total", True)
@@ -333,20 +354,34 @@ class FormConfigService:
                 template_source = "html"
                 template_metadata: dict = {}
                 if document_id == "agreement":
-                    template_source = str(workflow.get("contract_template_source") or "html")
+                    template_source = str(workflow.get("contract_template_source") or "builder")
                     template_metadata = dict(workflow.get("contract_docx_template") or {})
-                template_html = (
-                    str(template_metadata.get("html") or "").strip()
-                    if template_source == "docx"
-                    else str(workflow.get(html_key) or "").strip()
-                )
+                if template_source == "docx":
+                    template_html = str(template_metadata.get("html") or "").strip()
+                elif template_source == "builder":
+                    from services.documents.agreement_builder_service import render_agreement_builder_template
+
+                    template_html = render_agreement_builder_template(
+                        workflow.get("contract_builder_active_document")
+                        or workflow.get("contract_builder_document")
+                        or {}
+                    )
+                else:
+                    template_html = str(workflow.get(html_key) or "").strip()
                 if template_html:
                     documents_by_id[document_id]["template_html"] = template_html
                 elif workflow.get("managed_documents"):
                     documents_by_id[document_id].pop("template_html", None)
                 if document_id == "agreement":
                     documents_by_id[document_id]["template_source"] = template_source
+                    if template_source == "builder":
+                        documents_by_id[document_id]["builder_document"] = dict(
+                            workflow.get("contract_builder_active_document")
+                            or workflow.get("contract_builder_document")
+                            or {}
+                        )
                     if template_source == "docx":
+                        documents_by_id[document_id]["template_metadata"] = template_metadata
                         documents_by_id[document_id]["template_valid"] = bool(template_metadata.get("valid"))
                         documents_by_id[document_id]["template_unknown_variables"] = list(
                             template_metadata.get("unknown_variables") or []

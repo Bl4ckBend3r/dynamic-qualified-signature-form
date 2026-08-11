@@ -19,7 +19,7 @@ from jinja2 import TemplateSyntaxError, meta
 from jinja2.sandbox import SandboxedEnvironment
 
 
-PARSER_VERSION = "1.1"
+PARSER_VERSION = "1.2"
 _VARIABLE_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}", re.DOTALL)
 _JINJA_TOKEN_RE = re.compile(r"({{.*?}}|{%.*?%}|{#.*?#})", re.DOTALL)
 _JINJA_FRAGMENT_RE = re.compile(r"({{|}}|{%|%}|{#|#})")
@@ -108,6 +108,13 @@ def parse_docx_template(content: bytes) -> ParsedDocxTemplate:
                 pending_list.append(f'<li class="document-list__item document-list__item--level-{level}">{text}</li>')
                 continue
             flush_list()
+            heading_lines = _visual_lines(text) if _heading_level(block) else []
+            if len(heading_lines) > 1:
+                blocks.append(_paragraph_html(block, heading_lines[0]))
+                alignment = _paragraph_alignment(block, default="center")
+                for line in heading_lines[1:]:
+                    blocks.append(f'<p class="document-paragraph document-align-{alignment} document-heading-context">{line}</p>')
+                continue
             blocks.append(_paragraph_html(block, text))
         else:
             flush_list()
@@ -166,21 +173,34 @@ def _paragraph_text(paragraph: Paragraph, variables: set[str], warnings: list[st
 
 
 def _paragraph_html(paragraph: Paragraph, text: str) -> str:
-    style_name = str(getattr(paragraph.style, "name", "") or "").casefold()
-    heading_match = re.search(r"(?:heading|nagłówek|naglowek)\s*([1-3])", style_name)
-    tag = f"h{heading_match.group(1)}" if heading_match else "p"
+    heading_level = _heading_level(paragraph)
+    tag = f"h{heading_level}" if heading_level else "p"
     classes = ["document-paragraph"]
-    alignment = {
-        WD_ALIGN_PARAGRAPH.CENTER: "center",
-        WD_ALIGN_PARAGRAPH.RIGHT: "right",
-        WD_ALIGN_PARAGRAPH.JUSTIFY: "justify",
-        WD_ALIGN_PARAGRAPH.LEFT: "left",
-    }.get(paragraph.alignment)
+    alignment = _paragraph_alignment(paragraph)
     if alignment:
         classes.append(f"document-align-{alignment}")
     if not text:
         classes.append("document-paragraph--empty")
     return f'<{tag} class="{" ".join(classes)}">{text or "&nbsp;"}</{tag}>'
+
+
+def _heading_level(paragraph: Paragraph) -> int | None:
+    style_name = str(getattr(paragraph.style, "name", "") or "").casefold()
+    match = re.search(r"(?:heading|nagłówek|naglowek)\s*([1-3])", style_name)
+    return int(match.group(1)) if match else None
+
+
+def _paragraph_alignment(paragraph: Paragraph, *, default: str | None = None) -> str | None:
+    return {
+        WD_ALIGN_PARAGRAPH.CENTER: "center",
+        WD_ALIGN_PARAGRAPH.RIGHT: "right",
+        WD_ALIGN_PARAGRAPH.JUSTIFY: "justify",
+        WD_ALIGN_PARAGRAPH.LEFT: "left",
+    }.get(paragraph.alignment, default)
+
+
+def _visual_lines(content: str) -> list[str]:
+    return [line.strip() for line in re.split(r"<br\s*/?>", content, flags=re.IGNORECASE) if _visible_text(line)]
 
 
 def _looks_like_section_title(paragraph: Paragraph, raw_text: str, list_info: _ListInfo | None) -> bool:
@@ -340,18 +360,16 @@ def _builder_document(document: DocxDocument, variables: set[str], warnings: lis
             continue
 
         flush_list()
-        style_name = str(getattr(block.style, "name", "") or "").casefold()
-        heading_match = re.search(r"(?:heading|nagłówek|naglowek)\s*([1-3])", style_name)
-        alignment = {
-            WD_ALIGN_PARAGRAPH.CENTER: "center",
-            WD_ALIGN_PARAGRAPH.RIGHT: "right",
-            WD_ALIGN_PARAGRAPH.JUSTIFY: "justify",
-            WD_ALIGN_PARAGRAPH.LEFT: "left",
-        }.get(block.alignment, "left")
-        if heading_match:
-            blocks.append({"type": "heading", "level": int(heading_match.group(1)), "alignment": alignment, "content": content})
+        heading_level = _heading_level(block)
+        alignment = _paragraph_alignment(block, default="center" if heading_level else "left")
+        formatting = {"bold": bool(heading_level), "italic": False, "underline": False, "alignment": alignment}
+        if heading_level:
+            lines = _visual_lines(content)
+            blocks.append({"type": "heading", "level": heading_level, "format": formatting, "content": lines[0] if lines else content})
+            for line in lines[1:]:
+                blocks.append({"type": "paragraph", "format": {**formatting, "bold": False}, "content": line})
         else:
-            blocks.append({"type": "paragraph", "alignment": alignment, "content": content})
+            blocks.append({"type": "paragraph", "format": formatting, "content": content})
 
     flush_list()
     flush_section()

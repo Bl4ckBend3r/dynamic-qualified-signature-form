@@ -3019,8 +3019,15 @@ document.querySelectorAll("[data-agreement-template-test]").forEach((tester) => 
     const previewPage = dialog?.querySelector("[data-agreement-preview-page]");
     const previewState = dialog?.querySelector("[data-agreement-preview-state]");
     const links = [tester.querySelector("[data-agreement-preview-pdf]"), dialog?.querySelector("[data-agreement-preview-modal-pdf]")].filter(Boolean);
+    let previewController = null;
+    const previewErrorMessage = (payload) => {
+        const missing = Array.isArray(payload?.missing_variables) ? payload.missing_variables.filter(Boolean) : [];
+        if (!missing.length) return payload?.error || "Nie udało się wygenerować podglądu umowy.";
+        return `Nie można wygenerować podglądu.\n\nBrakujące zmienne:\n${missing.map((name) => "• " + "{" + "{ " + name + " }" + "}").join("\n")}`;
+    };
     const resizePreviewFrame = () => {
         if (!frame?.contentDocument) return;
+        frame.contentDocument.documentElement?.classList.add("agreement-preview-document");
         const contentHeight = Math.max(
             frame.contentDocument.documentElement?.scrollHeight || 0,
             frame.contentDocument.body?.scrollHeight || 0,
@@ -3056,20 +3063,53 @@ document.querySelectorAll("[data-agreement-template-test]").forEach((tester) => 
     };
     const refresh = async () => {
         if (!frame || !previewPage || !previewState) return;
+        previewController?.abort();
+        previewController = new AbortController();
         previewPage.hidden = true;
         previewState.hidden = false;
         previewState.classList.remove("is-error", "document-preview-error");
         previewState.textContent = "Generowanie podglądu...";
         syncLinks();
         try {
-            const response = await fetch(tester.dataset.previewUrl + selectedQuery(), {headers: {Accept: "application/json"}});
+            const response = await fetch(tester.dataset.previewUrl + selectedQuery(), {headers: {Accept: "application/json"}, signal: previewController.signal});
             const payload = await response.json().catch(() => ({}));
-            if (!response.ok || !payload.ok) throw new Error(payload.error || "Nie udało się wygenerować podglądu umowy.");
+            if (!response.ok || !payload.ok) throw new Error(previewErrorMessage(payload));
             frame.srcdoc = payload.html;
             previewState.hidden = true;
             previewPage.hidden = false;
         } catch (error) {
+            if (error.name === "AbortError") return;
             previewState.textContent = error.message || "Nie udało się wygenerować podglądu umowy.";
+            previewState.classList.add("is-error", "document-preview-error");
+        }
+    };
+    const downloadPdf = async (event) => {
+        const link = event.currentTarget;
+        if (link.getAttribute("aria-disabled") === "true") {
+            event.preventDefault();
+            return;
+        }
+        event.preventDefault();
+        try {
+            const response = await fetch(link.href, {headers: {Accept: "application/pdf, application/json"}});
+            const contentType = response.headers.get("content-type") || "";
+            if (!response.ok || contentType.includes("application/json")) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(previewErrorMessage(payload));
+            }
+            const blobUrl = URL.createObjectURL(await response.blob());
+            const disposition = response.headers.get("content-disposition") || "";
+            const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "przykladowa_umowa.pdf";
+            const downloadLink = document.createElement("a");
+            downloadLink.href = blobUrl;
+            downloadLink.download = filename;
+            downloadLink.click();
+            window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        } catch (error) {
+            if (dialog && typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
+            previewPage.hidden = true;
+            previewState.hidden = false;
+            previewState.textContent = error.message || "Nie udało się wygenerować przykładowego PDF.";
             previewState.classList.add("is-error", "document-preview-error");
         }
     };
@@ -3077,6 +3117,7 @@ document.querySelectorAll("[data-agreement-template-test]").forEach((tester) => 
     trainingSelect?.addEventListener("change", syncLinks);
     tester.querySelector("[data-agreement-preview-open]")?.addEventListener("click", refresh);
     dialog?.querySelector("[data-agreement-preview-refresh]")?.addEventListener("click", refresh);
+    links.forEach((link) => link.addEventListener("click", downloadPdf));
     frame?.addEventListener("load", resizePreviewFrame);
     syncTrainings();
 });

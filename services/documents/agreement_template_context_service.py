@@ -11,6 +11,36 @@ from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
 from services.training_service import format_price_pln, normalize_training_dates, parse_decimal_price, parse_training_snapshots
 
 
+def _dynamic_field_example(name: str, label: str, field_type: str) -> str:
+    normalized_name = name.strip().casefold()
+    common = {
+        "stanowisko": "Specjalista ds. projektów",
+        "nazwa_pracodawcy": "Przykład Sp. z o.o.",
+        "ulica": "Przykładowa",
+        "nr_budynku": "12",
+        "nr_lokalu": "3",
+        "kod_pocztowy": "65-001",
+        "miejscowosc": "Zielona Góra",
+        "wojewodztwo": "lubuskie",
+    }
+    if normalized_name in common:
+        return common[normalized_name]
+    normalized_type = field_type.strip().casefold()
+    if normalized_type in {"email"}:
+        return "jan.kowalski@example.org"
+    if normalized_type in {"date"}:
+        return "15.09.2026"
+    if normalized_type in {"number", "integer", "decimal"}:
+        return "1"
+    if normalized_type in {"checkbox", "boolean"}:
+        return "Tak"
+    if normalized_type in {"textarea", "multiline_text"}:
+        return "Przykładowy opis uczestnika projektu."
+    if normalized_type in {"select", "radio"}:
+        return "Wybrana odpowiedź"
+    return label or "Dane przykładowe"
+
+
 class AgreementVariableCatalog:
     """Single source of truth for variables exposed by every agreement editor."""
 
@@ -126,7 +156,7 @@ class AgreementVariableCatalog:
                 "name": name,
                 "label": label,
                 "type": field_type,
-                "example": f"Przykładowa wartość: {label}",
+                "example": _dynamic_field_example(name, label, field_type),
                 "description": f"Dynamiczne pole formularza „{label}”; jest dostępne automatycznie bez zmiany kodu.",
                 "placeholder": "{{ " + name + " }}",
             })
@@ -316,13 +346,17 @@ def build_agreement_render_context(
     )
 
 
-def agreement_sample_context(fields: Iterable[Any] = (), *, form_definition: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    sample = {item["name"]: item["example"] for item in AgreementVariableCatalog.variables(fields)}
+def build_example_agreement_context(fields: Iterable[Any] = (), *, form_definition: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Build a complete, persistence-free context for agreement previews and example PDFs."""
+    fields = tuple(fields)
+    catalog = AgreementVariableCatalog.variables(fields)
+    sample = {item["name"]: item["example"] for item in catalog}
     sample_trainings = [
         {"id": "example-training", "name": "Przykładowe szkolenie", "price": "1500", "currency": "PLN", "location": "Zielona Góra", "date": "15.09.2026", "start_date": "15.09.2026", "end_date": "16.09.2026", "start_time": "09:00", "end_time": "16:00", "description": "Praktyczne szkolenie", "is_locked": True},
         {"id": "example-training-2", "name": "Drugie szkolenie", "price": "1200", "currency": "PLN", "location": "Gorzów Wielkopolski", "date": "20.10.2026"},
     ]
     sample.update({
+        "form_definition": dict(form_definition or {}),
         "submission_id": "EXAMPLE-0001",
         "public_submission_id": "EXAMPLE-0001",
         "created_at": "2026-08-10T10:30:00",
@@ -350,7 +384,7 @@ def agreement_sample_context(fields: Iterable[Any] = (), *, form_definition: Map
     for field in fields:
         name = _field_value(field, "name").strip()
         if name:
-            sample[name] = next((item["example"] for item in AgreementVariableCatalog.variables(fields) if item["name"] == name), "Przykładowa wartość")
+            sample[name] = next((item["example"] for item in catalog if item["name"] == name), "Dane przykładowe")
     sample["submission"] = dict(sample)
     return build_agreement_render_context(
         sample,
@@ -361,6 +395,11 @@ def agreement_sample_context(fields: Iterable[Any] = (), *, form_definition: Map
     )
 
 
+def agreement_sample_context(fields: Iterable[Any] = (), *, form_definition: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Backward-compatible alias for the shared example context provider."""
+    return build_example_agreement_context(fields, form_definition=form_definition)
+
+
 def agreement_preview_context(
     fields: Iterable[Any] = (),
     *,
@@ -369,7 +408,7 @@ def agreement_preview_context(
     training: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if submission is None:
-        return agreement_sample_context(fields, form_definition=form_definition)
+        return build_example_agreement_context(fields, form_definition=form_definition)
 
     row = _flatten_submission(submission)
     trainings = parse_training_snapshots(row.get("selected_trainings"))

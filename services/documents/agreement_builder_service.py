@@ -14,6 +14,8 @@ from services.mail_template_service import sanitize_content_html
 
 BUILDER_VERSION = 1
 _JINJA_TOKEN_RE = re.compile(r"({{.*?}}|{%.*?%}|{#.*?#})", re.DOTALL)
+_TEXT_BLOCK_TYPES = {"heading", "paragraph"}
+_TEXT_ALIGNMENTS = {"left", "center", "right", "justify"}
 BUILDER_BLOCK_TYPES = {
     "heading",
     "paragraph",
@@ -49,12 +51,12 @@ def default_agreement_builder_document() -> dict[str, Any]:
             {
                 "type": "heading",
                 "level": 1,
-                "alignment": "center",
+                "format": _default_text_format("heading", alignment="center"),
                 "content": "Umowa uczestnictwa nr {{ agreement_number }}",
             },
             {
                 "type": "paragraph",
-                "alignment": "center",
+                "format": _default_text_format("paragraph", alignment="center"),
                 "content": "zawarta w dniu {{ agreement_date }}",
             },
             {
@@ -64,7 +66,7 @@ def default_agreement_builder_document() -> dict[str, Any]:
             },
             {
                 "type": "paragraph",
-                "alignment": "justify",
+                "format": _default_text_format("paragraph", alignment="justify"),
                 "content": "Umowa dotyczy udziału {{ participant_name }} w szkoleniu {{ training_name }}.",
             },
             {
@@ -92,8 +94,13 @@ def normalize_agreement_builder_document(value: Any) -> dict[str, Any]:
     blocks = [dict(block) for block in raw_blocks if isinstance(block, Mapping)] if isinstance(raw_blocks, list) else []
     for block in blocks:
         block_type = str(block.get("type") or "")
-        if block_type in {"heading", "paragraph"}:
+        block.pop("style", None)
+        if block_type in _TEXT_BLOCK_TYPES:
             block["content"] = _sanitize_builder_content(block.get("content"))
+            block["format"] = _normalize_text_format(block)
+            # `alignment` was the version-1 representation. Reading it above is
+            # the compatibility adapter; new saves use the bounded format map.
+            block.pop("alignment", None)
         elif block_type == "agreement_section":
             block["number"] = _sanitize_builder_content(block.get("number"))
             block["title"] = _sanitize_builder_content(block.get("title"))
@@ -201,13 +208,11 @@ def render_agreement_builder_template(value: Any) -> str:
 
 def _render_block(block: Mapping[str, Any]) -> str:
     block_type = str(block.get("type") or "")
-    alignment = str(block.get("alignment") or "left")
-    alignment = alignment if alignment in {"left", "center", "right", "justify"} else "left"
     if block_type == "heading":
         level = max(1, min(int(block.get("level") or 2), 3))
-        return f'<h{level} class="document-paragraph document-align-{alignment}">{_inline(block.get("content"))}</h{level}>'
+        return f'<h{level} class="{_text_format_classes(block, heading=True)}">{_inline(block.get("content"))}</h{level}>'
     if block_type == "paragraph":
-        return f'<p class="document-paragraph document-align-{alignment}">{_inline(block.get("content"))}</p>'
+        return f'<p class="{_text_format_classes(block)}">{_inline(block.get("content"))}</p>'
     if block_type == "agreement_section":
         return (
             '<section class="document-section">'
@@ -331,6 +336,48 @@ def _condition_open(condition: Mapping[str, Any]) -> str:
     if operator == "not_equals":
         return "{% if " + variable + " != " + repr(str(condition.get("value") or "")) + " %}"
     return f"{{% if {variable} %}}"
+
+
+def _default_text_format(block_type: str, *, alignment: str = "left") -> dict[str, Any]:
+    return {
+        "bold": block_type == "heading",
+        "italic": False,
+        "underline": False,
+        "alignment": alignment if alignment in _TEXT_ALIGNMENTS else "left",
+    }
+
+
+def _normalize_text_format(block: Mapping[str, Any]) -> dict[str, Any]:
+    block_type = str(block.get("type") or "paragraph")
+    raw = block.get("format") if isinstance(block.get("format"), Mapping) else {}
+    alignment = str(raw.get("alignment") or block.get("alignment") or "left").strip().casefold()
+    normalized = _default_text_format(block_type, alignment=alignment)
+    for name in ("bold", "italic", "underline"):
+        if name in raw:
+            normalized[name] = _format_flag(raw.get(name))
+    return normalized
+
+
+def _format_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _text_format_classes(block: Mapping[str, Any], *, heading: bool = False) -> str:
+    formatting = _normalize_text_format(block)
+    classes = ["document-paragraph", f'document-align-{formatting["alignment"]}']
+    if formatting["bold"]:
+        classes.append("document-bold")
+    elif heading:
+        classes.append("document-regular")
+    if formatting["italic"]:
+        classes.append("document-italic")
+    if formatting["underline"]:
+        classes.append("document-underline")
+    return " ".join(classes)
 
 
 def _inline(value: Any) -> str:

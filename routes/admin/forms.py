@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
-from jinja2 import UndefinedError, meta
+from jinja2 import TemplateSyntaxError, UndefinedError, meta
 from sqlalchemy import func, select
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
@@ -99,6 +99,34 @@ FIELD_STAGES = [
     (FIELD_STAGE_AFTER_ACCEPTANCE, "Dodatkowe pole po akceptacji"),
 ]
 LOGO_ALIGNMENTS = {"left", "center", "right"}
+
+
+class AgreementPreviewError(ValueError):
+    """A controlled, administrator-facing agreement preview failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        missing_variables: list[str] | tuple[str, ...] = (),
+        errors: list[dict] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.missing_variables = sorted({str(name) for name in missing_variables if str(name).strip()})
+        self.errors = list(errors or [])
+
+    def as_payload(self) -> dict:
+        payload = {
+            "ok": False,
+            "error": str(self),
+            "reason": self.reason,
+            "missing_variables": self.missing_variables,
+        }
+        if self.errors:
+            payload["errors"] = self.errors
+        return payload
 
 
 @bp.get("/forms")
@@ -756,16 +784,20 @@ def agreement_template_preview(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         fields = active_fields_for_form(db, form.id)
-        mode = str(request.args.get("preview_mode") or "example").strip().casefold()
+        request_values = request.form if request.method == "POST" else request.args
+        mode = str(request_values.get("preview_mode") or "example").strip().casefold()
         try:
             template_override = None
             if request.method == "POST":
-                document = _builder_document_from_request()
+                try:
+                    document = _builder_document_from_request()
+                except ValueError as exc:
+                    raise AgreementPreviewError(str(exc), reason="invalid_template") from exc
                 builder_errors = validate_agreement_builder_document(document, fields)
                 if builder_errors:
-                    return jsonify({"ok": False, "errors": [error.as_dict() for error in builder_errors], "error": builder_errors[0].message}), 422
+                    errors = [error.as_dict() for error in builder_errors]
+                    raise AgreementPreviewError(builder_errors[0].message, reason="invalid_template", errors=errors)
                 template_override = render_agreement_builder_template(document)
-                mode = str(request.form.get("preview_mode") or mode).strip().casefold()
             template_html, context, _ = _agreement_preview_material(
                 form,
                 fields,
@@ -774,25 +806,18 @@ def agreement_template_preview(form_id: int):
                 request.form.get("training_id") if request.method == "POST" else request.args.get("training_id"),
                 template_override=template_override,
             )
-        except ValueError as exc:
-            current_app.logger.warning(
-                "agreement_preview_validation_failed form_id=%s preview_mode=%s reason=%s",
-                form.id,
-                mode,
-                str(exc),
-            )
-            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
-            return jsonify({"ok": False, "error": str(exc)}), 422
+        except AgreementPreviewError as exc:
+            return _agreement_preview_error_response(form, mode, exc)
         try:
             rendered_html = render_document_html(current_app._get_current_object(), template_html, context)
             return jsonify({"ok": True, "html": rendered_html})
         except UndefinedError as exc:
-            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
             missing = _undefined_variable_name(exc)
             message = _missing_variables_message([missing]) if missing else "Szablon używa zmiennej, dla której nie znaleziono danych."
-            return jsonify({"ok": False, "error": message}), 422
-        except Exception as exc:
-            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
+            error = AgreementPreviewError(message, reason="missing_context_variables", missing_variables=[missing] if missing else [])
+            return _agreement_preview_error_response(form, mode, error)
+        except Exception:
+            current_app.logger.exception("agreement_preview_failed form_id=%s preview_mode=%s", form.id, mode)
             return jsonify({"ok": False, "error": "Nie udało się wygenerować podglądu umowy."}), 500
 
 
@@ -802,16 +827,20 @@ def agreement_template_example_pdf(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         fields = active_fields_for_form(db, form.id)
-        mode = str(request.args.get("preview_mode") or "example").strip().casefold()
+        request_values = request.form if request.method == "POST" else request.args
+        mode = str(request_values.get("preview_mode") or "example").strip().casefold()
         try:
             template_override = None
             if request.method == "POST":
-                document = _builder_document_from_request()
+                try:
+                    document = _builder_document_from_request()
+                except ValueError as exc:
+                    raise AgreementPreviewError(str(exc), reason="invalid_template") from exc
                 builder_errors = validate_agreement_builder_document(document, fields)
                 if builder_errors:
-                    return jsonify({"ok": False, "errors": [error.as_dict() for error in builder_errors], "error": builder_errors[0].message}), 422
+                    errors = [error.as_dict() for error in builder_errors]
+                    raise AgreementPreviewError(builder_errors[0].message, reason="invalid_template", errors=errors)
                 template_override = render_agreement_builder_template(document)
-                mode = str(request.form.get("preview_mode") or mode).strip().casefold()
             template_html, context, training = _agreement_preview_material(
                 form,
                 fields,
@@ -820,18 +849,8 @@ def agreement_template_example_pdf(form_id: int):
                 request.form.get("training_id") if request.method == "POST" else request.args.get("training_id"),
                 template_override=template_override,
             )
-        except ValueError as exc:
-            current_app.logger.warning(
-                "agreement_preview_validation_failed form_id=%s preview_mode=%s reason=%s",
-                form.id,
-                mode,
-                str(exc),
-            )
-            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
-            if request.method == "POST":
-                return jsonify({"ok": False, "error": str(exc)}), 422
-            flash(str(exc), "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        except AgreementPreviewError as exc:
+            return _agreement_preview_error_response(form, mode, exc)
         try:
             pdf = current_app.extensions["services"].document_service.pdf_render_service.render_document_pdf_bytes(
                 app=current_app._get_current_object(),
@@ -839,12 +858,14 @@ def agreement_template_example_pdf(form_id: int):
                 template_html=template_html,
                 context=context,
             )
-        except Exception as exc:
-            _log_agreement_preview_failure(form, mode, request.args.get("submission_id"), request.args.get("training_id"), exc, traceback=True)
-            if request.method == "POST":
-                return jsonify({"ok": False, "error": "Nie udało się wygenerować PDF."}), 500
-            flash("Nie udało się wygenerować PDF.", "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        except UndefinedError as exc:
+            missing = _undefined_variable_name(exc)
+            message = _missing_variables_message([missing]) if missing else "Szablon używa zmiennej, dla której nie znaleziono danych."
+            error = AgreementPreviewError(message, reason="missing_context_variables", missing_variables=[missing] if missing else [])
+            return _agreement_preview_error_response(form, mode, error)
+        except Exception:
+            current_app.logger.exception("agreement_preview_failed form_id=%s preview_mode=%s", form.id, mode)
+            return jsonify({"ok": False, "error": "Nie udało się wygenerować PDF."}), 500
         training_suffix = ""
         if mode == "submission" and training:
             training_suffix = "_" + normalize_slug(str(training.get("id") or training.get("training_id") or training.get("name") or "szkolenie"))
@@ -862,7 +883,7 @@ def _agreement_preview_material(
 ) -> tuple[str, dict, dict]:
     definition = form.definition_json or {}
     if preview_mode not in {"example", "submission"}:
-        raise ValueError("Nieznany tryb danych podglądu.")
+        raise AgreementPreviewError("Nieobsługiwany tryb podglądu.", reason="invalid_preview_mode")
     template_html, template_error = (template_override, None) if template_override else _resolve_agreement_preview_template(definition, fields)
     if template_error:
         raise template_error
@@ -870,22 +891,22 @@ def _agreement_preview_material(
     selected_training: dict = {}
     if preview_mode == "submission":
         if not submission_id:
-            raise ValueError("Wybierz zgłoszenie do podglądu umowy.")
+            raise AgreementPreviewError("Wybierz zgłoszenie do podglądu umowy.", reason="missing_submission")
         submission = current_app.extensions["services"].submission_repository.get_by_id(submission_id)
         if not submission or str(submission.get("form_slug") or "") != form.slug:
-            raise ValueError("Wybrane zgłoszenie nie należy do tego formularza lub jest niedostępne.")
+            raise AgreementPreviewError("Wybrane zgłoszenie nie należy do tego formularza lub jest niedostępne.", reason="missing_submission")
         trainings = parse_training_snapshots(submission.get("selected_trainings"))
         if not trainings:
-            raise ValueError("Wybrane zgłoszenie nie posiada szkolenia, dla którego można wygenerować umowę.")
+            raise AgreementPreviewError("Wybrane zgłoszenie nie posiada szkolenia, dla którego można wygenerować umowę.", reason="missing_training")
         if training_id:
             selected_training = next(
                 (item for item in trainings if str(item.get("id") or item.get("training_id") or "") == str(training_id)),
                 {},
             )
             if not selected_training:
-                raise ValueError("Wybrane szkolenie nie należy do tego zgłoszenia.")
+                raise AgreementPreviewError("Wybrane szkolenie nie należy do tego zgłoszenia.", reason="missing_training")
         elif len(trainings) > 1:
-            raise ValueError("Wybierz konkretne szkolenie do podglądu umowy.")
+            raise AgreementPreviewError("Wybierz konkretne szkolenie do podglądu umowy.", reason="missing_training")
         else:
             selected_training = trainings[0]
     context = agreement_preview_context(fields, form_definition=definition, submission=submission, training=selected_training or None)
@@ -893,12 +914,22 @@ def _agreement_preview_material(
     context["pdf_image_alt"] = definition.get("title", "")
     missing_variables = _missing_agreement_template_variables(template_html, context)
     if missing_variables:
-        raise ValueError(_missing_variables_message(missing_variables))
+        raise AgreementPreviewError(
+            _missing_variables_message(missing_variables),
+            reason="missing_context_variables",
+            missing_variables=missing_variables,
+        )
     return template_html, context, selected_training
 
 
 def _missing_agreement_template_variables(template_html: str, context: dict) -> list[str]:
-    parsed_template = current_app.jinja_env.parse(template_html)
+    try:
+        parsed_template = current_app.jinja_env.parse(template_html)
+    except TemplateSyntaxError as exc:
+        raise AgreementPreviewError(
+            "Szablon umowy zawiera niepoprawną składnię Jinja.",
+            reason="invalid_template",
+        ) from exc
     available = set(context) | set(current_app.jinja_env.globals)
     return sorted(meta.find_undeclared_variables(parsed_template) - available)
 
@@ -915,7 +946,7 @@ def _undefined_variable_name(exception: UndefinedError) -> str | None:
     return match.group(1) if match else None
 
 
-def _resolve_agreement_preview_template(definition: dict, fields: list[FormField] | tuple = ()) -> tuple[str, ValueError | None]:
+def _resolve_agreement_preview_template(definition: dict, fields: list[FormField] | tuple = ()) -> tuple[str, AgreementPreviewError | None]:
     workflow = definition.get("workflow") or {}
     source = str(workflow.get("contract_template_source") or "").casefold()
     metadata = workflow.get("contract_docx_template") or {}
@@ -925,26 +956,35 @@ def _resolve_agreement_preview_template(definition: dict, fields: list[FormField
         document = workflow.get("contract_builder_active_document") or workflow.get("contract_builder_document") or default_agreement_builder_document()
         errors = validate_agreement_builder_document(document, fields)
         if errors:
-            return "", ValueError(errors[0].message)
+            return "", AgreementPreviewError(
+                errors[0].message,
+                reason="invalid_template",
+                errors=[error.as_dict() for error in errors],
+            )
         return render_agreement_builder_template(document), None
     if source == "docx":
         try:
             parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
         except ValueError as exc:
-            return "", exc
+            error = AgreementPreviewError(str(exc), reason="docx_parse_error")
+            error.__cause__ = exc
+            return "", error
         parsed_metadata = {**metadata, "variables": list(parsed.variables)}
         unknown = _current_docx_unknown_variables(parsed_metadata, fields)
         if unknown:
-            formatted = ", ".join("{{ " + str(name) + " }}" for name in unknown)
-            return "", ValueError("Szablon zawiera nieznane zmienne: " + formatted + ".")
+            return "", AgreementPreviewError(
+                _missing_variables_message(unknown),
+                reason="missing_context_variables",
+                missing_variables=unknown,
+            )
         docx_html = str(parsed.html or "").strip()
         if docx_html:
             return docx_html, None
-        return "", ValueError("Nie wgrano szablonu umowy Word lub nie udało się go odczytać.")
+        return "", AgreementPreviewError("Nie wgrano szablonu umowy Word lub nie udało się go odczytać.", reason="missing_template")
     html_template = str(workflow.get("contract_template_html") or "").strip()
     if html_template:
         return html_template, None
-    return "", ValueError("Nie wgrano szablonu umowy Word ani szablonu HTML.")
+    return "", AgreementPreviewError("Nie wgrano szablonu umowy Word ani szablonu HTML.", reason="missing_template")
 
 
 def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tuple) -> list[str]:
@@ -955,37 +995,21 @@ def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tu
     return sorted(variables - available)
 
 
-def _log_agreement_preview_failure(
-    form: Form,
-    preview_mode: str,
-    submission_id: str | None,
-    training_id: str | None,
-    exc: Exception,
-    *,
-    traceback: bool = False,
-) -> None:
-    workflow = (form.definition_json or {}).get("workflow") or {}
-    metadata = workflow.get("contract_docx_template") or {}
-    message = (
-        "agreement_template_preview_failed form_id=%s form_slug=%s preview_mode=%s "
-        "submission_id=%s submission_training_id=%s template_source=%s docx_storage_path=%s "
-        "exception_type=%s exception_message=%s"
-    )
-    args = (
+def _agreement_preview_error_response(form: Form, preview_mode: str, error: AgreementPreviewError):
+    current_app.logger.warning(
+        "agreement_preview_422 form_id=%s preview_mode=%s reason=%s missing=%s",
         form.id,
-        form.slug,
         preview_mode,
-        submission_id or "",
-        training_id or "",
-        workflow.get("contract_template_source") or "html",
-        metadata.get("storage_path") or "",
-        type(exc).__name__,
-        str(exc),
+        error.reason,
+        error.missing_variables,
     )
-    if traceback:
-        current_app.logger.exception(message, *args)
-    else:
-        current_app.logger.warning(message, *args)
+    if error.reason == "docx_parse_error":
+        current_app.logger.exception(
+            "agreement_preview_failed form_id=%s preview_mode=%s",
+            form.id,
+            preview_mode,
+        )
+    return jsonify(error.as_payload()), 422
 
 
 def _agreement_docx_editor_context(form: Form, fields: list[FormField]) -> dict:

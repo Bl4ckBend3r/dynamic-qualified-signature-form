@@ -157,10 +157,10 @@ def write_pdf_from_html(
             header_template="<div></div>",
             footer_template=footer_template,
             margin={
-                "top": "20mm",
-                "right": "20mm",
+                "top": "18mm",
+                "right": "18mm",
                 "bottom": "28mm" if has_footer else "20mm",
-                "left": "20mm",
+                "left": "18mm",
             },
         )
 

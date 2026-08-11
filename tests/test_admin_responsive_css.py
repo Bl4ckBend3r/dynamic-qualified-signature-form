@@ -104,3 +104,19 @@ def test_agreement_builder_uses_one_ui_state_for_modes_panels_and_zoom():
     assert 'data-builder-size-mode="preview-wide"' in template
     assert 'data-builder-view="variables"' not in template
     assert 'data-builder-toggle-variables' not in template
+
+
+def test_agreement_builder_buttons_use_shared_classes_and_toolbar_groups():
+    css = ADMIN_CSS.read_text(encoding="utf-8")
+    script = AGREEMENT_BUILDER_JS.read_text(encoding="utf-8")
+    template = AGREEMENT_BUILDER_TEMPLATE.read_text(encoding="utf-8")
+
+    assert ".builder-button {" in css
+    assert ".builder-button--primary" in css
+    assert ".builder-button--success" in css
+    assert ".builder-button--danger" in css
+    assert ".builder-button--icon" in css
+    assert '.builder-button[aria-pressed="true"]' in css
+    assert "agreement-builder__toolset" in template
+    assert not re.search(r"<button\b(?![^>]*\bclass=)[^>]*>", template)
+    assert not re.search(r"<button\b(?![^>]*\bclass=)[^>]*>", script)

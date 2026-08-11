@@ -98,8 +98,10 @@
         let historyIndex = -1;
         let dirty = false;
         let activeRange = null;
+        let activeBlockIndex = -1;
         let pendingPreviewScroll = {left: 0, top: 0};
         let resetScrollOnNextPreview = false;
+        let blockedPreviewFingerprint = null;
         const builderState = {
             viewMode: "split",
             variablesVisible: true,
@@ -117,6 +119,8 @@
             }
         } catch (_) {}
 
+        documentModel = normalizeDocumentModel(documentModel);
+
         try {
             const savedUi = JSON.parse(localStorage.getItem(uiStorageKey) || "null");
             if (["split", "editor", "preview"].includes(savedUi?.viewMode)) builderState.viewMode = savedUi.viewMode;
@@ -127,8 +131,8 @@
         } catch (_) {}
 
         const blockDefaults = (type) => ({
-            heading: {type: "heading", level: 2, alignment: "left", content: "Nowy nagłówek"},
-            paragraph: {type: "paragraph", alignment: "left", content: "Nowy akapit"},
+            heading: {type: "heading", level: 2, format: {bold: true, italic: false, underline: false, alignment: "left"}, content: "Nowy nagłówek"},
+            paragraph: {type: "paragraph", format: {bold: false, italic: false, underline: false, alignment: "left"}, content: "Nowy akapit"},
             agreement_section: {type: "agreement_section", number: "§ 1.", title: "Tytuł paragrafu"},
             ordered_list: {type: "ordered_list", items: [{content: "Pierwszy punkt", level: 0}]},
             bullet_list: {type: "bullet_list", items: [{content: "Pierwszy punkt", level: 0}]},
@@ -139,6 +143,46 @@
             project_info: {type: "project_info", fields: ["project_name", "project_number", "project_program", "funding_source"], show_logo: false},
             page_break: {type: "page_break"},
         }[type]);
+
+        function textBlockFormat(block) {
+            const textBlock = ["heading", "paragraph"].includes(block?.type);
+            if (!textBlock) return null;
+            const raw = block.format && typeof block.format === "object" ? block.format : {};
+            const alignment = ["left", "center", "right", "justify"].includes(raw.alignment)
+                ? raw.alignment
+                : (["left", "center", "right", "justify"].includes(block.alignment) ? block.alignment : "left");
+            return {
+                bold: Object.prototype.hasOwnProperty.call(raw, "bold") ? raw.bold === true : block.type === "heading",
+                italic: raw.italic === true,
+                underline: raw.underline === true,
+                alignment,
+            };
+        }
+
+        function normalizeDocumentModel(value) {
+            const model = value && typeof value === "object" ? clone(value) : {version: 1, blocks: []};
+            model.version = 1;
+            model.blocks = Array.isArray(model.blocks) ? model.blocks : [];
+            model.blocks.forEach((block) => {
+                const formatting = textBlockFormat(block);
+                if (!formatting) return;
+                block.format = formatting;
+                delete block.alignment;
+                delete block.style;
+            });
+            return model;
+        }
+
+        function blockFormatClasses(block) {
+            const formatting = textBlockFormat(block);
+            if (!formatting) return "";
+            return [
+                formatting.bold ? "is-format-bold" : "",
+                formatting.italic ? "is-format-italic" : "",
+                formatting.underline ? "is-format-underline" : "",
+                `is-align-${formatting.alignment}`,
+            ].filter(Boolean).join(" ");
+        }
 
         function conditionEditor(block, index) {
             const condition = block.condition || {};
@@ -160,9 +204,9 @@
                 body = `<div class="agreement-builder-block__section">${editable(block.number, "number", index)}${editable(block.title, "title", index)}</div>`;
             } else if (["ordered_list", "bullet_list"].includes(block.type)) {
                 const tag = block.type === "ordered_list" ? "ol" : "ul";
-                body = `<${tag}>${(block.items || []).map((item, itemIndex) => `<li data-level="${Number(item.level || 0)}"><div contenteditable="true" data-builder-list-item data-index="${index}" data-item-index="${itemIndex}">${item.content || ""}</div><button type="button" aria-label="Usuń punkt" data-builder-remove-item data-index="${index}" data-item-index="${itemIndex}">×</button></li>`).join("")}</${tag}><button type="button" data-builder-add-item data-index="${index}">Dodaj punkt</button>`;
+                body = `<${tag}>${(block.items || []).map((item, itemIndex) => `<li data-level="${Number(item.level || 0)}"><div contenteditable="true" data-builder-list-item data-index="${index}" data-item-index="${itemIndex}">${item.content || ""}</div><button type="button" class="builder-button builder-button--icon builder-button--danger builder-button--compact" aria-label="Usuń punkt" data-builder-remove-item data-index="${index}" data-item-index="${itemIndex}">×</button></li>`).join("")}</${tag}><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-item data-index="${index}">Dodaj punkt</button>`;
             } else if (block.type === "table") {
-                body = `<table><tbody>${(block.rows || []).map((row, rowIndex) => `<tr>${row.map((cell, cellIndex) => `<td contenteditable="true" data-builder-table-cell data-index="${index}" data-row-index="${rowIndex}" data-cell-index="${cellIndex}">${cell || ""}</td>`).join("")}</tr>`).join("")}</tbody></table><button type="button" data-builder-add-row data-index="${index}">Dodaj wiersz</button>`;
+                body = `<table><tbody>${(block.rows || []).map((row, rowIndex) => `<tr>${row.map((cell, cellIndex) => `<td contenteditable="true" data-builder-table-cell data-index="${index}" data-row-index="${rowIndex}" data-cell-index="${cellIndex}">${cell || ""}</td>`).join("")}</tr>`).join("")}</tbody></table><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-row data-index="${index}">Dodaj wiersz</button>`;
             } else if (block.type === "training_table") {
                 const columnOptions = [["index", "Lp."], ["name", "Nazwa szkolenia"], ["price", "Cena"], ["date", "Termin"], ["location", "Lokalizacja"]];
                 body = `<fieldset><legend>Kolumny tabeli</legend>${columnOptions.map(([value, label]) => `<label><input type="checkbox" data-builder-array="columns" data-index="${index}" value="${value}" ${(block.columns || []).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</fieldset><label>Zakres <select data-builder-field="scope" data-index="${index}"><option value="selected_trainings" ${block.scope === "selected_trainings" ? "selected" : ""}>Bieżące szkolenie</option><option value="all_selected_trainings" ${block.scope === "all_selected_trainings" ? "selected" : ""}>Wszystkie wybrane</option><option value="locked_trainings" ${block.scope === "locked_trainings" ? "selected" : ""}>Zablokowane</option></select></label><label><input type="checkbox" data-builder-field="show_total" data-index="${index}" ${block.show_total ? "checked" : ""}> Pokaż sumę</label>`;
@@ -177,12 +221,16 @@
             } else if (block.type === "page_break") {
                 body = '<div class="agreement-builder-block__page-break">Podział strony</div>';
             }
-            return `<article class="agreement-builder-block" draggable="true" data-builder-block data-index="${index}" data-block-type="${escapeHtml(block.type)}"><header><strong>${escapeHtml(block.type.replaceAll("_", " "))}</strong><span><button type="button" title="Przesuń w górę" data-builder-move="up" data-index="${index}">↑</button><button type="button" title="Przesuń w dół" data-builder-move="down" data-index="${index}">↓</button><button type="button" title="Usuń blok" data-builder-remove data-index="${index}">Usuń</button></span></header><div class="agreement-builder-block__body">${body}</div>${conditionEditor(block, index)}</article>`;
+            const selectedClass = index === activeBlockIndex ? " is-selected" : "";
+            const formatClasses = blockFormatClasses(block);
+            return `<article class="agreement-builder-block${selectedClass}${formatClasses ? ` ${formatClasses}` : ""}" draggable="true" data-builder-block data-index="${index}" data-block-type="${escapeHtml(block.type)}" aria-selected="${index === activeBlockIndex}"><header><strong>${escapeHtml(block.type.replaceAll("_", " "))}</strong><span><button type="button" class="builder-button builder-button--icon builder-button--compact" title="Przesuń w górę" aria-label="Przesuń blok w górę" data-builder-move="up" data-index="${index}">↑</button><button type="button" class="builder-button builder-button--icon builder-button--compact" title="Przesuń w dół" aria-label="Przesuń blok w dół" data-builder-move="down" data-index="${index}">↓</button><button type="button" class="builder-button builder-button--danger builder-button--compact" title="Usuń blok" data-builder-remove data-index="${index}">Usuń</button></span></header><div class="agreement-builder-block__body">${body}</div>${conditionEditor(block, index)}</article>`;
         }
 
         function render() {
             blocksNode.innerHTML = documentModel.blocks.map(renderBlock).join("");
             hiddenJson.value = JSON.stringify(documentModel);
+            activeEditable = null;
+            activeRange = null;
             refreshControls();
         }
 
@@ -212,13 +260,14 @@
             changed();
         }
 
-        function changed() {
+        function changed({checkpointNow = false} = {}) {
             hiddenJson.value = JSON.stringify(documentModel);
             statusNode.textContent = "Niezapisane zmiany";
             dirty = true;
             try { localStorage.setItem(localKey, JSON.stringify({savedAt: new Date().toISOString(), document: documentModel})); } catch (_) {}
             window.clearTimeout(historyTimer);
-            historyTimer = window.setTimeout(checkpoint, 350);
+            if (checkpointNow) checkpoint();
+            else historyTimer = window.setTimeout(checkpoint, 350);
             schedulePreview();
         }
 
@@ -236,6 +285,7 @@
             if (nextIndex < 0 || nextIndex >= history.length) return;
             historyIndex = nextIndex;
             documentModel = JSON.parse(history[historyIndex]);
+            activeBlockIndex = Math.min(activeBlockIndex, documentModel.blocks.length - 1);
             render();
             changed();
         }
@@ -243,6 +293,57 @@
         function refreshControls() {
             root.querySelector('[data-builder-action="undo"]')?.toggleAttribute("disabled", historyIndex <= 0);
             root.querySelector('[data-builder-action="redo"]')?.toggleAttribute("disabled", historyIndex >= history.length - 1);
+            refreshFormattingControls();
+        }
+
+        function activeTextBlock() {
+            const block = documentModel.blocks[activeBlockIndex];
+            return textBlockFormat(block) ? block : null;
+        }
+
+        function setActiveBlock(index) {
+            activeBlockIndex = Number.isInteger(index) && documentModel.blocks[index] ? index : -1;
+            root.querySelectorAll("[data-builder-block]").forEach((article) => {
+                const selected = Number(article.dataset.index) === activeBlockIndex;
+                article.classList.toggle("is-selected", selected);
+                article.setAttribute("aria-selected", String(selected));
+            });
+            refreshFormattingControls();
+        }
+
+        function refreshFormattingControls() {
+            const block = activeTextBlock();
+            const formatting = textBlockFormat(block);
+            root.querySelectorAll("[data-builder-format]").forEach((button) => {
+                const active = Boolean(formatting?.[button.dataset.builderFormat]);
+                button.disabled = !block;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-pressed", String(active));
+            });
+            root.querySelectorAll("[data-builder-align]").forEach((button) => {
+                const active = formatting?.alignment === button.dataset.builderAlign;
+                button.disabled = !block;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-pressed", String(active));
+            });
+        }
+
+        function toggleBlockFormat(name) {
+            const block = activeTextBlock();
+            if (!block || !["bold", "italic", "underline"].includes(name)) return;
+            block.format = textBlockFormat(block);
+            block.format[name] = !block.format[name];
+            render();
+            changed({checkpointNow: true});
+        }
+
+        function alignBlock(alignment) {
+            const block = activeTextBlock();
+            if (!block || !["left", "center", "right", "justify"].includes(alignment)) return;
+            block.format = textBlockFormat(block);
+            block.format.alignment = alignment;
+            render();
+            changed({checkpointNow: true});
         }
 
         function selectedParams(formData) {
@@ -260,15 +361,28 @@
             return data;
         }
 
-        function showErrors(payload) {
-            const errors = payload?.errors?.length ? payload.errors : [{message: payload?.error || "Nie udało się wykonać operacji."}];
+        function previewErrorMessage(payload) {
+            const missing = Array.isArray(payload?.missing_variables) ? payload.missing_variables.filter(Boolean) : [];
+            if (!missing.length) return payload?.error || "Nie udało się wygenerować podglądu umowy.";
+            return `Nie można wygenerować podglądu.\n\nBrakujące zmienne:\n${missing.map((name) => `• {{ ${name} }}`).join("\n")}`;
+        }
+
+        function showErrors(payload, heading = "Nie można aktywować szablonu.") {
+            const missing = Array.isArray(payload?.missing_variables) ? payload.missing_variables.filter(Boolean) : [];
+            const errors = payload?.errors?.length
+                ? payload.errors
+                : missing.length
+                    ? missing.map((name) => ({message: `Brak zmiennej {{ ${name} }}`}))
+                    : [{message: payload?.error || "Nie udało się wykonać operacji."}];
             errorsNode.hidden = false;
-            errorsNode.innerHTML = `<strong>Nie można aktywować szablonu.</strong><ul>${errors.map((error) => `<li><button type="button" data-builder-error-path="${escapeHtml(error.path || "")}">${escapeHtml(error.message)}</button></li>`).join("")}</ul>`;
+            errorsNode.innerHTML = `<strong>${escapeHtml(heading)}</strong><ul>${errors.map((error) => `<li><button type="button" class="agreement-builder__error-link" data-builder-error-path="${escapeHtml(error.path || "")}">${escapeHtml(error.message)}</button></li>`).join("")}</ul>`;
             statusNode.textContent = errors[0].message;
         }
 
-        async function preview({resetScroll = false} = {}) {
+        async function preview({resetScroll = false, force = false} = {}) {
             if (root.hidden) return;
+            const previewFingerprint = JSON.stringify([documentModel, previewData?.value || "", previewTraining?.value || ""]);
+            if (!force && blockedPreviewFingerprint === previewFingerprint) return;
             pendingPreviewScroll = resetScroll || !previewViewport
                 ? {left: 0, top: 0}
                 : {left: previewViewport.scrollLeft, top: previewViewport.scrollTop};
@@ -286,13 +400,18 @@
             try {
                 const response = await fetch(root.dataset.previewUrl, {method: "POST", body: requestFormData(), signal: previewController.signal, headers: {Accept: "application/json"}});
                 const payload = await response.json().catch(() => ({}));
-                if (!response.ok || !payload.ok) { showErrors(payload); throw new Error(payload.error || "Podgląd zawiera błędy."); }
+                if (!response.ok || !payload.ok) {
+                    if (response.status === 422) blockedPreviewFingerprint = previewFingerprint;
+                    showErrors(payload, "Nie można wygenerować podglądu.");
+                    throw new Error(previewErrorMessage(payload));
+                }
+                blockedPreviewFingerprint = null;
                 errorsNode.hidden = true;
                 previewFrame.srcdoc = payload.html;
                 if (htmlPreview) htmlPreview.value = payload.html;
                 previewState.hidden = true;
                 previewCanvas.hidden = false;
-                statusNode.textContent = "Podgląd aktualny";
+                if (!dirty) statusNode.textContent = "Podgląd aktualny";
             } catch (error) {
                 if (error.name === "AbortError") return;
                 previewState.textContent = error.message;
@@ -398,7 +517,7 @@
             const response = await fetch(root.dataset.pdfUrl, {method: "POST", body: requestFormData()});
             const contentType = response.headers.get("content-type") || "";
             if (!response.ok || contentType.includes("application/json")) {
-                showErrors(await response.json().catch(() => ({})));
+                showErrors(await response.json().catch(() => ({})), "Nie można wygenerować przykładowego PDF.");
                 return;
             }
             const blob = await response.blob();
@@ -406,7 +525,7 @@
             const link = document.createElement("a");
             link.href = url; link.download = "przykladowa-umowa.pdf"; link.click();
             window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-            statusNode.textContent = "PDF pobrany";
+            if (!dirty) statusNode.textContent = "PDF pobrany";
         }
 
         function insertVariable(name) {
@@ -445,7 +564,7 @@
             if (!recent) try { recent = JSON.parse(localStorage.getItem(`${localKey}-recent-variables`) || "[]"); } catch (_) { recent = []; }
             const valid = (recent || []).filter((name) => variableNames.has(name));
             wrapper.hidden = !valid.length;
-            list.innerHTML = valid.map((name) => `<button type="button" data-builder-insert-variable="${escapeHtml(name)}">{{ ${escapeHtml(name)} }}</button>`).join("");
+            list.innerHTML = valid.map((name) => `<button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-insert-variable="${escapeHtml(name)}">{{ ${escapeHtml(name)} }}</button>`).join("");
         }
 
         const rememberEditableRange = () => {
@@ -454,18 +573,24 @@
             const range = selection.getRangeAt(0);
             if (activeEditable.contains(range.commonAncestorContainer)) activeRange = range.cloneRange();
         };
-        root.addEventListener("focusin", (event) => { if (event.target.isContentEditable) { activeEditable = event.target; rememberEditableRange(); } });
+        root.addEventListener("focusin", (event) => {
+            const article = event.target.closest?.("[data-builder-block]");
+            if (article) setActiveBlock(Number(article.dataset.index));
+            if (event.target.isContentEditable) { activeEditable = event.target; rememberEditableRange(); }
+        });
         root.addEventListener("keyup", rememberEditableRange);
         root.addEventListener("mouseup", rememberEditableRange);
         root.addEventListener("input", (event) => readField(event.target));
         root.addEventListener("change", (event) => readField(event.target));
         root.addEventListener("click", async (event) => {
+            const selectedArticle = event.target.closest("[data-builder-block]");
+            if (selectedArticle) setActiveBlock(Number(selectedArticle.dataset.index));
             const add = event.target.closest("[data-builder-add]");
-            if (add) { documentModel.blocks.push(clone(blockDefaults(add.dataset.builderAdd))); render(); changed(); return; }
+            if (add) { documentModel.blocks.push(clone(blockDefaults(add.dataset.builderAdd))); activeBlockIndex = documentModel.blocks.length - 1; render(); changed(); return; }
             const remove = event.target.closest("[data-builder-remove]");
-            if (remove) { documentModel.blocks.splice(Number(remove.dataset.index), 1); render(); changed(); return; }
+            if (remove) { const removed = Number(remove.dataset.index); documentModel.blocks.splice(removed, 1); activeBlockIndex = Math.min(removed, documentModel.blocks.length - 1); render(); changed(); return; }
             const move = event.target.closest("[data-builder-move]");
-            if (move) { const from = Number(move.dataset.index); const to = move.dataset.builderMove === "up" ? from - 1 : from + 1; if (to >= 0 && to < documentModel.blocks.length) [documentModel.blocks[from], documentModel.blocks[to]] = [documentModel.blocks[to], documentModel.blocks[from]]; render(); changed(); return; }
+            if (move) { const from = Number(move.dataset.index); const to = move.dataset.builderMove === "up" ? from - 1 : from + 1; if (to >= 0 && to < documentModel.blocks.length) { [documentModel.blocks[from], documentModel.blocks[to]] = [documentModel.blocks[to], documentModel.blocks[from]]; activeBlockIndex = to; render(); changed(); } return; }
             const addItem = event.target.closest("[data-builder-add-item]");
             if (addItem) { documentModel.blocks[Number(addItem.dataset.index)].items.push({content: "Nowy punkt", level: 0}); render(); changed(); return; }
             const removeItem = event.target.closest("[data-builder-remove-item]");
@@ -475,11 +600,11 @@
             const variable = event.target.closest("[data-builder-insert-variable]");
             if (variable) { insertVariable(variable.dataset.builderInsertVariable); return; }
             const copy = event.target.closest("[data-builder-copy-variable]");
-            if (copy) { await navigator.clipboard.writeText(`{{ ${copy.dataset.builderCopyVariable} }}`); statusNode.textContent = "Zmienna skopiowana"; return; }
+            if (copy) { await navigator.clipboard.writeText(`{{ ${copy.dataset.builderCopyVariable} }}`); if (!dirty) statusNode.textContent = "Zmienna skopiowana"; return; }
             const format = event.target.closest("[data-builder-format]");
-            if (format && activeEditable) { activeEditable.focus(); document.execCommand(format.dataset.builderFormat); activeEditable.dispatchEvent(new Event("input", {bubbles: true})); return; }
+            if (format) { toggleBlockFormat(format.dataset.builderFormat); return; }
             const align = event.target.closest("[data-builder-align]");
-            if (align && activeEditable) { const article = activeEditable.closest("[data-builder-block]"); if (article) { documentModel.blocks[Number(article.dataset.index)].alignment = align.dataset.builderAlign; render(); changed(); } return; }
+            if (align) { alignBlock(align.dataset.builderAlign); return; }
             const action = event.target.closest("[data-builder-action]")?.dataset.builderAction;
             if (action === "undo") restoreHistory(historyIndex - 1);
             if (action === "redo") restoreHistory(historyIndex + 1);
@@ -490,7 +615,7 @@
             }
             const saveButton = event.target.closest("[data-builder-save]");
             if (saveButton) await save(saveButton.dataset.builderSave);
-            if (event.target.closest("[data-builder-preview-now]")) await preview();
+            if (event.target.closest("[data-builder-preview-now]")) await preview({force: true});
             if (event.target.closest("[data-builder-download-pdf]")) await downloadPdf();
             const errorPath = event.target.closest("[data-builder-error-path]")?.dataset.builderErrorPath;
             if (errorPath?.startsWith("blocks.")) blocksNode.querySelector(`[data-index="${Number(errorPath.split(".")[1])}"]`)?.scrollIntoView({behavior: "smooth", block: "center"});
@@ -533,7 +658,7 @@
             if (variableName) { const editableTarget = event.target.closest("[contenteditable=true]"); if (editableTarget) activeEditable = editableTarget; insertVariable(variableName); return; }
             const from = Number(event.dataTransfer.getData("text/agreement-block"));
             const target = event.target.closest("[data-builder-block]");
-            if (Number.isInteger(from) && target) { const [block] = documentModel.blocks.splice(from, 1); documentModel.blocks.splice(Number(target.dataset.index), 0, block); render(); changed(); }
+            if (Number.isInteger(from) && target) { const [block] = documentModel.blocks.splice(from, 1); activeBlockIndex = Number(target.dataset.index); documentModel.blocks.splice(activeBlockIndex, 0, block); render(); changed(); }
         });
 
         root.querySelector("[data-builder-variable-search]")?.addEventListener("input", (event) => {
@@ -552,7 +677,9 @@
         previewTraining?.addEventListener("change", () => schedulePreview({resetScroll: true}));
         root.addEventListener("agreement-builder-visible", schedulePreview);
         previewFrame?.addEventListener("load", () => {
-            const height = Math.max(previewFrame.contentDocument?.documentElement?.scrollHeight || 0, 1123);
+            const previewDocument = previewFrame.contentDocument;
+            previewDocument?.documentElement?.classList.add("agreement-preview-document");
+            const height = Math.max(previewDocument?.documentElement?.scrollHeight || 0, 1123);
             previewFrame.style.height = `${height}px`;
             previewCanvas.hidden = false;
             window.requestAnimationFrame(() => {

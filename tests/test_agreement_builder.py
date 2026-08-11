@@ -26,7 +26,7 @@ def test_catalog_is_unique_complete_and_matches_real_context():
     assert len(catalog) == len({item["name"] for item in catalog})
     assert all({"name", "label", "category", "type", "example", "description", "placeholder"} <= set(item) for item in catalog)
     assert not ({item["name"] for item in catalog} - set(context))
-    assert context["stanowisko"] == "Przykładowa wartość: Stanowisko"
+    assert context["stanowisko"] == "Specjalista ds. projektów"
     assert next(item for item in catalog if item["name"] == "stanowisko")["category"] == "Pola formularza"
 
     real_context = build_agreement_render_context(
@@ -128,6 +128,37 @@ def test_builder_renders_formal_blocks_lists_tables_and_components():
     assert "Przykładowe szkolenie" in rendered
 
 
+def test_builder_normalizes_legacy_alignment_and_renders_bounded_format_classes():
+    legacy = {
+        "version": 1,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "alignment": "center",
+                "style": "position:fixed;left:0",
+                "content": "Wyróżniony akapit",
+                "format": {"bold": True, "italic": True, "underline": True},
+            },
+            {"type": "heading", "level": 1, "alignment": "right", "content": "Nagłówek"},
+        ],
+    }
+
+    normalized = normalize_agreement_builder_document(legacy)
+    template = render_agreement_builder_template(normalized)
+
+    assert normalized["blocks"][0]["format"] == {
+        "bold": True,
+        "italic": True,
+        "underline": True,
+        "alignment": "center",
+    }
+    assert "alignment" not in normalized["blocks"][0]
+    assert "style" not in normalized["blocks"][0]
+    assert 'document-align-center document-bold document-italic document-underline' in template
+    assert 'document-align-right document-bold' in template
+    assert "position:fixed" not in template
+
+
 def test_builder_validator_reports_unknown_variable_jinja_and_empty_blocks():
     unknown = {"version": 1, "blocks": [{"type": "paragraph", "content": "{{ participant_company_xyz }}"}]}
     broken = {"version": 1, "blocks": [{"type": "paragraph", "content": "{% if pesel %}"}]}
@@ -186,6 +217,29 @@ def test_docx_import_builds_editable_sections_multilevel_lists_variables_and_sig
     assert any(block["type"] == "ordered_list" for block in builder["blocks"])
     assert any(block["type"] == "table" and "Beneficjent" in str(block["rows"]) for block in builder["blocks"])
     assert {"agreement_number", "participant_name", "pesel", "nr_lokalu", "participant_address_inline"} <= set(parsed.variables)
+
+
+def test_docx_import_splits_multiline_main_heading_into_heading_and_context_paragraphs():
+    document = Document()
+    heading = document.add_heading(level=1)
+    heading.add_run("Umowa uczestnictwa nr {{ agreement_number }}")
+    heading.add_run().add_break()
+    heading.add_run("w projekcie Rozwój kompetencji")
+    heading.add_run().add_break()
+    heading.add_run("współfinansowanym z EFS+")
+    buffer = BytesIO()
+    document.save(buffer)
+
+    parsed = parse_docx_template(buffer.getvalue())
+    blocks = parsed.builder_document["blocks"]
+
+    assert blocks[0]["type"] == "heading"
+    assert blocks[0]["content"] == "Umowa uczestnictwa nr {{ agreement_number }}"
+    assert blocks[0]["format"]["alignment"] == "center"
+    assert [block["type"] for block in blocks[1:3]] == ["paragraph", "paragraph"]
+    assert all(block["format"]["alignment"] == "center" for block in blocks[1:3])
+    assert parsed.html.count("<h1") == 1
+    assert parsed.html.count("document-heading-context") == 2
 
 
 def test_default_builder_is_valid_and_uses_per_training_variables():

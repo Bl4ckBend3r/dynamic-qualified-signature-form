@@ -5384,7 +5384,7 @@ def test_agreement_preview_example_needs_no_submission_or_training_and_has_full_
     assert "Przykładowe szkolenie" in html
     assert "1 500,00 zł" in html
     assert "Jan Kowalski" in html
-    assert "Przykładowa wartość: Stanowisko" in html
+    assert "Specjalista ds. projektów" in html
     assert pdf.status_code == 200
     assert pdf.mimetype == "application/pdf"
     assert pdf.data.startswith(b"%PDF")
@@ -5393,6 +5393,59 @@ def test_agreement_preview_example_needs_no_submission_or_training_and_has_full_
         assert db.query(SubmissionFile).count() == 0
         assert db.query(SubmissionWorkflowEvent).count() == 0
         assert db.query(SubmissionTraining).count() == 0
+
+
+def test_agreement_example_preview_and_pdf_support_complex_jinja_without_persistence(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    complex_template = """
+        <main>
+            <p>{{ agreement_number }}|{{ participant_name }}|{{ pesel }}|{{ submission.get("ulica", "") }}</p>
+            <p>{{ all_selected_trainings_total }}|{{ generated_date }}|{{ submission_id }}|{{ stanowisko }}|{{ submission.get("stanowisko", "") }}</p>
+            <ol>{% for training in selected_trainings %}<li>{{ loop.index }}. {{ training.get("name", "") }}</li>{% endfor %}</ol>
+        </main>
+    """
+    definition = {
+        "title": "Złożony example context",
+        "fields": [{"name": "stanowisko", "label": "Stanowisko", "type": "text"}],
+        "workflow": {
+            "requires_contract": True,
+            "contract_template_source": "html",
+            "contract_template_html": complex_template,
+        },
+    }
+    form_id = create_form(admin_app, slug="complex_example", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
+    pdf_calls = []
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **kwargs: pdf_calls.append(kwargs) or b"%PDF-1.4\ncomplex-example",
+    )
+    login(admin_client)
+
+    preview = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview?preview_mode=example")
+    pdf = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/example.pdf?preview_mode=example")
+
+    assert preview.status_code == 200
+    rendered = preview.get_json()["html"]
+    assert "UM/PRZYKLAD/2026|Jan Kowalski|90010112345|Przykładowa" in rendered
+    assert "Specjalista ds. projektów" in rendered
+    assert "1. Przykładowe szkolenie" in rendered
+    assert pdf.status_code == 200
+    assert pdf.mimetype == "application/pdf"
+    assert pdf.headers["Content-Disposition"].startswith("attachment;")
+    assert "przykladowa_umowa_complex_example.pdf" in pdf.headers["Content-Disposition"]
+    assert pdf_calls[0]["context"]["submission"]["ulica"] == "Przykładowa"
+    assert pdf_calls[0]["context"]["selected_trainings"][0]["name"] == "Przykładowe szkolenie"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(FormSubmission).count() == 0
+        assert db.query(SubmissionFile).count() == 0
+        assert db.query(SubmissionWorkflowEvent).count() == 0
+        assert db.query(SubmissionTraining).count() == 0
+        assert db.query(EmailLog).count() == 0
 
 
 def test_agreement_template_test_ui_exposes_preview_controls(admin_app, admin_client):
@@ -5459,11 +5512,16 @@ def test_agreement_template_test_selects_training_and_opens_preview_in_browser(a
         assert page.locator("#agreement-preview-dialog").evaluate("dialog => dialog.open") is False
         page.locator("[data-agreement-preview-open]").click()
         page.unroute("https://preview.test/**")
-        page.route("https://preview.test/**", lambda route: route.fulfill(status=422, content_type="application/json", body=json.dumps({"ok": False, "error": "Brak danych szkolenia."})))
+        page.route("https://preview.test/**", lambda route: route.fulfill(status=422, content_type="application/json", body=json.dumps({"ok": False, "error": "Brak danych wymaganych przez szablon.", "reason": "missing_context_variables", "missing_variables": ["participant_address"]})))
         page.locator("[data-agreement-preview-refresh]").click()
-        page.wait_for_function("document.querySelector('[data-agreement-preview-state]').textContent.includes('Brak danych szkolenia')")
+        page.wait_for_function("document.querySelector('[data-agreement-preview-state]').textContent.includes('{{ participant_address }}')")
+        assert "Brakujące zmienne" in page.locator("[data-agreement-preview-state]").inner_text()
         assert page.locator("[data-agreement-preview-state]").is_visible()
         assert page.locator("[data-agreement-preview-page]").is_hidden()
+        current_url = page.url
+        page.locator("[data-agreement-preview-modal-pdf]").click()
+        page.wait_for_function("document.querySelector('[data-agreement-preview-state]').textContent.includes('{{ participant_address }}')")
+        assert page.url == current_url
         page.locator(".agreement-preview-dialog__footer [data-admin-modal-close]").click()
         assert page.locator("#agreement-preview-dialog").evaluate("dialog => dialog.open") is False
         browser.close()
@@ -5502,10 +5560,12 @@ def test_agreement_preview_rejects_unknown_mode_and_submission_without_training(
         no_training = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview?preview_mode=submission&submission_id=without-training")
 
     assert unknown.status_code == 422
-    assert unknown.get_json()["error"] == "Nieznany tryb danych podglądu."
+    assert unknown.get_json()["error"] == "Nieobsługiwany tryb podglądu."
+    assert unknown.get_json()["reason"] == "invalid_preview_mode"
     assert no_training.status_code == 422
     assert "nie posiada szkolenia" in no_training.get_json()["error"]
-    assert "agreement_preview_validation_failed" in caplog.text
+    assert no_training.get_json()["reason"] == "missing_training"
+    assert "agreement_preview_422" in caplog.text
     assert "preview_mode=other" in caplog.text
 
 
@@ -5535,14 +5595,47 @@ def test_agreement_preview_reports_exact_missing_context_variable(admin_app, adm
 
     with caplog.at_level(logging.WARNING):
         response = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview?preview_mode=example")
+        pdf = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/example.pdf?preview_mode=example")
 
     assert response.status_code == 422
     assert response.get_json() == {
         "ok": False,
         "error": "Szablon używa zmiennej, dla której nie znaleziono danych: {{ missing_context_value }}.",
+        "reason": "missing_context_variables",
+        "missing_variables": ["missing_context_value"],
     }
-    assert "agreement_preview_validation_failed" in caplog.text
+    assert pdf.status_code == 422
+    assert pdf.is_json
+    assert pdf.get_json() == response.get_json()
+    assert "agreement_preview_422" in caplog.text
+    assert "reason=missing_context_variables" in caplog.text
     assert "missing_context_value" in caplog.text
+
+
+def test_agreement_preview_classifies_invalid_template_and_missing_template(admin_app, admin_client):
+    create_user(admin_app)
+    invalid_form = create_form(
+        admin_app,
+        slug="invalid_jinja_preview",
+        definition_json={"title": "Invalid", "fields": [], "workflow": {"contract_template_source": "html", "contract_template_html": "{% for training in selected_trainings %}"}},
+    )
+    missing_form = create_form(
+        admin_app,
+        slug="missing_template_preview",
+        definition_json={"title": "Missing", "fields": [], "workflow": {"contract_template_source": "html", "contract_template_html": ""}},
+    )
+    login(admin_client)
+
+    invalid = admin_client.get(f"/admin/forms/{invalid_form}/documents/agreement/preview?preview_mode=example")
+    missing = admin_client.get(f"/admin/forms/{missing_form}/documents/agreement/example.pdf?preview_mode=example")
+
+    assert invalid.status_code == 422
+    assert invalid.get_json()["reason"] == "invalid_template"
+    assert invalid.get_json()["missing_variables"] == []
+    assert missing.status_code == 422
+    assert missing.is_json
+    assert missing.get_json()["reason"] == "missing_template"
+    assert missing.get_json()["missing_variables"] == []
 
 
 def test_agreement_preview_reports_corrupted_stored_docx_without_500(admin_app, admin_client, monkeypatch, caplog):
@@ -5554,16 +5647,20 @@ def test_agreement_preview_reports_corrupted_stored_docx_without_500(admin_app, 
     monkeypatch.setattr(storage, "read_bytes", lambda requested_path: b"not-a-docx", raising=False)
     login(admin_client)
 
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         response = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview?preview_mode=example")
 
     assert response.status_code == 422
-    assert response.get_json() == {"ok": False, "error": "Nie udało się odczytać zapisanego szablonu DOCX."}
-    assert "agreement_template_preview_failed" in caplog.text
+    assert response.get_json() == {
+        "ok": False,
+        "error": "Nie udało się odczytać zapisanego szablonu DOCX.",
+        "reason": "docx_parse_error",
+        "missing_variables": [],
+    }
+    assert "agreement_preview_422" in caplog.text
+    assert "agreement_preview_failed" in caplog.text
     assert f"form_id={form_id}" in caplog.text
-    assert "form_slug=corrupt" in caplog.text
     assert "preview_mode=example" in caplog.text
-    assert "docx_storage_path=output/corrupt/templates/agreement/agreement-template.docx" in caplog.text
     assert "BadZipFile" in caplog.text
 
 
@@ -5645,7 +5742,14 @@ def test_agreement_builder_draft_does_not_activate_and_activation_is_explicit(ad
     definition = {"title": "Umowa", "fields": [], "workflow": {"requires_contract": True, "contract_template_source": "html", "contract_template_html": "<p>Legacy HTML</p>"}}
     form_id = create_form(admin_app, slug="builder_save", definition_json=definition)
     login(admin_client)
-    builder = {"version": 1, "blocks": [{"type": "paragraph", "content": "Uczestnik {{ participant_name }}"}]}
+    builder = {
+        "version": 1,
+        "blocks": [{
+            "type": "paragraph",
+            "content": "Uczestnik {{ participant_name }}",
+            "format": {"bold": True, "italic": True, "underline": False, "alignment": "center"},
+        }],
+    }
 
     draft = admin_client.post(
         f"/admin/forms/{form_id}/agreement-template/builder",
@@ -5675,6 +5779,11 @@ def test_agreement_builder_draft_does_not_activate_and_activation_is_explicit(ad
         assert workflow["contract_builder_status"] == "active"
         assert workflow["contract_template_updated_source"] == "builder"
         assert workflow["contract_template_updated_by"]
+        assert workflow["contract_builder_document"]["blocks"][0]["format"] == builder["blocks"][0]["format"]
+        assert workflow["contract_builder_active_document"]["blocks"][0]["format"] == builder["blocks"][0]["format"]
+    reopened = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
+    assert '"alignment": "center"' in reopened
+    assert '"bold": true' in reopened
 
 
 def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_app, admin_client):
@@ -5724,7 +5833,7 @@ def test_agreement_builder_live_preview_and_pdf_are_stateless(admin_app, admin_c
     html = preview.get_json()["html"]
     assert "Jan Kowalski" in html
     assert "ul. Przykładowa 12/3" in html
-    assert "Przykładowa wartość: Stanowisko" in html
+    assert "Specjalista ds. projektów" in html
     assert "Przykładowe szkolenie" in html
     assert "document-signatures" in html
     assert pdf.status_code == 200
@@ -5751,6 +5860,7 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
     </script>"""
     html = html.replace("<head>", '<head><base href="https://preview.test/">').replace("</body>", window_stub + f"<script>{script}</script></body>")
     requests = []
+    preview_error = {"active": False}
 
     with playwright_api.sync_playwright() as playwright:
         try:
@@ -5765,6 +5875,8 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "message": "Wersja robocza zapisana."}))
             elif route.request.url.endswith("/example.pdf"):
                 route.fulfill(status=200, content_type="application/pdf", body=b"%PDF")
+            elif preview_error["active"]:
+                route.fulfill(status=422, content_type="application/json", body=json.dumps({"ok": False, "error": "Brak danych wymaganych przez szablon.", "reason": "missing_context_variables", "missing_variables": ["participant_address"]}))
             else:
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": "<main>Jan Kowalski</main>"}))
 
@@ -5781,6 +5893,31 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         last_editable.press("ArrowLeft")
         page.locator('[data-builder-insert-variable="email"]').first.click()
         assert last_editable.inner_text() == "A{{ email }}B"
+
+        bold = page.locator('[data-builder-format="bold"]')
+        italic = page.locator('[data-builder-format="italic"]')
+        underline = page.locator('[data-builder-format="underline"]')
+        center = page.locator('[data-builder-align="center"]')
+        justify = page.locator('[data-builder-align="justify"]')
+        bold.click()
+        italic.click()
+        underline.click()
+        center.click()
+        assert center.get_attribute("aria-pressed") == "true"
+        justify.click()
+        assert justify.get_attribute("aria-pressed") == "true"
+        assert center.get_attribute("aria-pressed") == "false"
+        assert bold.get_attribute("aria-pressed") == "true"
+        assert italic.get_attribute("aria-pressed") == "true"
+        assert underline.get_attribute("aria-pressed") == "true"
+        assert page.locator("[data-agreement-builder-status]").inner_text() == "Niezapisane zmiany"
+        page.locator('[data-builder-action="undo"]').click()
+        assert center.get_attribute("aria-pressed") == "true"
+        assert justify.get_attribute("aria-pressed") == "false"
+        page.locator('[data-builder-action="redo"]').click()
+        assert justify.get_attribute("aria-pressed") == "true"
+        assert center.get_attribute("aria-pressed") == "false"
+
         page.locator("[data-builder-close]").click()
         assert page.locator("[data-builder-close-dialog]").evaluate("dialog => dialog.open") is True
         page.locator("[data-builder-close-cancel]").click()
@@ -5790,8 +5927,22 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         assert preview_requests
         assert len(preview_requests) < 5
         assert "builder_json" in (preview_requests[-1].post_data or "")
+        preview_error["active"] = True
+        request_count_before_error = len(preview_requests)
+        page.locator("[data-builder-preview-now]").click()
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview-state]').textContent.includes('{{ participant_address }}')")
+        assert "Brakujące zmienne" in page.locator("[data-agreement-builder-preview-state]").inner_text()
+        requests_after_error = [request for request in requests if request.url.endswith("/documents/agreement/preview")]
+        assert len(requests_after_error) == request_count_before_error + 1
+        page.evaluate("document.querySelector('[data-agreement-builder]').dispatchEvent(new CustomEvent('agreement-builder-visible'))")
+        page.wait_for_timeout(700)
+        requests_after_blocked_retry = [request for request in requests if request.url.endswith("/documents/agreement/preview")]
+        assert len(requests_after_blocked_retry) == len(requests_after_error)
+        preview_error["active"] = False
         page.locator('[data-builder-save="draft"]').first.click()
         page.wait_for_function("document.querySelector('[data-agreement-builder-status]').textContent.includes('zapisany')")
+        saved_format = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).format")
+        assert saved_format == {"bold": True, "italic": True, "underline": True, "alignment": "justify"}
         messages = page.evaluate("window.openerMessages")
         assert messages[-1][0] == {"type": "agreement-builder-saved", "formId": form_id}
         assert messages[-1][1] == "https://preview.test"
@@ -5837,6 +5988,9 @@ def test_agreement_builder_browser_keeps_long_document_inside_independent_scroll
         page.set_content(html, wait_until="domcontentloaded")
         page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').srcdoc.includes('render-1')")
         page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').contentDocument?.body?.textContent.includes('Akapit testowy 99')")
+        assert page.locator("[data-agreement-builder-preview]").evaluate(
+            "frame => frame.contentDocument.documentElement.classList.contains('agreement-preview-document')"
+        ) is True
 
         page.evaluate("""() => {
             const addParagraph = document.querySelector('[data-builder-add="paragraph"]');

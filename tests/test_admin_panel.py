@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import re
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -5463,6 +5464,8 @@ def test_agreement_template_test_ui_exposes_preview_controls(admin_app, admin_cl
     assert 'class="document-preview__page agreement-preview-page"' in html
     assert "data-agreement-preview-open disabled" not in html
     assert 'data-agreement-preview-pdf href="/admin/forms/' in html
+    assert "Aktualny plik: None" not in html
+    assert "Pobierz orygina" not in html
 
 
 def test_agreement_template_test_selects_training_and_opens_preview_in_browser(admin_app, admin_client):
@@ -5702,6 +5705,8 @@ def test_agreement_builder_ui_exposes_visual_toolbar_components_and_source_modes
     builder = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
 
     assert "Otwórz kreator wizualny" in html
+    assert 'data-agreement-builder-popup' in html
+    assert 'class="admin-button document-source-builder-button"' in html
     assert 'data-agreement-builder-popup' in html
     assert f'/admin/forms/{form_id}/documents/agreement/builder' in html
     assert "Kreator wizualny" in html
@@ -5944,7 +5949,10 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         saved_format = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).format")
         assert saved_format == {"bold": True, "italic": True, "underline": True, "alignment": "justify"}
         messages = page.evaluate("window.openerMessages")
-        assert messages[-1][0] == {"type": "agreement-builder-saved", "formId": form_id}
+        assert messages[-1][0]["type"] == "agreement-builder-saved"
+        assert messages[-1][0]["formId"] == form_id
+        assert messages[-1][0]["documentType"] == "agreement"
+        assert messages[-1][0]["updatedAt"]
         assert messages[-1][1] == "https://preview.test"
         page.locator("[data-builder-close]").click()
         assert page.evaluate("window.closeCalls") == 1
@@ -6151,8 +6159,8 @@ def test_agreement_builder_launcher_uses_reusable_popup_and_reports_blocker(admi
         assert "resizable=yes" in calls[0][2]
         assert page.evaluate("window.popupFocusCalls") == 2
 
-        page.evaluate("window.dispatchEvent(new MessageEvent('message', {origin: window.location.origin, data: {type: 'agreement-builder-saved', formId: %d}}))" % form_id)
-        assert "Szablon zapisany" in page.locator("[data-agreement-builder-parent-status]").inner_text()
+        page.evaluate("window.dispatchEvent(new MessageEvent('message', {origin: window.location.origin, data: {type: 'agreement-builder-saved', formId: %d, documentType: 'agreement', updatedAt: '2026-08-11T12:30:00+02:00'}}))" % form_id)
+        assert "Ostatni zapis:" in page.locator("[data-agreement-builder-parent-status]").inner_text()
 
         blocked = browser.new_page()
         blocked_html = html.replace("<head>", '<head><base href="https://admin.test/">').replace("</body>", f"<script>window.open=()=>null;</script><script>{script}</script></body>")
@@ -6465,3 +6473,334 @@ def test_form_tabs_have_mobile_css():
     assert ".admin-form-tab-mobile" in css
     assert "@media (max-width: 720px)" in css
     assert ".admin-form-tabs" in css
+
+
+def test_declaration_builder_ui_uses_shared_component_without_training_blocks(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {
+        "title": "Deklaracja",
+        "fields": [{"name": "zgoda", "label": "Zgoda", "type": "checkbox"}],
+        "workflow": {"requires_declaration": True, "declaration_template_source": "builder"},
+    }
+    form_id = create_form(admin_app, slug="declaration_builder_ui", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
+    login(admin_client)
+
+    edit = admin_client.get(f"/admin/forms/{form_id}/edit?tab=declaration").get_data(as_text=True)
+    builder = admin_client.get(f"/admin/forms/{form_id}/documents/declaration/builder")
+    html = builder.get_data(as_text=True)
+
+    assert builder.status_code == 200
+    assert 'name="declaration_template_source" value="builder"' in edit
+    assert "Microsoft Word (.docx)" in edit
+    assert "HTML — tryb zaawansowany" in edit
+    assert 'data-document-builder-popup' in edit
+    assert f"/admin/forms/{form_id}/documents/declaration/builder" in edit
+    assert 'data-document-type="declaration"' in html
+    assert 'data-builder-add="form_field"' in html
+    assert 'data-builder-add="participant_address"' in html
+    assert 'data-builder-add="participant_contact"' in html
+    assert 'data-builder-add="statement"' in html
+    assert 'data-builder-add="participant_signature"' in html
+    assert 'data-builder-add="training_table"' not in html
+    assert 'data-builder-add="agreement_section"' not in html
+    assert "training_name" not in html
+    assert "agreement_builder.js" in html
+
+
+@pytest.mark.parametrize("source", ["builder", "docx", "html"])
+def test_document_source_selection_persists_after_form_save(admin_app, admin_client, source):
+    create_user(admin_app)
+    definition = {
+        "title": "Dokumenty",
+        "fields": [],
+        "workflow": {
+            "requires_contract": True,
+            "requires_declaration": True,
+            "contract_template_source": "builder",
+            "declaration_template_source": "builder",
+            "contract_template_html": "<p>Umowa</p>",
+            "declaration_template_html": "<p>Deklaracja</p>",
+            "contract_docx_template": {
+                "original_filename": "umowa.docx",
+                "storage_path": "templates/agreement/umowa.docx",
+                "html": "<p>Umowa Word</p>",
+                "valid": True,
+            },
+            "declaration_docx_template": {
+                "original_filename": "deklaracja.docx",
+                "storage_path": "templates/declaration/deklaracja.docx",
+                "html": "<p>Deklaracja Word</p>",
+                "valid": True,
+            },
+        },
+    }
+    form_id = create_form(admin_app, slug=f"document-source-{source}", name="Dokumenty", definition_json=definition)
+    login(admin_client)
+    edit = admin_client.get(f"/admin/forms/{form_id}/edit?tab=agreement").get_data(as_text=True)
+    token = edit.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    saved = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "agreement",
+            "name": "Dokumenty",
+            "slug": f"document-source-{source}",
+            "title": "Dokumenty",
+            "workflow_controls_present": "1",
+            "workflow_name": "Dokumenty",
+            "workflow_initial_step": "",
+            "requires_contract": "on",
+            "requires_declaration": "on",
+            "contract_template_source": source,
+            "declaration_template_source": source,
+            "contract_template_html": "<p>Umowa</p>",
+            "declaration_template_html": "<p>Deklaracja</p>",
+        },
+    )
+
+    assert saved.status_code == 302
+    reloaded = admin_client.get(f"/admin/forms/{form_id}/edit?tab=agreement").get_data(as_text=True)
+    assert re.search(rf'name="contract_template_source" value="{source}" checked', reloaded)
+    assert re.search(rf'name="declaration_template_source" value="{source}" checked', reloaded)
+
+
+def test_document_source_cards_switch_panels_and_variable_catalog_without_reload(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    definition = {
+        "title": "Dokumenty",
+        "fields": [{"name": "zgoda_projektowa", "label": "Zgoda projektowa", "type": "checkbox"}],
+        "workflow": {
+            "requires_contract": True,
+            "requires_declaration": True,
+            "contract_template_source": "builder",
+            "declaration_template_source": "builder",
+        },
+    }
+    form_id = create_form(admin_app, slug="document_source_cards", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=agreement").get_data(as_text=True)
+    assert re.search(r'data-document-variable-catalog="agreement"\s+hidden', html)
+    assert re.search(r'data-document-variable-catalog="declaration"\s+hidden', html)
+    assert "Aktualny plik: None" not in html
+    assert html.count(">Wgraj DOCX</button>") == 2
+    assert "Pobierz oryginał" not in html
+    script = (Path(__file__).resolve().parents[1] / "static" / "js" / "agreement_builder.js").read_text(encoding="utf-8")
+    html = html.replace("<head>", '<head><base href="https://admin.test/">').replace("</body>", f"<script>{script}</script></body>")
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        page.route("https://admin.test/**", lambda route: route.fulfill(status=200, content_type="text/plain", body=""))
+        page.set_content(html, wait_until="domcontentloaded")
+        page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: (value) => { window.copiedVariable = value; return Promise.resolve(); }}})")
+
+        for document_type in ("agreement", "declaration"):
+            page.get_by_role("tab", name="Umowa" if document_type == "agreement" else "Deklaracja", exact=True).click()
+            scope = page.locator(f'[data-document-source-scope][data-document-type="{document_type}"]')
+            catalog = scope.locator(f'[data-document-variable-catalog="{document_type}"]')
+            assert scope.locator('input[value="builder"]').is_checked()
+            assert scope.locator('[data-document-source-option].is-active').count() == 1
+            assert scope.locator('[data-source-panel="builder"]').evaluate("node => !node.hidden")
+            assert catalog.evaluate("node => node.hidden")
+
+            for source in ("docx", "html", "builder"):
+                scope.locator(f'[data-document-source-option][data-source="{source}"]').click()
+                assert scope.locator(f'input[value="{source}"]').is_checked()
+                assert scope.locator('[data-document-source-option].is-active').count() == 1
+                for panel_source in ("builder", "docx", "html"):
+                    assert scope.locator(f'[data-source-panel="{panel_source}"]').evaluate("node => node.hidden") is (panel_source != source)
+                assert catalog.evaluate("node => node.hidden") is (source == "builder")
+
+        page.get_by_role("tab", name="Umowa", exact=True).click()
+        agreement_scope = page.locator('[data-document-source-scope][data-document-type="agreement"]')
+        agreement_scope.locator('[data-document-source-option][data-source="docx"]').click()
+        catalog = agreement_scope.locator('[data-document-variable-catalog="agreement"]')
+        cards = catalog.locator('[data-document-variable-card]')
+        total_cards = cards.count()
+        catalog.locator('[data-document-variable-search]').fill("szkolenie")
+        visible_cards = catalog.locator('[data-document-variable-card]:not([hidden])')
+        assert 0 < visible_cards.count() < total_cards
+        visible_cards.first.click()
+        assert page.evaluate("window.copiedVariable").startswith("{{")
+        assert "Skopiowano" in catalog.locator('[data-document-variable-copy-status]').inner_text()
+        browser.close()
+
+
+def test_document_configuration_uses_shared_source_and_variable_partials():
+    template = (Path(__file__).resolve().parents[1] / "templates" / "admin" / "forms" / "edit.html").read_text(encoding="utf-8")
+    source_partial = (Path(__file__).resolve().parents[1] / "templates" / "admin" / "documents" / "_template_source_selector.html").read_text(encoding="utf-8")
+    variable_partial = (Path(__file__).resolve().parents[1] / "templates" / "admin" / "documents" / "_variable_catalog.html").read_text(encoding="utf-8")
+    css = (Path(__file__).resolve().parents[1] / "static" / "css" / "admin.css").read_text(encoding="utf-8")
+
+    assert template.count('{% include "admin/documents/_template_source_selector.html" %}') == 2
+    assert template.count('{% include "admin/documents/_variable_catalog.html" %}') == 2
+    assert 'role="radiogroup"' in source_partial
+    assert 'type="radio"' in source_partial
+    assert 'class="document-source-input visually-hidden"' in source_partial
+    assert "has_docx_template" in source_partial
+    assert 'data-document-variable-search' in variable_partial
+    assert "repeat(3, minmax(0, 1fr))" in css
+    assert "repeat(2, minmax(0, 1fr))" in css
+
+
+def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    definition = {
+        "title": "Deklaracja",
+        "fields": [{"name": "zgoda", "label": "Zgoda", "type": "checkbox"}],
+        "workflow": {"requires_declaration": True, "declaration_template_source": "html", "declaration_template_html": "<p>Stary HTML</p>"},
+    }
+    form_id = create_form(admin_app, slug="declaration_builder_save", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
+    login(admin_client)
+    document = {
+        "version": 1,
+        "document_type": "declaration",
+        "blocks": [
+            {"type": "heading", "level": 1, "runs": [{"text": "Deklaracja {{ participant_name }}", "bold": True}]},
+            {"type": "form_field", "field": "zgoda", "label": "Zgoda", "display": "yes_no"},
+            {"type": "participant_signature", "label": "Podpis uczestnika"},
+        ],
+    }
+    payload = {"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(document), "action": "draft"}
+
+    draft = admin_client.post(f"/admin/forms/{form_id}/declaration-template/builder", data=payload)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow["declaration_template_source"] == "html"
+        assert workflow["declaration_builder_status"] == "draft"
+
+    payload["action"] = "activate"
+    activated = admin_client.post(f"/admin/forms/{form_id}/declaration-template/builder", data=payload)
+    preview = admin_client.post(
+        f"/admin/forms/{form_id}/documents/declaration/preview",
+        data={"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(document), "preview_mode": "example"},
+    )
+    monkeypatch.setattr(admin_app.extensions["services"].document_service.pdf_render_service, "render_document_pdf_bytes", lambda **kwargs: b"%PDF-1.4\ndeclaration")
+    pdf = admin_client.post(
+        f"/admin/forms/{form_id}/documents/declaration/example.pdf",
+        data={"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(document), "preview_mode": "example"},
+    )
+
+    assert draft.status_code == 200
+    assert activated.status_code == 200
+    assert preview.status_code == 200
+    assert "Jan Kowalski" in preview.get_json()["html"]
+    assert "Tak" in preview.get_json()["html"]
+    assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow["declaration_template_source"] == "builder"
+        assert workflow["declaration_builder_status"] == "active"
+        assert workflow["declaration_builder_active_document"]["document_type"] == "declaration"
+        assert db.query(FormSubmission).filter(FormSubmission.form_slug == "declaration_builder_save").count() == 0
+        assert db.query(SubmissionFile).count() == 0
+        assert db.query(SubmissionWorkflowEvent).count() == 0
+        assert db.query(SubmissionTraining).count() == 0
+
+
+def test_declaration_docx_upload_prepares_builder_draft_and_keeps_source_docx(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {"title": "Deklaracja", "fields": [], "workflow": {"requires_declaration": True, "declaration_template_source": "builder"}}
+    form_id = create_form(admin_app, slug="declaration_docx", definition_json=definition)
+    document = Document()
+    paragraph = document.add_paragraph("Uczestnik ")
+    run = paragraph.add_run("{{ participant_name }}")
+    run.bold = True
+    buffer = io.BytesIO()
+    document.save(buffer)
+    login(admin_client)
+
+    uploaded = admin_client.post(
+        f"/admin/forms/{form_id}/declaration-template/docx",
+        data={"csrf_token": admin_csrf(admin_client), "declaration_docx_template": (io.BytesIO(buffer.getvalue()), "deklaracja.docx")},
+        content_type="multipart/form-data",
+    )
+    imported = admin_client.post(
+        f"/admin/forms/{form_id}/declaration-template/docx/import-builder",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert uploaded.status_code == 302
+    assert imported.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow["declaration_template_source"] == "docx"
+        assert workflow["declaration_builder_status"] == "draft"
+        assert workflow["declaration_docx_template"]["document_type"] == "declaration"
+        runs = workflow["declaration_builder_document"]["blocks"][0]["runs"]
+        assert any(run["bold"] and "participant_name" in run["text"] for run in runs)
+
+
+def test_document_builder_browser_formats_only_selection_and_restores_runs_from_local_draft(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="builder_inline_runs", definition_json={"title": "Umowa", "fields": [], "workflow": {"requires_contract": True, "contract_template_source": "builder"}})
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
+    script = (Path(__file__).resolve().parents[1] / "static" / "js" / "agreement_builder.js").read_text(encoding="utf-8")
+    html = html.replace("<head>", '<head><base href="https://inline.test/">').replace("</body>", f"<script>{script}</script></body>")
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        page.route("https://inline.test/**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": "<main>Podgląd</main>"})))
+        page.goto("https://inline.test/workspace")
+        page.set_content(html, wait_until="domcontentloaded")
+        page.locator('[data-builder-add="paragraph"]').first.click()
+        editable = page.locator("[data-builder-block]").last.locator("[contenteditable=true]")
+        editable.fill("Ala ma kota")
+        page.evaluate("""() => {
+            const editable = [...document.querySelectorAll('[data-builder-block] [contenteditable=true]')].at(-1);
+            const node = editable.firstChild;
+            const range = document.createRange();
+            range.setStart(node, 4);
+            range.setEnd(node, 6);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            editable.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+        }""")
+
+        page.locator('[data-builder-format="bold"]').click()
+        runs = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
+        assert runs == [
+            {"text": "Ala ", "bold": False, "italic": False, "underline": False},
+            {"text": "ma", "bold": True, "italic": False, "underline": False},
+            {"text": " kota", "bold": False, "italic": False, "underline": False},
+        ]
+        assert page.locator('[data-builder-format="bold"]').get_attribute("aria-pressed") == "true"
+        assert page.evaluate("window.getSelection().toString()") == "ma"
+
+        page.locator('[data-builder-format="italic"]').click()
+        selected_run = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1]")
+        assert selected_run["bold"] is True and selected_run["italic"] is True
+        page.locator('[data-builder-action="undo"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].italic") is False
+        page.locator('[data-builder-action="redo"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].italic") is True
+
+        page.set_content(html, wait_until="domcontentloaded")
+        restored = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
+        assert restored[1]["text"] == "ma"
+        assert restored[1]["bold"] is True and restored[1]["italic"] is True
+        browser.close()

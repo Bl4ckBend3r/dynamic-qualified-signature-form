@@ -38,6 +38,17 @@ from services.documents.agreement_builder_service import (
     validate_agreement_builder_document,
 )
 from services.documents.agreement_template_context_service import AgreementVariableCatalog, agreement_preview_context, agreement_variable_catalog
+from services.documents.declaration_template_context_service import (
+    DeclarationVariableCatalog,
+    declaration_preview_context,
+    declaration_variable_catalog,
+)
+from services.documents.document_builder_service import (
+    default_document_builder_document,
+    normalize_document_builder_document,
+    render_document_builder_template,
+    validate_document_builder_document,
+)
 from services.documents.docx_template_parser import DocxTemplateParseError
 from services.process_instruction_service import (
     instruction_status_options,
@@ -393,6 +404,14 @@ def form_edit(form_id: int):
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
                 updated_workflow = updated_definition.get("workflow") or {}
+                if updated_workflow.get("requires_declaration") and updated_workflow.get("declaration_template_source") == "builder":
+                    declaration_builder_errors = validate_document_builder_document(
+                        updated_workflow.get("declaration_builder_document"),
+                        active_fields_for_form(db, form.id),
+                        "declaration",
+                    )
+                    if declaration_builder_errors:
+                        raise ValueError("Nie można aktywować szablonu deklaracji. " + " ".join(error.message for error in declaration_builder_errors))
                 if updated_workflow.get("requires_contract") and updated_workflow.get("contract_template_source") == "builder":
                     builder_errors = validate_agreement_builder_document(
                         updated_workflow.get("contract_builder_document"),
@@ -600,7 +619,225 @@ def form_edit(form_id: int):
                 instruction_config=form.user_instruction_config,
             ),
             **_agreement_docx_editor_context(form, fields),
+            **_declaration_editor_context(form, fields),
         )
+
+
+@bp.post("/forms/<int:form_id>/declaration-template/docx")
+@login_required
+def declaration_docx_template_upload(form_id: int):
+    uploaded = request.files.get("declaration_docx_template")
+    if not uploaded or not uploaded.filename:
+        flash("Wybierz plik DOCX z szablonem deklaracji.", "error")
+        return redirect(url_for("admin.form_edit", form_id=form_id, tab="declaration"))
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            metadata = current_app.extensions["services"].agreement_docx_template_service.upload(
+                form_slug=form.slug,
+                filename=uploaded.filename,
+                content=uploaded.read(),
+                fields=fields,
+                uploaded_by_user_id=g.admin_user.id,
+                document_type="declaration",
+            )
+        except (DocxTemplateParseError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        imported_builder = metadata.pop("builder_document", None)
+        workflow["declaration_docx_template"] = metadata
+        if imported_builder:
+            workflow["declaration_builder_document"] = normalize_document_builder_document(imported_builder, "declaration")
+        workflow["declaration_template_source"] = "docx"
+        workflow["managed_documents"] = True
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        if metadata["unknown_variables"]:
+            flash("DOCX zapisano, ale wymaga poprawy nieznanych zmiennych: " + ", ".join(metadata["unknown_variables"]), "warning")
+        else:
+            flash("Szablon DOCX zapisano i ustawiono jako aktywne źródło deklaracji.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+
+
+@bp.post("/forms/<int:form_id>/declaration-template/builder")
+@login_required
+def declaration_builder_save(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            document = _builder_document_from_request("declaration")
+        except ValueError as exc:
+            return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
+        errors = validate_document_builder_document(document, fields, "declaration")
+        if errors:
+            return jsonify({"ok": False, "errors": [error.as_dict() for error in errors]}), 422
+        action = str(request.form.get("action") or "draft").strip().casefold()
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        if workflow.get("declaration_template_source") == "builder" and not workflow.get("declaration_builder_active_document"):
+            workflow["declaration_builder_active_document"] = normalize_document_builder_document(
+                workflow.get("declaration_builder_document") or default_document_builder_document("declaration"),
+                "declaration",
+            )
+        workflow["declaration_builder_document"] = document
+        workflow["declaration_builder_updated_at"] = datetime.now().astimezone().isoformat()
+        workflow["declaration_builder_updated_by"] = g.admin_user.id
+        workflow["declaration_builder_status"] = "active" if action == "activate" else "draft"
+        if action == "activate":
+            workflow["declaration_builder_active_document"] = document
+            workflow["declaration_template_source"] = "builder"
+            workflow["declaration_template_updated_at"] = workflow["declaration_builder_updated_at"]
+            workflow["declaration_template_updated_by"] = g.admin_user.id
+            workflow["declaration_template_updated_source"] = "builder"
+            workflow["managed_documents"] = True
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        return jsonify({
+            "ok": True,
+            "status": workflow["declaration_builder_status"],
+            "updated_at": workflow["declaration_builder_updated_at"],
+            "message": "Kreator zapisano jako aktywny szablon." if action == "activate" else "Wersja robocza kreatora została zapisana.",
+        })
+
+
+@bp.get("/forms/<int:form_id>/documents/declaration/builder")
+@login_required
+def declaration_builder_view(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        form.definition_json = normalize_admin_form_definition(form.definition_json or {})
+        workflow = (form.definition_json or {}).get("workflow") or {}
+        context = _declaration_editor_context(form, fields)
+        return render_template(
+            "admin/documents/document_builder.html",
+            form=form,
+            workflow=workflow,
+            document_builder_standalone=True,
+            document_builder_type="declaration",
+            document_builder_title="Deklaracja",
+            document_builder_description="Jedna deklaracja odpowiada jednemu zgłoszeniu i nie zawiera danych szkoleń.",
+            document_builder_document=context["declaration_builder_document"],
+            document_builder_variables=context["declaration_template_variables"],
+            document_builder_submissions=context["declaration_preview_submissions"],
+            document_builder_can_show_html=context["declaration_builder_can_show_html"],
+            document_docx_metadata=context["declaration_docx_metadata"],
+            document_builder_save_url=url_for("admin.declaration_builder_save", form_id=form.id),
+            document_builder_preview_url=url_for("admin.declaration_template_preview", form_id=form.id),
+            document_builder_pdf_url=url_for("admin.declaration_template_example_pdf", form_id=form.id),
+            document_builder_import_url=url_for("admin.declaration_docx_import_builder", form_id=form.id),
+        )
+
+
+@bp.post("/forms/<int:form_id>/declaration-template/docx/import-builder")
+@login_required
+def declaration_docx_import_builder(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        metadata = workflow.get("declaration_docx_template") or {}
+        try:
+            parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        document = normalize_document_builder_document(parsed.builder_document or {}, "declaration")
+        if not document.get("blocks"):
+            flash("Tego szablonu DOCX nie można przekonwertować do kreatora.", "error")
+            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        errors = validate_document_builder_document(document, active_fields_for_form(db, form.id), "declaration")
+        if errors:
+            flash("Import DOCX wymaga poprawy: " + " ".join(error.message for error in errors), "warning")
+        workflow["declaration_builder_document"] = document
+        workflow["declaration_builder_status"] = "draft"
+        workflow["declaration_builder_updated_at"] = datetime.now().astimezone().isoformat()
+        workflow["declaration_builder_updated_by"] = g.admin_user.id
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        flash("Szablon Word zaimportowano do wersji roboczej kreatora deklaracji.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+
+
+@bp.get("/forms/<int:form_id>/declaration-template/docx")
+@login_required
+def declaration_docx_template_download(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        metadata = ((form.definition_json or {}).get("workflow") or {}).get("declaration_docx_template") or {}
+        try:
+            content = current_app.extensions["services"].agreement_docx_template_service.download(metadata)
+        except Exception:
+            abort(404)
+        return send_file(BytesIO(content), mimetype=metadata.get("mime_type"), as_attachment=True, download_name=metadata.get("original_filename") or "szablon-deklaracji.docx")
+
+
+@bp.post("/forms/<int:form_id>/declaration-template/docx/delete")
+@login_required
+def declaration_docx_template_delete(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        current_app.extensions["services"].agreement_docx_template_service.delete(workflow.get("declaration_docx_template") or {})
+        workflow.pop("declaration_docx_template", None)
+        workflow["declaration_template_source"] = "builder" if workflow.get("declaration_builder_active_document") else "html"
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        flash("Szablon DOCX deklaracji został usunięty.", "success")
+        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+
+
+@bp.get("/forms/<int:form_id>/declaration-template/docx/sample")
+@bp.get("/forms/<int:form_id>/documents/declaration/example.docx")
+@login_required
+def declaration_docx_template_sample(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        content = current_app.extensions["services"].agreement_docx_template_service.sample_docx(
+            active_fields_for_form(db, form.id), document_type="declaration"
+        )
+        return send_file(BytesIO(content), mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document", as_attachment=True, download_name="przykladowy-szablon-deklaracji.docx")
+
+
+@bp.route("/forms/<int:form_id>/documents/declaration/preview", methods=["GET", "POST"])
+@login_required
+def declaration_template_preview(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            template_html, context = _declaration_preview_material(form, fields)
+            return jsonify({"ok": True, "html": render_document_html(current_app._get_current_object(), template_html, context)})
+        except AgreementPreviewError as exc:
+            return _document_preview_error_response(form, "declaration", exc)
+        except UndefinedError as exc:
+            missing = _undefined_variable_name(exc)
+            return _document_preview_error_response(form, "declaration", AgreementPreviewError(_missing_variables_message([missing] if missing else []), reason="missing_context_variables", missing_variables=[missing] if missing else []))
+
+
+@bp.route("/forms/<int:form_id>/documents/declaration/example.pdf", methods=["GET", "POST"])
+@login_required
+def declaration_template_example_pdf(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            template_html, context = _declaration_preview_material(form, fields)
+            pdf = current_app.extensions["services"].document_service.pdf_render_service.render_document_pdf_bytes(
+                app=current_app._get_current_object(), template_name="declaration_template.html", template_html=template_html, context=context
+            )
+        except AgreementPreviewError as exc:
+            return _document_preview_error_response(form, "declaration", exc)
+        return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name=f"przykladowa_deklaracja_{form.slug}.pdf")
 
 
 @bp.post("/forms/<int:form_id>/agreement-template/docx")
@@ -680,6 +917,7 @@ def agreement_builder_save(form_id: int):
         return jsonify({
             "ok": True,
             "status": workflow["contract_builder_status"],
+            "updated_at": workflow["contract_builder_updated_at"],
             "message": "Kreator zapisano jako aktywny szablon." if action == "activate" else "Wersja robocza kreatora została zapisana.",
         })
 
@@ -872,6 +1110,71 @@ def agreement_template_example_pdf(form_id: int):
         return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name=f"przykladowa_umowa_{form.slug}{training_suffix}.pdf")
 
 
+def _declaration_preview_material(form: Form, fields: list[FormField]) -> tuple[str, dict]:
+    definition = form.definition_json or {}
+    request_values = request.form if request.method == "POST" else request.args
+    mode = str(request_values.get("preview_mode") or "example").strip().casefold()
+    if mode not in {"example", "submission"}:
+        raise AgreementPreviewError("Nieobsługiwany tryb podglądu.", reason="invalid_preview_mode")
+    if request.method == "POST":
+        try:
+            document = _builder_document_from_request("declaration")
+        except ValueError as exc:
+            raise AgreementPreviewError(str(exc), reason="invalid_template") from exc
+        errors = validate_document_builder_document(document, fields, "declaration")
+        if errors:
+            raise AgreementPreviewError(errors[0].message, reason="invalid_template", errors=[error.as_dict() for error in errors])
+        template_html = render_document_builder_template(document, "declaration")
+    else:
+        template_html, template_error = _resolve_declaration_preview_template(definition, fields)
+        if template_error:
+            raise template_error
+    submission = None
+    if mode == "submission":
+        submission_id = str(request_values.get("submission_id") or "").strip()
+        if not submission_id:
+            raise AgreementPreviewError("Wybierz zgłoszenie do podglądu deklaracji.", reason="missing_submission")
+        submission = current_app.extensions["services"].submission_repository.get_by_id(submission_id)
+        if not submission or str(submission.get("form_slug") or "") != form.slug:
+            raise AgreementPreviewError("Wybrane zgłoszenie nie należy do tego formularza lub jest niedostępne.", reason="missing_submission")
+    context = declaration_preview_context(fields, form_definition=definition, submission=submission)
+    context["pdf_image_url"] = current_app.extensions["services"].document_service.resolve_pdf_image_url(definition)
+    context["pdf_image_alt"] = definition.get("title", "")
+    missing_variables = _missing_agreement_template_variables(template_html, context)
+    if missing_variables:
+        raise AgreementPreviewError(_missing_variables_message(missing_variables), reason="missing_context_variables", missing_variables=missing_variables)
+    return template_html, context
+
+
+def _resolve_declaration_preview_template(definition: dict, fields: list[FormField] | tuple = ()) -> tuple[str, AgreementPreviewError | None]:
+    workflow = definition.get("workflow") or {}
+    source = str(workflow.get("declaration_template_source") or "").casefold()
+    metadata = workflow.get("declaration_docx_template") or {}
+    if not source:
+        source = "html" if str(workflow.get("declaration_template_html") or "").strip() else ("docx" if metadata else "builder")
+    if source == "builder":
+        document = workflow.get("declaration_builder_active_document") or workflow.get("declaration_builder_document") or default_document_builder_document("declaration")
+        errors = validate_document_builder_document(document, fields, "declaration")
+        if errors:
+            return "", AgreementPreviewError(errors[0].message, reason="invalid_template", errors=[error.as_dict() for error in errors])
+        return render_document_builder_template(document, "declaration"), None
+    if source == "docx":
+        try:
+            parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
+        except ValueError as exc:
+            return "", AgreementPreviewError(str(exc), reason="docx_parse_error")
+        unknown = _current_docx_unknown_variables({**metadata, "variables": list(parsed.variables)}, fields, "declaration")
+        if unknown:
+            return "", AgreementPreviewError(_missing_variables_message(unknown), reason="missing_context_variables", missing_variables=unknown)
+        if str(parsed.html or "").strip():
+            return parsed.html, None
+        return "", AgreementPreviewError("Nie wgrano szablonu deklaracji Word lub nie udało się go odczytać.", reason="missing_template")
+    html_template = str(workflow.get("declaration_template_html") or "").strip()
+    if html_template:
+        return html_template, None
+    return "", AgreementPreviewError("Nie przygotowano szablonu deklaracji.", reason="missing_template")
+
+
 def _agreement_preview_material(
     form: Form,
     fields: list[FormField],
@@ -987,12 +1290,23 @@ def _resolve_agreement_preview_template(definition: dict, fields: list[FormField
     return "", AgreementPreviewError("Nie wgrano szablonu umowy Word ani szablonu HTML.", reason="missing_template")
 
 
-def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tuple) -> list[str]:
+def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tuple, document_type: str = "agreement") -> list[str]:
     variables = {str(name) for name in metadata.get("variables") or [] if str(name).strip()}
     if not variables:
         return sorted({str(name) for name in metadata.get("unknown_variables") or [] if str(name).strip()})
-    available = AgreementVariableCatalog.context_names(fields)
+    available = DeclarationVariableCatalog.context_names(fields) if document_type == "declaration" else AgreementVariableCatalog.context_names(fields)
     return sorted(variables - available)
+
+
+def _document_preview_error_response(form: Form, document_type: str, error: AgreementPreviewError):
+    current_app.logger.warning(
+        "%s_preview_422 form_id=%s reason=%s missing=%s",
+        document_type,
+        form.id,
+        error.reason,
+        error.missing_variables,
+    )
+    return jsonify(error.as_payload()), 422
 
 
 def _agreement_preview_error_response(form: Form, preview_mode: str, error: AgreementPreviewError):
@@ -1048,17 +1362,52 @@ def _agreement_docx_editor_context(form: Form, fields: list[FormField]) -> dict:
     }
 
 
-def _builder_document_from_request() -> dict:
-    raw = str(request.form.get("builder_json") or request.form.get("contract_builder_json") or "").strip()
+def _declaration_editor_context(form: Form, fields: list[FormField]) -> dict:
+    definition = form.definition_json or {}
+    workflow = definition.get("workflow") or {}
+    metadata = dict(workflow.get("declaration_docx_template") or {})
+    current_unknown = _current_docx_unknown_variables(metadata, fields, "declaration")
+    metadata["unknown_variables"] = current_unknown
+    metadata["valid"] = bool(metadata.get("html")) and not current_unknown
+    submissions = current_app.extensions["services"].submission_repository.list_by_form(form.slug)
+    _, preview_error = _resolve_declaration_preview_template(definition, fields)
+    return {
+        "declaration_template_variables": declaration_variable_catalog(fields),
+        "declaration_docx_metadata": metadata,
+        "declaration_preview_available": not preview_error,
+        "declaration_preview_error": str(preview_error or ""),
+        "declaration_preview_submissions": [
+            {
+                "submission_id": str(row.get("submission_id") or ""),
+                "label": " — ".join(filter(None, [
+                    str(row.get("submission_id") or ""),
+                    " ".join(filter(None, [str(row.get("imiona") or row.get("first_name") or ""), str(row.get("nazwisko") or row.get("last_name") or "")]))
+                ])),
+                "trainings": [],
+            }
+            for row in submissions[:100]
+            if row.get("submission_id")
+        ],
+        "declaration_builder_document": normalize_document_builder_document(
+            workflow.get("declaration_builder_document") or default_document_builder_document("declaration"),
+            "declaration",
+        ),
+        "declaration_builder_can_show_html": g.admin_user.role == ROLE_SUPER_ADMIN,
+    }
+
+
+def _builder_document_from_request(document_type: str = "agreement") -> dict:
+    field_name = "contract_builder_json" if document_type == "agreement" else "declaration_builder_json"
+    raw = str(request.form.get("builder_json") or request.form.get(field_name) or "").strip()
     if not raw:
-        raise ValueError("Brak danych kreatora umowy.")
+        raise ValueError(f"Brak danych kreatora {'umowy' if document_type == 'agreement' else 'deklaracji'}.")
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError("Konfiguracja kreatora nie jest poprawnym JSON-em.") from exc
     if not isinstance(value, dict):
         raise ValueError("Konfiguracja kreatora musi być obiektem JSON.")
-    return normalize_agreement_builder_document(value)
+    return normalize_document_builder_document(value, document_type)
 
 
 def _audit_training_catalog_actions(

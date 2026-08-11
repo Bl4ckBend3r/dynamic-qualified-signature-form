@@ -131,13 +131,41 @@ class FormConfigValidator:
                 errors.append(f"workflow.steps[{index}].document_id references unknown document: {document_id}")
             if step.get("repeat_over") and not step.get("document_id"):
                 errors.append(f"workflow.steps[{index}].repeat_over requires document_id")
-        if workflow.get("requires_declaration") and not str(workflow.get("declaration_template_html") or "").strip():
-            errors.append("workflow.declaration_template_html is required when declaration is required")
+        if workflow.get("requires_declaration"):
+            source = str(workflow.get("declaration_template_source") or "html")
+            docx_metadata = workflow.get("declaration_docx_template") or {}
+            builder_document = (
+                workflow.get("declaration_builder_active_document")
+                or workflow.get("declaration_builder_document")
+                or {}
+            )
+            has_template = (
+                bool(builder_document.get("blocks"))
+                if source == "builder"
+                else bool(docx_metadata.get("html") or docx_metadata.get("storage_path"))
+                if source == "docx"
+                else bool(str(workflow.get("declaration_template_html") or "").strip())
+            )
+            if not has_template:
+                errors.append("workflow.declaration_template_html is required when declaration is required")
+            if source == "docx" and docx_metadata.get("unknown_variables"):
+                errors.append(
+                    "Szablon DOCX deklaracji zawiera nieznane zmienne: "
+                    + ", ".join(str(item) for item in docx_metadata["unknown_variables"])
+                    + "."
+                )
         if workflow.get("requires_contract"):
             source = str(workflow.get("contract_template_source") or "html")
             docx_metadata = workflow.get("contract_docx_template") or {}
+            builder_document = (
+                workflow.get("contract_builder_active_document")
+                or workflow.get("contract_builder_document")
+                or {}
+            )
             has_template = (
-                bool(str(docx_metadata.get("html") or "").strip())
+                bool(builder_document.get("blocks"))
+                if source == "builder"
+                else bool(docx_metadata.get("html") or docx_metadata.get("storage_path"))
                 if source == "docx"
                 else bool(str(workflow.get("contract_template_html") or "").strip())
             )

@@ -1,3 +1,5 @@
+import pytest
+
 from services.form_config_service import FormConfigService
 from validators.form_config_validator import FormConfigValidator
 
@@ -58,6 +60,7 @@ def test_validator_reports_unknown_trigger_and_missing_required_html():
             "workflow": {
                 "initial_step": "submission",
                 "requires_declaration": True,
+                "declaration_template_source": "html",
                 "steps": [{"id": "submission", "type": "end", "triggers": ["unknown_trigger"]}],
             },
         }
@@ -67,6 +70,32 @@ def test_validator_reports_unknown_trigger_and_missing_required_html():
 
     assert "workflow.steps[0].triggers contains unsupported trigger: unknown_trigger" in errors
     assert "workflow.declaration_template_html is required when declaration is required" in errors
+
+
+@pytest.mark.parametrize("document_type", ["contract", "declaration"])
+@pytest.mark.parametrize("source", ["builder", "docx", "html"])
+def test_required_document_accepts_template_from_selected_source(document_type, source):
+    workflow = {
+        f"requires_{document_type}": True,
+        f"{document_type}_template_source": source,
+    }
+    if source == "builder":
+        workflow[f"{document_type}_builder_document"] = {
+            "blocks": [{"type": "paragraph", "runs": [{"text": "Treść"}]}]
+        }
+    elif source == "docx":
+        workflow[f"{document_type}_docx_template"] = {
+            "original_filename": "szablon.docx",
+            "storage_path": f"templates/{document_type}/szablon.docx",
+        }
+    else:
+        workflow[f"{document_type}_template_html"] = "<p>Treść</p>"
+
+    errors = FormConfigValidator(skip_template_check=True).validate(
+        {"title": "Form", "fields": [], "documents": [], "workflow": workflow}
+    )
+
+    assert errors == []
 
 
 def test_workflow_normalization_adds_html_document_templates():

@@ -1,0 +1,102 @@
+{% set current_docx_filename = docx_metadata.get('original_filename') or docx_metadata.get('filename') or (docx_metadata.get('storage_path') or '').split('/')[-1] %}
+{% set has_docx_template = docx_metadata.get('storage_path') %}
+<section class="document-source-card admin-form-wide" data-document-template-source="{{ document_type }}">
+    <header class="document-source-card__header">
+        <div>
+            <h3>Sposób przygotowania szablonu</h3>
+            <p>{{ source_description }}</p>
+        </div>
+    </header>
+
+    <div class="document-source-options" role="radiogroup" aria-label="Sposób przygotowania szablonu {{ 'umowy' if document_type == 'agreement' else 'deklaracji' }}">
+        {% for option in [
+            {'value': 'builder', 'title': 'Kreator wizualny', 'description': 'Preferowany tryb bez znajomości HTML i Jinja.'},
+            {'value': 'docx', 'title': 'Microsoft Word (.docx)', 'description': 'Wgraj istniejący szablon Word ze zmiennymi.'},
+            {'value': 'html', 'title': 'HTML — tryb zaawansowany', 'description': 'Pełna kontrola nad strukturą dokumentu.'}
+        ] %}
+            <label class="document-source-option{% if selected_source == option.value %} is-active{% endif %}" data-document-source-option data-source="{{ option.value }}">
+                <input class="document-source-input visually-hidden" type="radio" name="{{ source_input_name }}" value="{{ option.value }}" {% if selected_source == option.value %}checked{% endif %}>
+                <span class="document-source-radio" aria-hidden="true"><span></span></span>
+                <span class="document-source-details">
+                    <strong>{{ option.title }}</strong>
+                    <small>{{ option.description }}</small>
+                </span>
+            </label>
+        {% endfor %}
+    </div>
+
+    <div class="document-source-panels">
+        <section class="document-source-panel document-source-panel--builder" data-source-panel="builder" {% if selected_source != 'builder' %}hidden{% endif %}>
+            <div class="document-source-panel__content">
+                <h4>Kreator wizualny</h4>
+                <p>Kreator otwiera dokument w osobnym dużym obszarze roboczym. Bloki dokumentu można układać bez edycji kodu.</p>
+                <p class="document-source-last-saved" data-document-builder-parent-status {% if document_type == 'agreement' %}data-agreement-builder-parent-status{% endif %}>
+                    {% if last_saved_at %}
+                        Ostatni zapis: <time datetime="{{ last_saved_at }}" data-document-last-saved>{{ last_saved_at }}</time>
+                    {% else %}
+                        Szablon nie został jeszcze zapisany.
+                    {% endif %}
+                </p>
+            </div>
+            <button
+                type="button"
+                class="admin-button document-source-builder-button"
+                data-document-builder-popup
+                {% if document_type == 'agreement' %}data-agreement-builder-popup{% endif %}
+                data-document-type="{{ document_type }}"
+                data-builder-url="{{ builder_url }}"
+                data-form-id="{{ form.id }}"
+            >
+                Otwórz kreator wizualny
+                <span class="document-source-builder-button__icon" aria-hidden="true">↗</span>
+            </button>
+            <p class="agreement-builder-popup-error" data-document-builder-popup-error {% if document_type == 'agreement' %}data-agreement-builder-popup-error{% endif %} role="alert" hidden></p>
+        </section>
+
+        <section class="document-source-panel document-source-panel--docx" data-source-panel="docx" {% if selected_source != 'docx' %}hidden{% endif %}>
+            <div class="document-source-panel__content">
+                <h4>{{ docx_title }}</h4>
+                <p>{{ docx_description }}</p>
+            </div>
+            <label class="document-docx-dropzone">
+                <span class="document-docx-dropzone__icon" aria-hidden="true">⇧</span>
+                <strong>Przeciągnij plik .docx tutaj</strong>
+                <span>lub wybierz plik z dysku</span>
+                <input type="file" name="{{ docx_input_name }}" accept="application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx">
+            </label>
+            <div class="admin-actions document-source-panel__actions">
+                <button class="admin-button-secondary" type="submit" formaction="{{ docx_upload_url }}" formmethod="post" formnovalidate>{{ 'Zamień DOCX' if has_docx_template else 'Wgraj DOCX' }}</button>
+                <a class="admin-button-secondary" href="{{ docx_sample_url }}">Pobierz przykładowy DOCX</a>
+                {% if has_docx_template %}
+                    <a class="admin-button-secondary" href="{{ docx_download_url }}">Pobierz oryginał</a>
+                    <button class="admin-button-danger" type="submit" formaction="{{ docx_delete_url }}" formmethod="post" formnovalidate>Usuń DOCX</button>
+                {% endif %}
+            </div>
+            {% if has_docx_template %}
+                <div class="agreement-template-status {% if docx_metadata.get('valid') %}is-valid{% else %}is-invalid{% endif %}">
+                    <strong>Aktualny plik: {{ current_docx_filename or 'zapisany szablon DOCX' }}</strong>
+                    <span>{% if docx_metadata.get('valid') %}Szablon poprawny{% else %}Szablon wymaga poprawy{% endif %}</span>
+                    {% if docx_metadata.get('parser_version') %}<small>Parser {{ docx_metadata.get('parser_version') }}, zapis: {{ docx_metadata.get('uploaded_at', '') }}</small>{% endif %}
+                    {% if docx_metadata.get('unknown_variables') %}<p>Nieznane zmienne: <code>{{ docx_metadata.get('unknown_variables')|join(', ') }}</code></p>{% endif %}
+                    {% for warning in docx_metadata.get('warnings', []) %}<p class="workflow-help">{{ warning }}</p>{% endfor %}
+                </div>
+            {% endif %}
+        </section>
+
+        <section class="document-source-panel document-source-panel--html" data-source-panel="html" {% if selected_source != 'html' %}hidden{% endif %}>
+            <div class="document-source-panel__content">
+                <h4>{{ html_title }}</h4>
+                <p>{{ html_description }}</p>
+            </div>
+            <label class="admin-code-field document-html-editor">
+                <span>Treść szablonu HTML</span>
+                <textarea name="{{ html_input_name }}" data-template-content="{{ document_type }}" rows="{{ html_rows }}" spellcheck="false">{{ html_content }}</textarea>
+            </label>
+            <label class="document-html-upload">
+                <span>Wgraj istniejący plik HTML</span>
+                <input type="file" accept="text/html,.html" data-template-file="{{ document_type }}">
+            </label>
+            {% if html_help %}<p class="workflow-help">{{ html_help }}</p>{% endif %}
+        </section>
+    </div>
+</section>

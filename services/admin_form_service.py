@@ -114,6 +114,7 @@ def build_form_definition_from_admin_form(
     else:
         workflow = dict(definition.get("workflow") or {})
     workflow = normalizer.normalize(workflow)
+    previous_declaration_template_source = str(workflow.get("declaration_template_source") or "")
     previous_contract_template_source = str(workflow.get("contract_template_source") or "")
     workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
     requested_initial_step = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
@@ -126,6 +127,34 @@ def build_form_definition_from_admin_form(
     workflow["electronic_signature_required"] = form_data.get("electronic_signature_required") == "on"
     workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
+    requested_declaration_source = str(form_data.get("declaration_template_source") or "").strip().casefold()
+    if not requested_declaration_source and workflow["declaration_template_html"]:
+        requested_declaration_source = "html"
+    declaration_source = requested_declaration_source or str(workflow.get("declaration_template_source") or "builder").strip().casefold()
+    workflow["declaration_template_source"] = declaration_source if declaration_source in {"builder", "html", "docx"} else "builder"
+    workflow["declaration_docx_template"] = dict(workflow.get("declaration_docx_template") or {})
+    if workflow["declaration_template_source"] == "builder" and not isinstance(workflow.get("declaration_builder_document"), dict):
+        from services.documents.document_builder_service import default_document_builder_document
+
+        workflow["declaration_builder_document"] = default_document_builder_document("declaration")
+    declaration_builder_json = str(form_data.get("declaration_builder_json") or "").strip()
+    if declaration_builder_json:
+        from services.documents.document_builder_service import normalize_document_builder_document
+
+        parsed_declaration_builder = json.loads(declaration_builder_json)
+        if not isinstance(parsed_declaration_builder, dict):
+            raise ValueError("Konfiguracja kreatora deklaracji musi być obiektem JSON.")
+        workflow["declaration_builder_document"] = normalize_document_builder_document(parsed_declaration_builder, "declaration")
+    if (
+        workflow["declaration_template_source"] == "builder"
+        and isinstance(workflow.get("declaration_builder_document"), dict)
+        and (bool(declaration_builder_json) or previous_declaration_template_source != "builder" or not workflow.get("declaration_builder_active_document"))
+    ):
+        from services.documents.document_builder_service import normalize_document_builder_document
+
+        workflow["declaration_builder_active_document"] = normalize_document_builder_document(
+            workflow["declaration_builder_document"], "declaration"
+        )
     workflow["declaration_filename_pattern"] = (
         form_data.get("declaration_filename_pattern", workflow.get("declaration_filename_pattern", "")).strip()
         or "{first_name}_{last_name}-deklaracja.pdf"
@@ -140,6 +169,10 @@ def build_form_definition_from_admin_form(
     template_source = requested_template_source or str(workflow.get("contract_template_source") or "builder").strip().casefold()
     workflow["contract_template_source"] = template_source if template_source in {"builder", "html", "docx"} else "builder"
     workflow["contract_docx_template"] = dict(workflow.get("contract_docx_template") or {})
+    if workflow["contract_template_source"] == "builder" and not isinstance(workflow.get("contract_builder_document"), dict):
+        from services.documents.agreement_builder_service import default_agreement_builder_document
+
+        workflow["contract_builder_document"] = default_agreement_builder_document()
     builder_json = str(form_data.get("contract_builder_json") or "").strip()
     if builder_json:
         from services.documents.agreement_builder_service import normalize_agreement_builder_document
@@ -153,6 +186,8 @@ def build_form_definition_from_admin_form(
         and isinstance(workflow.get("contract_builder_document"), dict)
         and (bool(builder_json) or previous_contract_template_source != "builder" or not workflow.get("contract_builder_active_document"))
     ):
+        from services.documents.agreement_builder_service import normalize_agreement_builder_document
+
         workflow["contract_builder_active_document"] = normalize_agreement_builder_document(workflow["contract_builder_document"])
     workflow["contract_generation_mode"] = "per_training"
     workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
@@ -170,6 +205,7 @@ def build_form_definition_from_admin_form(
         or form_data.get("requires_contract")
         or form_data.get("declaration_template_html")
         or form_data.get("contract_template_html")
+        or workflow.get("declaration_docx_template")
         or workflow.get("contract_docx_template")
     )
     workflow["decision_settings"] = _workflow_decision_settings(form_data, workflow.get("decision_settings") or [])

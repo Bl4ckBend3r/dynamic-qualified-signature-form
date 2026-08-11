@@ -135,7 +135,7 @@ html.agreement-preview-document body {
 .document .document-bold { font-family: "DejaVuSans-Bold", Arial, sans-serif; font-weight: 700; }
 .document .document-regular { font-family: "DejaVuSans", Arial, sans-serif; font-weight: 400; }
 .document .document-italic { font-style: italic; }
-.document .document-underline { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .12em; }
+.document .document-underline, .document .document-inline-underline { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .12em; }
 .document--docx h1, .document--docx h2, .document--docx h3, .document-section-number, .document-section-title { break-after: avoid; page-break-after: avoid; }
 .document--docx .document-table--docx tr { break-inside: avoid; page-break-inside: avoid; }
 .document .document-list { max-width: 100%; margin: 6pt 0 12pt; padding-left: 22pt; }

@@ -15,10 +15,11 @@ DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml
 
 
 def parse_stored_agreement_docx(storage, metadata: Mapping[str, Any]):
+    document_type = str(metadata.get("document_type") or "agreement").strip().casefold()
     path = str(metadata.get("storage_path") or "").strip()
     if path:
         try:
-            return parse_docx_template(storage.read_bytes(path))
+            return parse_docx_template(storage.read_bytes(path), document_type=document_type)
         except Exception as exc:
             raise ValueError("Nie udało się odczytać zapisanego szablonu DOCX.") from exc
     html = str(metadata.get("html") or "").strip()
@@ -45,17 +46,28 @@ class AgreementDocxTemplateService:
         content: bytes,
         fields: Iterable[Any],
         uploaded_by_user_id: int | None,
+        document_type: str = "agreement",
     ) -> dict:
+        document_type = str(document_type or "agreement").strip().casefold()
+        if document_type not in {"agreement", "declaration"}:
+            raise ValueError("Nieobsługiwany typ dokumentu.")
+        label = "umowy" if document_type == "agreement" else "deklaracji"
         if Path(filename or "").suffix.casefold() != ".docx":
-            raise ValueError("Szablon umowy musi być plikiem DOCX.")
-        parsed = parse_docx_template(content)
-        known = AgreementVariableCatalog.context_names(fields)
+            raise ValueError(f"Szablon {label} musi być plikiem DOCX.")
+        parsed = parse_docx_template(content, document_type=document_type)
+        if document_type == "declaration":
+            from services.documents.declaration_template_context_service import DeclarationVariableCatalog
+
+            known = DeclarationVariableCatalog.context_names(fields)
+        else:
+            known = AgreementVariableCatalog.context_names(fields)
         unknown = sorted(set(parsed.variables) - known)
-        storage_path = self.storage_path(form_slug)
-        self._ensure_directory(form_slug)
+        storage_path = self.storage_path(form_slug, document_type=document_type)
+        self._ensure_directory(form_slug, document_type=document_type)
         self.storage.write_bytes(storage_path, content, DOCX_MIME_TYPE)
         return {
             "storage_path": storage_path,
+            "document_type": document_type,
             "original_filename": Path(filename).name,
             "mime_type": DOCX_MIME_TYPE,
             "size_bytes": len(content),
@@ -84,8 +96,23 @@ class AgreementDocxTemplateService:
         if path:
             self.storage.delete(path, missing_ok=True)
 
-    def sample_docx(self, fields: Iterable[Any]) -> bytes:
+    def sample_docx(self, fields: Iterable[Any], *, document_type: str = "agreement") -> bytes:
         document = Document()
+        if document_type == "declaration":
+            title = document.add_heading("DEKLARACJA UCZESTNICTWA", level=1)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            document.add_paragraph("sporządzona w dniu {{ generated_date }}")
+            document.add_heading("Dane uczestnika", level=2)
+            document.add_paragraph("{{ imiona }} {{ nazwisko }}\nPESEL: {{ pesel }}")
+            document.add_paragraph("Adres: {{ participant_address_inline }}")
+            document.add_paragraph("E-mail: {{ email }}\nTelefon: {{ telefon }}")
+            document.add_heading("Oświadczenie", level=2)
+            paragraph = document.add_paragraph("Oświadczam, że dane podane w formularzu są prawdziwe.")
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            document.add_paragraph("\n\n___________________\nCzytelny podpis uczestnika")
+            buffer = BytesIO()
+            document.save(buffer)
+            return buffer.getvalue()
         title = document.add_heading("UMOWA UCZESTNICTWA W PROJEKCIE", level=1)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         number = document.add_paragraph("nr {{ agreement_number }}")
@@ -115,10 +142,11 @@ class AgreementDocxTemplateService:
         document.save(buffer)
         return buffer.getvalue()
 
-    def storage_path(self, form_slug: str) -> str:
-        return f"{self.storage.output_dir}/{form_slug}/templates/agreement/agreement-template.docx"
+    def storage_path(self, form_slug: str, *, document_type: str = "agreement") -> str:
+        filename = "agreement-template.docx" if document_type == "agreement" else "declaration-template.docx"
+        return f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/{filename}"
 
-    def _ensure_directory(self, form_slug: str) -> None:
+    def _ensure_directory(self, form_slug: str, *, document_type: str = "agreement") -> None:
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}")
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates")
-        self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/agreement")
+        self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{document_type}")

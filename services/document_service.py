@@ -18,6 +18,7 @@ from services.agreement_context_service import (
 )
 from services.documents.agreement_template_context_service import build_agreement_render_context
 from services.documents.agreement_docx_template_service import parse_stored_agreement_docx
+from services.documents.declaration_template_context_service import build_declaration_render_context
 from services import document_naming_service as naming
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.document_view_service import DocumentViewService
@@ -232,6 +233,12 @@ class DocumentService:
         )
         context.update(resolved_context_extra)
         self._add_collection_context(context, render_row)
+        if document_id == DocumentType.DECLARATION:
+            context = build_declaration_render_context(
+                context,
+                form_definition=form_config,
+                fields=form_config.get("fields") or (),
+            )
         document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
@@ -694,9 +701,12 @@ class DocumentService:
 
     def resolve_document_template(self, document: Mapping[str, Any]) -> str:
         if document.get("template_source") == "builder":
-            from services.documents.agreement_builder_service import render_agreement_builder_template
+            from services.documents.document_builder_service import render_document_builder_template
 
-            return render_agreement_builder_template(document.get("builder_document") or {})
+            return render_document_builder_template(
+                document.get("builder_document") or {},
+                str(document.get("id") or "agreement"),
+            )
         if document.get("template_source") == "docx":
             try:
                 return parse_stored_agreement_docx(self.storage, document.get("template_metadata") or {}).html

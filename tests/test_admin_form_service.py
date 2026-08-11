@@ -229,6 +229,26 @@ def test_admin_contract_settings_create_generated_agreement_config():
     assert agreement["numbering"]["number_pattern"] == "U/{submission_id}/{generated_date}"
 
 
+@pytest.mark.parametrize("source", ["builder", "docx", "html"])
+def test_admin_document_template_sources_are_preserved_for_both_document_types(source):
+    definition = build_form_definition_from_admin_form(
+        {"title": "Form", "fields": []},
+        {
+            "workflow_json": '{"steps": []}',
+            "workflow_name": "Dokumenty",
+            "workflow_initial_step": "",
+            "requires_declaration": "on",
+            "requires_contract": "on",
+            "declaration_template_source": source,
+            "contract_template_source": source,
+        },
+    )
+
+    workflow = definition["workflow"]
+    assert workflow["declaration_template_source"] == source
+    assert workflow["contract_template_source"] == source
+
+
 def test_parse_training_dates_text_validates_and_sorts_dates():
     dates = parse_training_dates_text(
         "2026-09-10||10:00|12:00|Sala 2|Opis\n2026-08-01||||Sala 1|"

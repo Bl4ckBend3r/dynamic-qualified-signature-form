@@ -19,7 +19,7 @@ from jinja2 import TemplateSyntaxError, meta
 from jinja2.sandbox import SandboxedEnvironment
 
 
-PARSER_VERSION = "1.2"
+PARSER_VERSION = "1.3"
 _VARIABLE_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}", re.DOTALL)
 _JINJA_TOKEN_RE = re.compile(r"({{.*?}}|{%.*?%}|{#.*?#})", re.DOTALL)
 _JINJA_FRAGMENT_RE = re.compile(r"({{|}}|{%|%}|{#|#})")
@@ -47,7 +47,7 @@ class _ListInfo:
     level: int
 
 
-def parse_docx_template(content: bytes) -> ParsedDocxTemplate:
+def parse_docx_template(content: bytes, *, document_type: str = "agreement") -> ParsedDocxTemplate:
     if not content:
         raise DocxTemplateParseError("Plik DOCX jest pusty.")
     try:
@@ -55,6 +55,9 @@ def parse_docx_template(content: bytes) -> ParsedDocxTemplate:
     except (PackageNotFoundError, BadZipFile, ValueError, KeyError) as exc:
         raise DocxTemplateParseError("Plik nie jest poprawnym dokumentem DOCX.") from exc
 
+    document_type = str(document_type or "agreement").strip().casefold()
+    if document_type not in {"agreement", "declaration"}:
+        raise DocxTemplateParseError("Nieobsługiwany typ dokumentu DOCX.")
     variables: set[str] = set()
     warnings: list[str] = []
     blocks: list[str] = []
@@ -126,13 +129,13 @@ def parse_docx_template(content: bytes) -> ParsedDocxTemplate:
     if _contains_unsupported_xml(document):
         warnings.append("Dokument zawiera obrazy, pola tekstowe lub obiekty, których parser nie przenosi do HTML.")
 
-    template_html = '<main class="document document--agreement document--docx">' + "".join(blocks) + "</main>"
+    template_html = f'<main class="document document--{document_type} document--docx">' + "".join(blocks) + "</main>"
     try:
         parsed_jinja = SandboxedEnvironment(autoescape=True).parse(template_html)
         variables.update(meta.find_undeclared_variables(parsed_jinja))
     except TemplateSyntaxError as exc:
         warnings.append(f"Niepoprawna składnia Jinja: {exc.message}.")
-    builder_document = _builder_document(document, variables, warnings)
+    builder_document = _builder_document(document, variables, warnings, document_type=document_type)
     return ParsedDocxTemplate(
         html=template_html,
         variables=tuple(sorted(variables)),
@@ -150,6 +153,10 @@ def _iter_blocks(parent: DocxDocument):
 
 
 def _paragraph_text(paragraph: Paragraph, variables: set[str], warnings: list[str]) -> str:
+    return _runs_html(_paragraph_runs(paragraph, variables, warnings))
+
+
+def _paragraph_runs(paragraph: Paragraph, variables: set[str], warnings: list[str]) -> list[dict]:
     raw = paragraph.text or ""
     matches = list(_JINJA_TOKEN_RE.finditer(raw))
     variables.update(match.group(1) for match in _VARIABLE_RE.finditer(raw))
@@ -157,19 +164,73 @@ def _paragraph_text(paragraph: Paragraph, variables: set[str], warnings: list[st
     if _JINJA_FRAGMENT_RE.search(stripped):
         warnings.append("Wykryto niepełny znacznik Jinja. Sprawdź pary nawiasów {{ }}, {% %} lub {# #}.")
 
-    pieces: list[str] = []
+    styled_ranges: list[tuple[int, int, dict[str, bool]]] = []
+    range_cursor = 0
+    for run in paragraph.runs:
+        run_text = run.text or ""
+        if not run_text:
+            continue
+        style = {"bold": bool(run.bold), "italic": bool(run.italic), "underline": bool(run.underline)}
+        styled_ranges.append((range_cursor, range_cursor + len(run_text), style))
+        range_cursor += len(run_text)
+    if range_cursor != len(raw):
+        styled_ranges = [(0, len(raw), {"bold": False, "italic": False, "underline": False})]
+
+    pieces: list[dict] = []
     cursor = 0
     for match in matches:
-        pieces.append(_escape_literal(raw[cursor : match.start()]))
+        _append_literal_runs(pieces, raw, cursor, match.start(), styled_ranges)
         token = match.group(0)
-        if _is_supported_jinja_token(token):
-            pieces.append(token)
-        else:
-            pieces.append(_escape_literal(token))
-            warnings.append("NieobsĹ‚ugiwany znacznik Jinja zostaĹ‚ zachowany jako zwykĹ‚y tekst.")
+        _append_model_run(pieces, token, _style_at(styled_ranges, match.start()))
+        if not _is_supported_jinja_token(token):
+            warnings.append("Nieobsługiwany znacznik Jinja został zachowany jako zwykły tekst.")
         cursor = match.end()
-    pieces.append(_escape_literal(raw[cursor:]))
-    return "".join(pieces).replace("\n", "<br>")
+    _append_literal_runs(pieces, raw, cursor, len(raw), styled_ranges)
+    return pieces
+
+
+def _append_literal_runs(pieces: list[dict], raw: str, start: int, end: int, ranges: list[tuple[int, int, dict[str, bool]]]) -> None:
+    cursor = start
+    while cursor < end:
+        matching = next((item for item in ranges if item[0] <= cursor < item[1]), None)
+        next_end = min(end, matching[1]) if matching else end
+        style = matching[2] if matching else {"bold": False, "italic": False, "underline": False}
+        _append_model_run(pieces, raw[cursor:next_end], style)
+        cursor = next_end
+
+
+def _append_model_run(pieces: list[dict], text: str, style: dict[str, bool]) -> None:
+    if not text:
+        return
+    run = {"text": text, **style}
+    token_boundary = bool(_JINJA_TOKEN_RE.fullmatch(text)) or bool(
+        pieces and _JINJA_TOKEN_RE.fullmatch(str(pieces[-1].get("text") or ""))
+    )
+    if pieces and not token_boundary and all(pieces[-1].get(name) == run[name] for name in ("bold", "italic", "underline")):
+        pieces[-1]["text"] += text
+    else:
+        pieces.append(run)
+
+
+def _style_at(ranges: list[tuple[int, int, dict[str, bool]]], position: int) -> dict[str, bool]:
+    match = next((item for item in ranges if item[0] <= position < item[1]), None)
+    return dict(match[2]) if match else {"bold": False, "italic": False, "underline": False}
+
+
+def _runs_html(runs: list[dict]) -> str:
+    pieces = []
+    for run in runs:
+        raw = str(run.get("text") or "")
+        rendered = raw if _JINJA_TOKEN_RE.fullmatch(raw) and _is_supported_jinja_token(raw) else _escape_literal(raw)
+        rendered = rendered.replace("\n", "<br>")
+        if run.get("bold"):
+            rendered = f"<strong>{rendered}</strong>"
+        if run.get("italic"):
+            rendered = f"<em>{rendered}</em>"
+        if run.get("underline"):
+            rendered = f'<span class="document-inline-underline">{rendered}</span>'
+        pieces.append(rendered)
+    return "".join(pieces)
 
 
 def _paragraph_html(paragraph: Paragraph, text: str) -> str:
@@ -297,8 +358,8 @@ def _is_supported_jinja_token(token: str) -> bool:
     return bool(statement and statement[0] in _SUPPORTED_JINJA_STATEMENTS)
 
 
-def _builder_document(document: DocxDocument, variables: set[str], warnings: list[str]) -> dict:
-    """Convert the same Word structure to stable editable agreement blocks."""
+def _builder_document(document: DocxDocument, variables: set[str], warnings: list[str], *, document_type: str) -> dict:
+    """Convert the same Word structure to stable editable document blocks."""
     blocks: list[dict] = []
     pending_items: list[dict] = []
     pending_list_type = "ordered_list"
@@ -315,7 +376,10 @@ def _builder_document(document: DocxDocument, variables: set[str], warnings: lis
     def flush_section() -> None:
         nonlocal pending_section_number
         if pending_section_number is not None:
-            blocks.append({"type": "agreement_section", "number": pending_section_number, "title": "Paragraf umowy"})
+            if document_type == "agreement":
+                blocks.append({"type": "agreement_section", "number": pending_section_number, "title": "Paragraf umowy"})
+            else:
+                blocks.append(_plain_text_block("heading", pending_section_number, alignment="left", bold=True, level=2))
             pending_section_number = None
 
     for block in _iter_blocks(document):
@@ -324,24 +388,26 @@ def _builder_document(document: DocxDocument, variables: set[str], warnings: lis
             flush_section()
             rows = []
             for row in block.rows:
-                rows.append([
-                    "<br>".join(_paragraph_text(paragraph, variables, warnings) for paragraph in cell.paragraphs)
-                    for cell in row.cells
-                ])
+                rows.append([_cell_builder_value(cell.paragraphs, variables, warnings) for cell in row.cells])
             blocks.append({"type": "table", "header": bool(rows), "rows": rows})
             continue
 
         raw_text = block.text or ""
-        content = _paragraph_text(block, variables, warnings)
+        runs = _paragraph_runs(block, variables, warnings)
+        content = _runs_html(runs)
+        plain_content = "".join(run["text"] for run in runs)
         list_info = _list_info(block)
         if _LEGAL_SECTION_RE.fullmatch(raw_text):
             flush_list()
             flush_section()
-            pending_section_number = content
+            pending_section_number = plain_content
             continue
         if pending_section_number is not None:
             if _visible_text(content):
-                blocks.append({"type": "agreement_section", "number": pending_section_number, "title": content})
+                if document_type == "agreement":
+                    blocks.append({"type": "agreement_section", "number": pending_section_number, "title": plain_content})
+                else:
+                    blocks.append(_plain_text_block("heading", f"{pending_section_number} {plain_content}".strip(), alignment="left", bold=True, level=2))
                 pending_section_number = None
                 continue
             flush_section()
@@ -356,21 +422,65 @@ def _builder_document(document: DocxDocument, variables: set[str], warnings: lis
             if pending_identity is None:
                 pending_identity = list_info.identity
                 pending_list_type = "bullet_list" if list_info.tag == "ul" else "ordered_list"
-            pending_items.append({"content": content, "level": max(0, min(list_info.level, 8))})
+            pending_items.append({"content": plain_content, "runs": runs, "level": max(0, min(list_info.level, 8))})
             continue
 
         flush_list()
         heading_level = _heading_level(block)
         alignment = _paragraph_alignment(block, default="center" if heading_level else "left")
-        formatting = {"bold": bool(heading_level), "italic": False, "underline": False, "alignment": alignment}
         if heading_level:
-            lines = _visual_lines(content)
-            blocks.append({"type": "heading", "level": heading_level, "format": formatting, "content": lines[0] if lines else content})
-            for line in lines[1:]:
-                blocks.append({"type": "paragraph", "format": {**formatting, "bold": False}, "content": line})
+            lines = _split_model_runs_lines(runs)
+            first_runs = lines[0] if lines else runs
+            blocks.append(_runs_text_block("heading", first_runs, alignment=alignment, level=heading_level))
+            for line_runs in lines[1:]:
+                blocks.append(_runs_text_block("paragraph", line_runs, alignment=alignment))
         else:
-            blocks.append({"type": "paragraph", "format": formatting, "content": content})
+            blocks.append(_runs_text_block("paragraph", runs, alignment=alignment))
 
     flush_list()
     flush_section()
-    return {"version": 1, "blocks": blocks}
+    return {"version": 1, "document_type": document_type, "blocks": blocks}
+
+
+def _cell_builder_value(paragraphs, variables: set[str], warnings: list[str]):
+    combined: list[dict] = []
+    for index, paragraph in enumerate(paragraphs):
+        if index:
+            _append_model_run(combined, "\n", {"bold": False, "italic": False, "underline": False})
+        for run in _paragraph_runs(paragraph, variables, warnings):
+            _append_model_run(combined, run["text"], {name: bool(run.get(name)) for name in ("bold", "italic", "underline")})
+    return {"content": "".join(run["text"] for run in combined), "runs": combined}
+
+
+def _split_model_runs_lines(runs: list[dict]) -> list[list[dict]]:
+    lines: list[list[dict]] = [[]]
+    for run in runs:
+        parts = str(run.get("text") or "").split("\n")
+        style = {name: bool(run.get(name)) for name in ("bold", "italic", "underline")}
+        for index, part in enumerate(parts):
+            if part:
+                _append_model_run(lines[-1], part, style)
+            if index < len(parts) - 1:
+                lines.append([])
+    return [line for line in lines if any(str(run.get("text") or "").strip() for run in line)]
+
+
+def _runs_text_block(block_type: str, runs: list[dict], *, alignment: str, level: int | None = None) -> dict:
+    result = {
+        "type": block_type,
+        "format": {"alignment": alignment},
+        "content": "".join(run["text"] for run in runs),
+        "runs": runs,
+    }
+    if level is not None:
+        result["level"] = level
+    return result
+
+
+def _plain_text_block(block_type: str, content: str, *, alignment: str, bold: bool, level: int | None = None) -> dict:
+    return _runs_text_block(
+        block_type,
+        [{"text": content, "bold": bold, "italic": False, "underline": False}],
+        alignment=alignment,
+        level=level,
+    )

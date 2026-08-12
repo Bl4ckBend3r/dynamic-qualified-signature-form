@@ -6,6 +6,7 @@
     };
     const clone = (value) => JSON.parse(JSON.stringify(value));
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
+    const BUILDER_SCHEMA_VERSION = 1;
     const formatLastSaved = (value) => {
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return String(value || "");
@@ -193,7 +194,8 @@
         const hiddenJson = root.querySelector("[data-agreement-builder-json]");
         const variables = parseJson(root.querySelector("[data-agreement-builder-variables]"), []);
         const submissions = parseJson(root.querySelector("[data-agreement-builder-submissions]"), []);
-        const variableNames = new Set(variables.map((item) => item.name));
+        const criteriaVariables = variables.filter((item) => item.type === "criterion");
+        const variableNames = new Set(variables.filter((item) => item.type !== "criterion").map((item) => item.name));
         const blocksNode = root.querySelector("[data-agreement-builder-blocks]");
         const statusNode = root.querySelector("[data-agreement-builder-status]");
         const errorsNode = root.querySelector("[data-agreement-builder-errors]");
@@ -209,42 +211,45 @@
         const previewTraining = root.querySelector("[data-builder-preview-training]");
         const previewTrainingField = root.querySelector("[data-builder-preview-training-field]");
         const htmlPreview = root.querySelector("[data-agreement-builder-html]");
+        const draftChoice = root.querySelector("[data-builder-draft-choice]");
         const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || "";
-        const localKey = root.dataset.storageKey;
         const formId = Number(root.dataset.formId);
+        const localKey = root.dataset.storageKey || `document-builder:${documentType}:form:${formId}:v${BUILDER_SCHEMA_VERSION}`;
+        const legacyLocalKey = root.dataset.legacyStorageKey || `document-builder-${documentType}-draft-${formId}`;
         const closeDialog = root.querySelector("[data-builder-close-dialog]");
-        const uiStorageKey = `${localKey}-ui`;
-        let documentModel = parseJson(initialNode, {version: 1, blocks: []});
+        const uiStorageKey = `${localKey}:ui`;
+        const backendIsNew = root.dataset.backendIsNew === "true";
+        const diagnosticsEnabled = root.dataset.debug === "true";
+        let backendUpdatedAt = root.dataset.backendUpdatedAt || "";
+        const embeddedBackendDocument = parseJson(initialNode, {version: 1, document_type: documentType, blocks: []});
+        let documentModel = embeddedBackendDocument;
+        let pendingLocalDraft = null;
         let activeEditable = null;
         let previewTimer = null;
         let historyTimer = null;
         let previewController = null;
         let history = [];
         let historyIndex = -1;
-        let dirty = false;
         let activeSelection = null;
+        let savedTextSelection = null;
         let activeBlockIndex = -1;
         let pendingPreviewScroll = {left: 0, top: 0};
         let resetScrollOnNextPreview = false;
         let blockedPreviewFingerprint = null;
+        let previewRequestGeneration = 0;
         const builderState = {
             viewMode: "split",
             variablesVisible: true,
             workspaceSizeMode: "balanced",
             previewZoom: 0.8,
             fitWidth: false,
+            dirty: false,
         };
 
-        try {
-            const localDraft = JSON.parse(localStorage.getItem(localKey) || "null");
-            if (localDraft?.document?.blocks?.length) {
-                documentModel = localDraft.document;
-                dirty = true;
-                statusNode.textContent = "Przywrócono lokalny szkic";
-            }
-        } catch (_) {}
-
-        documentModel = normalizeDocumentModel(documentModel);
+        function debugEvent(eventName, details = {}) {
+            if (!diagnosticsEnabled) return;
+            console.debug(`[document-builder] ${eventName}`, {documentType, formId, ...details});
+        }
 
         try {
             const savedUi = JSON.parse(localStorage.getItem(uiStorageKey) || "null");
@@ -257,10 +262,10 @@
 
         const defaultRun = (text, bold = false) => ({text, bold, italic: false, underline: false});
         const blockDefaults = (type) => ({
-            heading: {type: "heading", level: 2, format: {bold: true, italic: false, underline: false, alignment: "left"}, content: "Nowy nagłówek", runs: [defaultRun("Nowy nagłówek", true)]},
-            paragraph: {type: "paragraph", format: {bold: false, italic: false, underline: false, alignment: "left"}, content: "Nowy akapit", runs: [defaultRun("Nowy akapit")]},
+            heading: {type: "heading", level: 2, format: {alignment: "left"}, content: "Nowy nagłówek", runs: [defaultRun("Nowy nagłówek", true)]},
+            paragraph: {type: "paragraph", format: {alignment: "left"}, content: "Nowy akapit", runs: [defaultRun("Nowy akapit")]},
             agreement_section: {type: "agreement_section", number: "§ 1.", title: "Tytuł paragrafu"},
-            ordered_list: {type: "ordered_list", items: [{content: "Pierwszy punkt", runs: [defaultRun("Pierwszy punkt")], level: 0}]},
+            ordered_list: {type: "ordered_list", items: [{content: "Pierwszy punkt", runs: [defaultRun("Pierwszy punkt")], level: 0}], list_styles: defaultListStyles()},
             bullet_list: {type: "bullet_list", items: [{content: "Pierwszy punkt", runs: [defaultRun("Pierwszy punkt")], level: 0}]},
             table: {type: "table", header: true, rows: [["Nagłówek 1", "Nagłówek 2"], ["Treść", "Treść"]]},
             training_table: {type: "training_table", scope: "selected_trainings", columns: ["index", "name", "price"], show_total: true},
@@ -271,9 +276,44 @@
             participant_contact: {type: "participant_contact", fields: ["email", "telefon"]},
             statement: {type: "statement", format: {alignment: "justify"}, content: "Treść oświadczenia", runs: [defaultRun("Treść oświadczenia")]},
             participant_signature: {type: "participant_signature", label: "Czytelny podpis uczestnika"},
+            criteria_table: {type: "criteria_table", criteria: [], show_number: true, show_header: true},
             project_info: {type: "project_info", fields: ["project_name", "project_number", "project_program", "funding_source"], show_logo: false},
             page_break: {type: "page_break"},
         }[type]);
+
+        const listMarkerLabels = [
+            ["decimal-dot", "1."],
+            ["decimal-paren", "1)"],
+            ["decimal-compound", "1.1"],
+            ["alpha-paren", "a)"],
+            ["alpha-dot", "a."],
+            ["lower-roman-dot", "i."],
+            ["upper-roman-dot", "I."],
+        ];
+
+        function defaultListStyles() {
+            return [
+                {level: 0, marker: "decimal-dot", indent_mm: 0},
+                {level: 1, marker: "decimal-compound", indent_mm: 7},
+                {level: 2, marker: "alpha-paren", indent_mm: 14},
+                {level: 3, marker: "lower-roman-dot", indent_mm: 21},
+            ];
+        }
+
+        function normalizeListStyles(value) {
+            const defaults = defaultListStyles();
+            const source = Array.isArray(value) ? value : [];
+            return defaults.map((fallback, level) => {
+                const raw = source.find((item) => Number(item?.level) === level) || {};
+                const marker = listMarkerLabels.some(([name]) => name === raw.marker) ? raw.marker : fallback.marker;
+                const requestedIndent = Number(raw.indent_mm);
+                return {
+                    level,
+                    marker,
+                    indent_mm: Number.isFinite(requestedIndent) ? Math.max(0, Math.min(requestedIndent, 60)) : fallback.indent_mm,
+                };
+            });
+        }
 
         function textBlockFormat(block) {
             const textBlock = ["heading", "paragraph", "statement"].includes(block?.type);
@@ -328,7 +368,7 @@
                 const next = {
                     bold: style.bold || ["strong", "b"].includes(tag),
                     italic: style.italic || ["em", "i"].includes(tag),
-                    underline: style.underline || tag === "u" || node.classList.contains("document-inline-underline"),
+                    underline: style.underline || tag === "u" || node.classList.contains("document-inline-underline") || node.classList.contains("document-text-underline"),
                 };
                 node.childNodes.forEach((child) => walk(child, next));
             };
@@ -352,13 +392,21 @@
             model.blocks.forEach((block) => {
                 const formatting = textBlockFormat(block);
                 if (formatting) {
-                    block.format = formatting;
                     normalizeHolder(block, formatting);
+                    block.format = {alignment: formatting.alignment};
                     delete block.alignment;
                 }
                 if (["ordered_list", "bullet_list"].includes(block.type)) {
-                    block.items = Array.isArray(block.items) ? block.items : [];
-                    block.items.forEach((item) => normalizeHolder(item));
+                    let previousLevel = 0;
+                    block.items = (Array.isArray(block.items) ? block.items : []).map((rawItem, itemIndex) => {
+                        const item = rawItem && typeof rawItem === "object" ? rawItem : {content: String(rawItem ?? "")};
+                        normalizeHolder(item);
+                        const requestedLevel = Math.max(0, Math.min(Number.parseInt(item.level, 10) || 0, 3));
+                        item.level = itemIndex === 0 ? 0 : Math.min(requestedLevel, previousLevel + 1);
+                        previousLevel = item.level;
+                        return item;
+                    });
+                    if (block.type === "ordered_list") block.list_styles = normalizeListStyles(block.list_styles);
                 }
                 if (block.type === "table") {
                     block.rows = (Array.isArray(block.rows) ? block.rows : []).map((row) => (Array.isArray(row) ? row : []).map((cell) => {
@@ -367,9 +415,151 @@
                         return holder;
                     }));
                 }
+                if (block.type === "criteria_table") {
+                    const used = new Set();
+                    block.criteria = (Array.isArray(block.criteria) ? block.criteria : []).flatMap((item) => {
+                        const fieldKey = String(item?.field_key ?? item ?? "").trim();
+                        if (!fieldKey || used.has(fieldKey)) return [];
+                        used.add(fieldKey);
+                        return [{field_key: fieldKey}];
+                    });
+                    block.show_number = block.show_number !== false;
+                    block.show_header = block.show_header !== false;
+                }
                 delete block.style;
             });
             return model;
+        }
+
+        function storageRemove(key) {
+            if (!key) return;
+            try { localStorage.removeItem(key); } catch (_) {}
+        }
+
+        function storageWrite(key, value) {
+            if (!key) return false;
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function timestampValue(value) {
+            const parsed = Date.parse(String(value || ""));
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        function holderHasText(holder) {
+            if (!holder || typeof holder !== "object") return false;
+            if (Array.isArray(holder.runs)) return holder.runs.some((run) => String(run?.text || "").trim());
+            return Boolean(String(holder.content || "").trim());
+        }
+
+        function blockHasRealContent(block) {
+            if (!block || typeof block !== "object") return false;
+            if (["heading", "paragraph", "statement"].includes(block.type)) return holderHasText(block);
+            if (block.type === "agreement_section") return Boolean(String(block.number || block.title || "").trim());
+            if (["ordered_list", "bullet_list"].includes(block.type)) return Array.isArray(block.items) && block.items.some(holderHasText);
+            if (block.type === "table") return Array.isArray(block.rows) && block.rows.some((row) => Array.isArray(row) && row.some((cell) => typeof cell === "object" ? holderHasText(cell) : Boolean(String(cell || "").trim())));
+            if (block.type === "training_table") return Array.isArray(block.columns) && block.columns.length > 0;
+            if (["participant_data", "participant_contact", "project_info"].includes(block.type)) return Array.isArray(block.fields) && block.fields.length > 0;
+            if (block.type === "signatures") return Boolean(String(block.left_label || block.right_label || "").trim());
+            if (block.type === "form_field") return Boolean(String(block.field || "").trim());
+            if (block.type === "criteria_table") return Array.isArray(block.criteria) && block.criteria.length > 0;
+            if (block.type === "participant_signature") return Boolean(String(block.label || "").trim());
+            return block.type === "participant_address";
+        }
+
+        function documentHasRealContent(value) {
+            if (!value || !Array.isArray(value.blocks) || !value.blocks.length) return false;
+            const containsEmptyParagraphRuns = value.blocks.some((block) => (
+                block?.type === "paragraph"
+                && Array.isArray(block.runs)
+                && !block.runs.some((run) => String(run?.text || "").trim())
+            ));
+            return !containsEmptyParagraphRuns && value.blocks.some(blockHasRealContent);
+        }
+
+        function validatedDraftEnvelope(value, {legacy = false} = {}) {
+            if (!value || typeof value !== "object") return null;
+            const envelope = legacy
+                ? {
+                    schemaVersion: BUILDER_SCHEMA_VERSION,
+                    formId,
+                    documentType,
+                    savedAt: value.savedAt,
+                    document: value.document,
+                }
+                : value;
+            if (Number(envelope.schemaVersion) !== BUILDER_SCHEMA_VERSION) return null;
+            if (Number(envelope.formId) !== formId || envelope.documentType !== documentType) return null;
+            if (timestampValue(envelope.savedAt) === null) return null;
+            if (Number(envelope.document?.version) !== BUILDER_SCHEMA_VERSION) return null;
+            if (envelope.document?.document_type && envelope.document.document_type !== documentType) return null;
+            if (!documentHasRealContent(envelope.document)) return null;
+            return {
+                schemaVersion: BUILDER_SCHEMA_VERSION,
+                formId,
+                documentType,
+                savedAt: envelope.savedAt,
+                document: normalizeDocumentModel(envelope.document),
+            };
+        }
+
+        function readDraft(key, options = {}) {
+            let raw = null;
+            try { raw = localStorage.getItem(key); } catch (_) { return null; }
+            if (!raw) return null;
+            let parsed = null;
+            try { parsed = JSON.parse(raw); } catch (_) {
+                debugEvent("local draft ignored", {format: options.legacy ? "legacy" : "current", reason: "invalid-json"});
+                storageRemove(key);
+                return null;
+            }
+            const draft = validatedDraftEnvelope(parsed, options);
+            if (!draft) {
+                debugEvent("local draft ignored", {format: options.legacy ? "legacy" : "current", reason: "invalid-or-empty"});
+                storageRemove(key);
+            }
+            return draft;
+        }
+
+        function loadLocalDraft() {
+            let draft = readDraft(localKey);
+            if (legacyLocalKey && legacyLocalKey !== localKey) {
+                const legacyDraft = draft ? null : readDraft(legacyLocalKey, {legacy: true});
+                storageRemove(legacyLocalKey);
+                if (legacyDraft) {
+                    storageWrite(localKey, legacyDraft);
+                    draft = legacyDraft;
+                }
+            }
+            if (!draft) return null;
+            const savedAt = timestampValue(draft.savedAt);
+            const backendTime = timestampValue(backendUpdatedAt);
+            const isNewer = backendIsNew ? true : backendTime !== null && savedAt > backendTime;
+            if (!isNewer) {
+                debugEvent("local draft ignored", {format: "current", reason: "not-newer"});
+                storageRemove(localKey);
+                return null;
+            }
+            return draft;
+        }
+
+        function initialBackendStatus() {
+            return backendIsNew ? "Utworzono nowy szablon." : "Wczytano zapisany szablon.";
+        }
+
+        function hideDraftChoice() {
+            if (draftChoice) draftChoice.hidden = true;
+        }
+
+        function resetHistory() {
+            history = [JSON.stringify(documentModel)];
+            historyIndex = 0;
+            refreshControls();
         }
 
         function blockFormatClasses(block) {
@@ -382,7 +572,7 @@
 
         function conditionEditor(block, index) {
             const condition = block.condition || {};
-            const options = ['<option value="">Bez warunku</option>', ...variables.filter((item) => !["html", "collection"].includes(item.type)).map((item) => `<option value="${escapeHtml(item.name)}" ${condition.variable === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`)].join("");
+            const options = ['<option value="">Bez warunku</option>', ...variables.filter((item) => !["html", "collection", "criterion"].includes(item.type)).map((item) => `<option value="${escapeHtml(item.name)}" ${condition.variable === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`)].join("");
             return `<details class="agreement-builder-block__condition"><summary>Warunek wyświetlania</summary><div><select data-builder-condition-variable data-index="${index}">${options}</select><select data-builder-condition-operator data-index="${index}"><option value="not_empty" ${condition.operator === "not_empty" ? "selected" : ""}>ma wartość</option><option value="empty" ${condition.operator === "empty" ? "selected" : ""}>jest puste</option><option value="equals" ${condition.operator === "equals" ? "selected" : ""}>równa się</option><option value="not_equals" ${condition.operator === "not_equals" ? "selected" : ""}>nie równa się</option></select><input data-builder-condition-value data-index="${index}" value="${escapeHtml(condition.value || "")}" placeholder="Wartość" ${["equals", "not_equals"].includes(condition.operator) ? "" : "hidden"}></div></details>`;
         }
 
@@ -396,6 +586,72 @@
             return `<div class="agreement-builder-block__editable" contenteditable="true" role="textbox" data-builder-field="${field}" data-index="${index}" data-builder-editor-key="block-${index}-${field}" ${extra}>${content}</div>`;
         }
 
+        function alphaNumber(value) {
+            let number = Math.max(1, value);
+            let result = "";
+            while (number) {
+                number -= 1;
+                result = String.fromCharCode(97 + (number % 26)) + result;
+                number = Math.floor(number / 26);
+            }
+            return result;
+        }
+
+        function romanNumber(value) {
+            let number = Math.max(1, value);
+            let result = "";
+            [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]].forEach(([amount, symbol]) => {
+                while (number >= amount) { result += symbol; number -= amount; }
+            });
+            return result;
+        }
+
+        function orderedListMarkers(block) {
+            const counters = [0, 0, 0, 0];
+            const styles = normalizeListStyles(block.list_styles);
+            return (block.items || []).map((item) => {
+                const level = Math.max(0, Math.min(Number(item.level) || 0, 3));
+                counters[level] += 1;
+                counters.fill(0, level + 1);
+                const marker = styles[level].marker;
+                if (marker === "decimal-paren") return `${counters[level]})`;
+                if (marker === "decimal-compound") return counters.slice(0, level + 1).join(".");
+                if (marker === "alpha-paren") return `${alphaNumber(counters[level])})`;
+                if (marker === "alpha-dot") return `${alphaNumber(counters[level])}.`;
+                if (marker === "lower-roman-dot") return `${romanNumber(counters[level]).toLowerCase()}.`;
+                if (marker === "upper-roman-dot") return `${romanNumber(counters[level])}.`;
+                return `${counters[level]}.`;
+            });
+        }
+
+        function renderListBlock(block, index) {
+            const ordered = block.type === "ordered_list";
+            const styles = ordered ? normalizeListStyles(block.list_styles) : defaultListStyles();
+            const markers = ordered ? orderedListMarkers(block) : (block.items || []).map(() => "•");
+            const items = (block.items || []).map((item, itemIndex) => {
+                const level = Math.max(0, Math.min(Number(item.level) || 0, 3));
+                const indent = ordered ? styles[level].indent_mm : level * 7;
+                return `<li data-level="${level}" style="--builder-list-indent:${indent}mm"><span class="agreement-builder-list__marker" aria-hidden="true">${escapeHtml(markers[itemIndex])}</span><div contenteditable="true" data-builder-list-item data-index="${index}" data-item-index="${itemIndex}" data-builder-editor-key="list-${index}-${itemIndex}">${runsMarkup(item)}</div><button type="button" class="builder-button builder-button--icon builder-button--danger builder-button--compact" aria-label="Usuń punkt" data-builder-remove-item data-index="${index}" data-item-index="${itemIndex}">×</button></li>`;
+            }).join("");
+            const configuration = ordered ? `<fieldset class="agreement-builder-list-config"><legend>Numeracja i wcięcia poziomów</legend>${styles.map((style) => `<div><strong>Poziom ${style.level + 1}</strong><label>Marker<select data-builder-list-marker data-index="${index}" data-level="${style.level}">${listMarkerLabels.map(([value, label]) => `<option value="${value}" ${style.marker === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label>Wcięcie (mm)<input type="number" min="0" max="60" step="1" value="${style.indent_mm}" data-builder-list-indent data-index="${index}" data-level="${style.level}"></label></div>`).join("")}</fieldset>` : "";
+            return `<${ordered ? "ol" : "ul"} class="agreement-builder-list">${items}</${ordered ? "ol" : "ul"}><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-item data-index="${index}">Dodaj punkt</button>${configuration}`;
+        }
+
+        function renderCriteriaTableBlock(block, index) {
+            const catalog = new Map(criteriaVariables.map((item) => [item.field_key, item]));
+            const selected = (block.criteria || []).map((item, criterionIndex) => {
+                const criterion = catalog.get(item.field_key);
+                const label = criterion?.label || `Nieaktywne kryterium: ${item.field_key}`;
+                return `<li><span><strong>${criterionIndex + 1}.</strong> ${escapeHtml(label)}<code>${escapeHtml(item.field_key)}</code></span><span><button type="button" class="builder-button builder-button--icon builder-button--compact" data-builder-move-criterion="up" data-index="${index}" data-criterion-index="${criterionIndex}" aria-label="Przesuń kryterium w górę">↑</button><button type="button" class="builder-button builder-button--icon builder-button--compact" data-builder-move-criterion="down" data-index="${index}" data-criterion-index="${criterionIndex}" aria-label="Przesuń kryterium w dół">↓</button><button type="button" class="builder-button builder-button--danger builder-button--compact" data-builder-remove-criterion data-index="${index}" data-criterion-index="${criterionIndex}">Usuń</button></span></li>`;
+            }).join("");
+            const selectedKeys = new Set((block.criteria || []).map((item) => item.field_key));
+            const available = criteriaVariables.filter((item) => !selectedKeys.has(item.field_key));
+            const options = available.length
+                ? available.map((item) => `<option value="${escapeHtml(item.field_key)}">${escapeHtml(item.label)}</option>`).join("")
+                : '<option value="">Brak kolejnych kryteriów</option>';
+            return `<fieldset class="agreement-builder-criteria-config"><legend>Tabela kryteriów kwalifikacyjnych</legend><label><input type="checkbox" data-builder-field="show_number" data-index="${index}" ${block.show_number ? "checked" : ""}> Kolumna Lp.</label><label><input type="checkbox" data-builder-field="show_header" data-index="${index}" ${block.show_header ? "checked" : ""}> Wiersz nagłówka</label><ol class="agreement-builder-criteria-list">${selected || "<li>Nie wybrano kryteriów.</li>"}</ol><div><label>Dodaj kryterium<select data-builder-criterion-select data-index="${index}">${options}</select></label><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-criterion data-index="${index}" ${available.length ? "" : "disabled"}>Dodaj</button></div><p class="workflow-help">Lista pochodzi z aktywnych warunków kwalifikacyjnych formularza. W dokumencie zapisywane są tylko klucze pól.</p></fieldset>`;
+        }
+
         function renderBlock(block, index) {
             let body = "";
             if (block.type === "heading") {
@@ -405,8 +661,7 @@
             } else if (block.type === "agreement_section") {
                 body = `<div class="agreement-builder-block__section">${editable(block.number, "number", index)}${editable(block.title, "title", index)}</div>`;
             } else if (["ordered_list", "bullet_list"].includes(block.type)) {
-                const tag = block.type === "ordered_list" ? "ol" : "ul";
-                body = `<${tag}>${(block.items || []).map((item, itemIndex) => `<li data-level="${Number(item.level || 0)}"><div contenteditable="true" data-builder-list-item data-index="${index}" data-item-index="${itemIndex}" data-builder-editor-key="list-${index}-${itemIndex}">${runsMarkup(item)}</div><button type="button" class="builder-button builder-button--icon builder-button--danger builder-button--compact" aria-label="Usuń punkt" data-builder-remove-item data-index="${index}" data-item-index="${itemIndex}">×</button></li>`).join("")}</${tag}><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-item data-index="${index}">Dodaj punkt</button>`;
+                body = renderListBlock(block, index);
             } else if (block.type === "table") {
                 body = `<table><tbody>${(block.rows || []).map((row, rowIndex) => `<tr>${row.map((cell, cellIndex) => `<td contenteditable="true" data-builder-table-cell data-index="${index}" data-row-index="${rowIndex}" data-cell-index="${cellIndex}" data-builder-editor-key="cell-${index}-${rowIndex}-${cellIndex}">${runsMarkup(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-add-row data-index="${index}">Dodaj wiersz</button>`;
             } else if (block.type === "training_table") {
@@ -429,6 +684,8 @@
                 body = `<fieldset><legend>Dane kontaktowe</legend>${choices.map(([value, label]) => `<label><input type="checkbox" data-builder-array="fields" data-index="${index}" value="${value}" ${(block.fields || []).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</fieldset>`;
             } else if (block.type === "participant_signature") {
                 body = `<label>Etykieta podpisu<input data-builder-field="label" data-index="${index}" value="${escapeHtml(block.label || "")}"></label>`;
+            } else if (block.type === "criteria_table") {
+                body = renderCriteriaTableBlock(block, index);
             } else if (block.type === "project_info") {
                 const choices = [["project_name", "Nazwa projektu"], ["project_number", "Numer projektu"], ["project_program", "Program"], ["project_action", "Działanie"], ["funding_source", "Źródło finansowania"], ["institution_name", "Instytucja"]];
                 body = `<fieldset><legend>Informacje o projekcie</legend>${choices.map(([value, label]) => `<label><input type="checkbox" data-builder-array="fields" data-index="${index}" value="${value}" ${(block.fields || []).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}<label><input type="checkbox" data-builder-field="show_logo" data-index="${index}" ${block.show_logo ? "checked" : ""}> Logo projektu</label></fieldset>`;
@@ -441,10 +698,19 @@
         }
 
         function render({restoreSelection = null} = {}) {
-            blocksNode.innerHTML = documentModel.blocks.map(renderBlock).join("");
+            documentModel = normalizeDocumentModel(documentModel);
+            const importButton = root.dataset.importUrl
+                ? `<button type="submit" class="builder-button builder-button--secondary" formaction="${escapeHtml(root.dataset.importUrl)}" formmethod="post" formnovalidate>Importuj Word</button>`
+                : "";
+            blocksNode.innerHTML = documentModel.blocks.length
+                ? documentModel.blocks.map(renderBlock).join("")
+                : backendIsNew
+                    ? `<div data-builder-empty-state role="status"><strong>Ten dokument nie zawiera jeszcze bloków.</strong><p>Dodaj pierwszy element albo zaimportuj istniejący szablon Word.</p><div><button type="button" class="builder-button builder-button--primary" data-builder-add="paragraph">Dodaj akapit</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="heading">Dodaj nagłówek</button>${importButton}</div></div>`
+                    : '<div data-builder-empty-state role="alert"><strong>Zapisany szablon nie zawiera bloków.</strong><p>Odśwież stronę lub skontaktuj się z administratorem.</p></div>';
             hiddenJson.value = JSON.stringify(documentModel);
             activeEditable = null;
             if (restoreSelection) restoreEditableSelection(restoreSelection);
+            else { activeSelection = null; savedTextSelection = null; }
             refreshControls();
         }
 
@@ -494,11 +760,23 @@
             if (block && target.dataset.builderField) block[target.dataset.builderField] = target.textContent || "";
         }
 
-        function editableSelection(target = activeEditable) {
-            const selection = window.getSelection();
-            if (!target || !selection?.rangeCount) return null;
-            const range = selection.getRangeAt(0);
-            if (!target.contains(range.commonAncestorContainer)) return null;
+        function editorForRange(range) {
+            if (!range) return null;
+            const container = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+                ? range.commonAncestorContainer
+                : range.commonAncestorContainer.parentElement;
+            const target = container?.closest?.('[contenteditable="true"][data-builder-editor-key]');
+            if (!target || !blocksNode.contains(target)) return null;
+            if (!target.contains(range.startContainer) || !target.contains(range.endContainer)) return null;
+            return target;
+        }
+
+        function editorContainsRange(range, target = activeEditable) {
+            return Boolean(target && blocksNode.contains(target) && editorForRange(range) === target);
+        }
+
+        function selectionOffsets(target, range) {
+            if (!target || !range || !editorContainsRange(range, target)) return null;
             const beforeStart = document.createRange();
             beforeStart.selectNodeContents(target);
             beforeStart.setEnd(range.startContainer, range.startOffset);
@@ -508,9 +786,50 @@
             return {key: target.dataset.builderEditorKey, start: beforeStart.toString().length, end: beforeEnd.toString().length};
         }
 
+        function editableSelection(target = activeEditable) {
+            const selection = window.getSelection();
+            if (!target || !selection?.rangeCount) return null;
+            return selectionOffsets(target, selection.getRangeAt(0));
+        }
+
+        function saveTextSelection() {
+            const selection = window.getSelection();
+            if (!selection?.rangeCount) return false;
+            const range = selection.getRangeAt(0);
+            const target = editorForRange(range);
+            if (!target) return false;
+            const article = target.closest("[data-builder-block]");
+            const index = Number(article?.dataset.index);
+            if (!Number.isInteger(index) || index !== activeBlockIndex) return false;
+            const saved = selectionOffsets(target, range);
+            if (!saved) return false;
+            activeEditable = target;
+            activeSelection = saved;
+            savedTextSelection = range.cloneRange();
+            return true;
+        }
+
+        function restoreTextSelection() {
+            if (savedTextSelection && editorContainsRange(savedTextSelection)) {
+                try {
+                    activeEditable.focus({preventScroll: true});
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(savedTextSelection);
+                    activeSelection = selectionOffsets(activeEditable, savedTextSelection) || activeSelection;
+                    return true;
+                } catch (_) {
+                    savedTextSelection = null;
+                }
+            }
+            if (!activeSelection) return false;
+            restoreEditableSelection(activeSelection);
+            return Boolean(savedTextSelection);
+        }
+
         function restoreEditableSelection(saved) {
             const target = blocksNode.querySelector(`[data-builder-editor-key="${CSS.escape(saved.key || "")}"]`);
-            if (!target) { activeSelection = null; return; }
+            if (!target) { activeSelection = null; savedTextSelection = null; return; }
             const nodes = [];
             const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
             while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -528,18 +847,25 @@
             const range = document.createRange();
             range.setStart(startNode, startOffset);
             range.setEnd(endNode, endOffset);
+            target.focus({preventScroll: true});
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
-            target.focus({preventScroll: true});
             activeEditable = target;
             activeSelection = {...saved};
+            savedTextSelection = range.cloneRange();
         }
 
         function readField(target) {
             const index = Number(target.dataset.index);
             const block = documentModel.blocks[index];
             if (!block) return;
+            if (target.matches("[data-builder-list-marker], [data-builder-list-indent]")) {
+                block.list_styles = normalizeListStyles(block.list_styles);
+                const level = Math.max(0, Math.min(Number(target.dataset.level) || 0, 3));
+                if (target.matches("[data-builder-list-marker]")) block.list_styles[level].marker = target.value;
+                else block.list_styles[level].indent_mm = Math.max(0, Math.min(Number(target.value) || 0, 60));
+            }
             const field = target.dataset.builderField;
             if (field) {
                 if (target.type === "checkbox") block[field] = target.checked;
@@ -569,8 +895,14 @@
         function changed({checkpointNow = false} = {}) {
             hiddenJson.value = JSON.stringify(documentModel);
             statusNode.textContent = "Niezapisane zmiany";
-            dirty = true;
-            try { localStorage.setItem(localKey, JSON.stringify({savedAt: new Date().toISOString(), document: documentModel})); } catch (_) {}
+            builderState.dirty = true;
+            storageWrite(localKey, {
+                schemaVersion: BUILDER_SCHEMA_VERSION,
+                formId,
+                documentType,
+                savedAt: new Date().toISOString(),
+                document: documentModel,
+            });
             window.clearTimeout(historyTimer);
             if (checkpointNow) checkpoint();
             else historyTimer = window.setTimeout(checkpoint, 350);
@@ -617,6 +949,53 @@
             refreshFormattingControls();
         }
 
+        function activeListItem() {
+            if (!activeEditable?.matches?.("[data-builder-list-item]")) return null;
+            const blockIndex = Number(activeEditable.dataset.index);
+            const itemIndex = Number(activeEditable.dataset.itemIndex);
+            const block = documentModel.blocks[blockIndex];
+            if (!["ordered_list", "bullet_list"].includes(block?.type) || !block.items?.[itemIndex]) return null;
+            return {block, blockIndex, itemIndex, item: block.items[itemIndex]};
+        }
+
+        function changeListItemLevel(direction) {
+            const active = activeListItem();
+            if (!active) return false;
+            const saved = editableSelection(activeEditable) || activeSelection;
+            syncEditableToModel(activeEditable);
+            const current = Number(active.item.level) || 0;
+            const previous = active.itemIndex > 0 ? Number(active.block.items[active.itemIndex - 1].level) || 0 : -1;
+            const maximum = active.itemIndex === 0 ? 0 : Math.min(3, previous + 1);
+            const requested = direction === "increase" ? current + 1 : current - 1;
+            const next = Math.max(0, Math.min(requested, maximum));
+            if (next === current) return false;
+            active.item.level = next;
+            render({restoreSelection: saved});
+            changed({checkpointNow: true});
+            return true;
+        }
+
+        function addCriterion(blockIndex) {
+            const select = blocksNode.querySelector(`[data-builder-criterion-select][data-index="${blockIndex}"]`);
+            const fieldKey = String(select?.value || "").trim();
+            const block = documentModel.blocks[blockIndex];
+            if (!fieldKey || block?.type !== "criteria_table") return;
+            block.criteria = Array.isArray(block.criteria) ? block.criteria : [];
+            if (!block.criteria.some((item) => item.field_key === fieldKey)) block.criteria.push({field_key: fieldKey});
+            render();
+            changed({checkpointNow: true});
+        }
+
+        function moveCriterion(blockIndex, criterionIndex, direction) {
+            const block = documentModel.blocks[blockIndex];
+            if (block?.type !== "criteria_table") return;
+            const targetIndex = direction === "up" ? criterionIndex - 1 : criterionIndex + 1;
+            if (targetIndex < 0 || targetIndex >= block.criteria.length) return;
+            [block.criteria[criterionIndex], block.criteria[targetIndex]] = [block.criteria[targetIndex], block.criteria[criterionIndex]];
+            render();
+            changed({checkpointNow: true});
+        }
+
         function refreshFormattingControls() {
             const block = activeTextBlock();
             const formatting = textBlockFormat(block);
@@ -635,6 +1014,14 @@
                 button.disabled = !block;
                 button.classList.toggle("is-active", active);
                 button.setAttribute("aria-pressed", String(active));
+            });
+            const activeList = activeListItem();
+            root.querySelectorAll("[data-builder-list-level]").forEach((button) => {
+                const direction = button.dataset.builderListLevel;
+                const current = Number(activeList?.item.level) || 0;
+                const previous = activeList && activeList.itemIndex > 0 ? Number(activeList.block.items[activeList.itemIndex - 1].level) || 0 : -1;
+                const maximum = activeList?.itemIndex > 0 ? Math.min(3, previous + 1) : 0;
+                button.disabled = !activeList || (direction === "decrease" ? current <= 0 : current >= maximum);
             });
         }
 
@@ -655,17 +1042,18 @@
         }
 
         function applyInlineFormat(name) {
+            if (!["bold", "italic", "underline"].includes(name) || !restoreTextSelection()) return;
             const target = activeEditable && document.contains(activeEditable) ? activeEditable : null;
             const holder = holderForEditable(target);
-            if (!target || !holder || !["bold", "italic", "underline"].includes(name)) return;
-            const saved = editableSelection(target) || activeSelection || {key: target.dataset.builderEditorKey, start: 0, end: 0};
+            if (!target || !holder) return;
+            const saved = editableSelection(target) || activeSelection;
+            if (!saved || saved.start === saved.end) return;
             syncEditableToModel(target);
             const runs = normalizeRuns(holder.runs);
             const total = runs.reduce((sum, run) => sum + run.text.length, 0);
             let start = Math.max(0, Math.min(saved.start, total));
             let end = Math.max(start, Math.min(saved.end, total));
-            const collapsed = start === end;
-            if (collapsed) { start = 0; end = total; }
+            if (start === end) return;
             const nextValue = !inlineFormattingState(runs, {start, end})[name];
             const result = [];
             let cursor = 0;
@@ -681,11 +1069,6 @@
             });
             holder.runs = normalizeRuns(result);
             holder.content = holder.runs.map((run) => run.text).join("");
-            const block = documentModel.blocks[activeBlockIndex];
-            if (collapsed && holder === block) {
-                block.format = textBlockFormat(block);
-                block.format[name] = nextValue;
-            }
             render({restoreSelection: saved});
             changed({checkpointNow: true});
         }
@@ -693,8 +1076,7 @@
         function alignBlock(alignment) {
             const block = activeTextBlock();
             if (!block || !["left", "center", "right", "justify"].includes(alignment)) return;
-            block.format = textBlockFormat(block);
-            block.format.alignment = alignment;
+            block.format = {alignment};
             render({restoreSelection: activeSelection});
             changed({checkpointNow: true});
         }
@@ -716,8 +1098,32 @@
 
         function previewErrorMessage(payload) {
             const missing = Array.isArray(payload?.missing_variables) ? payload.missing_variables.filter(Boolean) : [];
-            if (!missing.length) return payload?.error || "Nie udało się wygenerować podglądu umowy.";
-            return `Nie można wygenerować podglądu.\n\nBrakujące zmienne:\n${missing.map((name) => `• {{ ${name} }}`).join("\n")}`;
+            if (!missing.length) return payload?.error || "";
+            const backendMessage = String(payload?.error || "").trim();
+            return `${backendMessage ? `${backendMessage}\n\n` : ""}Brakujące zmienne:\n${missing.map((name) => `• {{ ${name} }}`).join("\n")}`;
+        }
+
+        function setPreviewState(state, detail = "") {
+            previewState.dataset.previewState = state;
+            if (state === "success") {
+                previewState.hidden = true;
+                previewCanvas.hidden = false;
+                return;
+            }
+            previewState.hidden = false;
+            if (state === "loading") {
+                previewState.textContent = "Generowanie podglądu…";
+                if (!previewFrame.srcdoc) previewCanvas.hidden = true;
+                return;
+            }
+            if (state === "waiting") {
+                previewState.textContent = detail;
+                previewCanvas.hidden = true;
+                return;
+            }
+            const generic = "Nie udało się wygenerować podglądu.";
+            previewState.textContent = detail ? `${generic}\n\n${detail}` : generic;
+            previewCanvas.hidden = true;
         }
 
         function showErrors(payload, heading = "Nie można aktywować szablonu.") {
@@ -733,43 +1139,55 @@
         }
 
         async function preview({resetScroll = false, force = false} = {}) {
-            if (root.hidden) return;
+            if (root.hidden) {
+                setPreviewState("waiting", "Podgląd uruchomi się po otwarciu kreatora.");
+                return;
+            }
             const previewFingerprint = JSON.stringify([documentModel, previewData?.value || "", previewTraining?.value || ""]);
             if (!force && blockedPreviewFingerprint === previewFingerprint) return;
+            const requestGeneration = ++previewRequestGeneration;
+            previewController?.abort();
+            previewController = null;
             pendingPreviewScroll = resetScroll || !previewViewport
                 ? {left: 0, top: 0}
                 : {left: previewViewport.scrollLeft, top: previewViewport.scrollTop};
             if (previewTraining && previewData?.value && !previewTraining.value) {
-                previewState.textContent = "Wybierz konkretne szkolenie.";
-                previewState.hidden = false;
-                previewCanvas.hidden = true;
+                setPreviewState("waiting", "Wybierz konkretne szkolenie.");
                 return;
             }
-            previewController?.abort();
-            previewController = new AbortController();
-            previewState.textContent = "Generowanie podglądu…";
-            previewState.hidden = false;
-            if (!previewFrame.srcdoc) previewCanvas.hidden = true;
+            const controller = new AbortController();
+            previewController = controller;
+            setPreviewState("loading");
+            debugEvent("preview request started", {
+                requestGeneration,
+                blockCount: documentModel.blocks.length,
+                previewMode: previewData?.value ? "submission" : "example",
+            });
             try {
-                const response = await fetch(root.dataset.previewUrl, {method: "POST", body: requestFormData(), signal: previewController.signal, headers: {Accept: "application/json"}});
+                const response = await fetch(root.dataset.previewUrl, {method: "POST", body: requestFormData(), signal: controller.signal, headers: {Accept: "application/json"}});
                 const payload = await response.json().catch(() => ({}));
+                if (requestGeneration !== previewRequestGeneration) return;
                 if (!response.ok || !payload.ok) {
+                    debugEvent("preview request failed", {requestGeneration, status: response.status});
                     if (response.status === 422) blockedPreviewFingerprint = previewFingerprint;
                     showErrors(payload, "Nie można wygenerować podglądu.");
-                    throw new Error(previewErrorMessage(payload));
+                    setPreviewState("error", previewErrorMessage(payload));
+                    return;
                 }
                 blockedPreviewFingerprint = null;
                 errorsNode.hidden = true;
                 previewFrame.srcdoc = payload.html;
                 if (htmlPreview) htmlPreview.value = payload.html;
-                previewState.hidden = true;
-                previewCanvas.hidden = false;
-                if (!dirty) statusNode.textContent = "Podgląd aktualny";
+                setPreviewState("success");
+                debugEvent("preview request success", {requestGeneration, status: response.status});
             } catch (error) {
-                if (error.name === "AbortError") return;
-                previewState.textContent = error.message;
-                previewState.hidden = false;
-                if (!previewFrame.srcdoc) previewCanvas.hidden = true;
+                if (error.name === "AbortError" || requestGeneration !== previewRequestGeneration) return;
+                debugEvent("preview request failed", {requestGeneration, status: "network-error"});
+                setPreviewState("error", "Sprawdź połączenie i spróbuj ponownie.");
+            } finally {
+                if (requestGeneration !== previewRequestGeneration) return;
+                if (previewController === controller) previewController = null;
+                if (previewState.dataset.previewState === "loading") setPreviewState("error");
             }
         }
 
@@ -791,9 +1209,12 @@
             const payload = await response.json().catch(() => ({}));
             if (!response.ok || !payload.ok) { showErrors(payload); return false; }
             errorsNode.hidden = true;
-            dirty = false;
+            builderState.dirty = false;
             statusNode.textContent = `Szablon zapisany ${new Date().toLocaleTimeString("pl-PL", {hour: "2-digit", minute: "2-digit"})}.`;
-            try { localStorage.removeItem(localKey); } catch (_) {}
+            backendUpdatedAt = payload.updated_at || new Date().toISOString();
+            storageRemove(localKey);
+            storageRemove(legacyLocalKey);
+            hideDraftChoice();
             window.opener?.postMessage({
                 type: documentType === "agreement" ? "agreement-builder-saved" : "document-builder-saved",
                 formId,
@@ -867,7 +1288,7 @@
         }
 
         function requestClose() {
-            if (!dirty) { window.close(); return; }
+            if (!builderState.dirty) { window.close(); return; }
             if (typeof closeDialog?.showModal === "function") closeDialog.showModal();
         }
 
@@ -884,7 +1305,7 @@
             const link = document.createElement("a");
             link.href = url; link.download = documentType === "agreement" ? "przykladowa-umowa.pdf" : "przykladowa-deklaracja.pdf"; link.click();
             window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-            if (!dirty) statusNode.textContent = "PDF pobrany";
+            if (!builderState.dirty) statusNode.textContent = "PDF pobrany";
         }
 
         function insertVariable(name) {
@@ -958,8 +1379,7 @@
         }
 
         const rememberEditableRange = () => {
-            const saved = editableSelection();
-            if (saved) activeSelection = saved;
+            saveTextSelection();
             refreshFormattingControls();
         };
         root.addEventListener("focusin", (event) => {
@@ -969,9 +1389,35 @@
         });
         root.addEventListener("keyup", rememberEditableRange);
         root.addEventListener("mouseup", rememberEditableRange);
+        root.addEventListener("keydown", (event) => {
+            if (event.key !== "Tab" || !event.target.matches?.("[data-builder-list-item]")) return;
+            event.preventDefault();
+            changeListItemLevel(event.shiftKey ? "decrease" : "increase");
+        });
+        document.addEventListener("selectionchange", rememberEditableRange);
         root.addEventListener("input", (event) => readField(event.target));
         root.addEventListener("change", (event) => readField(event.target));
         root.addEventListener("click", async (event) => {
+            if (event.target.closest("[data-builder-draft-restore]") && pendingLocalDraft) {
+                documentModel = normalizeDocumentModel(pendingLocalDraft.document);
+                pendingLocalDraft = null;
+                builderState.dirty = true;
+                hideDraftChoice();
+                statusNode.textContent = "Przywrócono lokalny szkic";
+                render();
+                resetHistory();
+                schedulePreview({resetScroll: true});
+                return;
+            }
+            if (event.target.closest("[data-builder-draft-discard]")) {
+                pendingLocalDraft = null;
+                storageRemove(localKey);
+                storageRemove(legacyLocalKey);
+                hideDraftChoice();
+                builderState.dirty = false;
+                statusNode.textContent = initialBackendStatus();
+                return;
+            }
             const selectedArticle = event.target.closest("[data-builder-block]");
             if (selectedArticle) setActiveBlock(Number(selectedArticle.dataset.index));
             const add = event.target.closest("[data-builder-add]");
@@ -980,16 +1426,24 @@
             if (remove) { const removed = Number(remove.dataset.index); documentModel.blocks.splice(removed, 1); activeBlockIndex = Math.min(removed, documentModel.blocks.length - 1); render(); changed(); return; }
             const move = event.target.closest("[data-builder-move]");
             if (move) { const from = Number(move.dataset.index); const to = move.dataset.builderMove === "up" ? from - 1 : from + 1; if (to >= 0 && to < documentModel.blocks.length) { [documentModel.blocks[from], documentModel.blocks[to]] = [documentModel.blocks[to], documentModel.blocks[from]]; activeBlockIndex = to; render(); changed(); } return; }
+            const listLevel = event.target.closest("[data-builder-list-level]");
+            if (listLevel) { changeListItemLevel(listLevel.dataset.builderListLevel); return; }
             const addItem = event.target.closest("[data-builder-add-item]");
-            if (addItem) { documentModel.blocks[Number(addItem.dataset.index)].items.push({content: "Nowy punkt", level: 0}); render(); changed(); return; }
+            if (addItem) { const block = documentModel.blocks[Number(addItem.dataset.index)]; const level = Number(block.items.at(-1)?.level) || 0; block.items.push({content: "Nowy punkt", runs: [defaultRun("Nowy punkt")], level}); render(); changed(); return; }
             const removeItem = event.target.closest("[data-builder-remove-item]");
             if (removeItem) { documentModel.blocks[Number(removeItem.dataset.index)].items.splice(Number(removeItem.dataset.itemIndex), 1); render(); changed(); return; }
+            const addCriterionButton = event.target.closest("[data-builder-add-criterion]");
+            if (addCriterionButton) { addCriterion(Number(addCriterionButton.dataset.index)); return; }
+            const removeCriterion = event.target.closest("[data-builder-remove-criterion]");
+            if (removeCriterion) { const block = documentModel.blocks[Number(removeCriterion.dataset.index)]; block.criteria.splice(Number(removeCriterion.dataset.criterionIndex), 1); render(); changed({checkpointNow: true}); return; }
+            const moveCriterionButton = event.target.closest("[data-builder-move-criterion]");
+            if (moveCriterionButton) { moveCriterion(Number(moveCriterionButton.dataset.index), Number(moveCriterionButton.dataset.criterionIndex), moveCriterionButton.dataset.builderMoveCriterion); return; }
             const addRow = event.target.closest("[data-builder-add-row]");
             if (addRow) { const table = documentModel.blocks[Number(addRow.dataset.index)]; table.rows.push(Array(table.rows[0]?.length || 2).fill("")); render(); changed(); return; }
             const variable = event.target.closest("[data-builder-insert-variable]");
             if (variable) { insertVariable(variable.dataset.builderInsertVariable); return; }
             const copy = event.target.closest("[data-builder-copy-variable]");
-            if (copy) { await navigator.clipboard.writeText(`{{ ${copy.dataset.builderCopyVariable} }}`); if (!dirty) statusNode.textContent = "Zmienna skopiowana"; return; }
+            if (copy) { await navigator.clipboard.writeText(`{{ ${copy.dataset.builderCopyVariable} }}`); if (!builderState.dirty) statusNode.textContent = "Zmienna skopiowana"; return; }
             const format = event.target.closest("[data-builder-format]");
             if (format) { applyInlineFormat(format.dataset.builderFormat); return; }
             const align = event.target.closest("[data-builder-align]");
@@ -1030,12 +1484,15 @@
             if (zoom === "100") setZoom(1);
             if (event.target.closest("[data-builder-close]")) requestClose();
             if (event.target.closest("[data-builder-close-cancel]")) closeDialog?.close();
-            if (event.target.closest("[data-builder-close-discard]")) { dirty = false; closeDialog?.close(); window.close(); }
+            if (event.target.closest("[data-builder-close-discard]")) { builderState.dirty = false; closeDialog?.close(); window.close(); }
             if (event.target.closest("[data-builder-close-save]")) { if (await save("draft")) { closeDialog?.close(); window.close(); } }
         });
 
+        root.querySelectorAll("[data-builder-format]").forEach((button) => {
+            button.addEventListener("mousedown", (event) => event.preventDefault());
+        });
         root.addEventListener("mousedown", (event) => {
-            if (event.target.closest("[data-builder-format], [data-builder-align], [data-builder-insert-variable]")) event.preventDefault();
+            if (event.target.closest("[data-builder-align], [data-builder-insert-variable], [data-builder-list-level]")) event.preventDefault();
         });
         root.addEventListener("dragstart", (event) => {
             const variable = event.target.closest("[data-builder-variable]");
@@ -1071,6 +1528,7 @@
         previewTraining?.addEventListener("change", () => schedulePreview({resetScroll: true}));
         root.addEventListener("agreement-builder-visible", schedulePreview);
         previewFrame?.addEventListener("load", () => {
+            if (previewState.dataset.previewState !== "success") return;
             const previewDocument = previewFrame.contentDocument;
             previewDocument?.documentElement?.classList.add("agreement-preview-document");
             const height = Math.max(previewDocument?.documentElement?.scrollHeight || 0, 1123);
@@ -1083,7 +1541,7 @@
             });
         });
         window.addEventListener("beforeunload", (event) => {
-            if (!dirty) return;
+            if (!builderState.dirty) return;
             event.preventDefault();
             event.returnValue = "";
         });
@@ -1100,13 +1558,35 @@
             }).observe(previewViewport);
         }
 
-        render();
-        history = [JSON.stringify(documentModel)];
-        historyIndex = 0;
-        renderRecent();
-        if (mobileQuery.matches && builderState.viewMode === "split") builderState.viewMode = "editor";
-        applyBuilderLayout({persist: false});
-        schedulePreview();
+        function initializeDocumentBuilder() {
+            documentModel = normalizeDocumentModel(embeddedBackendDocument);
+            statusNode.textContent = initialBackendStatus();
+            pendingLocalDraft = loadLocalDraft();
+            if (pendingLocalDraft) {
+                statusNode.textContent = "Znaleziono niezapisany szkic.";
+                if (draftChoice) draftChoice.hidden = false;
+            } else {
+                hideDraftChoice();
+            }
+            render();
+            resetHistory();
+            renderRecent();
+            if (mobileQuery.matches && builderState.viewMode === "split") builderState.viewMode = "editor";
+            applyBuilderLayout({persist: false});
+            schedulePreview();
+            debugEvent("initialized", {
+                source: pendingLocalDraft ? "backend-with-newer-local-draft" : (backendIsNew ? "new" : "backend"),
+                blockCount: documentModel.blocks.length,
+            });
+        }
+
+        try {
+            initializeDocumentBuilder();
+        } catch (error) {
+            debugEvent("initialization failed", {error: error?.name || "Error"});
+            statusNode.textContent = "Nie udało się uruchomić kreatora.";
+            setPreviewState("error", "Odśwież stronę i spróbuj ponownie.");
+        }
     }
 
     document.addEventListener("DOMContentLoaded", () => {

@@ -47,6 +47,7 @@ class AgreementDocxTemplateService:
         fields: Iterable[Any],
         uploaded_by_user_id: int | None,
         document_type: str = "agreement",
+        form_definition: Mapping[str, Any] | None = None,
     ) -> dict:
         document_type = str(document_type or "agreement").strip().casefold()
         if document_type not in {"agreement", "declaration"}:
@@ -58,7 +59,7 @@ class AgreementDocxTemplateService:
         if document_type == "declaration":
             from services.documents.declaration_template_context_service import DeclarationVariableCatalog
 
-            known = DeclarationVariableCatalog.context_names(fields)
+            known = DeclarationVariableCatalog.context_names(fields, form_definition=form_definition)
         else:
             known = AgreementVariableCatalog.context_names(fields)
         unknown = sorted(set(parsed.variables) - known)

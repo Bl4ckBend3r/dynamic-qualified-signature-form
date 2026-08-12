@@ -40,6 +40,7 @@ from services.documents.agreement_builder_service import (
 from services.documents.agreement_template_context_service import AgreementVariableCatalog, agreement_preview_context, agreement_variable_catalog
 from services.documents.declaration_template_context_service import (
     DeclarationVariableCatalog,
+    declaration_builder_variable_catalog,
     declaration_preview_context,
     declaration_variable_catalog,
 )
@@ -409,6 +410,7 @@ def form_edit(form_id: int):
                         updated_workflow.get("declaration_builder_document"),
                         active_fields_for_form(db, form.id),
                         "declaration",
+                        form_definition=updated_definition,
                     )
                     if declaration_builder_errors:
                         raise ValueError("Nie można aktywować szablonu deklaracji. " + " ".join(error.message for error in declaration_builder_errors))
@@ -633,6 +635,7 @@ def declaration_docx_template_upload(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         fields = active_fields_for_form(db, form.id)
+        definition = deepcopy(form.definition_json or {})
         try:
             metadata = current_app.extensions["services"].agreement_docx_template_service.upload(
                 form_slug=form.slug,
@@ -641,11 +644,11 @@ def declaration_docx_template_upload(form_id: int):
                 fields=fields,
                 uploaded_by_user_id=g.admin_user.id,
                 document_type="declaration",
+                form_definition=definition,
             )
         except (DocxTemplateParseError, ValueError) as exc:
             flash(str(exc), "error")
             return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
-        definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
         imported_builder = metadata.pop("builder_document", None)
         workflow["declaration_docx_template"] = metadata
@@ -673,7 +676,12 @@ def declaration_builder_save(form_id: int):
             document = _builder_document_from_request("declaration")
         except ValueError as exc:
             return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
-        errors = validate_document_builder_document(document, fields, "declaration")
+        errors = validate_document_builder_document(
+            document,
+            fields,
+            "declaration",
+            form_definition=form.definition_json or {},
+        )
         if errors:
             return jsonify({"ok": False, "errors": [error.as_dict() for error in errors]}), 422
         action = str(request.form.get("action") or "draft").strip().casefold()
@@ -724,7 +732,9 @@ def declaration_builder_view(form_id: int):
             document_builder_title="Deklaracja",
             document_builder_description="Jedna deklaracja odpowiada jednemu zgłoszeniu i nie zawiera danych szkoleń.",
             document_builder_document=context["declaration_builder_document"],
-            document_builder_variables=context["declaration_template_variables"],
+            document_builder_updated_at=context["declaration_builder_updated_at"],
+            document_builder_is_new=context["declaration_builder_is_new"],
+            document_builder_variables=context["declaration_builder_variables"],
             document_builder_submissions=context["declaration_preview_submissions"],
             document_builder_can_show_html=context["declaration_builder_can_show_html"],
             document_docx_metadata=context["declaration_docx_metadata"],
@@ -752,7 +762,12 @@ def declaration_docx_import_builder(form_id: int):
         if not document.get("blocks"):
             flash("Tego szablonu DOCX nie można przekonwertować do kreatora.", "error")
             return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
-        errors = validate_document_builder_document(document, active_fields_for_form(db, form.id), "declaration")
+        errors = validate_document_builder_document(
+            document,
+            active_fields_for_form(db, form.id),
+            "declaration",
+            form_definition=definition,
+        )
         if errors:
             flash("Import DOCX wymaga poprawy: " + " ".join(error.message for error in errors), "warning")
         workflow["declaration_builder_document"] = document
@@ -1121,7 +1136,12 @@ def _declaration_preview_material(form: Form, fields: list[FormField]) -> tuple[
             document = _builder_document_from_request("declaration")
         except ValueError as exc:
             raise AgreementPreviewError(str(exc), reason="invalid_template") from exc
-        errors = validate_document_builder_document(document, fields, "declaration")
+        errors = validate_document_builder_document(
+            document,
+            fields,
+            "declaration",
+            form_definition=definition,
+        )
         if errors:
             raise AgreementPreviewError(errors[0].message, reason="invalid_template", errors=[error.as_dict() for error in errors])
         template_html = render_document_builder_template(document, "declaration")
@@ -1154,7 +1174,12 @@ def _resolve_declaration_preview_template(definition: dict, fields: list[FormFie
         source = "html" if str(workflow.get("declaration_template_html") or "").strip() else ("docx" if metadata else "builder")
     if source == "builder":
         document = workflow.get("declaration_builder_active_document") or workflow.get("declaration_builder_document") or default_document_builder_document("declaration")
-        errors = validate_document_builder_document(document, fields, "declaration")
+        errors = validate_document_builder_document(
+            document,
+            fields,
+            "declaration",
+            form_definition=definition,
+        )
         if errors:
             return "", AgreementPreviewError(errors[0].message, reason="invalid_template", errors=[error.as_dict() for error in errors])
         return render_document_builder_template(document, "declaration"), None
@@ -1163,7 +1188,12 @@ def _resolve_declaration_preview_template(definition: dict, fields: list[FormFie
             parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
         except ValueError as exc:
             return "", AgreementPreviewError(str(exc), reason="docx_parse_error")
-        unknown = _current_docx_unknown_variables({**metadata, "variables": list(parsed.variables)}, fields, "declaration")
+        unknown = _current_docx_unknown_variables(
+            {**metadata, "variables": list(parsed.variables)},
+            fields,
+            "declaration",
+            form_definition=definition,
+        )
         if unknown:
             return "", AgreementPreviewError(_missing_variables_message(unknown), reason="missing_context_variables", missing_variables=unknown)
         if str(parsed.html or "").strip():
@@ -1290,11 +1320,21 @@ def _resolve_agreement_preview_template(definition: dict, fields: list[FormField
     return "", AgreementPreviewError("Nie wgrano szablonu umowy Word ani szablonu HTML.", reason="missing_template")
 
 
-def _current_docx_unknown_variables(metadata: dict, fields: list[FormField] | tuple, document_type: str = "agreement") -> list[str]:
+def _current_docx_unknown_variables(
+    metadata: dict,
+    fields: list[FormField] | tuple,
+    document_type: str = "agreement",
+    *,
+    form_definition: dict | None = None,
+) -> list[str]:
     variables = {str(name) for name in metadata.get("variables") or [] if str(name).strip()}
     if not variables:
         return sorted({str(name) for name in metadata.get("unknown_variables") or [] if str(name).strip()})
-    available = DeclarationVariableCatalog.context_names(fields) if document_type == "declaration" else AgreementVariableCatalog.context_names(fields)
+    available = (
+        DeclarationVariableCatalog.context_names(fields, form_definition=form_definition)
+        if document_type == "declaration"
+        else AgreementVariableCatalog.context_names(fields)
+    )
     return sorted(variables - available)
 
 
@@ -1358,6 +1398,8 @@ def _agreement_docx_editor_context(form: Form, fields: list[FormField]) -> dict:
         "agreement_builder_document": normalize_agreement_builder_document(
             workflow.get("contract_builder_document") or default_agreement_builder_document()
         ),
+        "agreement_builder_updated_at": workflow.get("contract_builder_updated_at") or "",
+        "agreement_builder_is_new": not bool(workflow.get("contract_builder_document")),
         "agreement_builder_can_show_html": g.admin_user.role == ROLE_SUPER_ADMIN,
     }
 
@@ -1366,13 +1408,19 @@ def _declaration_editor_context(form: Form, fields: list[FormField]) -> dict:
     definition = form.definition_json or {}
     workflow = definition.get("workflow") or {}
     metadata = dict(workflow.get("declaration_docx_template") or {})
-    current_unknown = _current_docx_unknown_variables(metadata, fields, "declaration")
+    current_unknown = _current_docx_unknown_variables(
+        metadata,
+        fields,
+        "declaration",
+        form_definition=definition,
+    )
     metadata["unknown_variables"] = current_unknown
     metadata["valid"] = bool(metadata.get("html")) and not current_unknown
     submissions = current_app.extensions["services"].submission_repository.list_by_form(form.slug)
     _, preview_error = _resolve_declaration_preview_template(definition, fields)
     return {
-        "declaration_template_variables": declaration_variable_catalog(fields),
+        "declaration_template_variables": declaration_variable_catalog(fields, form_definition=definition),
+        "declaration_builder_variables": declaration_builder_variable_catalog(fields, form_definition=definition),
         "declaration_docx_metadata": metadata,
         "declaration_preview_available": not preview_error,
         "declaration_preview_error": str(preview_error or ""),
@@ -1392,6 +1440,8 @@ def _declaration_editor_context(form: Form, fields: list[FormField]) -> dict:
             workflow.get("declaration_builder_document") or default_document_builder_document("declaration"),
             "declaration",
         ),
+        "declaration_builder_updated_at": workflow.get("declaration_builder_updated_at") or "",
+        "declaration_builder_is_new": not bool(workflow.get("declaration_builder_document")),
         "declaration_builder_can_show_html": g.admin_user.role == ROLE_SUPER_ADMIN,
     }
 
@@ -1692,9 +1742,9 @@ def form_fields(form_id: int):
                     existing.stage = normalize_field_stage(request.form.get("new_stage"))
                     existing.sort_order = parse_int(request.form.get("new_sort_order"), len(fields) + 1)
                     existing.options = parse_field_options(existing.type, request.form.get("new_options", ""))
+                    saved_field = existing
                 else:
-                    db.add(
-                        FormField(
+                    saved_field = FormField(
                             form_id=form.id,
                             name=field_name,
                             label=request.form.get("new_label", "").strip() or field_name,
@@ -1706,7 +1756,11 @@ def form_fields(form_id: int):
                             options=parse_field_options(request.form.get("new_type", "text"), request.form.get("new_options", "")),
                             active=True,
                         )
-                    )
+                    db.add(saved_field)
+                _update_document_field_labels(
+                    form,
+                    {field_name: request.form.get("new_document_label", "").strip()},
+                )
                 db.commit()
                 flash("Pole formularza zostało dodane.", "success")
                 return redirect(url_for("admin.form_fields", form_id=form.id))
@@ -1729,6 +1783,13 @@ def form_fields(form_id: int):
                 field.stage = normalize_field_stage(request.form.get(prefix + "stage"))
                 field.sort_order = parse_int(request.form.get(prefix + "sort_order"), field.sort_order)
                 field.options = parse_field_options(field.type, request.form.get(prefix + "options", ""))
+            _update_document_field_labels(
+                form,
+                {
+                    field.name: request.form.get(f"field_{field.id}_document_label", "").strip()
+                    for field in fields
+                },
+            )
             db.commit()
             flash("Pola formularza zostały zapisane.", "success")
             return redirect(url_for("admin.form_fields", form_id=form.id))
@@ -1739,7 +1800,36 @@ def form_fields(form_id: int):
             field_types=FIELD_TYPES,
             field_stages=FIELD_STAGES,
             field_options_text=field_options_text,
+            document_field_labels=(form.definition_json or {}).get("document_field_labels") or {},
         )
+
+
+def _update_document_field_labels(form: Form, updates: dict[str, str]) -> None:
+    definition = deepcopy(form.definition_json or {})
+    labels = dict(definition.get("document_field_labels") or {})
+    for field_name, label in updates.items():
+        if label:
+            labels[field_name] = label
+        else:
+            labels.pop(field_name, None)
+    if labels:
+        definition["document_field_labels"] = labels
+    else:
+        definition.pop("document_field_labels", None)
+    fields = [dict(item) if isinstance(item, dict) else item for item in definition.get("fields") or []]
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or field.get("id") or "").strip()
+        if name not in updates:
+            continue
+        if updates[name]:
+            field["document_label"] = updates[name]
+        else:
+            field.pop("document_label", None)
+    if fields:
+        definition["fields"] = fields
+    form.definition_json = definition
 
 
 def format_json(value) -> str:

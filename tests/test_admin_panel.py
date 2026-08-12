@@ -1417,6 +1417,7 @@ def test_form_fields_can_be_edited(admin_app, admin_client):
         data={
             "csrf_token": token,
             f"field_{field_id}_label": "Adres e-mail",
+            f"field_{field_id}_document_label": "Adres e-mail uczestnika",
             f"field_{field_id}_type": "text",
             f"field_{field_id}_required": "on",
             f"field_{field_id}_section": "Dane kontaktowe",
@@ -1431,6 +1432,9 @@ def test_form_fields_can_be_edited(admin_app, admin_client):
         assert field.type == "text"
         assert field.section == "Dane kontaktowe"
         assert field.sort_order == 3
+        assert db.get(Form, form_id).definition_json["document_field_labels"]["email"] == "Adres e-mail uczestnika"
+    reloaded = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+    assert 'value="Adres e-mail uczestnika"' in reloaded
 
 
 def test_form_field_can_be_added_and_deactivated_without_removing_history(admin_app, admin_client):
@@ -5751,8 +5755,11 @@ def test_agreement_builder_draft_does_not_activate_and_activation_is_explicit(ad
         "version": 1,
         "blocks": [{
             "type": "paragraph",
-            "content": "Uczestnik {{ participant_name }}",
-            "format": {"bold": True, "italic": True, "underline": False, "alignment": "center"},
+            "format": {"alignment": "center"},
+            "runs": [
+                {"text": "Uczestnik "},
+                {"text": "{{ participant_name }}", "bold": True},
+            ],
         }],
     }
 
@@ -5784,11 +5791,15 @@ def test_agreement_builder_draft_does_not_activate_and_activation_is_explicit(ad
         assert workflow["contract_builder_status"] == "active"
         assert workflow["contract_template_updated_source"] == "builder"
         assert workflow["contract_template_updated_by"]
-        assert workflow["contract_builder_document"]["blocks"][0]["format"] == builder["blocks"][0]["format"]
-        assert workflow["contract_builder_active_document"]["blocks"][0]["format"] == builder["blocks"][0]["format"]
+        assert workflow["contract_builder_document"]["blocks"][0]["runs"] == [
+            {"text": "Uczestnik ", "bold": False, "italic": False, "underline": False},
+            {"text": "{{ participant_name }}", "bold": True, "italic": False, "underline": False},
+        ]
+        assert workflow["contract_builder_active_document"]["blocks"][0]["runs"] == workflow["contract_builder_document"]["blocks"][0]["runs"]
     reopened = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
     assert '"alignment": "center"' in reopened
     assert '"bold": true' in reopened
+    assert "{{ participant_name }}" in reopened
 
 
 def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_app, admin_client):
@@ -5824,6 +5835,14 @@ def test_agreement_builder_live_preview_and_pdf_are_stateless(admin_app, admin_c
         "version": 1,
         "blocks": [
             {"type": "paragraph", "content": "{{ participant_name }} — {{ participant_address_inline }} — {{ stanowisko }}"},
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "Beneficjent przestrzega "},
+                    {"text": "Regulaminu projektu", "bold": True, "italic": True, "underline": True},
+                    {"text": "."},
+                ],
+            },
             {"type": "training_table", "scope": "selected_trainings", "columns": ["index", "name", "price"], "show_total": True},
             {"type": "signatures", "left_label": "Beneficjent", "right_label": "Uczestnik"},
         ],
@@ -5831,7 +5850,12 @@ def test_agreement_builder_live_preview_and_pdf_are_stateless(admin_app, admin_c
     payload = {"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(builder), "preview_mode": "example"}
 
     preview = admin_client.post(f"/admin/forms/{form_id}/documents/agreement/preview", data=payload)
-    monkeypatch.setattr(admin_app.extensions["services"].document_service.pdf_render_service, "render_document_pdf_bytes", lambda **kwargs: b"%PDF-1.4\nbuilder")
+    pdf_calls = []
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **kwargs: pdf_calls.append(kwargs) or b"%PDF-1.4\nbuilder",
+    )
     pdf = admin_client.post(f"/admin/forms/{form_id}/documents/agreement/example.pdf", data=payload)
 
     assert preview.status_code == 200
@@ -5841,8 +5865,11 @@ def test_agreement_builder_live_preview_and_pdf_are_stateless(admin_app, admin_c
     assert "Specjalista ds. projektów" in html
     assert "Przykładowe szkolenie" in html
     assert "document-signatures" in html
+    marked_phrase = '<strong><em><span class="document-text-underline">Regulaminu projektu</span></em></strong>'
+    assert marked_phrase in html
     assert pdf.status_code == 200
     assert pdf.data.startswith(b"%PDF")
+    assert marked_phrase in pdf_calls[0]["template_html"]
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(FormSubmission).filter(FormSubmission.form_slug == "builder_preview").count() == 0
         assert db.query(SubmissionFile).count() == 0
@@ -5898,6 +5925,20 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         last_editable.press("ArrowLeft")
         page.locator('[data-builder-insert-variable="email"]').first.click()
         assert last_editable.inner_text() == "A{{ email }}B"
+        page.evaluate("""() => {
+            const editable = [...document.querySelectorAll('[data-builder-block] [contenteditable=true]')].at(-1);
+            const range = document.createRange();
+            range.selectNodeContents(editable);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }""")
+        assert page.evaluate("""() => {
+            const button = document.querySelector('[data-builder-format="bold"]');
+            const event = new MouseEvent('mousedown', {bubbles: true, cancelable: true});
+            button.dispatchEvent(event);
+            return event.defaultPrevented;
+        }""") is True
 
         bold = page.locator('[data-builder-format="bold"]')
         italic = page.locator('[data-builder-format="italic"]')
@@ -5947,7 +5988,9 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         page.locator('[data-builder-save="draft"]').first.click()
         page.wait_for_function("document.querySelector('[data-agreement-builder-status]').textContent.includes('zapisany')")
         saved_format = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).format")
-        assert saved_format == {"bold": True, "italic": True, "underline": True, "alignment": "justify"}
+        saved_runs = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
+        assert saved_format == {"alignment": "justify"}
+        assert saved_runs == [{"text": "A{{ email }}B", "bold": True, "italic": True, "underline": True}]
         messages = page.evaluate("window.openerMessages")
         assert messages[-1][0]["type"] == "agreement-builder-saved"
         assert messages[-1][0]["formId"] == form_id
@@ -5957,6 +6000,194 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         page.locator("[data-builder-close]").click()
         assert page.evaluate("window.closeCalls") == 1
         browser.close()
+
+
+def test_agreement_builder_initialization_prefers_backend_and_handles_local_drafts_and_preview_states(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    backend_document = {
+        "version": 1,
+        "document_type": "agreement",
+        "blocks": [
+            {"type": "paragraph", "content": "Wartość z backendu: 42"},
+            {"type": "ordered_list", "items": [{"content": "Lista z backendu", "level": 0}]},
+            *[
+                {"type": "paragraph", "content": f"Blok backendu {index}"}
+                for index in range(3, 43)
+            ],
+        ],
+    }
+    definition = {
+        "title": "Umowa",
+        "fields": [],
+        "workflow": {
+            "requires_contract": True,
+            "contract_template_source": "builder",
+            "contract_builder_document": backend_document,
+            "contract_builder_updated_at": "2026-08-12T10:00:00+02:00",
+        },
+    }
+    form_id = create_form(admin_app, slug="builder_initialization", definition_json=definition)
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
+    assert f'data-storage-key="document-builder:agreement:form:{form_id}:v1"' in html
+    assert f'data-legacy-storage-key="document-builder-agreement-draft-{form_id}"' in html
+    assert 'data-backend-updated-at="2026-08-12T10:00:00+02:00"' in html
+    assert 'data-backend-is-new="false"' in html
+    script = (Path(__file__).resolve().parents[1] / "static" / "js" / "agreement_builder.js").read_text(encoding="utf-8")
+    html = re.sub(
+        r'<script src="[^"]*agreement_builder\.js"></script>',
+        lambda _match: f"<script>{script}</script>",
+        html,
+    )
+    storage_key = f"document-builder:agreement:form:{form_id}:v1"
+    legacy_key = f"document-builder-agreement-draft-{form_id}"
+    preview_response = {"status": 200, "payload": {"ok": True, "html": "<main>Podgląd działa</main>"}}
+    preview_requests = []
+    page_errors = []
+    console_errors = []
+
+    def route_request(route):
+        if route.request.url.endswith("/documents/agreement/preview"):
+            preview_requests.append(route.request)
+            route.fulfill(
+                status=preview_response["status"],
+                content_type="application/json",
+                body=json.dumps(preview_response["payload"]),
+            )
+            return
+        content_type = "text/css" if route.request.url.endswith(".css") else "text/html"
+        route.fulfill(status=200, content_type=content_type, body="<html></html>" if content_type == "text/html" else "")
+
+    def open_builder(browser, *, key=storage_key, value=None):
+        page = browser.new_page()
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
+        page.route("https://preview.test/**", route_request)
+        page.goto("https://preview.test/workspace")
+        page.evaluate("localStorage.clear()")
+        if value is not None:
+            page.evaluate("([storageKey, storageValue]) => localStorage.setItem(storageKey, storageValue)", [key, value])
+        page.set_content(html, wait_until="domcontentloaded")
+        return page
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+
+        empty_draft = json.dumps({
+            "schemaVersion": 1,
+            "formId": form_id,
+            "documentType": "agreement",
+            "savedAt": "2099-01-01T00:00:00Z",
+            "document": {"version": 1, "document_type": "agreement", "blocks": []},
+        })
+        page = open_builder(browser, value=empty_draft)
+        assert page.locator("[data-builder-block]").count() == 42
+        assert "Wartość z backendu: 42" in page.locator("[data-agreement-builder-blocks]").inner_text()
+        assert page.locator("[data-agreement-builder-status]").inner_text() == "Wczytano zapisany szablon."
+        assert page.evaluate("key => localStorage.getItem(key)", storage_key) is None
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').srcdoc.includes('Podgląd działa')")
+        assert console_errors == []
+        page.close()
+
+        empty_paragraph_draft = json.dumps({
+            "schemaVersion": 1,
+            "formId": form_id,
+            "documentType": "agreement",
+            "savedAt": "2099-01-01T00:00:00Z",
+            "document": {
+                "version": 1,
+                "document_type": "agreement",
+                "blocks": [{"type": "paragraph", "content": "", "runs": []}],
+            },
+        })
+        page = open_builder(browser, value=empty_paragraph_draft)
+        assert "Wartość z backendu: 42" in page.locator("[data-agreement-builder-blocks]").inner_text()
+        assert page.evaluate("key => localStorage.getItem(key)", storage_key) is None
+        page.close()
+
+        page = open_builder(browser, value="{uszkodzony-json")
+        assert page.locator("[data-builder-block]").count() == 42
+        assert page.evaluate("key => localStorage.getItem(key)", storage_key) is None
+        page.close()
+
+        local_document = {
+            "version": 1,
+            "document_type": "agreement",
+            "blocks": [{"type": "paragraph", "content": "Nowszy lokalny szkic"}],
+        }
+        local_draft = json.dumps({
+            "schemaVersion": 1,
+            "formId": form_id,
+            "documentType": "agreement",
+            "savedAt": "2099-01-01T00:00:00Z",
+            "document": local_document,
+        })
+        page = open_builder(browser, value=local_draft)
+        assert "Wartość z backendu: 42" in page.locator("[data-agreement-builder-blocks]").inner_text()
+        assert page.locator("[data-builder-draft-choice]").is_visible()
+        assert page.locator("[data-builder-draft-restore]").inner_text() == "Przywróć szkic"
+        assert page.locator("[data-builder-draft-discard]").inner_text() == "Użyj zapisanej wersji"
+        assert page.locator("[data-agreement-builder-status]").inner_text() == "Znaleziono niezapisany szkic."
+        page.locator("[data-builder-draft-restore]").click()
+        assert "Nowszy lokalny szkic" in page.locator("[data-agreement-builder-blocks]").inner_text()
+        assert page.locator("[data-agreement-builder-status]").inner_text() == "Przywrócono lokalny szkic"
+
+        preview_response.update({
+            "status": 422,
+            "payload": {
+                "ok": False,
+                "error": "Brak danych wymaganych przez zapisany szablon.",
+                "missing_variables": ["participant_address"],
+            },
+        })
+        page.locator("[data-builder-preview-now]").click()
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview-state]').textContent.includes('{{ participant_address }}')")
+        preview_error = page.locator("[data-agreement-builder-preview-state]").inner_text()
+        assert "Nie udało się wygenerować podglądu." in preview_error
+        assert "Brak danych wymaganych przez zapisany szablon." in preview_error
+
+        preview_response.update({"status": 500, "payload": {"ok": False, "error": "Kontrolowany błąd serwera."}})
+        requests_before_change = len(preview_requests)
+        page.locator("[data-builder-block] [contenteditable=true]").first.fill("Nowszy lokalny szkic po zmianie")
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview-state]').textContent.includes('Kontrolowany błąd serwera.')")
+        assert len(preview_requests) == requests_before_change + 1
+        assert "Nie udało się wygenerować podglądu." in page.locator("[data-agreement-builder-preview-state]").inner_text()
+
+        console_errors.clear()
+        preview_response.update({"status": 200, "payload": {"ok": True, "html": "<main>Podgląd po błędzie działa</main>"}})
+        page.locator("[data-builder-preview-now]").click()
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').srcdoc.includes('Podgląd po błędzie działa')")
+        assert page.locator("[data-agreement-builder-preview-state]").is_hidden()
+        preview_request = preview_requests[-1]
+        preview_body = preview_request.post_data or ""
+        assert preview_request.method == "POST"
+        assert preview_request.url.endswith("/documents/agreement/preview")
+        assert preview_request.headers["content-type"].startswith("multipart/form-data;")
+        assert "csrf_token" in preview_body
+        assert "preview_mode" in preview_body
+        assert "builder_json" in preview_body
+        assert 'document_type\\\"%3A\\\"agreement' in preview_body or 'document_type\":\"agreement' in preview_body
+        assert "Nowszy lokalny szkic po zmianie" in preview_body
+        page.close()
+
+        legacy_draft = json.dumps({"savedAt": "2099-01-01T00:00:00Z", "document": local_document})
+        page = open_builder(browser, key=legacy_key, value=legacy_draft)
+        assert page.locator("[data-builder-draft-choice]").is_visible()
+        assert page.evaluate("key => localStorage.getItem(key)", legacy_key) is None
+        assert page.evaluate("key => localStorage.getItem(key)", storage_key) is not None
+        page.locator("[data-builder-draft-discard]").click()
+        assert "Wartość z backendu: 42" in page.locator("[data-agreement-builder-blocks]").inner_text()
+        assert page.evaluate("key => localStorage.getItem(key)", storage_key) is None
+        page.close()
+
+        browser.close()
+
+    assert page_errors == []
+    assert console_errors == []
 
 
 def test_agreement_builder_browser_keeps_long_document_inside_independent_scroll_panels(admin_app, admin_client):
@@ -6660,7 +6891,11 @@ def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admi
     create_user(admin_app)
     definition = {
         "title": "Deklaracja",
-        "fields": [{"name": "zgoda", "label": "Zgoda", "type": "checkbox"}],
+        "fields": [{"name": "zgoda", "label": "Zgoda", "document_label": "Zgoda kwalifikacyjna", "type": "checkbox"}],
+        "qualification_conditions": {
+            "enabled": True,
+            "conditions": [{"field_name": "zgoda", "field_label": "Zgoda", "operator": "equals", "expected_value": True, "is_active": True}],
+        },
         "workflow": {"requires_declaration": True, "declaration_template_source": "html", "declaration_template_html": "<p>Stary HTML</p>"},
     }
     form_id = create_form(admin_app, slug="declaration_builder_save", definition_json=definition)
@@ -6674,7 +6909,22 @@ def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admi
         "document_type": "declaration",
         "blocks": [
             {"type": "heading", "level": 1, "runs": [{"text": "Deklaracja {{ participant_name }}", "bold": True}]},
+            {"type": "paragraph", "runs": [{"text": "Regulaminu projektu", "bold": True, "italic": True, "underline": True}]},
+            {
+                "type": "ordered_list",
+                "items": [
+                    {"content": "Punkt główny", "level": 0},
+                    {"content": "Podpunkt", "level": 1},
+                ],
+                "list_styles": [
+                    {"level": 0, "marker": "decimal-paren", "indent_mm": 0},
+                    {"level": 1, "marker": "decimal-compound", "indent_mm": 9},
+                    {"level": 2, "marker": "alpha-dot", "indent_mm": 18},
+                    {"level": 3, "marker": "upper-roman-dot", "indent_mm": 27},
+                ],
+            },
             {"type": "form_field", "field": "zgoda", "label": "Zgoda", "display": "yes_no"},
+            {"type": "criteria_table", "criteria": [{"field_key": "zgoda"}], "show_number": True, "show_header": True},
             {"type": "participant_signature", "label": "Podpis uczestnika"},
         ],
     }
@@ -6692,7 +6942,12 @@ def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admi
         f"/admin/forms/{form_id}/documents/declaration/preview",
         data={"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(document), "preview_mode": "example"},
     )
-    monkeypatch.setattr(admin_app.extensions["services"].document_service.pdf_render_service, "render_document_pdf_bytes", lambda **kwargs: b"%PDF-1.4\ndeclaration")
+    pdf_calls = []
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **kwargs: pdf_calls.append(kwargs) or b"%PDF-1.4\ndeclaration",
+    )
     pdf = admin_client.post(
         f"/admin/forms/{form_id}/documents/declaration/example.pdf",
         data={"csrf_token": admin_csrf(admin_client), "builder_json": json.dumps(document), "preview_mode": "example"},
@@ -6703,12 +6958,26 @@ def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admi
     assert preview.status_code == 200
     assert "Jan Kowalski" in preview.get_json()["html"]
     assert "Tak" in preview.get_json()["html"]
+    assert "Zgoda kwalifikacyjna" in preview.get_json()["html"]
+    assert ">1)</span>" in preview.get_json()["html"]
+    assert ">1.1</span>" in preview.get_json()["html"]
+    marked_phrase = '<strong><em><span class="document-text-underline">Regulaminu projektu</span></em></strong>'
+    assert marked_phrase in preview.get_json()["html"]
     assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF")
+    assert marked_phrase in pdf_calls[0]["template_html"]
+    assert "document-criteria-table" in pdf_calls[0]["template_html"]
+    assert "--document-list-indent: 9mm" in pdf_calls[0]["template_html"]
+    reopened = admin_client.get(f"/admin/forms/{form_id}/documents/declaration/builder").get_data(as_text=True)
+    assert 'data-builder-add="criteria_table"' in reopened
+    assert '"marker": "decimal-compound"' in reopened
+    assert '"field_key": "zgoda"' in reopened
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         workflow = db.get(Form, form_id).definition_json["workflow"]
         assert workflow["declaration_template_source"] == "builder"
         assert workflow["declaration_builder_status"] == "active"
         assert workflow["declaration_builder_active_document"]["document_type"] == "declaration"
+        assert workflow["declaration_builder_active_document"]["blocks"][2]["items"][1]["level"] == 1
+        assert workflow["declaration_builder_active_document"]["blocks"][4]["criteria"] == [{"field_key": "zgoda"}]
         assert db.query(FormSubmission).filter(FormSubmission.form_slug == "declaration_builder_save").count() == 0
         assert db.query(SubmissionFile).count() == 0
         assert db.query(SubmissionWorkflowEvent).count() == 0
@@ -6717,12 +6986,25 @@ def test_declaration_builder_draft_activation_preview_and_pdf_are_stateless(admi
 
 def test_declaration_docx_upload_prepares_builder_draft_and_keeps_source_docx(admin_app, admin_client):
     create_user(admin_app)
-    definition = {"title": "Deklaracja", "fields": [], "workflow": {"requires_declaration": True, "declaration_template_source": "builder"}}
+    definition = {
+        "title": "Deklaracja",
+        "fields": [{"name": "zgoda", "label": "Zgoda", "type": "checkbox"}],
+        "qualification_conditions": {
+            "enabled": True,
+            "conditions": [{"field_name": "zgoda", "operator": "equals", "expected_value": True, "is_active": True}],
+        },
+        "workflow": {"requires_declaration": True, "declaration_template_source": "builder"},
+    }
     form_id = create_form(admin_app, slug="declaration_docx", definition_json=definition)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        db.commit()
     document = Document()
     paragraph = document.add_paragraph("Uczestnik ")
     run = paragraph.add_run("{{ participant_name }}")
     run.bold = True
+    document.add_paragraph("TAK: {{ criterion_zgoda_yes_checked }}")
     buffer = io.BytesIO()
     document.save(buffer)
     login(admin_client)
@@ -6744,17 +7026,19 @@ def test_declaration_docx_upload_prepares_builder_draft_and_keeps_source_docx(ad
         assert workflow["declaration_template_source"] == "docx"
         assert workflow["declaration_builder_status"] == "draft"
         assert workflow["declaration_docx_template"]["document_type"] == "declaration"
+        assert workflow["declaration_docx_template"]["unknown_variables"] == []
         runs = workflow["declaration_builder_document"]["blocks"][0]["runs"]
         assert any(run["bold"] and "participant_name" in run["text"] for run in runs)
 
 
-def test_document_builder_browser_formats_only_selection_and_restores_runs_from_local_draft(admin_app, admin_client):
+def test_document_builder_browser_preserves_selection_and_toggles_inline_runs(admin_app, admin_client):
     playwright_api = pytest.importorskip("playwright.sync_api")
     create_user(admin_app)
     form_id = create_form(admin_app, slug="builder_inline_runs", definition_json={"title": "Umowa", "fields": [], "workflow": {"requires_contract": True, "contract_template_source": "builder"}})
     login(admin_client)
     html = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
     script = (Path(__file__).resolve().parents[1] / "static" / "js" / "agreement_builder.js").read_text(encoding="utf-8")
+    document_css = (Path(__file__).resolve().parents[1] / "static" / "css" / "document_template.css").read_text(encoding="utf-8")
     html = html.replace("<head>", '<head><base href="https://inline.test/">').replace("</body>", f"<script>{script}</script></body>")
 
     with playwright_api.sync_playwright() as playwright:
@@ -6763,44 +7047,101 @@ def test_document_builder_browser_formats_only_selection_and_restores_runs_from_
         except playwright_api.Error as exception:
             pytest.skip(f"Brak przeglądarki Playwright: {exception}")
         page = browser.new_page()
-        page.route("https://inline.test/**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": "<main>Podgląd</main>"})))
+        preview_requests = []
+
+        def route_request(route):
+            body = route.request.post_data or ""
+            if route.request.url.endswith("/documents/agreement/preview"):
+                preview_requests.append(route.request)
+                formatted = '"text":"Regulaminu projektu","bold":true,"italic":true,"underline":true' in body
+                preview_html = (
+                    f'<style>{document_css}</style><main class="document"><strong><em><span class="document-text-underline">Regulaminu projektu</span></em></strong></main>'
+                    if formatted else "<main>Podgląd</main>"
+                )
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": preview_html}))
+            else:
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+
+        page.route("https://inline.test/**", route_request)
         page.goto("https://inline.test/workspace")
         page.set_content(html, wait_until="domcontentloaded")
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').srcdoc.includes('Podgląd')")
+        preview_count_before_formatting = len(preview_requests)
         page.locator('[data-builder-add="paragraph"]').first.click()
         editable = page.locator("[data-builder-block]").last.locator("[contenteditable=true]")
-        editable.fill("Ala ma kota")
+        text = "Beneficjent zobowiązuje się przestrzegać postanowień Regulaminu projektu."
+        phrase = "Regulaminu projektu"
+        editable.fill(text)
         page.evaluate("""() => {
             const editable = [...document.querySelectorAll('[data-builder-block] [contenteditable=true]')].at(-1);
             const node = editable.firstChild;
+            const phrase = 'Regulaminu projektu';
+            const start = node.nodeValue.indexOf(phrase);
             const range = document.createRange();
-            range.setStart(node, 4);
-            range.setEnd(node, 6);
+            range.setStart(node, start);
+            range.setEnd(node, start + phrase.length);
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
-            editable.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
         }""")
 
         page.locator('[data-builder-format="bold"]').click()
-        runs = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
-        assert runs == [
-            {"text": "Ala ", "bold": False, "italic": False, "underline": False},
-            {"text": "ma", "bold": True, "italic": False, "underline": False},
-            {"text": " kota", "bold": False, "italic": False, "underline": False},
-        ]
-        assert page.locator('[data-builder-format="bold"]').get_attribute("aria-pressed") == "true"
-        assert page.evaluate("window.getSelection().toString()") == "ma"
-
         page.locator('[data-builder-format="italic"]').click()
-        selected_run = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1]")
-        assert selected_run["bold"] is True and selected_run["italic"] is True
-        page.locator('[data-builder-action="undo"]').click()
-        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].italic") is False
-        page.locator('[data-builder-action="redo"]').click()
-        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].italic") is True
+        page.locator('[data-builder-format="underline"]').click()
 
-        page.set_content(html, wait_until="domcontentloaded")
-        restored = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
-        assert restored[1]["text"] == "ma"
-        assert restored[1]["bold"] is True and restored[1]["italic"] is True
+        runs = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
+        phrase_start = text.index(phrase)
+        assert runs == [
+            {"text": text[:phrase_start], "bold": False, "italic": False, "underline": False},
+            {"text": phrase, "bold": True, "italic": True, "underline": True},
+            {"text": text[phrase_start + len(phrase):], "bold": False, "italic": False, "underline": False},
+        ]
+        for mark in ("bold", "italic", "underline"):
+            button = page.locator(f'[data-builder-format="{mark}"]')
+            assert button.get_attribute("aria-pressed") == "true"
+            button.click()
+            assert page.evaluate(f"JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].{mark}") is False
+            button.click()
+            assert page.evaluate(f"JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].{mark}") is True
+        assert page.evaluate("window.getSelection().toString()") == phrase
+        assert page.locator("[data-agreement-builder-status]").inner_text() == "Niezapisane zmiany"
+
+        page.locator('[data-builder-action="undo"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].underline") is False
+        page.locator('[data-builder-action="redo"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].underline") is True
+        page.wait_for_function("document.querySelector('[data-agreement-builder-preview]').srcdoc.includes('document-text-underline')")
+        page.wait_for_function("getComputedStyle(document.querySelector('[data-agreement-builder-preview]').contentDocument.querySelector('strong')).fontWeight === '700'")
+        assert page.evaluate("getComputedStyle(document.querySelector('[data-agreement-builder-preview]').contentDocument.querySelector('strong')).fontWeight") == "700"
+        assert len(preview_requests) > preview_count_before_formatting
+        before_collapsed_click = page.locator("[data-agreement-builder-json]").input_value()
+        page.evaluate("""() => {
+            const editable = [...document.querySelectorAll('[data-builder-block] [contenteditable=true]')].at(-1);
+            const node = editable.querySelector('[data-builder-run]')?.firstChild || editable.firstChild;
+            const range = document.createRange();
+            range.setStart(node, 1);
+            range.collapse(true);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }""")
+        page.locator('[data-builder-format="bold"]').click()
+        assert page.locator("[data-agreement-builder-json]").input_value() == before_collapsed_click
+
+        page.locator('[data-builder-add="ordered_list"]').first.click()
+        list_block = page.locator("[data-builder-block]").last
+        list_block.locator("[data-builder-add-item]").click()
+        second_item = list_block.locator("[data-builder-list-item]").nth(1)
+        second_item.focus()
+        page.keyboard.press("Tab")
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).items[1].level") == 1
+        page.keyboard.press("Shift+Tab")
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).items[1].level") == 0
+        page.locator('[data-builder-list-level="increase"]').click()
+        list_block.locator('[data-builder-list-marker][data-level="1"]').select_option("alpha-dot")
+        list_block.locator('[data-builder-list-indent][data-level="1"]').fill("12")
+        list_model = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1)")
+        assert list_model["items"][1]["level"] == 1
+        assert list_model["list_styles"][1]["marker"] == "alpha-dot"
+        assert list_model["list_styles"][1]["indent_mm"] == 12
         browser.close()

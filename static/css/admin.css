@@ -240,7 +240,7 @@
 .admin-button-secondary:hover,
 .admin-link-button:hover,
 .admin-actions a:hover {
-    color: var(--gold-dark);
+    color: #24345d;
 }
 
 .admin-button-danger:hover {
@@ -2902,8 +2902,8 @@ body.admin-modal-open {
 }
 .document-docx-dropzone:hover,
 .document-docx-dropzone:focus-within,
-.document-docx-dropzone.is-dragover { border-color: #2563eb; background: #eff6ff; }
-.document-docx-dropzone__icon { color: #2563eb; font-size: 1.6rem; line-height: 1; }
+.document-docx-dropzone.is-dragover { border-color: #24345d; background: #eff6ff; }
+.document-docx-dropzone__icon { color: #24345d; font-size: 1.6rem; line-height: 1; }
 .document-docx-dropzone input { width: min(100%, 32rem); margin-top: .5rem; }
 .document-source-panel__actions { margin-top: 0; }
 .document-html-editor { display: grid; gap: .4rem; }
@@ -3061,12 +3061,24 @@ body.admin-modal-open {
 .agreement-builder-block.is-align-right .agreement-builder-block__editable { text-align: right; }
 .agreement-builder-block.is-align-justify .agreement-builder-block__editable { text-align: justify; }
 .agreement-builder-block__section { display: grid; grid-template-columns: 6rem 1fr; gap: .5rem; }
-.agreement-builder-block ol, .agreement-builder-block ul { display: grid; gap: .3rem; margin: 0; padding-left: 1.8rem; }
-.agreement-builder-block li { position: relative; }
-.agreement-builder-block li > button { position: absolute; right: .2rem; top: .2rem; }
+.agreement-builder-block .agreement-builder-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.agreement-builder-block .agreement-builder-list > li { position: relative; display: grid; grid-template-columns: 2.4rem minmax(0, 1fr); gap: .35rem; margin-left: var(--builder-list-indent, 0mm); padding-right: 2.6rem; }
+.agreement-builder-list__marker { padding-top: .55rem; text-align: right; white-space: nowrap; }
+.agreement-builder-block .agreement-builder-list > li > button { position: absolute; right: .2rem; top: .2rem; }
 .agreement-builder-block table { width: 100%; border-collapse: collapse; }
 .agreement-builder-block td { border: 1px solid #d7dce7; }
 .agreement-builder-block fieldset { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .6rem; }
+.agreement-builder-list-config { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.agreement-builder-list-config legend { grid-column: 1 / -1; }
+.agreement-builder-list-config > div { display: grid; grid-template-columns: auto minmax(7rem, 1fr) minmax(6rem, .6fr); align-items: end; gap: .4rem; padding: .45rem; border: 1px solid #e1e5ee; border-radius: 6px; }
+.agreement-builder-list-config label { display: grid; gap: .2rem; }
+.agreement-builder-criteria-config { display: grid !important; }
+.agreement-builder-criteria-list { display: grid; gap: .35rem; width: 100%; margin: 0; padding: 0; list-style: none; }
+.agreement-builder-criteria-list li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .45rem; border: 1px solid #e1e5ee; border-radius: 6px; }
+.agreement-builder-criteria-list li > span { display: flex; align-items: center; gap: .35rem; }
+.agreement-builder-criteria-list code { color: #657087; font-size: .78rem; }
+.agreement-builder-criteria-config > div { display: flex; align-items: end; gap: .45rem; width: 100%; }
+.agreement-builder-criteria-config > div label { flex: 1; }
 .agreement-builder-block__signature-config { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .agreement-builder-block__page-break { padding: .7rem; border-top: 2px dashed #8f9ab1; border-bottom: 2px dashed #8f9ab1; color: #657087; text-align: center; }
 .agreement-builder-block__condition { padding: .45rem .7rem; border-top: 1px solid #e1e5ee; background: #fafbfc; }
@@ -3100,6 +3112,8 @@ body.admin-modal-open {
     .agreement-builder__variables { grid-column: auto; }
     .agreement-builder__toolbar { position: static; }
     .agreement-builder-block__condition > div, .agreement-builder-block__signature-config { grid-template-columns: 1fr; }
+    .agreement-builder-list-config { grid-template-columns: 1fr; }
+    .agreement-builder-list-config > div { grid-template-columns: 1fr; }
 }
 
 .agreement-builder-launcher, .document-builder-launcher { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #d9deea; border-radius: 10px; background: #f7f8fb; flex-wrap: wrap; }

@@ -34,6 +34,20 @@ BOOLEAN_FIELD_TYPES = {"boolean", "bool", "checkbox"}
 NUMBER_FIELD_TYPES = {"number", "integer", "float", "decimal"}
 
 
+def normalize_yes_no_value(value: Any) -> bool | None:
+    """Return a tri-state yes/no value shared by qualification and documents."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    text = str(value or "").strip().casefold()
+    if text in {"tak", "yes", "true", "1", "on", "x"}:
+        return True
+    if text in {"nie", "no", "false", "0", "off"}:
+        return False
+    return None
+
+
 class QualificationConditionService:
     def normalize_config(self, raw_config: Any, fields: list[dict] | None = None) -> dict:
         source = dict(raw_config) if isinstance(raw_config, Mapping) else {}
@@ -265,16 +279,7 @@ class QualificationConditionService:
 
     @staticmethod
     def _boolean_value(value: Any) -> bool | None:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)) and value in {0, 1}:
-            return bool(value)
-        text = str(value or "").strip().casefold()
-        if text in {"tak", "yes", "true", "1", "on"}:
-            return True
-        if text in {"nie", "no", "false", "0", "off"}:
-            return False
-        return None
+        return normalize_yes_no_value(value)
 
     @classmethod
     def _normalize_expected_value(

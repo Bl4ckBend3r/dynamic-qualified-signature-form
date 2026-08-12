@@ -3,6 +3,8 @@
 {% set document_builder_title = 'Umowa' %}
 {% set document_builder_description = 'Jedna umowa nadal odpowiada jednemu konkretnemu szkoleniu.' %}
 {% set document_builder_document = agreement_builder_document %}
+{% set document_builder_updated_at = agreement_builder_updated_at|default('') %}
+{% set document_builder_is_new = agreement_builder_is_new|default(true) %}
 {% set document_builder_variables = agreement_template_variables %}
 {% set document_builder_submissions = agreement_preview_submissions %}
 {% set document_builder_can_show_html = agreement_builder_can_show_html %}

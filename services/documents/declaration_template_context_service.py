@@ -7,6 +7,7 @@ from services.documents.agreement_template_context_service import (
     AgreementVariableCatalog,
     build_agreement_template_context,
 )
+from services.qualification_condition_service import BOOLEAN_FIELD_TYPES, normalize_yes_no_value
 
 
 _EXCLUDED_CATEGORIES = {"Umowa", "Szkolenie", "Wszystkie szkolenia"}
@@ -42,7 +43,13 @@ class DeclarationVariableCatalog:
     """Variables shared by declaration builder, previews and production PDFs."""
 
     @classmethod
-    def variables(cls, fields: Iterable[Any] = ()) -> list[dict[str, str]]:
+    def variables(
+        cls,
+        fields: Iterable[Any] = (),
+        *,
+        form_definition: Mapping[str, Any] | None = None,
+        include_criteria_technical: bool = True,
+    ) -> list[dict[str, Any]]:
         fields = tuple(fields)
         variables = [
             dict(item)
@@ -77,11 +84,39 @@ class DeclarationVariableCatalog:
                     "description": "Jednoznaczna reprezentacja logiczna Tak/Nie.",
                     "placeholder": "{{ " + name + "_yes_no }}",
                 }
+        if include_criteria_technical:
+            for criterion in declaration_criteria_catalog(form_definition, fields):
+                prefix = criterion["variable_prefix"]
+                technical = (
+                    ("label", "Etykieta", criterion["label"]),
+                    ("answer", "Odpowiedź", criterion.get("example") or "Przykładowa odpowiedź"),
+                    ("yes_checked", "Znacznik TAK", "X"),
+                    ("no_checked", "Znacznik NIE", ""),
+                    ("other_enabled", "Kolumna innej odpowiedzi", ""),
+                    ("other_checked", "Znacznik innej odpowiedzi", ""),
+                    ("other_label", "Inna odpowiedź", ""),
+                )
+                for suffix, label_suffix, example in technical:
+                    name = f"{prefix}_{suffix}"
+                    by_name[name] = {
+                        "category": "Kryteria kwalifikacyjne — techniczne",
+                        "name": name,
+                        "label": f"{criterion['label']} — {label_suffix}",
+                        "type": "text",
+                        "example": example,
+                        "description": "Techniczna zmienna tabeli kryteriów do szablonów DOCX i HTML.",
+                        "placeholder": "{{ " + name + " }}",
+                    }
         return list(by_name.values())
 
     @classmethod
-    def context_names(cls, fields: Iterable[Any] = ()) -> set[str]:
-        return {item["name"] for item in cls.variables(fields)} | {
+    def context_names(
+        cls,
+        fields: Iterable[Any] = (),
+        *,
+        form_definition: Mapping[str, Any] | None = None,
+    ) -> set[str]:
+        return {item["name"] for item in cls.variables(fields, form_definition=form_definition)} | {
             "submission",
             "form_definition",
             "submission_view",
@@ -96,8 +131,89 @@ class DeclarationVariableCatalog:
         }
 
 
-def declaration_variable_catalog(fields: Iterable[Any] = ()) -> list[dict[str, str]]:
-    return DeclarationVariableCatalog.variables(fields)
+def declaration_variable_catalog(
+    fields: Iterable[Any] = (),
+    *,
+    form_definition: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    return DeclarationVariableCatalog.variables(fields, form_definition=form_definition)
+
+
+def declaration_builder_variable_catalog(
+    fields: Iterable[Any] = (),
+    *,
+    form_definition: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    variables = DeclarationVariableCatalog.variables(
+        fields,
+        form_definition=form_definition,
+        include_criteria_technical=False,
+    )
+    return [*variables, *declaration_criteria_catalog(form_definition, fields)]
+
+
+def declaration_criteria_catalog(
+    form_definition: Mapping[str, Any] | None,
+    fields: Iterable[Any] = (),
+) -> list[dict[str, Any]]:
+    """Build semantic document criteria from the existing qualification config."""
+    definition = dict(form_definition or {})
+    field_definitions: dict[str, dict[str, Any]] = {}
+    for raw_field in definition.get("fields") or []:
+        if isinstance(raw_field, Mapping) and str(raw_field.get("name") or raw_field.get("id") or "").strip():
+            name = str(raw_field.get("name") or raw_field.get("id") or "").strip()
+            field_definitions[name] = dict(raw_field)
+    for field in fields:
+        name = _field_value(field, "name")
+        if not name:
+            continue
+        merged = dict(field_definitions.get(name) or {})
+        for key in ("label", "type", "field_type", "options"):
+            raw = _field_raw(field, key)
+            if raw not in (None, "", []):
+                merged[key] = raw
+        merged["name"] = name
+        field_definitions[name] = merged
+
+    qualification = definition.get("qualification_conditions") or {}
+    document_labels = definition.get("document_field_labels") or {}
+    conditions = qualification.get("conditions") if isinstance(qualification, Mapping) else []
+    result: list[dict[str, Any]] = []
+    used: set[str] = set()
+    for condition in conditions if isinstance(conditions, list) else []:
+        if not isinstance(condition, Mapping) or condition.get("is_active", True) is False:
+            continue
+        field_key = str(condition.get("field_name") or "").strip()
+        if not field_key or field_key in used:
+            continue
+        used.add(field_key)
+        field = field_definitions.get(field_key, {})
+        label = str(
+            field.get("document_label")
+            or (document_labels.get(field_key) if isinstance(document_labels, Mapping) else "")
+            or field.get("label")
+            or condition.get("field_label")
+            or field_key
+        ).strip()
+        field_type = str(field.get("field_type") or field.get("type") or "text").strip().casefold()
+        options = _field_options(field)
+        option_states = [normalize_yes_no_value(option["value"]) for option in options]
+        has_other = any(state is None for state in option_states)
+        answer_type = "yes_no" if field_type in BOOLEAN_FIELD_TYPES or (options and not has_other) else "choice" if options else "text"
+        result.append({
+            "category": "Kryteria kwalifikacyjne",
+            "name": field_key,
+            "field_key": field_key,
+            "variable_prefix": _criterion_variable_prefix(field_key),
+            "label": label,
+            "type": "criterion",
+            "answer_type": answer_type,
+            "options": options,
+            "example": _criterion_example(field, answer_type),
+            "description": "Kryterium z konfiguracji warunków kwalifikacyjnych formularza.",
+            "placeholder": "",
+        })
+    return result
 
 
 def build_declaration_render_context(
@@ -131,8 +247,25 @@ def build_declaration_render_context(
         result[name] = value
         result[f"{name}_display"] = _display_value(value, field_type)
         if field_type.casefold() in {"checkbox", "boolean", "bool"}:
-            result[f"{name}_yes_no"] = "Tak" if _boolean_value(value) else "Nie"
-    for variable in DeclarationVariableCatalog.variables(fields):
+            normalized = normalize_yes_no_value(value)
+            result[f"{name}_yes_no"] = "Tak" if normalized is True else "Nie" if normalized is False else ""
+    for criterion in declaration_criteria_catalog(form_definition, fields):
+        field_key = criterion["field_key"]
+        prefix = criterion["variable_prefix"]
+        value = source.get(field_key, result.get(field_key, ""))
+        normalized = normalize_yes_no_value(value) if criterion["answer_type"] != "text" else None
+        answer = _criterion_display_value(value, criterion)
+        missing = _is_empty_value(value)
+        result.update({
+            f"{prefix}_label": criterion["label"],
+            f"{prefix}_answer": answer,
+            f"{prefix}_yes_checked": "X" if normalized is True else "",
+            f"{prefix}_no_checked": "X" if normalized is False else "",
+            f"{prefix}_other_enabled": "X" if criterion["answer_type"] != "yes_no" else "",
+            f"{prefix}_other_checked": "X" if not missing and normalized is None else "",
+            f"{prefix}_other_label": answer if not missing and normalized is None else "",
+        })
+    for variable in DeclarationVariableCatalog.variables(fields, form_definition=form_definition):
         result.setdefault(variable["name"], "")
     return result
 
@@ -144,7 +277,12 @@ def declaration_preview_context(
     submission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     fields = tuple(fields)
-    sample = {item["name"]: item.get("example", "") for item in DeclarationVariableCatalog.variables(fields)}
+    sample = {
+        item["name"]: item.get("example", "")
+        for item in DeclarationVariableCatalog.variables(fields, form_definition=form_definition)
+    }
+    for criterion in declaration_criteria_catalog(form_definition, fields):
+        sample[criterion["field_key"]] = criterion.get("example", "")
     sample.update({
         "submission_id": "EXAMPLE-0001",
         "public_submission_id": "EXAMPLE-0001",
@@ -172,22 +310,13 @@ def declaration_preview_context(
 def _display_value(value: Any, field_type: str) -> str:
     normalized_type = field_type.strip().casefold()
     if normalized_type in {"checkbox", "boolean", "bool"}:
-        return "Tak" if _boolean_value(value) else "Nie"
+        normalized = normalize_yes_no_value(value)
+        return "Tak" if normalized is True else "Nie" if normalized is False else ""
     if isinstance(value, (list, tuple, set)):
         return ", ".join(str(item) for item in value)
     if isinstance(value, Mapping):
         return ", ".join(f"{key}: {item}" for key, item in value.items())
     return str(value or "")
-
-
-def _boolean_value(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    return str(value or "").strip().casefold() in {"1", "true", "yes", "on", "tak", "x"}
 
 
 def _flatten_values(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -207,6 +336,70 @@ def _flatten_values(value: Mapping[str, Any]) -> dict[str, Any]:
 def _field_value(field: Any, name: str) -> str:
     value = field.get(name) if isinstance(field, Mapping) else getattr(field, name, None)
     return str(value or "").strip()
+
+
+def _field_raw(field: Any, name: str) -> Any:
+    return field.get(name) if isinstance(field, Mapping) else getattr(field, name, None)
+
+
+def _field_options(field: Mapping[str, Any]) -> list[dict[str, str]]:
+    raw_options = field.get("options") or field.get("choices") or []
+    if isinstance(raw_options, Mapping):
+        raw_options = list(raw_options.items())
+    result = []
+    for option in raw_options if isinstance(raw_options, (list, tuple)) else []:
+        if isinstance(option, Mapping):
+            value = option.get("value", option.get("id", option.get("name", option.get("label", ""))))
+            label = option.get("label", option.get("name", value))
+        elif isinstance(option, tuple) and len(option) == 2:
+            value, label = option
+        else:
+            value = label = option
+        value_text = str(value or "").strip()
+        label_text = str(label or value_text).strip()
+        if value_text:
+            result.append({"value": value_text, "label": label_text})
+    return result
+
+
+def _criterion_variable_prefix(field_key: str) -> str:
+    normalized = "".join(character if character.isascii() and (character.isalnum() or character == "_") else "_" for character in field_key)
+    normalized = normalized.strip("_") or "field"
+    if normalized[0].isdigit():
+        normalized = "field_" + normalized
+    return "criterion_" + normalized
+
+
+def _criterion_example(field: Mapping[str, Any], answer_type: str) -> Any:
+    if answer_type == "yes_no":
+        return True
+    options = _field_options(field)
+    return options[0]["value"] if options else "Przykładowa odpowiedź"
+
+
+def _criterion_display_value(value: Any, criterion: Mapping[str, Any]) -> str:
+    options = {str(item.get("value") or ""): str(item.get("label") or item.get("value") or "") for item in criterion.get("options") or []}
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(options.get(str(item), str(item)) for item in value)
+    if isinstance(value, Mapping):
+        return ", ".join(f"{key}: {item}" for key, item in value.items())
+    raw = str(value or "").strip()
+    if raw in options:
+        return options[raw]
+    normalized = normalize_yes_no_value(value)
+    if normalized is not None and criterion.get("answer_type") == "yes_no":
+        return "Tak" if normalized else "Nie"
+    return raw
+
+
+def _is_empty_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return not value
+    return False
 
 
 def _field_example(variable: Mapping[str, Any] | None) -> str:

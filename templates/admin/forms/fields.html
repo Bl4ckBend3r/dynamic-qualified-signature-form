@@ -22,6 +22,7 @@
                     <th>Kolejność</th>
                     <th>Nazwa pola</th>
                     <th>Etykieta</th>
+                    <th>Etykieta w dokumentach</th>
                     <th>Typ</th>
                     <th>Opcje</th>
                     <th>Wymagane</th>
@@ -36,6 +37,7 @@
                     <td><input class="admin-input-small" name="field_{{ field.id }}_sort_order" value="{{ field.sort_order }}" inputmode="numeric"></td>
                     <td><code>{{ field.name }}</code></td>
                     <td><input name="field_{{ field.id }}_label" value="{{ field.label }}"></td>
+                    <td><input name="field_{{ field.id }}_document_label" value="{{ document_field_labels.get(field.name, '') }}" placeholder="Domyślnie jak etykieta"></td>
                     <td>
                         <select name="field_{{ field.id }}_type">
                             {% for option in field_types %}
@@ -58,7 +60,7 @@
                     <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usuń pole</button></td>
                 </tr>
             {% else %}
-                <tr><td colspan="9">Brak aktywnych pól.</td></tr>
+                <tr><td colspan="10">Brak aktywnych pól.</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -68,6 +70,7 @@
         <div class="admin-form-grid">
             <label><span>Nazwa pola</span><input name="new_name" placeholder="np. numer_telefonu"></label>
             <label><span>Etykieta</span><input name="new_label" placeholder="np. Numer telefonu"></label>
+            <label><span>Etykieta w dokumentach</span><input name="new_document_label" placeholder="Opcjonalna krótsza etykieta"></label>
             <label>
                 <span>Typ</span>
                 <select name="new_type">

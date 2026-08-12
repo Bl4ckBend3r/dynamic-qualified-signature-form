@@ -86,6 +86,13 @@ html.agreement-preview-document body {
     font-weight: normal;
 }
 
+.document strong,
+.document b,
+.document .document-bold {
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-weight: 700;
+}
+
 .document h1 {
     margin: 0 0 16pt;
     font-size: 15pt;
@@ -135,15 +142,13 @@ html.agreement-preview-document body {
 .document .document-bold { font-family: "DejaVuSans-Bold", Arial, sans-serif; font-weight: 700; }
 .document .document-regular { font-family: "DejaVuSans", Arial, sans-serif; font-weight: 400; }
 .document .document-italic { font-style: italic; }
-.document .document-underline, .document .document-inline-underline { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .12em; }
+.document .document-underline, .document .document-inline-underline, .document .document-text-underline { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .12em; }
 .document--docx h1, .document--docx h2, .document--docx h3, .document-section-number, .document-section-title { break-after: avoid; page-break-after: avoid; }
 .document--docx .document-table--docx tr { break-inside: avoid; page-break-inside: avoid; }
-.document .document-list { max-width: 100%; margin: 6pt 0 12pt; padding-left: 22pt; }
-.document .document-list__item { max-width: 100%; margin: 0 0 5pt; padding-left: 2pt; text-align: justify; line-height: 1.4; overflow-wrap: anywhere; }
-.document--docx .document-list__item--level-1 { margin-left: 14pt; }
-.document--docx .document-list__item--level-2 { margin-left: 28pt; }
-.document--docx .document-list__item--level-3 { margin-left: 42pt; }
-.document--docx .document-list__item--level-4, .document--docx .document-list__item--level-5, .document--docx .document-list__item--level-6, .document--docx .document-list__item--level-7, .document--docx .document-list__item--level-8 { margin-left: 56pt; }
+.document .document-list { max-width: 100%; margin: 6pt 0 12pt; padding-left: 0; list-style: none; }
+.document .document-list__item { display: grid; grid-template-columns: 24pt minmax(0, 1fr); gap: 4pt; max-width: 100%; margin: 0 0 5pt var(--document-list-indent, 0mm); padding: 0; text-align: justify; line-height: 1.4; overflow-wrap: anywhere; break-inside: avoid; page-break-inside: avoid; }
+.document .document-list__marker { text-align: right; white-space: nowrap; }
+.document .document-list__content { min-width: 0; }
 
 .document-section-number,
 .document .document-section-number {
@@ -211,6 +216,15 @@ html.agreement-preview-document body {
     font-weight: 700;
     text-align: left;
 }
+
+.document .document-criteria-table { margin-top: 10pt; font-size: 9pt; }
+.document .document-criteria-table tr { break-inside: avoid; page-break-inside: avoid; }
+.document .document-criteria-table__number { width: 7%; text-align: center; }
+.document .document-criteria-table__criterion { width: auto; }
+.document .document-criteria-table__choice { width: 11%; text-align: center; vertical-align: middle; }
+.document .document-criteria-table__other { width: 23%; }
+.document .document-criteria-table__other-value { display: flex; align-items: center; gap: 5pt; }
+.document .document-checkbox { display: inline-flex; align-items: center; justify-content: center; width: 11pt; height: 11pt; border: 1pt solid #181818; font-family: "DejaVuSans-Bold", Arial, sans-serif; font-size: 9pt; font-weight: 700; line-height: 1; }
 
 .document-signature,
 .document .document-signature,

@@ -80,3 +80,31 @@ def test_collection_context_normalization_overrides_raw_context_extra_string():
     assert context["selected_trainings"][0]["price_formatted"].startswith("1 200,00")
     assert context["selected_trainings_normalized"] == context["selected_trainings"]
     assert context["selected_trainings_total"] == 1200
+
+
+@pytest.mark.parametrize("document_type", ["agreement", "declaration"])
+def test_production_template_resolution_uses_builder_inline_run_renderer(document_type):
+    phrase = "Regulaminu projektu"
+    builder_document = {
+        "version": 1,
+        "document_type": document_type,
+        "blocks": [{
+            "type": "paragraph",
+            "runs": [
+                {"text": "Treść przed "},
+                {"text": phrase, "bold": True, "italic": True, "underline": True},
+                {"text": " po treści."},
+            ],
+        }],
+    }
+
+    template = DocumentService().resolve_document_template({
+        "id": document_type,
+        "template_source": "builder",
+        "builder_document": builder_document,
+    })
+
+    assert (
+        '<strong><em><span class="document-text-underline">'
+        f"{phrase}</span></em></strong>"
+    ) in template

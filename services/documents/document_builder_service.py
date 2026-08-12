@@ -14,6 +14,22 @@ from services.mail_template_service import sanitize_content_html
 
 BUILDER_VERSION = 1
 DOCUMENT_TYPES = {"agreement", "declaration"}
+MAX_LIST_LEVEL = 3
+ORDERED_LIST_MARKERS = {
+    "decimal-dot",
+    "decimal-paren",
+    "decimal-compound",
+    "alpha-paren",
+    "alpha-dot",
+    "lower-roman-dot",
+    "upper-roman-dot",
+}
+DEFAULT_ORDERED_LIST_STYLES = (
+    {"level": 0, "marker": "decimal-dot", "indent_mm": 0},
+    {"level": 1, "marker": "decimal-compound", "indent_mm": 7},
+    {"level": 2, "marker": "alpha-paren", "indent_mm": 14},
+    {"level": 3, "marker": "lower-roman-dot", "indent_mm": 21},
+)
 _JINJA_TOKEN_RE = re.compile(r"({{.*?}}|{%.*?%}|{#.*?#})", re.DOTALL)
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TEXT_BLOCK_TYPES = {"heading", "paragraph", "statement"}
@@ -31,6 +47,7 @@ _COMMON_BLOCK_TYPES = {
 }
 _AGREEMENT_BLOCK_TYPES = {"agreement_section", "training_table"}
 _DECLARATION_BLOCK_TYPES = {
+    "criteria_table",
     "form_field",
     "participant_address",
     "participant_contact",
@@ -127,17 +144,22 @@ def normalize_document_builder_document(value: Any, document_type: str = "agreem
         elif block_type == "agreement_section":
             block["number"] = _sanitize_builder_content(block.get("number"))
             block["title"] = _sanitize_builder_content(block.get("title"))
-        elif block_type in {"ordered_list", "bullet_list"} and isinstance(block.get("items"), list):
+        elif block_type in {"ordered_list", "bullet_list"}:
             normalized_items = []
-            for item in block["items"]:
+            previous_level = 0
+            for item_index, item in enumerate(block.get("items") if isinstance(block.get("items"), list) else []):
                 holder = dict(item) if isinstance(item, Mapping) else {"content": item, "level": 0}
                 _normalize_rich_text_holder(holder, "paragraph", include_format=False)
                 try:
-                    holder["level"] = max(0, min(int(holder.get("level") or 0), 8))
+                    requested_level = max(0, min(int(holder.get("level") or 0), MAX_LIST_LEVEL))
                 except (TypeError, ValueError):
-                    holder["level"] = 0
+                    requested_level = 0
+                holder["level"] = 0 if item_index == 0 else min(requested_level, previous_level + 1)
+                previous_level = holder["level"]
                 normalized_items.append(holder)
             block["items"] = normalized_items
+            if block_type == "ordered_list":
+                block["list_styles"] = _normalize_ordered_list_styles(block.get("list_styles"))
         elif block_type == "table" and isinstance(block.get("rows"), list):
             rows = []
             for row in block["rows"]:
@@ -162,6 +184,17 @@ def normalize_document_builder_document(value: Any, document_type: str = "agreem
             block["fields"] = [item for item in block.get("fields") or [] if item in {"email", "telefon", "phone"}]
         elif block_type == "participant_signature":
             block["label"] = _plain_label(block.get("label") or "Czytelny podpis uczestnika")
+        elif block_type == "criteria_table":
+            criteria = []
+            used = set()
+            for item in block.get("criteria") if isinstance(block.get("criteria"), list) else []:
+                field_key = str(item.get("field_key") if isinstance(item, Mapping) else item or "").strip()
+                if field_key and field_key not in used:
+                    criteria.append({"field_key": field_key})
+                    used.add(field_key)
+            block["criteria"] = criteria
+            block["show_number"] = _format_flag(block.get("show_number", True))
+            block["show_header"] = _format_flag(block.get("show_header", True))
     return {"version": BUILDER_VERSION, "document_type": normalized_type, "blocks": blocks}
 
 
@@ -169,9 +202,13 @@ def validate_document_builder_document(
     value: Any,
     fields: Iterable[Any] = (),
     document_type: str = "agreement",
+    *,
+    form_definition: Mapping[str, Any] | None = None,
 ) -> list[DocumentBuilderValidationError]:
     normalized_type = _document_type(document_type)
     fields = tuple(fields)
+    raw_document = dict(value) if isinstance(value, Mapping) else {}
+    raw_blocks = [block for block in raw_document.get("blocks") or [] if isinstance(block, Mapping)]
     document = normalize_document_builder_document(value, normalized_type)
     errors: list[DocumentBuilderValidationError] = []
     blocks = document["blocks"]
@@ -186,9 +223,15 @@ def validate_document_builder_document(
         if _field_value(field, "name")
     }
     dynamic_fields = set(dynamic_field_types)
+    criterion_fields: set[str] = set()
+    if normalized_type == "declaration" and form_definition is not None:
+        from services.documents.declaration_template_context_service import declaration_criteria_catalog
+
+        criterion_fields = {item["field_key"] for item in declaration_criteria_catalog(form_definition, fields)}
 
     for index, block in enumerate(blocks):
         path = f"blocks.{index}"
+        raw_block = raw_blocks[index] if index < len(raw_blocks) else block
         block_type = str(block.get("type") or "")
         if block_type not in allowed_types:
             errors.append(DocumentBuilderValidationError(path, f"Nieobsługiwany typ bloku dla dokumentu {normalized_type}: {block_type or 'brak'}."))
@@ -206,6 +249,12 @@ def validate_document_builder_document(
                 errors.append(DocumentBuilderValidationError(path + ".items", "Lista musi zawierać co najmniej jeden punkt."))
             elif any(not _visible_inline(item) for item in items):
                 errors.append(DocumentBuilderValidationError(path + ".items", "Punkty listy nie mogą być puste."))
+            for item_error in _list_item_level_errors(raw_block.get("items")):
+                errors.append(DocumentBuilderValidationError(path + ".items", item_error))
+            if block_type == "ordered_list":
+                styles_to_validate = raw_block.get("list_styles") if raw_block.get("list_styles") is not None else block.get("list_styles")
+                for style_error in _ordered_list_style_errors(styles_to_validate):
+                    errors.append(DocumentBuilderValidationError(path + ".list_styles", style_error))
         elif block_type == "table":
             rows = block.get("rows")
             if not isinstance(rows, list) or not rows or any(not isinstance(row, list) or not row for row in rows):
@@ -226,6 +275,16 @@ def validate_document_builder_document(
                 errors.append(DocumentBuilderValidationError(path + ".field", "Wybierz aktywne pole formularza."))
             elif block.get("display") == "yes_no" and dynamic_field_types.get(field_name) not in {"checkbox", "boolean", "bool"}:
                 errors.append(DocumentBuilderValidationError(path + ".display", "Wariant Tak/Nie jest dostępny tylko dla pola logicznego."))
+        elif block_type == "criteria_table":
+            criteria = block.get("criteria") or []
+            if not criteria:
+                errors.append(DocumentBuilderValidationError(path + ".criteria", "Wybierz co najmniej jedno kryterium kwalifikacyjne."))
+            for criterion_index, criterion in enumerate(criteria):
+                field_key = str(criterion.get("field_key") or "") if isinstance(criterion, Mapping) else ""
+                if not _FIELD_NAME_RE.fullmatch(field_key):
+                    errors.append(DocumentBuilderValidationError(f"{path}.criteria.{criterion_index}", "Kryterium ma niepoprawny klucz pola."))
+                elif form_definition is not None and field_key not in criterion_fields:
+                    errors.append(DocumentBuilderValidationError(f"{path}.criteria.{criterion_index}", "Wybierz aktywne kryterium z warunków kwalifikacyjnych formularza."))
         elif block_type == "signatures":
             if not str(block.get("left_label") or "").strip() or not str(block.get("right_label") or "").strip():
                 errors.append(DocumentBuilderValidationError(path, "Sekcja podpisów wymaga etykiety lewej i prawej strony."))
@@ -249,7 +308,7 @@ def validate_document_builder_document(
     except (TemplateSyntaxError, ValueError) as exc:
         return [DocumentBuilderValidationError("blocks", f"Niepoprawna składnia Jinja: {exc}.")]
 
-    known = _context_names(fields, normalized_type) | set(environment.globals)
+    known = _context_names(fields, normalized_type, form_definition=form_definition) | set(environment.globals)
     for variable in sorted(meta.find_undeclared_variables(parsed) - known):
         errors.append(DocumentBuilderValidationError(
             _find_variable_path(blocks, variable),
@@ -283,15 +342,7 @@ def _render_block(block: Mapping[str, Any], document_type: str) -> str:
     if block_type == "agreement_section":
         return '<section class="document-section">' + f'<div class="document-section-number">{_inline(block.get("number"))}</div>' + f'<div class="document-section-title">{_inline(block.get("title"))}</div></section>'
     if block_type in {"ordered_list", "bullet_list"}:
-        tag = "ol" if block_type == "ordered_list" else "ul"
-        items = []
-        for item in block.get("items") or []:
-            try:
-                level = max(0, min(int(item.get("level") or 0), 8))
-            except (AttributeError, TypeError, ValueError):
-                level = 0
-            items.append(f'<li class="document-list__item document-list__item--level-{level}">{_inline(item)}</li>')
-        return f'<{tag} class="document-list">' + "".join(items) + f"</{tag}>"
+        return _render_list(block, ordered=block_type == "ordered_list")
     if block_type == "table":
         rows = []
         for row_index, row in enumerate(block.get("rows") or []):
@@ -326,6 +377,8 @@ def _render_block(block: Mapping[str, Any], document_type: str) -> str:
     if block_type == "participant_signature":
         label = html.escape(str(block.get("label") or "Czytelny podpis uczestnika"))
         return '<section class="document-signatures document-signatures--participant"><div class="document-signature"><div class="document-signature__line"></div>' + f'<div class="document-signature__label">{label}</div></div></section>'
+    if block_type == "criteria_table":
+        return _render_criteria_table(block)
     if block_type == "project_info":
         return _render_project_info(block)
     if block_type == "page_break":
@@ -391,6 +444,61 @@ def _render_project_info(block: Mapping[str, Any]) -> str:
     return '<section class="document-project-info">' + logo + "".join(rows) + "</section>"
 
 
+def _render_list(block: Mapping[str, Any], *, ordered: bool) -> str:
+    tag = "ol" if ordered else "ul"
+    styles = _normalize_ordered_list_styles(block.get("list_styles")) if ordered else []
+    counters = [0] * (MAX_LIST_LEVEL + 1)
+    items = []
+    for item in block.get("items") or []:
+        level = max(0, min(int(item.get("level") or 0), MAX_LIST_LEVEL))
+        if ordered:
+            counters[level] += 1
+            for deeper in range(level + 1, len(counters)):
+                counters[deeper] = 0
+            style = styles[level]
+            marker = _ordered_list_marker(style["marker"], counters, level)
+            indent_mm = style["indent_mm"]
+            marker_html = f'<span class="document-list__marker" aria-hidden="true">{html.escape(marker)}</span>'
+        else:
+            indent_mm = level * 7
+            marker_html = '<span class="document-list__marker" aria-hidden="true">&#8226;</span>'
+        items.append(
+            f'<li class="document-list__item document-list__item--level-{level}" '
+            f'style="--document-list-indent: {_format_mm(indent_mm)}mm">'
+            f'{marker_html}<span class="document-list__content">{_inline(item)}</span></li>'
+        )
+    return f'<{tag} class="document-list document-list--{"ordered" if ordered else "bullet"}">' + "".join(items) + f"</{tag}>"
+
+
+def _render_criteria_table(block: Mapping[str, Any]) -> str:
+    criteria = [str(item.get("field_key") or "") for item in block.get("criteria") or [] if isinstance(item, Mapping)]
+    prefixes = [_criterion_variable_prefix(field_key) for field_key in criteria if _FIELD_NAME_RE.fullmatch(field_key)]
+    other_expression = " or ".join(f"{prefix}_other_enabled" for prefix in prefixes) or "false"
+    columns = []
+    if block.get("show_number", True):
+        columns.append('<th class="document-criteria-table__number">Lp.</th>')
+    columns.extend([
+        '<th class="document-criteria-table__criterion">Kryterium</th>',
+        '<th class="document-criteria-table__choice">TAK</th>',
+        '<th class="document-criteria-table__choice">NIE</th>',
+        f'{{% if {other_expression} %}}<th class="document-criteria-table__other">Inna odpowiedź</th>{{% endif %}}',
+    ])
+    header = "<thead><tr>" + "".join(columns) + "</tr></thead>" if block.get("show_header", True) else ""
+    rows = []
+    for index, prefix in enumerate(prefixes, start=1):
+        cells = []
+        if block.get("show_number", True):
+            cells.append(f'<td class="document-criteria-table__number">{index}.</td>')
+        cells.extend([
+            f'<td class="document-criteria-table__criterion">{{{{ {prefix}_label }}}}</td>',
+            f'<td class="document-criteria-table__choice"><span class="document-checkbox">{{{{ {prefix}_yes_checked }}}}</span></td>',
+            f'<td class="document-criteria-table__choice"><span class="document-checkbox">{{{{ {prefix}_no_checked }}}}</span></td>',
+            f'{{% if {other_expression} %}}<td class="document-criteria-table__other"><div class="document-criteria-table__other-value"><span class="document-checkbox">{{{{ {prefix}_other_checked }}}}</span><span>{{{{ {prefix}_other_label }}}}</span></div></td>{{% endif %}}',
+        ])
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return '<table class="document-table document-criteria-table">' + header + "<tbody>" + "".join(rows) + "</tbody></table>"
+
+
 def _normalize_rich_text_holder(holder: dict[str, Any], block_type: str, *, include_format: bool = True) -> None:
     if "runs" in holder:
         holder["runs"] = normalize_inline_runs(holder.get("runs"))
@@ -400,6 +508,115 @@ def _normalize_rich_text_holder(holder: dict[str, Any], block_type: str, *, incl
     if include_format:
         holder["format"] = _normalize_text_format(holder, block_type)
         holder.pop("alignment", None)
+
+
+def _normalize_ordered_list_styles(value: Any) -> list[dict[str, Any]]:
+    raw_by_level = {
+        int(item.get("level")): item
+        for item in value if isinstance(item, Mapping) and str(item.get("level", "")).lstrip("-").isdigit()
+    } if isinstance(value, list) else {}
+    result = []
+    for default in DEFAULT_ORDERED_LIST_STYLES:
+        level = default["level"]
+        raw = raw_by_level.get(level, {})
+        marker = str(raw.get("marker") or default["marker"]).strip().casefold()
+        try:
+            indent_mm = float(raw.get("indent_mm", default["indent_mm"]))
+        except (TypeError, ValueError):
+            indent_mm = float(default["indent_mm"])
+        result.append({
+            "level": level,
+            "marker": marker if marker in ORDERED_LIST_MARKERS else default["marker"],
+            "indent_mm": max(0, min(indent_mm, 60)),
+        })
+    return result
+
+
+def _ordered_list_style_errors(value: Any) -> list[str]:
+    if not isinstance(value, list) or len(value) != MAX_LIST_LEVEL + 1:
+        return ["Lista numerowana wymaga ustawień dla poziomów 1–4."]
+    levels = set()
+    errors = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            errors.append("Ustawienie poziomu listy musi być obiektem.")
+            continue
+        try:
+            level = int(item.get("level"))
+            indent_mm = float(item.get("indent_mm"))
+        except (TypeError, ValueError):
+            errors.append("Poziom i wcięcie listy muszą być liczbami.")
+            continue
+        levels.add(level)
+        if level < 0 or level > MAX_LIST_LEVEL:
+            errors.append("Poziom listy musi mieścić się w zakresie 1–4.")
+        if str(item.get("marker") or "") not in ORDERED_LIST_MARKERS:
+            errors.append("Wybierz obsługiwany marker listy numerowanej.")
+        if indent_mm < 0 or indent_mm > 60:
+            errors.append("Wcięcie listy musi mieścić się w zakresie 0–60 mm.")
+    if levels != set(range(MAX_LIST_LEVEL + 1)):
+        errors.append("Każdy poziom listy 1–4 musi mieć dokładnie jedno ustawienie.")
+    return list(dict.fromkeys(errors))
+
+
+def _list_item_level_errors(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors = []
+    previous_level = 0
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            level = int(item.get("level") or 0)
+        except (TypeError, ValueError):
+            errors.append(f"Punkt {index + 1}: poziom listy musi być liczbą.")
+            continue
+        if level < 0 or level > MAX_LIST_LEVEL:
+            errors.append(f"Punkt {index + 1}: poziom listy musi mieścić się w zakresie 1–4.")
+        if index == 0 and level != 0:
+            errors.append("Pierwszy punkt listy musi być na poziomie 1.")
+        elif index > 0 and level > previous_level + 1:
+            errors.append(f"Punkt {index + 1}: nie można pominąć poziomu listy.")
+        previous_level = max(0, min(level, MAX_LIST_LEVEL))
+    return errors
+
+
+def _ordered_list_marker(marker: str, counters: list[int], level: int) -> str:
+    value = counters[level]
+    if marker == "decimal-paren":
+        return f"{value})"
+    if marker == "decimal-compound":
+        return ".".join(str(counter) for counter in counters[:level + 1])
+    if marker in {"alpha-paren", "alpha-dot"}:
+        return _alpha_number(value) + (")" if marker == "alpha-paren" else ".")
+    if marker in {"lower-roman-dot", "upper-roman-dot"}:
+        roman = _roman_number(value)
+        return (roman.lower() if marker == "lower-roman-dot" else roman) + "."
+    return f"{value}."
+
+
+def _alpha_number(value: int) -> str:
+    result = ""
+    number = max(1, value)
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(97 + remainder) + result
+    return result
+
+
+def _roman_number(value: int) -> str:
+    number = max(1, value)
+    result = ""
+    for amount, symbol in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        count, number = divmod(number, amount)
+        result += symbol * count
+    return result
+
+
+def _format_mm(value: Any) -> str:
+    number = max(0, min(float(value or 0), 60))
+    return str(int(number)) if number.is_integer() else f"{number:.1f}".rstrip("0").rstrip(".")
 
 
 def normalize_inline_runs(value: Any) -> list[dict[str, Any]]:
@@ -435,12 +652,12 @@ def _inline(value: Any) -> str:
 
 def _render_run(run: Mapping[str, Any]) -> str:
     rendered = _render_run_text(run.get("text"))
-    if run.get("bold"):
-        rendered = f"<strong>{rendered}</strong>"
+    if run.get("underline"):
+        rendered = f'<span class="document-text-underline">{rendered}</span>'
     if run.get("italic"):
         rendered = f"<em>{rendered}</em>"
-    if run.get("underline"):
-        rendered = f'<span class="document-inline-underline">{rendered}</span>'
+    if run.get("bold"):
+        rendered = f"<strong>{rendered}</strong>"
     return rendered
 
 
@@ -514,12 +731,25 @@ def _visible_inline(value: Any) -> bool:
     return bool(re.sub(r"<[^>]+>", "", html.unescape(text)).strip())
 
 
-def _context_names(fields: Iterable[Any], document_type: str) -> set[str]:
+def _context_names(
+    fields: Iterable[Any],
+    document_type: str,
+    *,
+    form_definition: Mapping[str, Any] | None = None,
+) -> set[str]:
     if document_type == "agreement":
         return AgreementVariableCatalog.context_names(fields)
     from services.documents.declaration_template_context_service import DeclarationVariableCatalog
 
-    return DeclarationVariableCatalog.context_names(fields)
+    return DeclarationVariableCatalog.context_names(fields, form_definition=form_definition)
+
+
+def _criterion_variable_prefix(field_key: str) -> str:
+    normalized = "".join(character if character.isascii() and (character.isalnum() or character == "_") else "_" for character in field_key)
+    normalized = normalized.strip("_") or "field"
+    if normalized[0].isdigit():
+        normalized = "field_" + normalized
+    return "criterion_" + normalized
 
 
 def _find_variable_path(blocks: list[Mapping[str, Any]], variable: str) -> str:

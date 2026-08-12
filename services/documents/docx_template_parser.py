@@ -223,12 +223,12 @@ def _runs_html(runs: list[dict]) -> str:
         raw = str(run.get("text") or "")
         rendered = raw if _JINJA_TOKEN_RE.fullmatch(raw) and _is_supported_jinja_token(raw) else _escape_literal(raw)
         rendered = rendered.replace("\n", "<br>")
-        if run.get("bold"):
-            rendered = f"<strong>{rendered}</strong>"
+        if run.get("underline"):
+            rendered = f'<span class="document-text-underline">{rendered}</span>'
         if run.get("italic"):
             rendered = f"<em>{rendered}</em>"
-        if run.get("underline"):
-            rendered = f'<span class="document-inline-underline">{rendered}</span>'
+        if run.get("bold"):
+            rendered = f"<strong>{rendered}</strong>"
         pieces.append(rendered)
     return "".join(pieces)
 

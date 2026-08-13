@@ -1510,6 +1510,8 @@ def test_form_fields_can_be_edited(admin_app, admin_client):
         db.commit()
     login(admin_client)
     html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+    assert "Dostępność w procesie" in html
+    assert f'field_' in html and "_availability_0_visible" in html
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     with session_factory() as db:
         field = db.query(FormField).filter_by(form_id=form_id, name="email").one()
@@ -1538,6 +1540,52 @@ def test_form_fields_can_be_edited(admin_app, admin_client):
         assert db.get(Form, form_id).definition_json["document_field_labels"]["email"] == "Adres e-mail uczestnika"
     reloaded = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
     assert 'value="Adres e-mail uczestnika"' in reloaded
+
+
+def test_form_field_availability_uses_configured_workflow_steps(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="availability_form", name="Availability")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.get(Form, form_id)
+        form.definition_json = {
+            **(form.definition_json or {}),
+            "workflow": {
+                "initial_step": "submission",
+                "steps": [
+                    {"id": "submission", "admin_label": "Złożenie", "next": "declaration"},
+                    {"id": "declaration", "admin_label": "Deklaracja", "requires_user_action": True},
+                ],
+            },
+        }
+        field = FormField(form_id=form_id, name="account", label="Rachunek", type="text", required=False, sort_order=1)
+        db.add(field)
+        db.commit()
+        field_id = field.id
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/fields",
+        data={
+            "csrf_token": token,
+            f"field_{field_id}_label": "Numer rachunku",
+            f"field_{field_id}_type": "text",
+            f"field_{field_id}_section": "Dane",
+            f"field_{field_id}_sort_order": "1",
+            f"field_{field_id}_availability_present": "1",
+            f"field_{field_id}_availability_1_visible": "on",
+            f"field_{field_id}_availability_1_editable": "on",
+            f"field_{field_id}_availability_1_required": "on",
+        },
+    )
+    assert response.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormField, field_id)
+        assert saved.availability_json == [
+            {"step": "submission", "visible": False, "editable": False, "required": False},
+            {"step": "declaration", "visible": True, "editable": True, "required": True},
+        ]
 
 
 def test_form_field_can_be_added_and_deactivated_without_removing_history(admin_app, admin_client):

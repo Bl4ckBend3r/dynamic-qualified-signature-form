@@ -784,6 +784,7 @@ def form_fields_to_definition(fields: list[FormField], original_fields: dict[str
                 "options": normalize_field_options(field.type, field.options),
                 "default": field.default_value,
                 "stage": field.stage or FIELD_STAGE_INITIAL,
+                "availability": list(field.availability_json or field_config.get("availability") or []),
             }
         )
         rendered_fields.append(field_config)

@@ -108,6 +108,7 @@ class FormVersionService:
                     "options": deepcopy(field.options or []),
                     "default": field.default_value,
                     "stage": field.stage or "initial_submission",
+                    "availability": deepcopy(field.availability_json or config.get("availability") or []),
                 }
             )
             rendered_fields.append(config)

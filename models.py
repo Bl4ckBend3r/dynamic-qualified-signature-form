@@ -389,6 +389,8 @@ class Form(Base):
     definition_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_listed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    share_token_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     training_selection_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     label_text: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     label_variant: Mapped[str] = mapped_column(String(64), default="project", nullable=False)
@@ -609,6 +611,7 @@ class FormField(Base):
     default_value: Mapped[str] = mapped_column(Text, default="", nullable=False)
     section: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     stage: Mapped[str] = mapped_column(String(64), default="initial_submission", nullable=False)
+    availability_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

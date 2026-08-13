@@ -4,7 +4,8 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
-from form_loader import FIELD_STAGE_INITIAL, SUPPORTED_FIELD_STAGES
+from form_loader import FIELD_STAGE_INITIAL
+from services.field_availability_service import FieldAvailabilityService
 from services.qualification_condition_service import QualificationConditionService
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ class FormConfigService:
         )
         config = self.build_default_workflow_if_missing(config)
         config["workflow"] = self.normalize_workflow_config(config.get("workflow") or {})
+        availability_service = FieldAvailabilityService()
+        config["fields"] = [availability_service.normalize_field(field, config) for field in config["fields"]]
         config["documents"] = self.ensure_required_document_configs(config["documents"], config["workflow"])
         return config
 
@@ -157,7 +160,7 @@ class FormConfigService:
             item = dict(field)
             if item.get("id") and not item.get("name"):
                 item["name"] = item["id"]
-            if item.get("stage") not in SUPPORTED_FIELD_STAGES:
+            if not str(item.get("stage") or "").strip():
                 item["stage"] = FIELD_STAGE_INITIAL
             normalized_fields.append(item)
         return normalized_fields

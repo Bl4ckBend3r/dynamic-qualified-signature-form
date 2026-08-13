@@ -60,6 +60,8 @@ class SubmissionAttachmentService:
         for field in form_config.get("fields") or []:
             if field.get("type") not in {"file", "attachment"}:
                 continue
+            if field.get("readonly") or field.get("hidden"):
+                continue
             key = str(field.get("name") or "").strip()
             if not key:
                 continue

@@ -22,6 +22,7 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.field_availability_service import FieldAvailabilityService
 from services.qualification_condition_service import QualificationConditionService
 from services.training_catalog_service import TrainingCatalogService
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
@@ -743,6 +744,8 @@ def sync_form_fields(db, form: Form, form_definition: dict) -> None:
         form_field.options = field.get("options") or []
         form_field.default_value = str(field.get("default", ""))
         form_field.section = current_section
+        normalized_field = FieldAvailabilityService().normalize_field(field, form_definition)
+        form_field.availability_json = normalized_field.get("availability") or []
         form_field.stage = normalize_field_stage(field.get("stage"))
         form_field.sort_order = order
         form_field.active = True

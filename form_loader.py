@@ -247,28 +247,24 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
             field.setdefault("required_if", None)
             field.setdefault("document_type", "submission_attachment")
             field.setdefault("category", "")
-        if field.get("stage") not in SUPPORTED_FIELD_STAGES:
+        if not str(field.get("stage") or "").strip():
             field["stage"] = FIELD_STAGE_INITIAL
+
+    from services.field_availability_service import FieldAvailabilityService
+
+    availability_service = FieldAvailabilityService()
+    normalized["fields"] = [
+        availability_service.normalize_field(field, normalized)
+        for field in normalized["fields"]
+    ]
 
     return normalized
 
 
 def fields_for_stage(form_definition: Dict[str, Any], stage: str) -> List[Dict[str, Any]]:
-    wanted_stage = stage if stage in SUPPORTED_FIELD_STAGES else FIELD_STAGE_INITIAL
-    fields = form_definition.get("fields", [])
-    result: List[Dict[str, Any]] = []
-    pending_sections: List[Dict[str, Any]] = []
-    for field in fields:
-        field_type = field.get("type")
-        if field_type in {"section", "static_text"}:
-            pending_sections.append(field)
-            continue
-        if field.get("stage", FIELD_STAGE_INITIAL) != wanted_stage:
-            continue
-        result.extend(pending_sections)
-        pending_sections = []
-        result.append(field)
-    return result
+    from services.field_availability_service import FieldAvailabilityService
+
+    return FieldAvailabilityService().visible_fields(form_definition, stage)
 
 
 def form_definition_for_stage(form_definition: Dict[str, Any], stage: str) -> Dict[str, Any]:
@@ -306,7 +302,14 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
         field_type = field["type"]
         field_name = field.get("name")
 
-        if field_type in {"section", "static_text", "file"} or not field_name:
+        if (
+            field_type in {"section", "static_text", "file"}
+            or not field_name
+            or field.get("readonly")
+            or field.get("hidden")
+            or field.get("system")
+            or field.get("technical")
+        ):
             continue
 
         if field_type == "checkbox":
@@ -398,7 +401,7 @@ def validate_submission(
         field_type = field["type"]
         field_name = field.get("name")
 
-        if field_type in {"section", "static_text", "file"} or not field_name:
+        if field_type in {"section", "static_text", "file"} or not field_name or field.get("readonly"):
             continue
 
         if not evaluate_visible_if(field.get("visible_if"), submission_data):
@@ -407,7 +410,10 @@ def validate_submission(
         label = field.get("label", field_name)
         value = submission_data.get(field_name, "")
 
-        if field.get("required"):
+        required = bool(field.get("required"))
+        if field.get("required_if"):
+            required = required or evaluate_visible_if(field.get("required_if"), submission_data)
+        if required:
             if field_type == "checkbox":
                 if value != "Tak":
                     errors[field_name] = f"Pole „{label}” jest wymagane."

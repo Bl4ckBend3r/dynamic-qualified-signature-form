@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
+from services.field_availability_service import FieldAvailabilityService
 from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
 from services.workflow_config_service import is_workflow_step_active
@@ -41,6 +42,7 @@ class FormConfigValidator:
             documents = []
         document_ids = self._validate_documents(documents, errors)
         self._validate_workflow(form_config.get("workflow") or {}, document_ids, errors)
+        errors.extend(FieldAvailabilityService().validate_config(form_config))
         self._validate_rules(form_config.get("rules") or [], errors)
         self._validate_notifications(form_config.get("notifications") or [], errors)
         errors.extend(
@@ -60,7 +62,7 @@ class FormConfigValidator:
             field_name = str(field.get("name") or "").strip()
             if field_type not in {"section", "static_text"} and not field_name:
                 errors.append(f"fields[{index}].name is required")
-            if field.get("stage", "initial_submission") not in SUPPORTED_FIELD_STAGES:
+            if not field.get("availability") and field.get("stage", "initial_submission") not in SUPPORTED_FIELD_STAGES:
                 errors.append(f"fields[{index}].stage is unsupported: {field.get('stage')}")
             if field_name:
                 if field_name in names:

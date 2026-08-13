@@ -13,6 +13,7 @@ from form_loader import (
     validate_submission,
 )
 from services.document_service import DocumentType, serialize_json_list
+from services.field_availability_service import FieldAvailabilityService
 from services.process_service import ProcessStatus
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
@@ -39,20 +40,28 @@ class DeclarationFlowService:
     @staticmethod
     def build_declaration_form_definition(
         declaration_config: Mapping[str, Any],
+        form_config: Mapping[str, Any] | None = None,
+        step: str | None = None,
         availability: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict:
+        legacy_fields = list(declaration_config.get("fields") or [])
+        workflow_fields: list[dict] = []
+        if form_config:
+            selected_step = step or FieldAvailabilityService().legacy_after_acceptance_step(form_config)
+            workflow_fields = FieldAvailabilityService().visible_fields(form_config, selected_step)
+        names = {str(field.get("name")) for field in workflow_fields if field.get("name")}
         return {
             "title": declaration_config.get("form_title") or "Uzupelnienie deklaracji uczestnictwa",
             "description": declaration_config.get("form_description") or "",
             "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklaracje PDF",
             "fields": without_training_selection_section(
-                declaration_config.get("fields") or []
+                workflow_fields + [field for field in legacy_fields if not field.get("name") or str(field.get("name")) not in names]
             ),
         }
 
     @staticmethod
-    def build_additional_fields_definition(form_config: dict) -> dict:
-        definition = form_definition_for_stage(form_config, FIELD_STAGE_AFTER_ACCEPTANCE)
+    def build_additional_fields_definition(form_config: dict, step: str | None = None) -> dict:
+        definition = form_definition_for_stage(form_config, step or FIELD_STAGE_AFTER_ACCEPTANCE)
         return {
             **definition,
             "title": "Dodatkowe informacje po akceptacji wniosku",
@@ -65,7 +74,25 @@ class DeclarationFlowService:
         return str(row.get("additional_fields_completed") or "").strip().lower() == "tak"
 
     def requires_additional_fields(self, form_config: dict, row: Mapping[str, Any]) -> bool:
-        return has_additional_fields_after_acceptance(form_config) and not self.additional_fields_completed(row)
+        step = self._row_availability_step(form_config, row)
+        return self.has_fields_for_step(form_config, step) and not self.additional_fields_completed(row)
+
+    @staticmethod
+    def _row_availability_step(form_config: dict, row: Mapping[str, Any]) -> str:
+        service = FieldAvailabilityService()
+        configured = set(service.step_ids(form_config))
+        for key in ("workflow_stage", "workflow_step", "current_stage"):
+            value = str(row.get(key) or "").strip()
+            if value in configured:
+                return value
+        return service.legacy_after_acceptance_step(form_config)
+
+    @staticmethod
+    def has_fields_for_step(form_config: dict, step: str) -> bool:
+        return any(
+            field.get("type") not in {"section", "static_text"}
+            for field in FieldAvailabilityService().visible_fields(form_config, step)
+        )
 
     def prepare_declaration_form(
         self,
@@ -75,7 +102,8 @@ class DeclarationFlowService:
         declaration_config: Mapping[str, Any],
         submission_repository=None,
     ) -> DeclarationFlowResult:
-        declaration_definition = self.build_declaration_form_definition(declaration_config)
+        step = self._row_availability_step(form_config, submission["row"])
+        declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
         return DeclarationFlowResult(
             success=True,
             values=dict(submission["row"]),
@@ -95,11 +123,12 @@ class DeclarationFlowService:
         document_service,
         refresh_submission: Callable[[str], dict | None],
     ) -> DeclarationFlowResult:
-        declaration_definition = self.build_declaration_form_definition(declaration_config)
+        step = self._row_availability_step(form_config, submission["row"])
+        declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
         declaration_data = extract_submission_data(declaration_definition, form_data)
         declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values = {**submission["row"], **declaration_data}
-        errors = validate_submission(declaration_definition, declaration_data)
+        errors = validate_submission(declaration_definition, values)
 
         if errors:
             return DeclarationFlowResult(
@@ -157,11 +186,12 @@ class DeclarationFlowService:
         form_data,
         submission_repository,
     ) -> DeclarationFlowResult:
-        additional_definition = self.build_additional_fields_definition(form_config)
+        step = self._row_availability_step(form_config, submission["row"])
+        additional_definition = self.build_additional_fields_definition(form_config, step)
         additional_data = extract_submission_data(additional_definition, form_data)
         additional_data = apply_pesel_derived_values(additional_definition, additional_data)
-        errors = validate_submission(additional_definition, additional_data)
         values = {**submission["row"], **additional_data}
+        errors = validate_submission(additional_definition, values)
         if errors:
             return DeclarationFlowResult(
                 success=False,
@@ -189,6 +219,21 @@ class DeclarationFlowService:
             "workflow_step": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
         }
         submission_repository.update(submission_id, updates)
+        if hasattr(submission_repository, "record_workflow_event"):
+            submission_repository.record_workflow_event(
+                submission_id,
+                {
+                    "previous_status": str(submission["row"].get("process_status") or ""),
+                    "new_status": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
+                    "previous_step": step,
+                    "new_step": step,
+                    "actor_role": "participant",
+                    "reason": "workflow_fields_updated",
+                    "source": "workflow_fields_updated",
+                    # Audit field names only; values may contain sensitive data.
+                    "side_effects": {"changed_fields": sorted(additional_data)},
+                },
+            )
         return DeclarationFlowResult(
             success=True,
             message="Dodatkowe informacje zostaly zapisane. Mozesz pobrac deklaracje.",

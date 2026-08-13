@@ -26,8 +26,7 @@
                     <th>Typ</th>
                     <th>Opcje</th>
                     <th>Konfiguracja pliku</th>
-                    <th>Wymagane</th>
-                    <th>Etap</th>
+                    <th>Dostępność w procesie</th>
                     <th>Sekcja</th>
                     <th>Akcje</th>
                 </tr>
@@ -64,14 +63,20 @@
                         </details>
                     {% else %}—{% endif %}</td>
                     <td>
-                        <label class="admin-check compact"><input type="checkbox" name="field_{{ field.id }}_required" {% if field.required %}checked{% endif %}><span>Tak</span></label>
-                    </td>
-                    <td>
-                        <select name="field_{{ field.id }}_stage">
-                            {% for value, label in field_stages %}
-                                <option value="{{ value }}" {% if field.stage == value %}selected{% endif %}>{{ label }}</option>
+                        <input type="hidden" name="field_{{ field.id }}_availability_present" value="1">
+                        <details class="field-availability"><summary>Ustaw etapy</summary>
+                            <table class="admin-table compact"><thead><tr><th>Etap</th><th>Widoczne</th><th>Edytowalne</th><th>Wymagane</th></tr></thead><tbody>
+                            {% set configured = field_availability.get(field.name, []) %}
+                            {% for step in workflow_steps %}
+                                {% set permission = configured|selectattr('step', 'equalto', step.get('id'))|first|default({}) %}
+                                <tr><td>{{ step.get('admin_label') or step.get('user_label') or step.get('id') }}<br><code>{{ step.get('id') }}</code></td>
+                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_visible" {% if permission.get('visible') %}checked{% endif %}></td>
+                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_editable" {% if permission.get('editable') %}checked{% endif %}></td>
+                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_required" {% if permission.get('required') %}checked{% endif %}></td>
+                                </tr>
                             {% endfor %}
-                        </select>
+                            </tbody></table>
+                        </details>
                     </td>
                     <td><input name="field_{{ field.id }}_section" value="{{ field.section }}"></td>
                     <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usuń pole</button></td>
@@ -98,15 +103,20 @@
             </label>
             <label><span>Kolejność</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
             <label><span>Sekcja</span><input name="new_section"></label>
-            <label>
-                <span>Etap</span>
-                <select name="new_stage">
-                    {% for value, label in field_stages %}
-                        <option value="{{ value }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label class="admin-check"><input type="checkbox" name="new_required" checked><span>Wymagane</span></label>
+            <div class="admin-form-wide field-availability">
+                <span>Dostępność w procesie</span>
+                <input type="hidden" name="new_availability_present" value="1">
+                <table class="admin-table compact"><thead><tr><th>Etap</th><th>Widoczne</th><th>Edytowalne</th><th>Wymagane</th></tr></thead><tbody>
+                {% for step in workflow_steps %}
+                    {% set selected = step.get('id') == initial_workflow_step %}
+                    <tr><td>{{ step.get('admin_label') or step.get('user_label') or step.get('id') }}<br><code>{{ step.get('id') }}</code></td>
+                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_visible" {% if selected %}checked{% endif %}></td>
+                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_editable" {% if selected %}checked{% endif %}></td>
+                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_required" {% if selected %}checked{% endif %}></td>
+                    </tr>
+                {% endfor %}
+                </tbody></table>
+            </div>
             <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox można użyć value|label."></textarea></label>
             <label><span>Rozszerzenia pliku</span><input name="new_allowed_extensions" value="pdf"></label>
             <label><span>Dozwolone MIME</span><input name="new_allowed_mime_types" placeholder="application/pdf"></label>
@@ -135,6 +145,20 @@ document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
 });
 document.querySelector("[data-form-tab-select]")?.addEventListener("change", (event) => {
     if (event.target.value !== "fields") window.location.href = `${editFormUrl}?tab=${encodeURIComponent(event.target.value)}`;
+});
+document.querySelectorAll(".field-availability tbody tr").forEach((row) => {
+    const visible = row.querySelector('input[name$="_visible"]');
+    const editable = row.querySelector('input[name$="_editable"]');
+    const required = row.querySelector('input[name$="_required"]');
+    const reconcile = () => {
+        if (!visible.checked) { editable.checked = false; required.checked = false; }
+        if (!editable.checked) required.checked = false;
+        editable.disabled = !visible.checked;
+        required.disabled = !visible.checked || !editable.checked;
+    };
+    visible?.addEventListener("change", reconcile);
+    editable?.addEventListener("change", reconcile);
+    reconcile();
 });
 </script>
 {% endblock %}

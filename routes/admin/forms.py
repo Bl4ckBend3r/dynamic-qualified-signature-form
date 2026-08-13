@@ -32,6 +32,7 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.field_availability_service import FieldAvailabilityService
 from services.form_version_service import (
     FORM_VERSION_DRAFT,
     FormVersionError,
@@ -118,6 +119,41 @@ FIELD_STAGES = [
     (FIELD_STAGE_AFTER_ACCEPTANCE, "Dodatkowe pole po akceptacji"),
 ]
 LOGO_ALIGNMENTS = {"left", "center", "right"}
+
+
+def _field_workflow_context(form: Form) -> tuple[dict, list[dict]]:
+    definition = normalize_admin_form_definition(form.definition_json or {})
+    return definition, FieldAvailabilityService().workflow_steps(definition)
+
+
+def _availability_from_form(form_data, prefix: str, definition: dict, workflow_steps: list[dict], *, fallback_field=None) -> list[dict]:
+    marker = f"{prefix}availability_present"
+    if marker not in form_data:
+        if fallback_field is not None and getattr(fallback_field, "availability_json", None):
+            return list(fallback_field.availability_json or [])
+        legacy_stage = str(form_data.get(f"{prefix}stage") or FIELD_STAGE_INITIAL)
+        return FieldAvailabilityService().normalize_field(
+            {"stage": legacy_stage, "required": form_data.get(f"{prefix}required") == "on"}, definition
+        )["availability"]
+    availability = []
+    for index, step in enumerate(workflow_steps):
+        step_id = str(step.get("id") or "")
+        visible = form_data.get(f"{prefix}availability_{index}_visible") == "on"
+        editable = form_data.get(f"{prefix}availability_{index}_editable") == "on"
+        required = form_data.get(f"{prefix}availability_{index}_required") == "on"
+        if required and (not visible or not editable):
+            raise ValueError(f'Pole nie może być wymagane w etapie "{step_id}", jeśli nie jest widoczne i edytowalne.')
+        availability.append({"step": step_id, "visible": visible, "editable": visible and editable, "required": required})
+    return availability
+
+
+def _set_field_availability(field: FormField, availability: list[dict], definition: dict) -> None:
+    field.availability_json = availability
+    initial = FieldAvailabilityService().initial_step(definition)
+    initial_permission = next((item for item in availability if item.get("step") == initial), {})
+    field.required = bool(initial_permission.get("required"))
+    first_visible = next((str(item.get("step")) for item in availability if item.get("visible")), initial)
+    field.stage = first_visible
 
 
 def _editable_form_version(db, form: Form) -> FormVersion | None:
@@ -1938,6 +1974,7 @@ def form_fields(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         fields = active_fields_for_form(db, form.id)
+        availability_definition, workflow_steps = _field_workflow_context(form)
         if request.method == "POST":
             _editable_form_version(db, form)
             action = request.form.get("action", "save")
@@ -1946,6 +1983,13 @@ def form_fields(form_id: int):
                 if not field_name:
                     flash("Podaj nazwę pola.", "error")
                     return redirect(url_for("admin.form_fields", form_id=form.id))
+                try:
+                    new_availability = _availability_from_form(
+                        request.form, "new_", availability_definition, workflow_steps
+                    )
+                except ValueError as exc:
+                    flash(str(exc), "error")
+                    return redirect(url_for("admin.form_fields", form_id=form.id))
                 existing = db.execute(
                     select(FormField).where(FormField.form_id == form.id, FormField.name == field_name)
                 ).scalar_one_or_none()
@@ -1953,9 +1997,8 @@ def form_fields(form_id: int):
                     existing.active = True
                     existing.label = request.form.get("new_label", "").strip() or existing.label or field_name
                     existing.type = request.form.get("new_type", "text") if request.form.get("new_type") in FIELD_TYPES else "text"
-                    existing.required = request.form.get("new_required") == "on"
                     existing.section = request.form.get("new_section", "").strip()
-                    existing.stage = normalize_field_stage(request.form.get("new_stage"))
+                    _set_field_availability(existing, new_availability, availability_definition)
                     existing.sort_order = parse_int(request.form.get("new_sort_order"), len(fields) + 1)
                     existing.options = parse_field_options(existing.type, request.form.get("new_options", ""))
                     saved_field = existing
@@ -1965,14 +2008,16 @@ def form_fields(form_id: int):
                             name=field_name,
                             label=request.form.get("new_label", "").strip() or field_name,
                             type=request.form.get("new_type", "text") if request.form.get("new_type") in FIELD_TYPES else "text",
-                            required=request.form.get("new_required") == "on",
+                            required=False,
                             section=request.form.get("new_section", "").strip(),
-                            stage=normalize_field_stage(request.form.get("new_stage")),
+                            stage=FieldAvailabilityService().initial_step(availability_definition),
+                            availability_json=new_availability,
                             sort_order=parse_int(request.form.get("new_sort_order"), len(fields) + 1),
                             options=parse_field_options(request.form.get("new_type", "text"), request.form.get("new_options", "")),
                             active=True,
                         )
                     db.add(saved_field)
+                _set_field_availability(saved_field, new_availability, availability_definition)
                 _update_document_field_labels(
                     form,
                     {field_name: request.form.get("new_document_label", "").strip()},
@@ -1997,9 +2042,15 @@ def form_fields(form_id: int):
                 prefix = f"field_{field.id}_"
                 field.label = request.form.get(prefix + "label", "").strip() or field.name
                 field.type = request.form.get(prefix + "type", "").strip() if request.form.get(prefix + "type") in FIELD_TYPES else field.type
-                field.required = request.form.get(prefix + "required") == "on"
                 field.section = request.form.get(prefix + "section", "").strip()
-                field.stage = normalize_field_stage(request.form.get(prefix + "stage"))
+                try:
+                    availability = _availability_from_form(
+                        request.form, prefix, availability_definition, workflow_steps, fallback_field=field
+                    )
+                except ValueError as exc:
+                    flash(f"{field.label or field.name}: {exc}", "error")
+                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                _set_field_availability(field, availability, availability_definition)
                 field.sort_order = parse_int(request.form.get(prefix + "sort_order"), field.sort_order)
                 field.options = parse_field_options(field.type, request.form.get(prefix + "options", ""))
             _update_document_field_labels(
@@ -2015,12 +2066,35 @@ def form_fields(form_id: int):
             db.commit()
             flash("Pola formularza zostały zapisane.", "success")
             return redirect(url_for("admin.form_fields", form_id=form.id))
+        definition_fields_by_name = {
+            str(item.get("name")): item
+            for item in (form.definition_json or {}).get("fields", [])
+            if isinstance(item, dict) and item.get("name")
+        }
+        availability_service = FieldAvailabilityService()
+        field_availability = {
+            field.name: availability_service.normalize_field(
+                {
+                    "name": field.name,
+                    "stage": field.stage,
+                    "required": field.required,
+                    "availability": field.availability_json
+                    or definition_fields_by_name.get(field.name, {}).get("availability")
+                    or [],
+                },
+                availability_definition,
+            )["availability"]
+            for field in fields
+        }
         return render_template(
             "admin/forms/fields.html",
             form=form,
             fields=fields,
             field_types=FIELD_TYPES,
             field_stages=FIELD_STAGES,
+            workflow_steps=workflow_steps,
+            field_availability=field_availability,
+            initial_workflow_step=FieldAvailabilityService().initial_step(availability_definition),
             field_options_text=field_options_text,
             document_field_labels=(form.definition_json or {}).get("document_field_labels") or {},
             field_configs={

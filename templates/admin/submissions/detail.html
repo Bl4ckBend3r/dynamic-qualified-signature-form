@@ -4,6 +4,16 @@
 {% if g.admin_user.role == "form_manager" %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać dane i dokumenty zgłoszenia, ale nie możesz zmieniać decyzji ani wysyłać wiadomości.</div>{% endif %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
+<section class="admin-card admin-section" id="assignment">
+    <div class="admin-section-heading"><div><h2>Prowadzący sprawę</h2><p>Bieżący właściciel, priorytet i termin sprawy.</p></div></div>
+    <dl class="admin-workflow-summary"><dt>Prowadzący</dt><dd>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</dd><dt>Priorytet</dt><dd>{{ priority_labels.get(submission.priority, submission.priority) }}</dd><dt>Termin</dt><dd>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</dd></dl>
+    {% if can_assign_submissions %}<form method="post" action="{{ url_for('admin.submission_assignment_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <div class="admin-form-grid"><label><span>Prowadzący</span><select name="assigned_to_user_id"><option value="">Nieprzydzielona</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if submission.assigned_to_user_id == user.id %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></label><label><span>Priorytet</span><select name="priority">{% for priority in priorities %}<option value="{{ priority }}" {% if submission.priority == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></label><label><span>Termin</span><input type="datetime-local" name="due_at" value="{{ submission.due_at.strftime('%Y-%m-%dT%H:%M') if submission.due_at else '' }}"></label><label><span>Powód zmiany</span><input name="assignment_reason"></label></div>
+        <button class="admin-button" type="submit">Zapisz przydział</button>
+    </form>{% endif %}
+    {% if can_claim_submission and submission.assigned_to_user_id != g.admin_user.id and (not submission.assigned_to_user_id or can_assign_submissions) %}<form method="post" action="{{ url_for('admin.submission_assignment_claim', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary" type="submit">Przejmij sprawę</button></form>{% endif %}
+</section>
 {% if blocked_agreement_view.is_blocked %}
 <section class="admin-card admin-blocked-agreement" aria-labelledby="blocked-agreement-title">
     <h2 id="blocked-agreement-title">Umowa zablokowana</h2>
@@ -424,6 +434,10 @@
         <tr><td colspan="7">Brak historii workflow.</td></tr>
     {% endfor %}</tbody>
 </table></div>
+<h2>Historia przydziałów</h2>
+<div class="admin-card admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Zmiana</th><th>Przydzielił</th><th>Źródło</th><th>Powód</th></tr></thead><tbody>
+{% for item in assignment_history %}<tr><td>{{ item.assigned_at.strftime("%Y-%m-%d %H:%M") if item.assigned_at else "-" }}</td><td>{{ item.previous_user.email if item.previous_user else "Nieprzydzielona" }} → {{ item.assigned_to.email if item.assigned_to else "Nieprzydzielona" }}</td><td>{{ item.assigned_by.email if item.assigned_by else "System" }}</td><td>{{ item.source }}</td><td>{{ item.reason or "-" }}</td></tr>{% else %}<tr><td colspan="5">Brak historii przydziałów.</td></tr>{% endfor %}
+</tbody></table></div>
 <h2 id="correspondence">Korespondencja</h2>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
     <thead><tr><th>Data wysyłki</th><th>Odbiorca</th><th>Temat</th><th>Typ</th><th>Status</th><th>Nadawca</th><th>Szablon</th><th>Błąd</th><th>Treść</th></tr></thead>

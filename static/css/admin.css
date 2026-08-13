@@ -298,8 +298,81 @@
 
     gap: 4px;
 }
+.admin-access-fieldset {
+    width: 100%;
+    box-sizing: border-box;
+    border: 0;
+    padding: 0;
+    margin: 0 0 1.5rem;
+}
 
+.admin-access-fieldset legend {
+    width: 100%;
+    margin: 0 0 0.75rem;
+    padding: 0;
+    font-weight: 700;
+}
 
+.admin-access-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    width: 100%;
+}
+
+.admin-access-option {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    column-gap: 0.75rem;
+    align-items: start;
+    padding: 1rem;
+    min-height: 90px;
+    box-sizing: border-box;
+    border: 1px solid #d8d8d8;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.admin-access-option input[type="radio"] {
+    appearance: auto;
+    -webkit-appearance: radio;
+    width: 18px !important;
+    height: 18px;
+    min-width: 18px;
+    margin: 0.45rem 0 0;
+    accent-color: #24345d;
+}
+
+.admin-access-option span {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.admin-access-option strong {
+    color: #24345d;
+    line-height: 1.2;
+}
+
+.admin-access-option small {
+    line-height: 1.35;
+}
+
+.admin-share-link-panel {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 1.5rem;
+}
+
+@media (max-width: 900px) {
+    .admin-access-options {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-access-option {
+        min-height: auto;
+    }
+}
 .admin-condition-summary-item > span {
     font-size: 0.82rem;
     font-weight: 600;
@@ -316,7 +389,54 @@
     white-space: nowrap;
 }
 
+.agreement-builder-list-config-collapse {
+    display: block;
+    width: 100%;
+    margin-top: 0.75rem;
+    border: 1px solid #b8b8b8;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
 
+.agreement-builder-list-config-collapse > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    color: #24345d;
+    font-weight: 600;
+    list-style: none;
+}
+
+.agreement-builder-list-config-collapse > summary::marker {
+    content: "";
+}
+
+.agreement-builder-list-config-collapse > summary::-webkit-details-marker {
+    display: none;
+}
+
+.agreement-builder-list-config__chevron {
+    flex: 0 0 auto;
+    transition: transform 0.2s ease;
+}
+
+.agreement-builder-list-config-collapse[open]
+.agreement-builder-list-config__chevron {
+    transform: rotate(180deg);
+}
+
+.agreement-builder-list-config-collapse > .agreement-builder-list-config {
+    width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    border: 0;
+    border-top: 1px solid #d9d9d9;
+    border-radius: 0;
+}
 .admin-condition-cancel input {
     width: 18px;
     height: 18px;

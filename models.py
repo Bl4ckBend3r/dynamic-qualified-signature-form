@@ -16,6 +16,9 @@ JsonDict = JSON().with_variant(JSONB, "postgresql")
 
 class FormSubmission(Base):
     __tablename__ = "form_submissions"
+    __table_args__ = (
+        CheckConstraint("priority IN ('low', 'normal', 'high', 'urgent')", name="ck_form_submissions_priority"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     submission_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
@@ -41,6 +44,15 @@ class FormSubmission(Base):
     )
     data_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    assigned_to_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=True
+    )
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    priority: Mapped[str] = mapped_column(String(16), default="normal", server_default="normal", index=True, nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
 
     imiona: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     nazwisko: Mapped[str] = mapped_column(String(255), default="", nullable=False)
@@ -163,6 +175,13 @@ class FormSubmission(Base):
         back_populates="submission",
         cascade="all, delete-orphan",
         order_by="SubmissionConsent.id",
+    )
+    assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_user_id])
+    assigned_by: Mapped["User | None"] = relationship(foreign_keys=[assigned_by_user_id])
+    assignment_history: Mapped[list["SubmissionAssignmentHistory"]] = relationship(
+        back_populates="submission",
+        order_by="SubmissionAssignmentHistory.id",
+        passive_deletes=True,
     )
 
 
@@ -316,6 +335,54 @@ class SubmissionDecision(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class SubmissionAssignmentHistory(Base):
+    __tablename__ = "submission_assignment_history"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('manual', 'round_robin', 'workflow_rule', 'system')",
+            name="ck_submission_assignment_history_source",
+        ),
+        Index("ix_submission_assignment_history_submission_id", "submission_id"),
+        Index("ix_submission_assignment_history_assigned_at", "assigned_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int | None] = mapped_column(ForeignKey("form_submissions.id", ondelete="SET NULL"), nullable=True)
+    assigned_to_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    assigned_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    previous_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    unassigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+
+    submission: Mapped[FormSubmission | None] = relationship(back_populates="assignment_history")
+    assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_user_id])
+    assigned_by: Mapped["User | None"] = relationship(foreign_keys=[assigned_by_user_id])
+    previous_user: Mapped["User | None"] = relationship(foreign_keys=[previous_user_id])
+
+
+class FormAssignmentState(Base):
+    __tablename__ = "form_assignment_states"
+
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), primary_key=True)
+    last_assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
+def _reject_assignment_history_mutation(_mapper, _connection, _target) -> None:
+    raise ValueError("Submission assignment history is immutable.")
+
+
+event.listen(SubmissionAssignmentHistory, "before_update", _reject_assignment_history_mutation)
+event.listen(SubmissionAssignmentHistory, "before_delete", _reject_assignment_history_mutation)
 
 
 class User(Base):
@@ -835,6 +902,8 @@ class FormPermission(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=False)
     can_manage: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_review: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_assign_submissions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

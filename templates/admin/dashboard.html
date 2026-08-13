@@ -20,6 +20,16 @@
     <div class="admin-card admin-stat"><span>Ostatnia próba SMTP</span><strong class="admin-stat-date">{{ last_smtp_attempt_at.strftime("%Y-%m-%d %H:%M") if last_smtp_attempt_at else "Brak prób" }}</strong></div>
 </div>
 <section class="admin-card admin-section">
+    <div class="admin-section-heading"><div><h2>Kolejki spraw</h2><p>Liczniki są agregowane bezpośrednio w bazie.</p></div></div>
+    <div class="admin-stats-grid">
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='mine') }}"><span>Moje sprawy</span><strong>{{ assignment_queues.mine }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='unassigned') }}"><span>Nieprzydzielone</span><strong>{{ assignment_queues.unassigned }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='overdue') }}"><span>Po terminie</span><strong>{{ assignment_queues.overdue }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='requiring_decision') }}"><span>Wymagające decyzji</span><strong>{{ assignment_queues.requiring_decision }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='waiting_office_signature') }}"><span>Oczekujące na podpis urzędu</span><strong>{{ assignment_queues.waiting_office_signature }}</strong></a>
+    </div>
+</section>
+<section class="admin-card admin-section">
     <div class="admin-section-heading"><div><h2>Ostatni błąd SMTP</h2><p>Wynik ostatniego nieudanego testu połączenia SMTP.</p></div></div>
     {% if last_smtp_error %}
     <p><strong>{{ last_smtp_error.error_type or "Błąd SMTP" }}</strong> — {{ last_smtp_error.administrator_message or last_smtp_error.error_message }}</p>

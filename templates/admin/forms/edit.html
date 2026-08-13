@@ -18,29 +18,96 @@
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
     {% if form.editable_version_id %}<input type="hidden" name="form_version_id" value="{{ form.editable_version_id }}">{% endif %}
     <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
-    <section class="admin-form-tab-panel" id="form-tab-basic" role="tabpanel" data-form-tab-panel="basic" {% if active_tab != 'basic' %}hidden{% endif %}>
-        <div class="admin-section-heading"><div><h2>Podstawowe</h2><p>Najważniejsze informacje i dostępność formularza.</p></div></div>
-        <div class="admin-form-grid">
-            <label>
-    <span>Dostępność formularza</span>
-    {% if form.is_active and form.is_public and not form.is_listed %}
+    <section
+    class="admin-form-tab-panel"
+    id="form-tab-basic"
+    role="tabpanel"
+    data-form-tab-panel="basic"
+    {% if active_tab != 'basic' %}hidden{% endif %}
+>
+    <div class="admin-section-heading">
+        <div>
+            <h2>Podstawowe</h2>
+            <p>Najważniejsze informacje i dostępność formularza.</p>
+        </div>
+    </div>
 
+    <!-- DOSTĘPNOŚĆ - PEŁNA SZEROKOŚĆ -->
+    <fieldset class="admin-access-fieldset">
+        <legend>Dostępność formularza</legend>
+
+        <div class="admin-access-options">
+
+            <label class="admin-access-option">
+                <input
+                    type="radio"
+                    name="access_mode"
+                    value="public"
+                    {% if form.is_active and form.is_public and form.is_listed %}checked{% endif %}
+                >
+                <span>
+                    <strong>Publiczny</strong>
+                    <small>
+                        Widoczny na stronie głównej.
+                    </small>
+                </span>
+            </label>
+
+            <label class="admin-access-option">
+                <input
+                    type="radio"
+                    name="access_mode"
+                    value="unlisted"
+                    {% if form.is_active and form.is_public and not form.is_listed %}checked{% endif %}
+                >
+                <span>
+                    <strong>Tylko przez link</strong>
+                    <small>
+                        Ukryty na liście, dostępny przez specjalny adres.
+                    </small>
+                </span>
+            </label>
+
+            <label class="admin-access-option">
+                <input
+                    type="radio"
+                    name="access_mode"
+                    value="disabled"
+                    {% if not form.is_active %}checked{% endif %}
+                >
+                <span>
+                    <strong>Wyłączony</strong>
+                    <small>
+                        Całkowicie niedostępny.
+                    </small>
+                </span>
+            </label>
+
+        </div>
+    </fieldset>
+
+
+    <!-- LINK PRYWATNY - RÓWNIEŻ PEŁNA SZEROKOŚĆ -->
+    {% if form.is_active and form.is_public and not form.is_listed %}
     <div
-        class="admin-form-wide admin-card"
+        class="admin-card admin-share-link-panel"
         data-share-link-panel
     >
-        <h3>Link prywatny</h3>
-
-        <p>
-            Formularz nie jest widoczny na publicznej liście.
-            Dostęp wymaga specjalnego linku.
-        </p>
+        <div class="admin-section-heading">
+            <div>
+                <h3>Link prywatny</h3>
+                <p>
+                    Formularz nie jest widoczny na publicznej liście.
+                    Dostęp wymaga specjalnego linku.
+                </p>
+            </div>
+        </div>
 
         {% if form.share_token_hash %}
             <p>
                 Link został już wcześniej wygenerowany.
-                Ze względów bezpieczeństwa nie można ponownie
-                odczytać istniejącego tokenu.
+                Ze względów bezpieczeństwa istniejącego tokenu
+                nie można ponownie odczytać.
             </p>
 
             <p>
@@ -49,23 +116,18 @@
             </p>
         {% endif %}
 
-        <div class="admin-form-grid">
+        <label>
+            <span>Wygenerowany link</span>
 
-            <label class="admin-form-wide">
-                <span>Wygenerowany link</span>
-
-                <input
-                    type="text"
-                    readonly
-                    data-share-link-output
-                    placeholder="Kliknij „Wygeneruj nowy link”"
-                >
-            </label>
-
-        </div>
+            <input
+                type="text"
+                readonly
+                data-share-link-output
+                placeholder="Kliknij „Wygeneruj nowy link”"
+            >
+        </label>
 
         <div class="admin-actions">
-
             <button
                 type="button"
                 class="admin-button-secondary"
@@ -92,57 +154,93 @@
             >
                 Kopiuj link
             </button>
-
         </div>
 
         <p
             data-share-link-message
             aria-live="polite"
         ></p>
-
     </div>
-
     {% endif %}
 
-    <select name="access_mode">
 
-        <option
-            value="public"
-            {% if form.is_active and form.is_public and form.is_listed %}selected{% endif %}
-        >
-            Publiczny
-        </option>
+    <!-- POLA POD DOSTĘPNOŚCIĄ -->
+    <div class="admin-form-grid">
 
-        <option
-            value="unlisted"
-            {% if form.is_active and form.is_public and not form.is_listed %}selected{% endif %}
-        >
-            Tylko przez link
-        </option>
+        <label>
+            <span>
+                Slug
+                <span
+                    class="required-marker"
+                    aria-hidden="true"
+                >*</span>
+            </span>
 
-        <option
-            value="disabled"
-            {% if not form.is_active %}selected{% endif %}
-        >
-            Wyłączony
-        </option>
+            <input
+                name="slug"
+                value="{{ form.slug }}"
+                required
+                aria-required="true"
+            >
+        </label>
 
-    </select>
+        <label>
+            <span>
+                Nazwa
+                <span
+                    class="required-marker"
+                    aria-hidden="true"
+                >*</span>
+            </span>
 
-    <small>
-        Publiczny — widoczny na stronie głównej.
-        Tylko przez link — ukryty na liście, dostępny przez specjalny adres.
-        Wyłączony — całkowicie niedostępny.
-    </small>
-</label>
-        <label><span>Nazwa <span class="required-marker" aria-hidden="true">*</span></span><input name="name" value="{{ form.name }}" required aria-required="true"></label>
-        <label><span>Slug <span class="required-marker" aria-hidden="true">*</span></span><input name="slug" value="{{ form.slug }}" required aria-required="true"></label>
-        <label><span>Tytuł</span><input name="title" value="{{ form.title }}" data-header-title-input></label>
-        <label><span>Kolejność sortowania</span><input type="number" name="sort_order" value="{{ form.sort_order }}"></label>
-        <label class="admin-form-wide"><span>Opis</span><textarea name="description">{{ form.description }}</textarea></label>
-        <label><span>Etykieta formularza</span><input name="label_text" value="{{ form.label_text }}" placeholder="PROJEKT 6.08" data-header-label-input></label>
-        
-        </div>
+            <input
+                name="name"
+                value="{{ form.name }}"
+                required
+                aria-required="true"
+            >
+        </label>
+
+        <label>
+            <span>Tytuł</span>
+
+            <input
+                name="title"
+                value="{{ form.title }}"
+                data-header-title-input
+            >
+        </label>
+
+        <label>
+            <span>Kolejność sortowania</span>
+
+            <input
+                type="number"
+                name="sort_order"
+                value="{{ form.sort_order }}"
+            >
+        </label>
+
+        <label class="admin-form-wide">
+            <span>Opis</span>
+
+            <textarea
+                name="description"
+            >{{ form.description }}</textarea>
+        </label>
+
+        <label>
+            <span>Etykieta formularza</span>
+
+            <input
+                name="label_text"
+                value="{{ form.label_text }}"
+                placeholder="PROJEKT 6.08"
+                data-header-label-input
+            >
+        </label>
+
+    </div>
         {% set qualification = (form.definition_json or {}).get('qualification_conditions') or {} %}
         <div class="admin-section" data-qualification-builder>
             <div class="admin-section-heading">
@@ -782,6 +880,8 @@
                 <label class="admin-check"><input type="checkbox" name="allow_correction" {% if workflow.get('allow_correction') %}checked{% endif %}><span>Pozwól na korektę zgłoszenia</span></label>
             </div>
             <p class="workflow-help">Dokumenty wymagane w procesie konfigurujesz w osobnych zakładkach „Deklaracja” i „Umowa”.</p>
+            {% set assignment = (form.definition_json or {}).get('assignment') or {} %}
+            <div class="admin-section"><div class="admin-section-heading"><div><h3>Automatyczny przydział spraw</h3><p>Round-robin obejmuje tylko aktywnych użytkowników z dostępem i uprawnieniem do opiniowania.</p></div></div><div class="admin-form-grid"><label><span>Tryb</span><select name="assignment_mode"><option value="manual" {% if assignment.get('mode', 'manual') == 'manual' %}selected{% endif %}>Ręczny</option><option value="round_robin" {% if assignment.get('mode') == 'round_robin' %}selected{% endif %}>Round-robin</option></select></label></div><div class="admin-check-grid">{% for user in users if user.is_active and not user.is_blocked %}<label class="admin-check"><input type="checkbox" name="assignment_eligible_user_ids" value="{{ user.id }}" {% if user.id in (assignment.get('eligible_users') or []) %}checked{% endif %}><span>{{ user.email }}</span></label>{% else %}<p>Brak aktywnych użytkowników.</p>{% endfor %}</div></div>
             <p><button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_repair_agreement_confirmation', form_id=form.id) }}" formmethod="post">Napraw ścieżkę podpisu urzędu</button></p>
         </section>
 

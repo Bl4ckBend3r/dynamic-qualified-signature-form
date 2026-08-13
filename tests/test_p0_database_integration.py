@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
@@ -12,6 +13,10 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy.engine import make_url
+from sqlalchemy.orm import sessionmaker
+
+from models import Form, FormPermission, FormSubmission, User
+from services.submission_assignment_service import SubmissionAssignmentService
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -19,6 +24,7 @@ P0_TABLES = {
     "form_versions", "consent_definitions", "consent_versions",
     "form_regulation_versions", "form_version_consents", "submission_consents",
     "form_drafts",
+    "submission_assignment_history", "form_assignment_states",
 }
 ATTACHMENT_COLUMNS = {
     "field_key", "attachment_version", "category", "uploaded_by_source",
@@ -178,7 +184,7 @@ def _assert_p0_schema_and_backfill(engine, form_ids=(), submission_ids=()) -> No
     drafts = sa.Table("form_drafts", metadata, autoload_with=engine)
     files = sa.Table("submission_files", metadata, autoload_with=engine)
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == "20260813_0036"
+        assert MigrationContext.configure(connection).get_current_revision() == "20260813_0037"
         assert connection.scalar(sa.text("SELECT COUNT(*) FROM alembic_version")) == 1
         for form_id in form_ids:
             assert connection.scalar(sa.select(sa.func.count()).select_from(versions).where(versions.c.form_id == form_id)) >= 1
@@ -251,3 +257,54 @@ def test_p0_clean_and_pre_p0_upgrade(environment_name):
         finally:
             engine.dispose()
             _drop_database(admin_url, database)
+
+
+@pytest.mark.parametrize(
+    "environment_name",
+    ["P0_MARIADB_ADMIN_DATABASE_URL", "P0_POSTGRES_ADMIN_DATABASE_URL"],
+)
+def test_round_robin_is_serialized_on_real_database(environment_name):
+    admin_url = os.getenv(environment_name, "").strip()
+    if not admin_url:
+        pytest.skip(f"Set {environment_name} to run this database integration test.")
+    database = f"p0_test_{uuid4().hex[:12]}"
+    _create_database(admin_url, database)
+    url = _database_url(admin_url, database)
+    engine = sa.create_engine(url)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        command.upgrade(_config(url), "head")
+        with factory() as db:
+            form = Form(slug="concurrent", name="Concurrent", definition_json={})
+            users = [User(email=f"rr-{index}@example.test", password_hash="x", role="form_manager") for index in range(3)]
+            db.add_all([form, *users])
+            db.flush()
+            db.add_all([
+                FormPermission(user_id=user.id, form_id=form.id, can_manage=False, can_review=True)
+                for user in users
+            ])
+            submissions = [
+                FormSubmission(submission_id=f"rr-case-{index}", form_slug=form.slug, form_name=form.name)
+                for index in range(9)
+            ]
+            db.add_all(submissions)
+            db.commit()
+            user_ids = [user.id for user in users]
+            public_ids = [item.submission_id for item in submissions]
+        service = SubmissionAssignmentService()
+        config = {"assignment": {"mode": "round_robin", "eligible_users": user_ids}}
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            results = list(executor.map(
+                lambda public_id: service.auto_assign_created(factory, submission_id=public_id, form_config=config),
+                public_ids,
+            ))
+        assert set(results) == set(user_ids)
+        with factory() as db:
+            counts = dict(db.execute(
+                sa.select(FormSubmission.assigned_to_user_id, sa.func.count(FormSubmission.id))
+                .group_by(FormSubmission.assigned_to_user_id)
+            ).all())
+            assert counts == {user_id: 3 for user_id in user_ids}
+    finally:
+        engine.dispose()
+        _drop_database(admin_url, database)

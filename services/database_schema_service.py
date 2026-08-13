@@ -46,7 +46,14 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
     "submission_consents": frozenset(
         {"submission_id", "consent_key", "consent_version", "consent_sha256", "accepted", "accepted_at"}
     ),
-    "form_submissions": frozenset({"form_version_id"}),
+    "form_submissions": frozenset(
+        {"form_version_id", "assigned_to_user_id", "assigned_at", "assigned_by_user_id", "priority", "due_at"}
+    ),
+    "submission_assignment_history": frozenset(
+        {"submission_id", "assigned_to_user_id", "assigned_by_user_id", "previous_user_id", "assigned_at", "unassigned_at", "reason", "source"}
+    ),
+    "form_assignment_states": frozenset({"form_id", "last_assigned_user_id", "updated_at"}),
+    "form_permissions": frozenset({"can_manage", "can_review", "can_assign_submissions"}),
     "form_fields": frozenset({"availability_json"}),
     "form_drafts": frozenset(
         {"public_id", "form_id", "form_version_id", "email", "data_json", "status", "token_hash", "expires_at", "completed_at", "last_autosave_at", "submission_public_id"}

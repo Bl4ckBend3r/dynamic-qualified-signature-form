@@ -12,7 +12,7 @@ from docx import Document
 pytest.importorskip("sqlalchemy")
 
 from flask import url_for
-from sqlalchemy import text
+from sqlalchemy import select, text
 from werkzeug.security import generate_password_hash
 
 from conftest import InMemoryStorage
@@ -33,6 +33,7 @@ from models import (
     PlatformMailTemplate,
     ServiceDocument,
     SubmissionDecision,
+    SubmissionAssignmentHistory,
     SubmissionFile,
     SubmissionTraining,
     SubmissionWorkflowEvent,
@@ -117,6 +118,60 @@ def login(client, email="admin@example.com", password="secret"):
     html = response.get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     return client.post("/admin/", data={"email": email, "password": password, "csrf_token": token})
+
+
+def test_super_admin_assigns_submission_and_route_writes_audit(admin_app, admin_client):
+    admin_id = create_user(admin_app)
+    assignee_id = create_user(admin_app, email="officer@example.com", role="form_manager")
+    form_id = create_form(admin_app)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add(FormPermission(user_id=assignee_id, form_id=form_id, can_manage=False, can_review=True))
+        submission = FormSubmission(submission_id="assigned-route", form_slug="sample_form")
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/assignment",
+        data={
+            "csrf_token": admin_csrf(admin_client), "assigned_to_user_id": str(assignee_id),
+            "priority": "high", "assignment_reason": "Podział pracy",
+        },
+    )
+    assert response.status_code == 302
+    with factory() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        history = db.execute(select(SubmissionAssignmentHistory)).scalar_one()
+        assert submission.assigned_to_user_id == assignee_id
+        assert submission.priority == "high"
+        assert history.assigned_by_user_id == admin_id
+        assert history.reason == "Podział pracy"
+
+
+def test_form_manager_without_assignment_permission_gets_403(admin_app, admin_client):
+    manager_id = create_user(admin_app, email="manager@example.com", role="form_manager")
+    assignee_id = create_user(admin_app, email="officer2@example.com", role="form_manager")
+    form_id = create_form(admin_app)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add_all([
+            FormPermission(user_id=manager_id, form_id=form_id, can_manage=False, can_review=True, can_assign_submissions=False),
+            FormPermission(user_id=assignee_id, form_id=form_id, can_manage=False, can_review=True),
+        ])
+        submission = FormSubmission(submission_id="forbidden-assignment", form_slug="sample_form")
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client, email="manager@example.com")
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/assign-selected",
+        data={
+            "csrf_token": admin_csrf(admin_client), "submission_pk_ids": str(submission_pk),
+            "assigned_to_user_id": str(assignee_id),
+        },
+    )
+    assert response.status_code == 403
 
 
 def create_participant_attachment(app):

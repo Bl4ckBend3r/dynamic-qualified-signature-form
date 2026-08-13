@@ -219,6 +219,19 @@ def build_form_definition_from_admin_form(
         if workflow_errors:
             raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
+    if "assignment_mode" in form_data:
+        assignment_mode = str(form_data.get("assignment_mode") or "manual").strip()
+        if assignment_mode not in {"manual", "round_robin"}:
+            raise ValueError("Nieprawidłowy tryb automatycznego przydzielania spraw.")
+        eligible_users = [
+            int(item) for item in form_data.getlist("assignment_eligible_user_ids")
+            if str(item).isdigit()
+        ]
+        definition["assignment"] = {
+            **dict(definition.get("assignment") or {}),
+            "mode": assignment_mode,
+            "eligible_users": list(dict.fromkeys(eligible_users)),
+        }
     if "qualification_conditions_json" in form_data:
         raw_conditions = str(form_data.get("qualification_conditions_json") or "").strip() or "[]"
         parsed_conditions = json.loads(raw_conditions)

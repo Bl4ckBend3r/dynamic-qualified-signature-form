@@ -43,6 +43,7 @@ class SubmissionService:
         qualification_condition_service: QualificationConditionService | None = None,
         compliance_service: ComplianceService | None = None,
         submission_attachment_service: SubmissionAttachmentService | None = None,
+        submission_assignment_service=None,
         validator=validate_submission,
     ) -> None:
         self.submission_repository = submission_repository
@@ -62,6 +63,7 @@ class SubmissionService:
         self.submission_attachment_service = submission_attachment_service or SubmissionAttachmentService(
             submission_repository, storage
         )
+        self.submission_assignment_service = submission_assignment_service
         self.validator = validator
 
     def submit_form(
@@ -251,6 +253,15 @@ class SubmissionService:
             **build_legacy_process_fields(),
         }
         self.submission_repository.create(submission)
+        if self.submission_assignment_service and hasattr(self.submission_repository, "session_factory"):
+            try:
+                self.submission_assignment_service.auto_assign_created(
+                    self.submission_repository.session_factory,
+                    submission_id=submission_id,
+                    form_config=form_config,
+                )
+            except Exception:
+                logger.exception("Automatyczny przydział zgłoszenia %s nie powiódł się; sprawa pozostaje w kolejce.", submission_id)
         logger.info("Zapis zgloszenia %s zakonczony sukcesem.", submission_id)
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)

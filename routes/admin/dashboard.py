@@ -28,7 +28,12 @@ def dashboard():
         if user.role != ROLE_SUPER_ADMIN:
             slugs = accessible_form_slugs(db, form_ids)
             submissions_query = submissions_query.where(FormSubmission.form_slug.in_(slugs or [""]))
+        else:
+            slugs = None
         submissions_count = db.execute(submissions_query).scalar() or 0
+        assignment_queues = current_app.extensions["services"].submission_assignment_service.queue_counts(
+            db, user_id=user.id, form_slugs=slugs
+        )
         pending_query = select(func.count(FormSubmission.id)).where(
             FormSubmission.process_status.in_(["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION"])
         )
@@ -111,4 +116,5 @@ def dashboard():
         smtp_failure_count=smtp_failure_count,
         last_smtp_attempt_at=last_smtp_attempt_at,
         last_smtp_error=last_smtp_error,
+        assignment_queues=assignment_queues,
     )

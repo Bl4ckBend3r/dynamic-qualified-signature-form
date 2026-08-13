@@ -117,6 +117,17 @@ def test_build_form_definition_from_admin_form_updates_workflow():
     assert definition["workflow"]["declaration_template_html"] == "<p>Deklaracja</p>"
 
 
+def test_build_form_definition_saves_round_robin_assignment_config():
+    form_data = MultiDict([
+        ("assignment_mode", "round_robin"),
+        ("assignment_eligible_user_ids", "12"),
+        ("assignment_eligible_user_ids", "15"),
+        ("assignment_eligible_user_ids", "12"),
+    ])
+    definition = build_form_definition_from_admin_form({"title": "Form", "fields": []}, form_data)
+    assert definition["assignment"] == {"mode": "round_robin", "eligible_users": [12, 15]}
+
+
 def test_build_form_definition_saves_multiple_qualification_conditions():
     conditions = [
         {

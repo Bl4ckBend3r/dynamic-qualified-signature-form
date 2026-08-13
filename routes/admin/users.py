@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from flask import abort, flash, g, redirect, render_template, request, url_for
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from werkzeug.security import generate_password_hash
 
-from models import EmailLog, Form, FormPermission, Logo, User
+from models import EmailLog, Form, FormPermission, FormSubmission, Logo, SubmissionAssignmentHistory, User
 
 from . import ROLE_FORM_MANAGER, ROLE_SUPER_ADMIN, ROLES, bp, db_session_factory, login_required, role_required
 
@@ -43,6 +43,23 @@ def user_delete(user_id: int):
         user = db.get(User, user_id) or abort(404)
         if user.id == g.admin_user.id:
             flash("Nie mozna usunac aktualnie zalogowanego uzytkownika.", "error")
+            return redirect(url_for("admin.users_list"))
+        assignment_references = db.execute(
+            select(func.count(SubmissionAssignmentHistory.id)).where(
+                or_(
+                    SubmissionAssignmentHistory.assigned_to_user_id == user.id,
+                    SubmissionAssignmentHistory.assigned_by_user_id == user.id,
+                    SubmissionAssignmentHistory.previous_user_id == user.id,
+                )
+            )
+        ).scalar() or 0
+        current_cases = db.execute(
+            select(func.count(FormSubmission.id)).where(
+                or_(FormSubmission.assigned_to_user_id == user.id, FormSubmission.assigned_by_user_id == user.id)
+            )
+        ).scalar() or 0
+        if assignment_references or current_cases:
+            flash("Nie można usunąć użytkownika powiązanego z bieżącym lub historycznym przydziałem spraw.", "error")
             return redirect(url_for("admin.users_list"))
         db.execute(Form.__table__.update().where(Form.created_by_id == user.id).values(created_by_id=None))
         db.execute(Logo.__table__.update().where(Logo.uploaded_by_user_id == user.id).values(uploaded_by_user_id=None))
@@ -102,20 +119,34 @@ def user_edit(user_id: int | None = None):
                     roles=sorted(ROLES),
                     forms=forms,
                     assigned_form_ids=set(),
+                    permission_settings={},
                 ), 400
             user.is_active = request.form.get("is_active") == "on"
             user.is_blocked = request.form.get("is_blocked") == "on"
             db.add(user)
             db.flush()
             selected_form_ids = {int(item) for item in request.form.getlist("form_ids") if item.isdigit()}
+            review_form_ids = {int(item) for item in request.form.getlist("review_form_ids") if item.isdigit()}
+            assign_form_ids = {int(item) for item in request.form.getlist("assign_form_ids") if item.isdigit()}
+            manage_form_ids = {int(item) for item in request.form.getlist("manage_form_ids") if item.isdigit()}
             existing = {permission.form_id: permission for permission in user.permissions}
             for form in forms:
-                if form.id in selected_form_ids and form.id not in existing:
-                    db.add(FormPermission(user_id=user.id, form_id=form.id, can_manage=True))
+                if form.id in selected_form_ids:
+                    permission = existing.get(form.id)
+                    if permission is None:
+                        permission = FormPermission(user_id=user.id, form_id=form.id)
+                        db.add(permission)
+                    permission.can_review = form.id in review_form_ids
+                    permission.can_assign_submissions = form.id in assign_form_ids
+                    permission.can_manage = form.id in manage_form_ids
                 if form.id not in selected_form_ids and form.id in existing:
                     db.delete(existing[form.id])
             db.commit()
             flash("Uzytkownik zostal zapisany.", "success")
             return redirect(url_for("admin.users_list"))
         assigned_form_ids = {permission.form_id for permission in user.permissions}
-        return render_template("admin/users/edit.html", user=user, roles=sorted(ROLES), forms=forms, assigned_form_ids=assigned_form_ids)
+        permission_settings = {permission.form_id: permission for permission in user.permissions}
+        return render_template(
+            "admin/users/edit.html", user=user, roles=sorted(ROLES), forms=forms,
+            assigned_form_ids=assigned_form_ids, permission_settings=permission_settings,
+        )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 from io import BytesIO
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
@@ -17,6 +18,7 @@ from models import (
     MailFooter,
     MailTemplate,
     SubmissionDecision,
+    SubmissionAssignmentHistory,
     SubmissionFile,
     SubmissionWorkflowEvent,
     User,
@@ -47,6 +49,11 @@ from services.training_availability_service import TrainingAvailabilityService
 from services.training_service import format_price_pln
 from services.submission_stage_rollback_service import ALLOWED_ROLES, StageRollbackError
 from services.submission_correction_service import SubmissionCorrectionError
+from services.submission_assignment_service import (
+    PRIORITIES,
+    PRIORITY_LABELS,
+    SubmissionAssignmentError,
+)
 from statuses import WAITING_FOR_CORRECTION
 
 from . import (
@@ -113,6 +120,19 @@ def _get_primary_agreement_number(submission) -> str:
     return ""
 
 
+def _parse_due_at(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise SubmissionAssignmentError("Nieprawidłowy termin sprawy.") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(current_app.config.get("APP_TIMEZONE", "Europe/Warsaw")))
+    return parsed.astimezone(timezone.utc)
+
+
 @bp.get("/submissions")
 @login_required
 def submissions_all():
@@ -127,6 +147,9 @@ def submissions_all():
             query = select(FormSubmission)
             if user.role != ROLE_SUPER_ADMIN:
                 query = query.where(FormSubmission.form_slug.in_(slugs))
+            query = current_app.extensions["services"].submission_assignment_service.apply_filters(
+                query, request.args, current_user_id=user.id
+            )
             submissions = db.execute(query).scalars().all()
         requested_form_id = str(request.args.get("form_id") or "").strip()
         selected_form = next((form for form in forms if str(form.id) == requested_form_id), None)
@@ -149,6 +172,12 @@ def submissions_all():
         )
         pagination_urls = _pagination_urls("admin.submissions_all", pagination)
         sort_urls = _submission_sort_urls("admin.submissions_all")
+        assignment_service = current_app.extensions["services"].submission_assignment_service
+        eligible_users = {
+            item.id: item
+            for form in forms
+            for item in assignment_service.eligible_users(db, form)
+        }
         return render_template(
             "admin/submissions/all.html",
             submissions=submissions,
@@ -161,6 +190,9 @@ def submissions_all():
             can_edit_application_decision=can_edit_application_decision,
             forms=forms,
             sort_urls=sort_urls,
+            assignment_users=sorted(eligible_users.values(), key=lambda item: item.email.casefold()),
+            priorities=PRIORITIES,
+            priority_labels=PRIORITY_LABELS,
         )
 
 
@@ -170,9 +202,10 @@ def submissions_list(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
         fields = active_fields_for_form(db, form.id)
-        submissions = db.execute(
-            select(FormSubmission).where(FormSubmission.form_slug == form.slug)
-        ).scalars().all()
+        assignment_service = current_app.extensions["services"].submission_assignment_service
+        query = select(FormSubmission).where(FormSubmission.form_slug == form.slug)
+        query = assignment_service.apply_filters(query, request.args, current_user_id=g.admin_user.id)
+        submissions = db.execute(query).scalars().all()
         submissions = filter_submissions(
             submissions,
             request.args,
@@ -186,6 +219,8 @@ def submissions_list(form_id: int):
         )
         pagination_urls = _pagination_urls("admin.submissions_list", pagination, form_id=form.id)
         sort_urls = _submission_sort_urls("admin.submissions_list", form_id=form.id)
+        assignment_users = assignment_service.eligible_users(db, form)
+        can_assign_submissions = assignment_service.can_assign(db, g.admin_user, form)
         return render_template(
             "admin/submissions/list.html",
             form=form,
@@ -201,6 +236,12 @@ def submissions_list(form_id: int):
             pagination=pagination,
             pagination_urls=pagination_urls,
             sort_urls=sort_urls,
+            assignment_users=assignment_users,
+            can_assign_submissions=can_assign_submissions,
+            can_claim_submission=assignment_service.can_review(db, g.admin_user, form),
+            priorities=PRIORITIES,
+            priority_labels=PRIORITY_LABELS,
+            read_only=not can_manage_form(db, g.admin_user, form),
         )
 
 
@@ -225,6 +266,16 @@ def submission_detail(form_id: int, submission_pk: int):
         files = services.submission_document_service.list_documents(submission.submission_id)
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
+        assignment_history = db.execute(
+            select(SubmissionAssignmentHistory)
+            .where(SubmissionAssignmentHistory.submission_id == submission.id)
+            .order_by(SubmissionAssignmentHistory.assigned_at.desc(), SubmissionAssignmentHistory.id.desc())
+        ).scalars().all()
+        assignment_users = services.submission_assignment_service.eligible_users(db, form)
+        if submission.assigned_to and all(item.id != submission.assigned_to.id for item in assignment_users):
+            assignment_users.append(submission.assigned_to)
+        can_assign_submissions = services.submission_assignment_service.can_assign(db, g.admin_user, form)
+        can_claim_submission = services.submission_assignment_service.can_review(db, g.admin_user, form)
         can_review_agreement = services.beneficiary_agreement_service.can_review(db, submission)
         office_signed_agreement_view = {
             "folder": services.office_signed_agreement_service.folder_for_form(form),
@@ -383,7 +434,104 @@ def submission_detail(form_id: int, submission_pk: int):
             attachment_labels=attachment_labels,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
+            assignment_history=assignment_history,
+            assignment_users=assignment_users,
+            can_assign_submissions=can_assign_submissions,
+            can_claim_submission=can_claim_submission,
+            priorities=PRIORITIES,
+            priority_labels=PRIORITY_LABELS,
         )
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/assignment")
+@login_required
+def submission_assignment_update(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.id == submission_pk,
+                FormSubmission.form_slug == form.slug,
+            ).with_for_update()
+        ).scalar_one_or_none() or abort(404)
+        raw_assignee = str(request.form.get("assigned_to_user_id") or "").strip()
+        assignee_id = int(raw_assignee) if raw_assignee.isdigit() else None
+        service = current_app.extensions["services"].submission_assignment_service
+        try:
+            service.assign(
+                db, submission, form, assignee_id=assignee_id, actor=g.admin_user,
+                reason=request.form.get("assignment_reason", ""), source="manual",
+            )
+            service.update_case_metadata(
+                submission,
+                priority=str(request.form.get("priority") or "normal"),
+                due_at=_parse_due_at(request.form.get("due_at", "")),
+            )
+            db.commit()
+        except SubmissionAssignmentError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+        else:
+            flash("Przydział i parametry sprawy zostały zapisane.", "success")
+    return redirect(request.form.get("next") or url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/claim")
+@login_required
+def submission_assignment_claim(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.id == submission_pk,
+                FormSubmission.form_slug == form.slug,
+            ).with_for_update()
+        ).scalar_one_or_none() or abort(404)
+        try:
+            current_app.extensions["services"].submission_assignment_service.claim(
+                db, submission, form, actor=g.admin_user
+            )
+            db.commit()
+        except SubmissionAssignmentError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+        else:
+            flash("Sprawa została przejęta.", "success")
+    return redirect(request.form.get("next") or url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
+@bp.post("/forms/<int:form_id>/submissions/assign-selected")
+@login_required
+def submissions_assignment_update(form_id: int):
+    raw_ids = request.form.getlist("submission_pk_ids")
+    submission_ids = [int(item) for item in raw_ids if str(item).isdigit()]
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        service = current_app.extensions["services"].submission_assignment_service
+        if not service.can_assign(db, g.admin_user, form):
+            abort(403)
+        raw_assignee = str(request.form.get("assigned_to_user_id") or "").strip()
+        assignee_id = int(raw_assignee) if raw_assignee.isdigit() else None
+        submissions = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.id.in_(submission_ids),
+                FormSubmission.form_slug == form.slug,
+            ).with_for_update()
+        ).scalars().all()
+        try:
+            changed = 0
+            for submission in submissions:
+                changed += service.assign(
+                    db, submission, form, assignee_id=assignee_id, actor=g.admin_user,
+                    reason=request.form.get("assignment_reason", ""), source="manual",
+                ) is not None
+            db.commit()
+        except SubmissionAssignmentError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+        else:
+            flash(f"Zmieniono prowadzącego dla {changed} spraw.", "success")
+    return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
 @bp.get("/forms/<int:form_id>/regulations/versions/<int:regulation_version_id>/download")

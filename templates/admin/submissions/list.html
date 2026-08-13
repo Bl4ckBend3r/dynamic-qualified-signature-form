@@ -44,6 +44,9 @@
         <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
         <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
     </select>
+    <select name="queue">{% for value, label in [("", "Wszystkie kolejki"), ("mine", "Moje sprawy"), ("unassigned", "Nieprzydzielone"), ("overdue", "Po terminie"), ("requiring_decision", "Wymagające decyzji"), ("waiting_office_signature", "Oczekujące na podpis urzędu")] %}<option value="{{ value }}" {% if filters.get('queue') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    <select name="assignee"><option value="">Każdy prowadzący</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Nieprzydzielone</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select>
+    <select name="priority"><option value="">Każdy priorytet</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select>
     <button class="admin-button-secondary" type="submit">Filtruj</button>
 </form>
 <form id="submission-column-filters" method="get"><input type="hidden" name="sort" value="{{ filters.get('sort', 'created_at') }}"><input type="hidden" name="direction" value="{{ filters.get('direction', 'desc') }}"></form>
@@ -63,6 +66,10 @@
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-delete-selection></div>
 </form>
+{% if can_assign_submissions %}<form id="bulk-assignment-form" method="post" action="{{ url_for('admin.submissions_assignment_update', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="next" value="{{ request.full_path }}"><div data-assignment-selection></div>
+</form>{% endif %}
+{% if can_assign_submissions %}<div class="admin-bulk-actions"><label class="admin-check"><input type="checkbox" id="select-all-assignments"><span>Zaznacz wszystkie na stronie</span></label><div class="admin-actions"><select name="assigned_to_user_id" form="bulk-assignment-form"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select><input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany"><button class="admin-button-secondary" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz prowadzącego</button></div></div>{% endif %}
 {% if not read_only %}<div class="admin-bulk-actions">
     <label class="admin-check">
         <input type="checkbox" id="select-all-submissions">
@@ -83,26 +90,30 @@
         <table class="admin-table admin-table--submissions admin-table--responsive">
             <thead>
                 <tr>
-                    {% if not read_only %}<th class="column-secondary">Wybierz</th>{% endif %}
+                    {% if not read_only or can_assign_submissions %}<th class="column-secondary">Wybierz</th>{% endif %}
                     <th>{{ sortable('ID', 'submission_id') }}</th>
                     <th>{{ sortable('Imię i nazwisko', 'full_name') }}</th>
                     <th class="column-secondary">{{ sortable('E-mail', 'email') }}</th>
                     <th class="column-secondary">{{ sortable('Telefon', 'telefon') }}</th>
                     <th>{{ sortable('Data złożenia', 'created_at') }}</th>
                     <th>{{ sortable('Formularz', 'form_slug') }}</th>
+                    <th>Prowadzący</th>
+                    <th>Priorytet / termin</th>
                     <th>{{ sortable('Aktualny status', 'process_status') }}</th>
                     <th class="column-secondary">{{ sortable('Etap workflow', 'workflow_stage') }}</th>
                     <th class="column-secondary">Decyzja urzędnika</th>
                     <th class="actions-column">Akcje</th>
                 </tr>
                 <tr class="admin-column-filters">
-                    {% if not read_only %}<th class="column-secondary"></th>{% endif %}
+                    {% if not read_only or can_assign_submissions %}<th class="column-secondary"></th>{% endif %}
                     <th><a class="admin-sort-link" href="{{ sort_urls.submission_id }}" aria-label="Sortuj po ID">↕</a><input form="submission-column-filters" name="submission_id" value="{{ filters.get('submission_id', '') }}" aria-label="Filtruj po ID"></th>
                     <th><a class="admin-sort-link" href="{{ sort_urls.full_name }}" aria-label="Sortuj po imieniu i nazwisku">↕</a><input form="submission-column-filters" name="full_name" value="{{ filters.get('full_name', '') }}" aria-label="Filtruj po imieniu i nazwisku"></th>
                     <th class="column-secondary"><a class="admin-sort-link" href="{{ sort_urls.email }}" aria-label="Sortuj po e-mailu">↕</a><input form="submission-column-filters" name="email" value="{{ filters.get('email', '') }}" aria-label="Filtruj po e-mailu"></th>
                     <th class="column-secondary"><a class="admin-sort-link" href="{{ sort_urls.telefon }}" aria-label="Sortuj po telefonie">↕</a><input form="submission-column-filters" name="telefon" value="{{ filters.get('telefon', '') }}" aria-label="Filtruj po telefonie"></th>
                     <th><a class="admin-sort-link" href="{{ sort_urls.created_at }}" aria-label="Sortuj po dacie">↕</a><div class="admin-date-filter"><input form="submission-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Data od"><input form="submission-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Data do"></div></th>
                     <th class="column-secondary"><select form="submission-column-filters" name="form_slug" aria-label="Filtruj po formularzu"><option value="">Wszystkie</option><option value="{{ form.slug }}" {% if filters.get('form_slug') == form.slug %}selected{% endif %}>{{ form.name }}</option></select></th>
+                    <th><select form="submission-column-filters" name="assignee"><option value="">Każdy</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Brak</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></th>
+                    <th><select form="submission-column-filters" name="priority"><option value="">Każdy</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></th>
                     <th><a class="admin-sort-link" href="{{ sort_urls.process_status }}" aria-label="Sortuj po statusie">↕</a><select form="submission-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></th>
                     <th class="column-secondary"><a class="admin-sort-link" href="{{ sort_urls.workflow_stage }}" aria-label="Sortuj po etapie">↕</a><input form="submission-column-filters" name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" aria-label="Filtruj po etapie workflow"></th>
                     <th class="column-secondary"></th>
@@ -111,7 +122,7 @@
             </thead>
             <tbody>{% for submission in submissions %}
                 <tr>
-                    {% if not read_only %}<td class="column-secondary">
+                    {% if not read_only or can_assign_submissions %}<td class="column-secondary">
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
                         <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" data-submission-pk="{{ submission.id }}" form="bulk-mail-form">
                     </td>{% endif %}
@@ -121,6 +132,8 @@
                     <td class="column-secondary">{{ submission.telefon or "-" }}</td>
                     <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
                     <td>{{ form.name }}</td>
+                    <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
+                    <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
                     <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
                     {% if not read_only %}<td class="column-secondary">
@@ -167,7 +180,7 @@
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="{{ 11 if not read_only else 10 }}">Brak zgłoszeń.</td></tr>
+                <tr><td colspan="{{ 13 if not read_only else 12 }}">Brak zgłoszeń.</td></tr>
             {% endfor %}</tbody>
         </table>
     </div>
@@ -202,12 +215,15 @@
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const selectAll = document.getElementById("select-all-submissions");
+    const selectAllAssignments = document.getElementById("select-all-assignments");
     const checks = document.querySelectorAll(".submission-check");
     const deleteForm = document.getElementById("bulk-delete-form");
     const deleteButton = document.querySelector("[data-delete-button]");
     const deleteSelection = document.querySelector("[data-delete-selection]");
     const officeAgreementButton = document.querySelector("[data-office-agreement-button]");
     const officeAgreementSelection = document.querySelector("[data-office-agreement-selection]");
+    const assignmentButton = document.querySelector("[data-assignment-button]");
+    const assignmentSelection = document.querySelector("[data-assignment-selection]");
 
     function syncDeleteButton() {
         const selected = Array.from(checks).filter(item => item.checked);
@@ -236,11 +252,28 @@ document.addEventListener("DOMContentLoaded", function () {
                 officeAgreementSelection.appendChild(input);
             });
         }
+        if (assignmentButton) assignmentButton.disabled = selected.length === 0;
+        if (assignmentSelection) {
+            assignmentSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_pk_ids";
+                input.value = item.dataset.submissionPk || "";
+                assignmentSelection.appendChild(input);
+            });
+        }
     }
 
     if (selectAll) {
         selectAll.addEventListener("change", function () {
             checks.forEach(item => { item.checked = selectAll.checked; });
+            syncDeleteButton();
+        });
+    }
+    if (selectAllAssignments) {
+        selectAllAssignments.addEventListener("change", function () {
+            checks.forEach(item => { item.checked = selectAllAssignments.checked; });
             syncDeleteButton();
         });
     }

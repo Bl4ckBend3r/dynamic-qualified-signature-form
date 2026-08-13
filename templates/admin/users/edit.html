@@ -21,7 +21,13 @@
         <h2>Dostep do formularzy</h2>
         <div class="admin-check-grid">
             {% for form in forms %}
-                <label class="admin-check"><input type="checkbox" name="form_ids" value="{{ form.id }}" {% if form.id in assigned_form_ids %}checked{% endif %}><span>{{ form.name }}</span></label>
+                {% set permission = permission_settings.get(form.id) %}
+                <div class="admin-card">
+                    <label class="admin-check"><input type="checkbox" name="form_ids" value="{{ form.id }}" {% if form.id in assigned_form_ids %}checked{% endif %}><span>{{ form.name }} — dostęp</span></label>
+                    <label class="admin-check"><input type="checkbox" name="review_form_ids" value="{{ form.id }}" {% if not permission or permission.can_review %}checked{% endif %}><span>Może prowadzić i opiniować sprawy</span></label>
+                    <label class="admin-check"><input type="checkbox" name="assign_form_ids" value="{{ form.id }}" {% if permission and permission.can_assign_submissions %}checked{% endif %}><span>Może przydzielać sprawy</span></label>
+                    <label class="admin-check"><input type="checkbox" name="manage_form_ids" value="{{ form.id }}" {% if permission and permission.can_manage %}checked{% endif %}><span>Może zarządzać formularzem</span></label>
+                </div>
             {% else %}
                 <p>Brak formularzy do przypisania.</p>
             {% endfor %}

@@ -36,6 +36,7 @@ from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
 from services.submission_attachment_service import SubmissionAttachmentService
+from services.submission_assignment_service import SubmissionAssignmentService
 from services.submission_training_service import SubmissionTrainingService
 from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
@@ -50,6 +51,7 @@ class ServiceContainer:
     submission_repository: object
     submission_service: SubmissionService
     submission_attachment_service: SubmissionAttachmentService
+    submission_assignment_service: SubmissionAssignmentService
     submission_training_service: SubmissionTrainingService
     workflow_service: WorkflowService
     beneficiary_agreement_service: BeneficiaryAgreementService
@@ -96,6 +98,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     access_token_service = AccessTokenService()
     qualification_condition_service = QualificationConditionService()
     submission_correction_service = SubmissionCorrectionService()
+    submission_assignment_service = SubmissionAssignmentService()
     blocked_agreement_admin_service = BlockedAgreementAdminService()
 
     form_slugs = []
@@ -193,6 +196,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         qualification_condition_service=qualification_condition_service,
         compliance_service=compliance_service,
         submission_attachment_service=submission_attachment_service,
+        submission_assignment_service=submission_assignment_service,
     )
     submission_training_service = SubmissionTrainingService()
     document_signing_service = DocumentSigningService(
@@ -210,6 +214,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_repository=submission_repository,
         submission_service=submission_service,
         submission_attachment_service=submission_attachment_service,
+        submission_assignment_service=submission_assignment_service,
         submission_training_service=submission_training_service,
         workflow_service=workflow_service,
         beneficiary_agreement_service=beneficiary_agreement_service,

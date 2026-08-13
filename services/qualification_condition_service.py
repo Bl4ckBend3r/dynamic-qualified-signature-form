@@ -19,7 +19,10 @@ QUALIFICATION_OPERATORS = {
     "in",
     "not_in",
 }
-QUALIFICATION_FAILURE_ACTIONS = {"auto_reject"}
+QUALIFICATION_FAILURE_ACTIONS = {
+    "auto_reject",
+    "officer_decision",
+}
 EMPTY_VALUE_OPERATORS = {"is_empty", "is_not_empty"}
 LIST_VALUE_OPERATORS = {"in", "not_in"}
 MULTI_VALUE_FIELD_TYPES = {
@@ -67,7 +70,13 @@ class QualificationConditionService:
                 condition_id = f"condition_{index + 1}"
             used_ids.add(condition_id)
             operator = str(raw_condition.get("operator") or "equals").strip()
-            failure_action = str(raw_condition.get("failure_action") or "auto_reject").strip()
+            failure_action = str(
+                raw_condition.get("failure_action") or "auto_reject"
+            ).strip()
+
+            cancel_process_on_failure = (
+                failure_action == "auto_reject"
+            )
             field_definition = known_fields.get(field_name, {})
             expected_value = self._normalize_expected_value(
                 raw_condition.get("expected_value"),
@@ -86,6 +95,7 @@ class QualificationConditionService:
                     "operator": operator,
                     "expected_value": expected_value,
                     "failure_action": failure_action,
+                    "cancel_process_on_failure": cancel_process_on_failure,
                     "user_message": str(raw_condition.get("user_message") or "").strip(),
                     "officer_message": str(raw_condition.get("officer_message") or "").strip(),
                     "is_active": self._as_bool(raw_condition.get("is_active", True)),

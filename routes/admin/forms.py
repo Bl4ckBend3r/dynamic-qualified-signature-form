@@ -759,6 +759,13 @@ def form_edit(form_id: int):
                 regulation = form.regulation or FormRegulation(form_id=form.id, original_filename="", storage_path="", mime_type="")
                 update_form_regulation_from_upload(regulation, metadata, uploaded_by_user_id=g.admin_user.id)
                 db.add(regulation)
+                db.flush()
+                current_app.extensions["services"].compliance_service.stage_regulation_version(
+                    db,
+                    form,
+                    regulation,
+                    actor_id=g.admin_user.id,
+                )
             if g.admin_user.role == ROLE_SUPER_ADMIN:
                 selected_user_ids = {int(item) for item in request.form.getlist("user_ids") if item.isdigit()}
                 existing = {permission.user_id: permission for permission in form.permissions}

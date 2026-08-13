@@ -222,7 +222,121 @@
     color: #fff;
     padding: 9px 14px;
 }
+.admin-condition-card {
+    padding: 0;
+    overflow: hidden;
+}
 
+
+.admin-condition-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 14px 18px;
+
+    border-bottom: 1px solid #e7dfd4;
+}
+
+
+.admin-condition-toggle {
+    width: 36px;
+    height: 36px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+
+    border: 0;
+    border-radius: 6px;
+
+    background: transparent;
+
+    cursor: pointer;
+
+    font-size: 16px;
+}
+
+
+.admin-condition-toggle:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+
+.admin-condition-card [data-condition-body] {
+    padding: 18px;
+}
+
+
+.admin-condition-summary {
+    display: grid;
+
+    grid-template-columns:
+        minmax(280px, 2fr)
+        minmax(180px, 1fr)
+        minmax(180px, 1fr)
+        minmax(110px, auto);
+
+    gap: 20px;
+
+    padding: 12px 18px 18px;
+
+    align-items: center;
+}
+.admin-condition-summary[hidden] {
+    display: none !important;
+}
+
+
+.admin-condition-summary-item {
+    min-width: 0;
+
+    display: flex;
+    flex-direction: column;
+
+    gap: 4px;
+}
+
+
+.admin-condition-summary-item > span {
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+
+.admin-condition-summary-item > strong {
+    min-width: 0;
+
+    font-weight: 500;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+.admin-condition-cancel input {
+    width: 18px;
+    height: 18px;
+
+    margin-top: 2px;
+}
+
+
+.admin-condition-card.is-collapsed .admin-condition-header {
+    border-bottom: 0;
+}
+
+
+@media (max-width: 900px) {
+
+    .admin-condition-summary {
+        grid-template-columns: 1fr;
+    }
+
+}
 .admin-link-button {
     border: 0;
     background: transparent;

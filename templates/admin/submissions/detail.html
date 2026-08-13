@@ -211,6 +211,37 @@
     </table></div>
 </section>
 {% endif %}
+<section class="admin-card">
+    <h2>Zaakceptowane zgody i regulaminy</h2>
+    {% if submission_consents %}
+    <div class="admin-table-wrap">
+        <table class="admin-table admin-table--responsive">
+            <thead><tr><th>Nazwa</th><th>Wersja</th><th>Zaakceptowano</th><th>Data</th><th>SHA-256</th><th>Dowód</th></tr></thead>
+            <tbody>
+            {% for item in submission_consents %}
+            {% set consent = item.record %}
+            <tr>
+                <td>{{ consent.consent_title_snapshot }}</td>
+                <td>{{ consent.regulation_version or consent.consent_version }}</td>
+                <td>{{ 'Tak' if consent.accepted else 'Nie' }}</td>
+                <td>{{ consent.accepted_at.strftime('%Y-%m-%d %H:%M:%S') if consent.accepted_at else 'Brak — migracja legacy' }}</td>
+                <td><code>{{ consent.regulation_sha256 or consent.consent_sha256 }}</code></td>
+                <td>
+                    <details><summary>Treść i opis audytowy</summary>
+                        <p>{{ item.audit_description }}</p>
+                        <pre>{{ consent.consent_text_snapshot }}</pre>
+                    </details>
+                    {% if item.regulation_url %}<a href="{{ item.regulation_url }}" target="_blank" rel="noopener noreferrer">Pobierz regulamin</a>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <p>Brak audytowalnych snapshotów. Starsze pola logiczne nie stanowią pełnego dowodu zaakceptowanej treści.</p>
+    {% endif %}
+</section>
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">

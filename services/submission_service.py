@@ -17,6 +17,7 @@ from form_loader import (
 )
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
+from services.compliance_service import ComplianceService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
 from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_from_form, validate_required_submission_fields
 from services.process_service import OfficerDecision, ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
@@ -39,6 +40,7 @@ class SubmissionService:
         access_token_service: AccessTokenService | None = None,
         submission_document_service: SubmissionDocumentService | None = None,
         qualification_condition_service: QualificationConditionService | None = None,
+        compliance_service: ComplianceService | None = None,
         validator=validate_submission,
     ) -> None:
         self.submission_repository = submission_repository
@@ -54,6 +56,7 @@ class SubmissionService:
             storage=storage,
         )
         self.qualification_condition_service = qualification_condition_service or QualificationConditionService()
+        self.compliance_service = compliance_service or ComplianceService(submission_repository)
         self.validator = validator
 
     def submit_form(
@@ -83,6 +86,8 @@ class SubmissionService:
         mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
         mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
         errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
+        consent_errors = self.compliance_service.validate_acceptances(form_config, submission_data)
+        errors.update({key: value for key, value in consent_errors.items() if key not in errors})
         if errors:
             return {
                 "ok": False,
@@ -99,7 +104,14 @@ class SubmissionService:
             form_config,
             {
                 **submission_data,
-                "data_json": submission_data,
+                "data_json": {
+                    **submission_data,
+                    **(
+                        {"_consent_snapshots": self.compliance_service.build_unversioned_snapshots(form_config, submission_data)}
+                        if form_version_id is None
+                        else {}
+                    ),
+                },
                 "pdf_filename": "",
                 "signed_pdf_filename": "",
                 "signature_status": "manual",
@@ -109,6 +121,15 @@ class SubmissionService:
             submission_id=submission_id,
             dispatch_received=False,
         )
+        try:
+            self.compliance_service.record_submission_acceptances(
+                submission_id=submission_id,
+                form_version_id=form_version_id,
+                submission_data=submission_data,
+            )
+        except Exception:
+            self.compliance_service.remove_incomplete_submission(submission_id)
+            raise
 
         qualification = self.qualification_condition_service.evaluate(
             form_config.get("qualification_conditions"),
@@ -116,9 +137,29 @@ class SubmissionService:
             form_config.get("fields") or [],
         )
         self._persist_qualification_result(submission, submission_data, qualification)
-        auto_rejected = not qualification["passed"]
+        failed_conditions = qualification.get("failed_conditions", [])
+
+        auto_rejected = any(
+            condition.get("failure_action") == "auto_reject"
+            for condition in failed_conditions
+        )
+
+        requires_officer_decision = any(
+            condition.get("failure_action") == "officer_decision"
+            for condition in failed_conditions
+        )
+
         if auto_rejected:
-            self._auto_reject_submission(submission, qualification)
+            self._auto_reject_submission(
+                submission,
+                qualification,
+            )
+
+        elif requires_officer_decision:
+            self._mark_officer_decision_required(
+                submission,
+                qualification,
+            )
         elif self.mail_dispatch_service:
             try:
                 self.mail_dispatch_service.dispatch_submission_received(submission_id)
@@ -262,7 +303,29 @@ class SubmissionService:
         }
         self.submission_repository.update(submission_id, updates)
         refreshed = {**existing, **updates}
-        auto_rejected = not qualification["passed"]
+        failed_conditions = qualification.get(
+            "failed_conditions",
+            [],
+        )
+
+        auto_rejected = any(
+            condition.get("failure_action") == "auto_reject"
+            for condition in failed_conditions
+        )
+
+        requires_officer_decision = any(
+            condition.get("failure_action") == "officer_decision"
+            for condition in failed_conditions
+        )
+        blocked_by_condition = (
+            auto_rejected
+            or requires_officer_decision
+            or any(
+                bool(condition.get("cancel_process_on_failure"))
+                for condition in failed_conditions
+            )
+        )
+
         if auto_rejected:
             self._auto_reject_submission(
                 refreshed,
@@ -270,6 +333,15 @@ class SubmissionService:
                 previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
                 previous_step="returned_for_correction",
             )
+
+        elif requires_officer_decision:
+            self._mark_officer_decision_required(
+                refreshed,
+                qualification,
+                previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                previous_step="returned_for_correction",
+            )
+
         else:
             self.submission_repository.record_workflow_event(
                 submission_id,
@@ -328,7 +400,7 @@ class SubmissionService:
                     if auto_rejected
                     else "Zgłoszenie poprawiono i przesłano ponownie."
                 ),
-                "can_continue": not auto_rejected,
+                "can_continue": not blocked_by_condition,
             },
         }
 
@@ -391,6 +463,107 @@ class SubmissionService:
         self.submission_repository.update(submission["submission_id"], {"data_json": stored_data})
         submission["data_json"] = stored_data
 
+    def _mark_officer_decision_required(
+        self,
+        submission: dict,
+        evaluation: dict,
+        *,
+        previous_status: str = ProcessStatus.FORM_SUBMITTED.value,
+        previous_step: str | None = None,
+    ) -> None:
+        failed = [
+            item
+            for item in (evaluation.get("failed_conditions") or [])
+            if item.get("failure_action") == "officer_decision"
+        ]
+
+        details = []
+
+        for item in failed:
+            label = str(
+                item.get("field_label")
+                or item.get("field_name")
+                or "warunek"
+            )
+
+            details.append(
+                f"{label}: "
+                f"wartość użytkownika={item.get('actual_value')!r}, "
+                f"wartość oczekiwana={item.get('expected_value')!r}"
+            )
+
+        officer_messages = [
+            str(item.get("officer_message") or "").strip()
+            for item in failed
+            if str(item.get("officer_message") or "").strip()
+        ]
+
+        reason = (
+            "Zgłoszenie wymaga decyzji urzędnika z powodu "
+            "niespełnienia warunku: "
+            + "; ".join(details)
+        )
+
+        if officer_messages:
+            reason += (
+                ". Informacja dla urzędnika: "
+                + " ".join(officer_messages)
+            )
+
+        previous_step = str(
+            previous_step
+            or submission.get("workflow_step")
+            or "submission"
+        )
+
+        updates = {
+            "process_status": ProcessStatus.FORM_SUBMITTED.value,
+            "workflow_step": "officer_decision",
+            "officer_decision": "",
+            "officer_decision_reason": reason,
+        }
+
+        self.submission_repository.update(
+            submission["submission_id"],
+            updates,
+        )
+
+        submission.update(updates)
+
+        self.submission_repository.record_workflow_event(
+            submission["submission_id"],
+            {
+                "previous_status": previous_status,
+                "new_status": ProcessStatus.FORM_SUBMITTED.value,
+                "previous_step": previous_step,
+                "new_step": "officer_decision",
+                "actor_role": "system",
+                "reason": reason,
+                "source": "qualification_officer_decision",
+            },
+        )
+
+        if self.audit_log_service:
+            self.audit_log_service.log_event(
+                "QUALIFICATION_OFFICER_DECISION_REQUIRED",
+                submission["submission_id"],
+                submission.get("form_slug", ""),
+                old_value=previous_status,
+                new_value=ProcessStatus.FORM_SUBMITTED.value,
+                metadata={
+                    "failed_conditions": [
+                        {
+                            "id": item.get("id"),
+                            "field_name": item.get("field_name"),
+                            "actual_value": item.get("actual_value"),
+                            "expected_value": item.get("expected_value"),
+                            "officer_message": item.get("officer_message"),
+                        }
+                        for item in failed
+                    ],
+                },
+            )
+    
     def _auto_reject_submission(
         self,
         submission: dict,

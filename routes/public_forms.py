@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
-from models import ContactPage, Form, FormField, FormSubmission, FormVersion, Logo, ServiceDocument
+from models import ContactPage, Form, FormField, FormRegulationVersion, FormSubmission, FormVersion, Logo, ServiceDocument
 from services.process_service import ProcessStatus
 from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
@@ -400,6 +400,30 @@ def form_regulation_file(slug: str):
         return send_file(path, mimetype=regulation.mime_type or None, download_name=regulation.original_filename)
 
 
+@bp.get("/form/<slug>/regulamin/version/<int:regulation_version_id>")
+def form_regulation_version_file(slug: str, regulation_version_id: int):
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    with session_factory() as db:
+        regulation_version = db.get(FormRegulationVersion, regulation_version_id)
+        if (
+            not regulation_version
+            or regulation_version.form.slug != slug
+            or not regulation_version.form.is_active
+            or not regulation_version.form.is_public
+        ):
+            abort(404)
+        path = Path(regulation_version.storage_path)
+        if not path.is_file():
+            abort(404)
+        return send_file(
+            path,
+            mimetype=regulation_version.mime_type or None,
+            download_name=regulation_version.original_filename,
+        )
+
+
 @bp.get("/assets/logos/<int:logo_id>/<path:filename>")
 def logo_asset(logo_id: int, filename: str):
     session_factory = db_session_factory()
@@ -490,7 +514,15 @@ def version_to_public_form(db, form: Form, version: FormVersion) -> tuple[dict, 
     logo_id = metadata.get("logo_id", form.logo_id)
     logo = db.get(Logo, logo_id) if logo_id else None
     definition["logo_url"] = logo_url(logo)
-    definition["regulation_url"] = url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else ""
+    definition["regulation_url"] = (
+        url_for(
+            "public_forms.form_regulation_version_file",
+            slug=form.slug,
+            regulation_version_id=version.regulation_version_id,
+        )
+        if version.regulation_version_id
+        else ""
+    )
     definition["logo_alignment"] = normalize_logo_alignment(
         str(metadata.get("logo_alignment") or definition.get("logo_alignment") or "left")
     )

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from models import Form, FormField, FormSubmission, FormVersion
 from services.admin_form_service import sync_form_fields, validate_admin_form_config
+from services.compliance_service import ComplianceError, ComplianceService
 
 
 FORM_VERSION_DRAFT = "draft"
@@ -199,6 +200,13 @@ class FormVersionService:
         )
         db.add(version)
         db.flush()
+        if status == FORM_VERSION_PUBLISHED:
+            try:
+                ComplianceService().freeze_form_version(db, form, version, actor_id=actor_id)
+            except ComplianceError as exc:
+                raise FormVersionValidationError([str(exc)]) from exc
+        elif status == FORM_VERSION_DRAFT:
+            ComplianceService().stage_form_version(db, form, version, actor_id=actor_id)
         return version
 
     def sync_draft_from_legacy(self, db, form: Form, *, actor_id: int | None = None) -> FormVersion | None:
@@ -213,6 +221,7 @@ class FormVersionService:
         if actor_id and not draft.created_by_id:
             draft.created_by_id = actor_id
         draft.updated_at = datetime.now(timezone.utc)
+        ComplianceService().stage_form_version(db, form, draft, actor_id=actor_id)
         db.flush()
         return draft
 
@@ -262,6 +271,7 @@ class FormVersionService:
         db.add(draft)
         db.flush()
         self.apply_to_legacy_editor(db, form, draft.definition_json)
+        ComplianceService().stage_form_version(db, form, draft, actor_id=actor_id)
         return draft
 
     def publish(
@@ -290,6 +300,11 @@ class FormVersionService:
             errors.append("Wersja nie zawiera pól formularza.")
         if errors:
             raise FormVersionValidationError(errors)
+
+        try:
+            ComplianceService().freeze_form_version(db, form, version, actor_id=actor_id)
+        except ComplianceError as exc:
+            raise FormVersionValidationError([str(exc)]) from exc
 
         now = datetime.now(timezone.utc)
         published_versions = db.execute(

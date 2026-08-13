@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, event, func, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -159,6 +159,11 @@ class FormSubmission(Base):
         cascade="all, delete-orphan",
     )
     form_version: Mapped["FormVersion | None"] = relationship(back_populates="submissions")
+    consents: Mapped[list["SubmissionConsent"]] = relationship(
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        order_by="SubmissionConsent.id",
+    )
 
 
 class SubmissionTraining(Base):
@@ -410,6 +415,14 @@ class Form(Base):
         cascade="all, delete-orphan",
         order_by="FormVersion.version_major, FormVersion.version_minor",
     )
+    consent_definitions: Mapped[list["ConsentDefinition"]] = relationship(
+        back_populates="form",
+        cascade="all, delete-orphan",
+    )
+    regulation_versions: Mapped[list["FormRegulationVersion"]] = relationship(
+        back_populates="form",
+        cascade="all, delete-orphan",
+    )
     permissions: Mapped[list["FormPermission"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_templates: Mapped[list["MailTemplate"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_footers: Mapped[list["MailFooter"]] = relationship(back_populates="form", cascade="all, delete-orphan")
@@ -469,12 +482,24 @@ class FormVersion(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     change_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     source_version_id: Mapped[int | None] = mapped_column(ForeignKey("form_versions.id", ondelete="SET NULL"), nullable=True)
+    regulation_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("form_regulation_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     form: Mapped[Form] = relationship(back_populates="versions")
     created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_id])
     published_by: Mapped[User | None] = relationship(foreign_keys=[published_by_id])
     source_version: Mapped["FormVersion | None"] = relationship(remote_side=[id], foreign_keys=[source_version_id])
     submissions: Mapped[list[FormSubmission]] = relationship(back_populates="form_version")
+    regulation_version: Mapped["FormRegulationVersion | None"] = relationship(
+        foreign_keys=[regulation_version_id],
+    )
+    consent_links: Mapped[list["FormVersionConsent"]] = relationship(
+        back_populates="form_version",
+        cascade="all, delete-orphan",
+        order_by="FormVersionConsent.sort_order, FormVersionConsent.id",
+    )
 
 
 class SystemMailSettings(Base):
@@ -563,6 +588,147 @@ class FormRegulation(Base):
 
     form: Mapped[Form] = relationship(back_populates="regulation")
     uploaded_by: Mapped[User | None] = relationship()
+    versions: Mapped[list["FormRegulationVersion"]] = relationship(
+        back_populates="regulation",
+        cascade="all, delete-orphan",
+        order_by="FormRegulationVersion.version_major, FormRegulationVersion.version_minor",
+    )
+
+
+class FormRegulationVersion(Base):
+    __tablename__ = "form_regulation_versions"
+    __table_args__ = (
+        UniqueConstraint("regulation_id", "version_major", "version_minor", name="uq_regulation_versions_number"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_regulation_versions_status"),
+        Index("ix_regulation_versions_form_status", "form_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    regulation_id: Mapped[int] = mapped_column(ForeignKey("form_regulations.id", ondelete="CASCADE"), nullable=False)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    version_major: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), default="Regulamin", nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    regulation: Mapped[FormRegulation] = relationship(back_populates="versions")
+    form: Mapped[Form] = relationship(back_populates="regulation_versions")
+    created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_id])
+
+
+class ConsentDefinition(Base):
+    __tablename__ = "consent_definitions"
+    __table_args__ = (UniqueConstraint("form_id", "consent_key", name="uq_consent_definitions_form_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=False)
+    consent_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    consent_type: Mapped[str] = mapped_column(String(64), default="other", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    form: Mapped[Form] = relationship(back_populates="consent_definitions")
+    versions: Mapped[list["ConsentVersion"]] = relationship(
+        back_populates="definition",
+        cascade="all, delete-orphan",
+        order_by="ConsentVersion.version_major, ConsentVersion.version_minor",
+    )
+
+
+class ConsentVersion(Base):
+    __tablename__ = "consent_versions"
+    __table_args__ = (
+        UniqueConstraint("consent_definition_id", "version_major", "version_minor", name="uq_consent_versions_number"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_consent_versions_status"),
+        Index("ix_consent_versions_definition_status", "consent_definition_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consent_definition_id: Mapped[int] = mapped_column(ForeignKey("consent_definitions.id", ondelete="CASCADE"), nullable=False)
+    version_major: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    consent_type: Mapped[str] = mapped_column(String(64), default="other", nullable=False)
+    title: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    text_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    definition: Mapped[ConsentDefinition] = relationship(back_populates="versions")
+    created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_id])
+
+
+class FormVersionConsent(Base):
+    __tablename__ = "form_version_consents"
+    __table_args__ = (UniqueConstraint("form_version_id", "consent_version_id", name="uq_form_version_consents_link"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_version_id: Mapped[int] = mapped_column(ForeignKey("form_versions.id", ondelete="CASCADE"), nullable=False)
+    consent_version_id: Mapped[int] = mapped_column(ForeignKey("consent_versions.id", ondelete="RESTRICT"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    form_version: Mapped[FormVersion] = relationship(back_populates="consent_links")
+    consent_version: Mapped[ConsentVersion] = relationship()
+
+
+class SubmissionConsent(Base):
+    __tablename__ = "submission_consents"
+    __table_args__ = (UniqueConstraint("submission_id", "consent_key", name="uq_submission_consents_submission_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), index=True, nullable=False)
+    consent_version_id: Mapped[int | None] = mapped_column(ForeignKey("consent_versions.id", ondelete="SET NULL"), nullable=True)
+    regulation_version_id: Mapped[int | None] = mapped_column(ForeignKey("form_regulation_versions.id", ondelete="SET NULL"), nullable=True)
+    consent_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    consent_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    consent_title_snapshot: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    consent_text_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    consent_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    regulation_version: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    regulation_sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    submission: Mapped[FormSubmission] = relationship(back_populates="consents")
+    consent_version_record: Mapped[ConsentVersion | None] = relationship(foreign_keys=[consent_version_id])
+    regulation_version_record: Mapped[FormRegulationVersion | None] = relationship(foreign_keys=[regulation_version_id])
+
+
+def _immutable_published_content(mapper, connection, target) -> None:
+    state = inspect(target)
+    status_history = state.attrs.status.history
+    original_status = status_history.deleted[0] if status_history.deleted else target.status
+    if original_status not in {"published", "archived"}:
+        return
+    allowed = {"status", "archived_at"}
+    changed = {attribute.key for attribute in state.attrs if attribute.history.has_changes()}
+    if changed - allowed:
+        raise ValueError("Opublikowanej lub archiwalnej treści compliance nie można edytować.")
+
+
+event.listen(ConsentVersion, "before_update", _immutable_published_content)
+event.listen(FormRegulationVersion, "before_update", _immutable_published_content)
+
+
+@event.listens_for(SubmissionConsent, "before_update")
+def _immutable_submission_consent(mapper, connection, target) -> None:
+    raise ValueError("Snapshotu zaakceptowanej zgody nie można edytować.")
 
 
 class ContactPage(Base):

@@ -10,6 +10,7 @@ from services.access_token_service import AccessTokenService
 from services.audit_log_service import AuditLogService
 from services.beneficiary_agreement_service import BeneficiaryAgreementService
 from services.blocked_agreement_admin_service import BlockedAgreementAdminService
+from services.compliance_service import ComplianceService
 from services.document_service import DocumentService
 from services.documents.agreement_flow_service import AgreementFlowService
 from services.documents.agreement_docx_template_service import AgreementDocxTemplateService
@@ -70,6 +71,7 @@ class ServiceContainer:
     access_token_service: AccessTokenService
     form_config_service: FormConfigService
     form_version_service: FormVersionService
+    compliance_service: ComplianceService
     rules_service: RulesService
     qualification_condition_service: QualificationConditionService
     submission_correction_service: SubmissionCorrectionService
@@ -165,6 +167,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_document_service=submission_document_service,
         strict_document_metadata_read=bool(app.config.get("STRICT_DOCUMENT_METADATA_READ")),
     )
+    compliance_service = ComplianceService(submission_repository)
     submission_service = SubmissionService(
         submission_repository,
         storage=storage,
@@ -176,6 +179,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         access_token_service=access_token_service,
         submission_document_service=submission_document_service,
         qualification_condition_service=qualification_condition_service,
+        compliance_service=compliance_service,
     )
     submission_training_service = SubmissionTrainingService()
     document_signing_service = DocumentSigningService(
@@ -217,6 +221,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         access_token_service=access_token_service,
         form_config_service=form_config_service,
         form_version_service=form_version_service,
+        compliance_service=compliance_service,
         rules_service=rules_service,
         qualification_condition_service=qualification_condition_service,
         submission_correction_service=submission_correction_service,

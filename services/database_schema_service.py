@@ -30,7 +30,19 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
             "archived_at",
             "change_summary",
             "source_version_id",
+            "regulation_version_id",
         }
+    ),
+    "consent_definitions": frozenset({"form_id", "consent_key", "consent_type"}),
+    "consent_versions": frozenset(
+        {"consent_definition_id", "version_major", "version_minor", "consent_type", "sha256", "status", "text_snapshot"}
+    ),
+    "form_regulation_versions": frozenset(
+        {"regulation_id", "form_id", "version_major", "version_minor", "sha256", "status", "storage_path"}
+    ),
+    "form_version_consents": frozenset({"form_version_id", "consent_version_id", "sort_order"}),
+    "submission_consents": frozenset(
+        {"submission_id", "consent_key", "consent_version", "consent_sha256", "accepted", "accepted_at"}
     ),
     "form_submissions": frozenset({"form_version_id"}),
     "email_logs": frozenset({"event_type", "error_type", "administrator_message", "html_body", "text_body"}),

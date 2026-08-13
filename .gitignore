@@ -13,7 +13,7 @@ __pycache__/
 .ruff_cache/
 .tox/
 .nox/
-.pytest-tmp-full-versioning
+.pytest-tmp-*
 
 # Coverage output
 .coverage

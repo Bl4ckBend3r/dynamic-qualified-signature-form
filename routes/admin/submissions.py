@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timezone
+from pathlib import Path
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from models import (
     EmailLog,
     Form,
+    FormRegulationVersion,
     FormSubmission,
     MailFooter,
     MailTemplate,
@@ -335,6 +337,22 @@ def submission_detail(form_id: int, submission_pk: int):
             }
             for item in correspondence_logs
         ]
+        submission_consents = [
+            {
+                "record": item,
+                "audit_description": services.compliance_service.audit_description(item),
+                "regulation_url": (
+                    url_for(
+                        "admin.regulation_version_download",
+                        form_id=form.id,
+                        regulation_version_id=item.regulation_version_id,
+                    )
+                    if item.regulation_version_id
+                    else ""
+                ),
+            }
+            for item in submission.consents
+        ]
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -349,9 +367,24 @@ def submission_detail(form_id: int, submission_pk: int):
             office_signed_agreement_view=office_signed_agreement_view,
             participant_training_view=participant_training_view,
             correspondence=correspondence,
+            submission_consents=submission_consents,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
         )
+
+
+@bp.get("/forms/<int:form_id>/regulations/versions/<int:regulation_version_id>/download")
+@login_required
+def regulation_version_download(form_id: int, regulation_version_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        version = db.get(FormRegulationVersion, regulation_version_id) or abort(404)
+        if version.form_id != form.id:
+            abort(404)
+        path = Path(version.storage_path)
+        if not path.is_file():
+            abort(404)
+        return send_file(path, mimetype=version.mime_type or None, download_name=version.original_filename)
 
 
 @bp.post("/submissions/<submission_id>/rollback-stage")

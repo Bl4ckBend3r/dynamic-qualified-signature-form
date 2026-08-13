@@ -646,7 +646,7 @@ def list_public_db_forms() -> list[dict]:
     with session_factory() as db:
         forms = db.execute(
             select(Form)
-            .where(Form.is_active.is_(True), Form.is_public.is_(True))
+            .where(Form.is_active.is_(True), Form.is_public.is_(True), Form.is_listed.is_(True))
             .order_by(Form.sort_order, Form.name)
         ).scalars().all()
         result = []

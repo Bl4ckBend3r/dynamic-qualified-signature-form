@@ -7,6 +7,8 @@ from typing import Callable
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import Engine, make_url
 
 from database import create_engine, normalize_database_url
@@ -15,7 +17,7 @@ from database import create_engine, normalize_database_url
 logger = logging.getLogger(__name__)
 
 REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
-    "forms": frozenset({"user_instruction", "user_instruction_config"}),
+    "forms": frozenset({"user_instruction", "user_instruction_config", "is_listed", "share_token_hash"}),
     "form_versions": frozenset(
         {
             "form_id",
@@ -88,7 +90,44 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
     ),
 }
 
-MIGRATION_HINT = "Brakuje kolumn w bazie danych. Uruchom: alembic upgrade head"
+MIGRATION_HINT = "Database schema is behind Alembic head. Run: alembic upgrade head"
+
+
+def database_migration_status(
+    database_url: str | None = None,
+    *,
+    engine: Engine | None = None,
+    project_root: Path | None = None,
+) -> dict:
+    if engine is None and not str(database_url or "").strip():
+        raise RuntimeError("DATABASE_URL is required to inspect Alembic status.")
+    checked_engine = engine or create_engine(str(database_url))
+    root = project_root or Path(__file__).resolve().parents[1]
+    config = AlembicConfig(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    script = ScriptDirectory.from_config(config)
+    heads = tuple(script.get_heads())
+    with checked_engine.connect() as connection:
+        current = tuple(MigrationContext.configure(connection).get_current_heads())
+    known = {revision.revision for revision in script.walk_revisions()}
+    unknown = tuple(sorted(set(current) - known))
+    if unknown:
+        state = "unknown"
+    elif len(heads) != 1:
+        state = "multiple_heads"
+    elif current == heads:
+        state = "head"
+    elif not current:
+        state = "unversioned"
+    else:
+        state = "behind"
+    return {
+        "state": state,
+        "current": list(current),
+        "heads": list(heads),
+        "head_count": len(heads),
+        "unknown": list(unknown),
+    }
 
 
 def redact_database_url(database_url: str) -> str:
@@ -151,6 +190,7 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
     database_url = str(app.config.get("DATABASE_URL") or "").strip()
     auto_migrate = bool(app.config.get("AUTO_DB_MIGRATE"))
     app.extensions["database_schema_missing"] = {}
+    app.extensions["database_migration_status"] = {}
     if not database_url:
         return {}
 
@@ -166,6 +206,28 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
             "Pominięto walidację migracji: AUTO_CREATE_DB_SCHEMA jest włączone."
         )
         return {}
+
+    migration_status = {}
+    try:
+        migration_status = database_migration_status(database_url)
+        app.extensions["database_migration_status"] = migration_status
+        if migration_status["state"] != "head":
+            app.logger.error(
+                "%s state=%s current=%s heads=%s database_url=%s",
+                MIGRATION_HINT,
+                migration_status["state"],
+                ",".join(migration_status["current"]) or "-",
+                ",".join(migration_status["heads"]) or "-",
+                safe_url,
+            )
+            if auto_migrate:
+                raise RuntimeError("Automatyczna migracja nie doprowadziła bazy do Alembic head.")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        app.logger.exception("Nie udało się odczytać stanu Alembic. database_url=%s", safe_url)
+        if auto_migrate:
+            raise RuntimeError("Nie udało się potwierdzić Alembic head po automatycznej migracji.") from exc
 
     try:
         missing = check_database_schema(database_url)

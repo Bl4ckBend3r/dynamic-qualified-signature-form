@@ -97,7 +97,35 @@ from . import (
     parse_optional_int,
     role_required,
 )
+FORM_ACCESS_MODES = {
+    "public",
+    "unlisted",
+    "disabled",
+}
 
+
+def apply_form_access_mode(form: Form, raw_mode: str | None) -> str:
+    mode = str(raw_mode or "public").strip().lower()
+
+    if mode not in FORM_ACCESS_MODES:
+        mode = "public"
+
+    if mode == "public":
+        form.is_active = True
+        form.is_public = True
+        form.is_listed = True
+
+    elif mode == "unlisted":
+        form.is_active = True
+        form.is_public = True
+        form.is_listed = False
+
+    elif mode == "disabled":
+        form.is_active = False
+        form.is_public = False
+        form.is_listed = False
+
+    return mode
 
 FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel", "file"]
 FORM_EDITOR_TABS = {

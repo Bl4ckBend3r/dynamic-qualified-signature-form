@@ -12,6 +12,7 @@ from models import Base
 from services.database_schema_service import (
     MIGRATION_HINT,
     check_database_schema,
+    database_migration_status,
     prepare_database_schema,
     redact_database_url,
     run_database_upgrade,
@@ -46,6 +47,19 @@ def test_database_url_is_logged_without_password():
     assert "super-secret" not in redacted
     assert "***" in redacted
     assert "db.example.test" in redacted
+
+
+def test_migration_status_reports_unversioned_unknown_and_head(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'status.db'}")
+    status = database_migration_status(engine=engine)
+    assert status["state"] == "unversioned"
+    assert status["head_count"] == 1
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE alembic_version (version_num VARCHAR(64) NOT NULL PRIMARY KEY)")
+        connection.exec_driver_sql("INSERT INTO alembic_version(version_num) VALUES ('unknown_revision')")
+    status = database_migration_status(engine=engine)
+    assert status["state"] == "unknown"
+    assert status["unknown"] == ["unknown_revision"]
 
 
 def test_database_upgrade_uses_alembic_api_and_requested_database(tmp_path):
@@ -85,6 +99,10 @@ def test_prepare_schema_only_runs_upgrade_when_enabled(monkeypatch, caplog):
         "services.database_schema_service.check_database_schema",
         lambda url: {"forms": ["user_instruction_config"]},
     )
+    monkeypatch.setattr(
+        "services.database_schema_service.database_migration_status",
+        lambda url: {"state": "behind", "current": ["old"], "heads": ["head"]},
+    )
 
     missing = prepare_database_schema(app)
 
@@ -94,6 +112,10 @@ def test_prepare_schema_only_runs_upgrade_when_enabled(monkeypatch, caplog):
     assert "secret" not in caplog.text
 
     app.config["AUTO_DB_MIGRATE"] = True
+    monkeypatch.setattr(
+        "services.database_schema_service.database_migration_status",
+        lambda url: {"state": "head", "current": ["head"], "heads": ["head"]},
+    )
     monkeypatch.setattr(
         "services.database_schema_service.check_database_schema",
         lambda url: {},
@@ -117,6 +139,10 @@ def test_auto_migrate_takes_precedence_over_legacy_auto_create(monkeypatch):
     monkeypatch.setattr(
         "services.database_schema_service.check_database_schema",
         lambda url: {},
+    )
+    monkeypatch.setattr(
+        "services.database_schema_service.database_migration_status",
+        lambda url: {"state": "head", "current": ["head"], "heads": ["head"]},
     )
 
     assert prepare_database_schema(app) == {}
@@ -143,6 +169,11 @@ def test_prepare_schema_fails_start_when_automatic_upgrade_fails(monkeypatch):
 
 
 def test_manage_db_check_and_upgrade_exit_codes(monkeypatch, capsys):
+    monkeypatch.setattr(
+        manage,
+        "database_migration_status",
+        lambda url: {"state": "head", "current": ["head"], "heads": ["head"], "head_count": 1, "unknown": []},
+    )
     monkeypatch.setattr(
         manage,
         "check_database_schema",

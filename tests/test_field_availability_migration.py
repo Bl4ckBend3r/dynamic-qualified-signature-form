@@ -14,7 +14,7 @@ def test_field_availability_migration_adds_json_column(tmp_path):
         connection.exec_driver_sql("ALTER TABLE form_fields DROP COLUMN availability_json")
         context = MigrationContext.configure(connection)
         operations = Operations(context)
-        module_path = Path("migrations/versions/20260813_0035_field_workflow_availability.py")
+        module_path = Path("migrations/versions/20260813_0036_field_workflow_availability.py")
         namespace = {}
         exec(compile(module_path.read_text(encoding="utf-8"), str(module_path), "exec"), namespace)
         original_op = namespace["op"]

@@ -191,13 +191,19 @@ def _backfill() -> None:
         extend_existing=True,
     )
     now = datetime.now(timezone.utc)
-    if (
-        bind.execute(sa.select(sa.func.count(links.c.id))).scalar_one()
-        or bind.execute(sa.select(sa.func.count(definitions.c.id))).scalar_one()
-        or bind.execute(sa.select(sa.func.count(regulation_versions.c.id))).scalar_one()
-        or bind.execute(sa.select(sa.func.count(snapshots.c.id))).scalar_one()
-    ):
-        return
+    populated = {
+        "form_version_consents": bind.execute(sa.select(sa.func.count(links.c.id))).scalar_one(),
+        "consent_definitions": bind.execute(sa.select(sa.func.count(definitions.c.id))).scalar_one(),
+        "form_regulation_versions": bind.execute(sa.select(sa.func.count(regulation_versions.c.id))).scalar_one(),
+        "submission_consents": bind.execute(sa.select(sa.func.count(snapshots.c.id))).scalar_one(),
+    }
+    if any(populated.values()):
+        details = ", ".join(f"{name}={count}" for name, count in populated.items() if count)
+        raise RuntimeError(
+            "Migration 20260813_0032 found pre-populated compliance tables "
+            f"({details}). Refusing to stamp a potentially partial backfill; "
+            "restore a backup or verify and repair the data before retrying."
+        )
 
     definition_ids: dict[tuple[int, str], int] = {}
     current_by_definition: dict[int, dict] = {}

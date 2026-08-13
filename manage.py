@@ -11,6 +11,7 @@ from services.form_draft_service import FormDraftService
 from services.database_schema_service import (
     MIGRATION_HINT,
     check_database_schema,
+    database_migration_status,
     redact_database_url,
     run_database_upgrade,
 )
@@ -41,6 +42,7 @@ def db_check(database_url: str | None = None) -> int:
         print("DATABASE_URL jest wymagany.")
         return 2
     try:
+        migration_status = database_migration_status(selected_url)
         missing = check_database_schema(selected_url)
     except Exception as exc:
         print(
@@ -49,9 +51,16 @@ def db_check(database_url: str | None = None) -> int:
         )
         return 2
     print(f"Database: {redact_database_url(selected_url)}")
+    print(f"Alembic current: {', '.join(migration_status['current']) or '(brak)'}")
+    print(f"Alembic head: {', '.join(migration_status['heads']) or '(brak)'}")
+    print(f"Alembic state: {migration_status['state']}")
+    if migration_status["state"] != "head":
+        print(MIGRATION_HINT)
     if not missing:
-        print("Schemat rozszerzony jest aktualny.")
-        return 0
+        if migration_status["state"] == "head":
+            print("Schemat rozszerzony jest aktualny.")
+            return 0
+        return 1
     print(MIGRATION_HINT)
     print("Tabela | Brakujące kolumny")
     print("--- | ---")

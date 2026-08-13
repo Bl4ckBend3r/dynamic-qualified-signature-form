@@ -15,15 +15,32 @@ depends_on = None
 
 
 def upgrade():
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "submission_files" not in inspector.get_table_names():
+        raise RuntimeError("Brak wymaganej tabeli submission_files przed migracją 20260813_0033.")
+    existing = {item["name"] for item in inspector.get_columns("submission_files")}
+    definitions = (
+        sa.Column("field_key", sa.String(255), nullable=False, server_default=""),
+        sa.Column("attachment_version", sa.Integer(), nullable=True),
+        sa.Column("category", sa.String(128), nullable=False, server_default=""),
+        sa.Column("uploaded_by_source", sa.String(64), nullable=False, server_default=""),
+        sa.Column("workflow_step_at_upload", sa.String(128), nullable=False, server_default=""),
+        sa.Column("antivirus_status", sa.String(64), nullable=False, server_default="not_configured"),
+        sa.Column("rejection_reason", sa.Text(), nullable=False, server_default=""),
+    )
     with op.batch_alter_table("submission_files") as batch:
-        batch.add_column(sa.Column("field_key", sa.String(255), nullable=False, server_default=""))
-        batch.add_column(sa.Column("attachment_version", sa.Integer(), nullable=True))
-        batch.add_column(sa.Column("category", sa.String(128), nullable=False, server_default=""))
-        batch.add_column(sa.Column("uploaded_by_source", sa.String(64), nullable=False, server_default=""))
-        batch.add_column(sa.Column("workflow_step_at_upload", sa.String(128), nullable=False, server_default=""))
-        batch.add_column(sa.Column("antivirus_status", sa.String(64), nullable=False, server_default="not_configured"))
-        batch.add_column(sa.Column("rejection_reason", sa.Text(), nullable=False, server_default=""))
-        batch.create_index("ix_submission_files_attachment_field", ["submission_id", "field_key", "attachment_version"])
+        for column in definitions:
+            if column.name not in existing:
+                batch.add_column(column)
+    inspector = sa.inspect(bind)
+    indexes = {item["name"] for item in inspector.get_indexes("submission_files")}
+    if "ix_submission_files_attachment_field" not in indexes:
+        op.create_index(
+            "ix_submission_files_attachment_field",
+            "submission_files",
+            ["submission_id", "field_key", "attachment_version"],
+        )
 
 
 def downgrade():

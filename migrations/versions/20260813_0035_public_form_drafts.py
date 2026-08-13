@@ -1,7 +1,7 @@
 """add secure resumable public form drafts
 
-Revision ID: 20260813_0034
-Revises: 20260813_0033
+Revision ID: 20260813_0035
+Revises: 20260813_0034
 Create Date: 2026-08-13
 """
 
@@ -9,10 +9,17 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "20260813_0034"
-down_revision = "20260813_0033"
+revision = "20260813_0035"
+down_revision = "20260813_0034"
 branch_labels = None
 depends_on = None
+
+_REQUIRED_COLUMNS = {
+    "id", "public_id", "form_id", "form_version_id", "email", "data_json",
+    "status", "token_hash", "expires_at", "completed_at", "last_autosave_at",
+    "submit_started_at", "submission_id", "submission_public_id",
+    "metadata_json", "created_at", "updated_at",
+}
 
 
 def _json_type():
@@ -20,6 +27,16 @@ def _json_type():
 
 
 def upgrade():
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "form_drafts" in inspector.get_table_names():
+        missing = sorted(_REQUIRED_COLUMNS - {item["name"] for item in inspector.get_columns("form_drafts")})
+        if missing:
+            raise RuntimeError(
+                "Partial form_drafts schema before migration 20260813_0035; "
+                f"missing columns: {', '.join(missing)}. Restore a backup or repair the schema before retrying."
+            )
+        return
     op.create_table(
         "form_drafts",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -53,4 +70,5 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_table("form_drafts")
+    if "form_drafts" in sa.inspect(op.get_bind()).get_table_names():
+        op.drop_table("form_drafts")

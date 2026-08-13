@@ -11,6 +11,8 @@ from flask import abort, current_app, flash, g, jsonify, redirect, render_templa
 from jinja2 import TemplateSyntaxError, UndefinedError, meta
 from sqlalchemy import func, select
 
+from services.form_access_service import generate_share_token
+
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
 from models import (
     Form,
@@ -773,8 +775,10 @@ def form_edit(form_id: int):
             form.user_instruction_config = instruction_config
             form.slug = new_slug
             form.description = request.form.get("description", "").strip()
-            form.is_active = request.form.get("is_active") == "on"
-            form.is_public = request.form.get("is_public") == "on"
+            apply_form_access_mode(
+                form,
+                request.form.get("access_mode"),
+            )
             form.label_text = request.form.get("label_text", "").strip()
             form.label_variant = request.form.get("label_variant", "").strip() or "project"
             form.label_color = request.form.get("label_color", "").strip() or "#b38d45"
@@ -1952,6 +1956,52 @@ def form_repair_agreement_confirmation(form_id: int):
         db.commit()
     flash("Naprawiono ścieżkę podpisu urzędu. Dodano lub uaktywniono wymagany etap.", "success")
     return redirect(url_for("admin.form_edit", form_id=form_id, tab="workflow"))
+
+
+@bp.post("/forms/<int:form_id>/share-link/regenerate")
+@login_required
+def form_share_link_regenerate(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(
+            db,
+            form_id,
+            manage=True,
+        )
+
+        if not (
+            form.is_active
+            and form.is_public
+            and not form.is_listed
+        ):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "Link prywatny można wygenerować tylko "
+                        "dla formularza w trybie „Tylko przez link”."
+                    ),
+                }
+            ), 400
+
+        token, token_hash = generate_share_token()
+
+        form.share_token_hash = token_hash
+
+        db.commit()
+
+        share_url = url_for(
+            "public_forms.form_page",
+            slug=form.slug,
+            access=token,
+            _external=True,
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "url": share_url,
+        }
+    )
 
 
 @bp.post("/forms/<int:form_id>/toggle")

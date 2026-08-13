@@ -18,6 +18,8 @@ from services.contact_page_service import ensure_contact_defaults, normalized_ph
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
 from services.nextcloud_storage import NextcloudStorageError
 
+from services.form_access_service import verify_share_token
+
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("public_forms", __name__)
@@ -118,19 +120,56 @@ def index():
 def form_page(slug: str):
     services = get_services()
     if current_app.config.get("DATABASE_URL"):
-        form_meta, form_config, form_version = get_public_db_form_versioned(slug)
+        share_access_token = str(
+            request.args.get("access") or ""
+        ).strip()
+
+        form_meta, form_config, form_version = (
+            get_public_db_form_versioned(
+                slug,
+                access_token=share_access_token,
+            )
+        )
+
         if not form_meta or not form_config:
             abort(404)
+
+        form_action = url_for(
+            "public_forms.submit",
+            slug=slug,
+            **(
+                {"access": share_access_token}
+                if share_access_token
+                else {}
+            ),
+        )
+
         return render_template(
             "form_page.html",
             slug=slug,
             form_meta=form_meta,
-            form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
+            form_definition=form_definition_for_stage(
+                form_config,
+                FIELD_STAGE_INITIAL,
+            ),
             errors={},
             values={},
-            form_version_id=form_version.id if form_version else None,
-            form_version_token=_form_version_token(slug, form_version.id) if form_version else "",
+            form_version_id=(
+                form_version.id
+                if form_version
+                else None
+            ),
+            form_version_token=(
+                _form_version_token(
+                    slug,
+                    form_version.id,
+                )
+                if form_version
+                else ""
+            ),
             draft_enabled=True,
+            form_action=form_action,
+            share_access_token=share_access_token,
         )
 
     form_meta = services.form_config_service.get_form_meta(services.storage, slug)
@@ -162,8 +201,14 @@ def create_form_draft(slug: str):
     if not csrf_valid:
         abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
     version_token = str(request_data.get("form_version_token") or "")
+    share_access_token = str(
+        request.args.get("access") or ""
+    ).strip()
     form_meta, form_config, version = get_public_db_form_versioned(
-        slug, version_token=version_token, require_version_token=True
+        slug,
+        version_token=version_token,
+        require_version_token=True,
+        access_token=share_access_token,
     )
     if not form_meta or not form_config or not version:
         abort(409, description="Wersja formularza nie jest dostępna. Otwórz formularz ponownie.")
@@ -349,9 +394,23 @@ def _definition_for_draft(db, form: Form, draft: FormDraft) -> dict:
     return form_to_definition(form, fields)
 
 
+
 @bp.post("/submit/<slug>")
 def submit(slug: str):
     services = get_services()
+    share_access_token = str(
+        request.args.get("access") or ""
+    ).strip()
+
+    form_action = url_for(
+        "public_forms.submit",
+        slug=slug,
+        **(
+            {"access": share_access_token}
+            if share_access_token
+            else {}
+        ),
+    )
     request_data = request.get_json(silent=True) if request.is_json else request.form
     form_version = None
     form_version_token = str((request_data or {}).get("form_version_token") or "")
@@ -360,6 +419,7 @@ def submit(slug: str):
             slug,
             version_token=form_version_token,
             require_version_token=True,
+            access_token=share_access_token,
         )
         if not form_meta or not form_config:
             abort(409, description="Wersja formularza wygasła albo nie jest już dostępna. Otwórz formularz ponownie.")
@@ -390,6 +450,8 @@ def submit(slug: str):
             form_version_id=form_version.id if form_version else None,
             form_version_token=form_version_token,
             form_error="Sesja formularza wygasła lub brakuje tokenu bezpieczeństwa. Odśwież stronę i spróbuj ponownie.",
+            form_action=form_action,
+            share_access_token=share_access_token,
         ), 400
 
     try:
@@ -409,6 +471,7 @@ def submit(slug: str):
                 csrf_missing,
             )
             flash("Formularz zawiera błędy. Popraw wskazane pola.", "error")
+            
             return render_template(
                 "form_page.html",
                 slug=slug,
@@ -419,9 +482,11 @@ def submit(slug: str):
                 form_version_id=form_version.id if form_version else None,
                 form_version_token=form_version_token,
                 form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
+                form_action=form_action,
+                share_access_token=share_access_token,
             ), 400
 
-        return render_template("result.html", result=submission_result["result"])
+        return render_template("result.html", result=submission_result["result"], form_action=form_action, share_access_token=share_access_token,)
 
     except Exception as exc:
         logger.exception("Błąd przetwarzania formularza: %s", exc)
@@ -663,8 +728,16 @@ def list_public_db_forms() -> list[dict]:
         return result
 
 
-def get_public_db_form(slug: str) -> tuple[dict | None, dict | None]:
-    form_meta, form_config, _version = get_public_db_form_versioned(slug)
+
+
+def get_public_db_form(
+    slug: str,
+    access_token: str = "",
+) -> tuple[dict | None, dict | None]:
+    form_meta, form_config, _version = get_public_db_form_versioned(
+        slug,
+        access_token=access_token,
+    )
     return form_meta, form_config
 
 
@@ -673,10 +746,14 @@ def get_public_db_form_versioned(
     *,
     version_token: str = "",
     require_version_token: bool = False,
+    access_token: str = "",
 ) -> tuple[dict | None, dict | None, FormVersion | None]:
+
     session_factory = db_session_factory()
+
     if not session_factory:
         return None, None, None
+
     with session_factory() as db:
         form = db.execute(
             select(Form).where(
@@ -685,28 +762,75 @@ def get_public_db_form_versioned(
                 Form.is_public.is_(True),
             )
         ).scalar_one_or_none()
+
         if not form:
             return None, None, None
+
+        # Formularz typu "Tylko przez link"
+        if not form.is_listed:
+            if not verify_share_token(
+                form.share_token_hash,
+                access_token,
+            ):
+                return None, None, None
+
         version_service = get_services().form_version_service
+
         if version_service.has_versions(db, form.id):
+
             if version_token:
-                version_id = _version_id_from_token(slug, version_token)
-                version = version_service.resolve_rendered_version(db, form, version_id) if version_id else None
+                version_id = _version_id_from_token(
+                    slug,
+                    version_token,
+                )
+
+                version = (
+                    version_service.resolve_rendered_version(
+                        db,
+                        form,
+                        version_id,
+                    )
+                    if version_id
+                    else None
+                )
+
             elif require_version_token:
                 version = None
+
             else:
-                version = version_service.resolve_published(db, form.id)
+                version = version_service.resolve_published(
+                    db,
+                    form.id,
+                )
+
             if not version:
                 return None, None, None
-            meta, definition = version_to_public_form(db, form, version)
+
+            meta, definition = version_to_public_form(
+                db,
+                form,
+                version,
+            )
+
             return meta, definition, version
+
         fields = db.execute(
             select(FormField)
-            .where(FormField.form_id == form.id, FormField.active.is_(True))
-            .order_by(FormField.sort_order, FormField.id)
+            .where(
+                FormField.form_id == form.id,
+                FormField.active.is_(True),
+            )
+            .order_by(
+                FormField.sort_order,
+                FormField.id,
+            )
         ).scalars().all()
-        return form_to_public_meta(form), form_to_definition(form, fields), None
 
+        return (
+            form_to_public_meta(form),
+            form_to_definition(form, fields),
+            None,
+        )
 
 def version_to_public_form(db, form: Form, version: FormVersion) -> tuple[dict, dict]:
     definition = dict(version.definition_json or {})

@@ -23,6 +23,86 @@
         <div class="admin-form-grid">
             <label>
     <span>Dostępność formularza</span>
+    {% if form.is_active and form.is_public and not form.is_listed %}
+
+    <div
+        class="admin-form-wide admin-card"
+        data-share-link-panel
+    >
+        <h3>Link prywatny</h3>
+
+        <p>
+            Formularz nie jest widoczny na publicznej liście.
+            Dostęp wymaga specjalnego linku.
+        </p>
+
+        {% if form.share_token_hash %}
+            <p>
+                Link został już wcześniej wygenerowany.
+                Ze względów bezpieczeństwa nie można ponownie
+                odczytać istniejącego tokenu.
+            </p>
+
+            <p>
+                Wygenerowanie nowego linku natychmiast
+                unieważni poprzedni.
+            </p>
+        {% endif %}
+
+        <div class="admin-form-grid">
+
+            <label class="admin-form-wide">
+                <span>Wygenerowany link</span>
+
+                <input
+                    type="text"
+                    readonly
+                    data-share-link-output
+                    placeholder="Kliknij „Wygeneruj nowy link”"
+                >
+            </label>
+
+        </div>
+
+        <div class="admin-actions">
+
+            <button
+                type="button"
+                class="admin-button-secondary"
+                data-generate-share-link
+                data-share-link-url="{{
+                    url_for(
+                        'admin.form_share_link_regenerate',
+                        form_id=form.id
+                    )
+                }}"
+            >
+                {% if form.share_token_hash %}
+                    Wygeneruj nowy link
+                {% else %}
+                    Wygeneruj link
+                {% endif %}
+            </button>
+
+            <button
+                type="button"
+                class="admin-button-secondary"
+                data-copy-share-link
+                disabled
+            >
+                Kopiuj link
+            </button>
+
+        </div>
+
+        <p
+            data-share-link-message
+            aria-live="polite"
+        ></p>
+
+    </div>
+
+    {% endif %}
 
     <select name="access_mode">
 
@@ -3746,6 +3826,135 @@ document
         syncConditionCancelProcess(row);
         updateConditionSummary(row);
     });
+
+const shareLinkGenerateButton =
+    document.querySelector("[data-generate-share-link]");
+
+const shareLinkCopyButton =
+    document.querySelector("[data-copy-share-link]");
+
+const shareLinkOutput =
+    document.querySelector("[data-share-link-output]");
+
+const shareLinkMessage =
+    document.querySelector("[data-share-link-message]");
+
+
+if (shareLinkGenerateButton) {
+
+    shareLinkGenerateButton.addEventListener(
+        "click",
+        async function () {
+
+            const csrfToken =
+                document.querySelector(
+                    'input[name="csrf_token"]'
+                )?.value || "";
+
+            shareLinkGenerateButton.disabled = true;
+
+            if (shareLinkMessage) {
+                shareLinkMessage.textContent =
+                    "Generowanie linku...";
+            }
+
+            try {
+
+                const body = new URLSearchParams();
+
+                body.set(
+                    "csrf_token",
+                    csrfToken
+                );
+
+                const response = await fetch(
+                    shareLinkGenerateButton.dataset.shareLinkUrl,
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type":
+                                "application/x-www-form-urlencoded;charset=UTF-8",
+                        },
+                        body: body.toString(),
+                    }
+                );
+
+                const result = await response.json();
+
+                if (!response.ok || !result.ok) {
+                    throw new Error(
+                        result.error
+                        || "Nie udało się wygenerować linku."
+                    );
+                }
+
+                if (shareLinkOutput) {
+                    shareLinkOutput.value = result.url;
+                }
+
+                if (shareLinkCopyButton) {
+                    shareLinkCopyButton.disabled = false;
+                }
+
+                if (shareLinkMessage) {
+                    shareLinkMessage.textContent =
+                        "Nowy link został wygenerowany. " +
+                        "Poprzedni link, jeżeli istniał, " +
+                        "jest już nieważny.";
+                }
+
+            } catch (error) {
+
+                if (shareLinkMessage) {
+                    shareLinkMessage.textContent =
+                        error.message;
+                }
+
+            } finally {
+
+                shareLinkGenerateButton.disabled = false;
+            }
+        }
+    );
+}
+
+
+if (shareLinkCopyButton) {
+
+    shareLinkCopyButton.addEventListener(
+        "click",
+        async function () {
+
+            const value =
+                shareLinkOutput?.value?.trim() || "";
+
+            if (!value) {
+                return;
+            }
+
+            try {
+
+                await navigator.clipboard.writeText(value);
+
+                if (shareLinkMessage) {
+                    shareLinkMessage.textContent =
+                        "Link został skopiowany.";
+                }
+
+            } catch {
+
+                shareLinkOutput?.select();
+
+                document.execCommand("copy");
+
+                if (shareLinkMessage) {
+                    shareLinkMessage.textContent =
+                        "Link został skopiowany.";
+                }
+            }
+        }
+    );
+}
 
 </script>
 <script src="{{ url_for('static', filename='js/agreement_builder.js') }}"></script>

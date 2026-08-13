@@ -219,7 +219,7 @@
 
             <div class="submit-row">
                 {% if draft_enabled and not correction_mode and not draft_mode %}
-                    <button type="submit" class="btn-secondary" formaction="{{ url_for('public_forms.create_form_draft', slug=slug) }}" formnovalidate>Zapisz i dokończ później</button>
+                    <button type="submit" class="btn-secondary" formaction="{{ url_for('public_forms.create_form_draft', slug=slug, access=share_access_token) }}" formnovalidate>Zapisz i dokończ później</button>
                 {% endif %}
                 {% if draft_mode %}<span class="draft-autosave-status" data-draft-autosave-status aria-live="polite">Wersja robocza jest aktywna.</span>{% endif %}
                 <button type="submit" class="btn-primary">{{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}</button>

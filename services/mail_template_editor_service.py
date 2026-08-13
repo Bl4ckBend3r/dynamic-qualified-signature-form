@@ -77,6 +77,8 @@ VARIABLE_GROUPS = (
             ("signed_agreements_list", "Podpisane umowy jako lista HTML", "Lista podpisanych umów"),
             ("signed_agreements_text", "Podpisane umowy jako tekst", "1. umowa-podpisana.pdf"),
             ("status_url", "Link do statusu zgłoszenia", "https://formularze.example.com/status/abc"),
+            ("draft_resume_url", "Link do wznowienia wersji roboczej", "https://formularze.example.com/form/przyklad/draft/token"),
+            ("draft_expires_at", "Data wygaśnięcia wersji roboczej", "2026-09-12 14:30"),
             ("podpisz_url", "Link do podpisania dokumentów", "https://formularze.example.com/podpisz/abc"),
             ("document_url", "Link do pobrania dokumentu", "https://formularze.example.com/dokument/abc"),
         ),

@@ -20,6 +20,7 @@ from services.documents.document_download_service import DocumentDownloadService
 from services.documents.document_signing_service import DocumentSigningService
 from services.form_config_service import FormConfigService
 from services.form_version_service import FormVersionService
+from services.form_draft_service import FormDraftService
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.legacy_fallback_readiness_service import LegacyFallbackReadinessService
 from services.mail_dispatch_service import MailDispatchService
@@ -73,6 +74,7 @@ class ServiceContainer:
     access_token_service: AccessTokenService
     form_config_service: FormConfigService
     form_version_service: FormVersionService
+    form_draft_service: FormDraftService
     compliance_service: ComplianceService
     rules_service: RulesService
     qualification_condition_service: QualificationConditionService
@@ -84,6 +86,10 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     storage = storage_override or create_nextcloud_storage_from_env()
     form_config_service = FormConfigService()
     form_version_service = FormVersionService()
+    form_draft_service = FormDraftService(
+        ttl_days=app.config.get("FORM_DRAFT_TTL_DAYS", 30),
+        max_data_bytes=app.config.get("FORM_DRAFT_MAX_DATA_BYTES", 262144),
+    )
     access_token_service = AccessTokenService()
     qualification_condition_service = QualificationConditionService()
     submission_correction_service = SubmissionCorrectionService()
@@ -226,6 +232,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         access_token_service=access_token_service,
         form_config_service=form_config_service,
         form_version_service=form_version_service,
+        form_draft_service=form_draft_service,
         compliance_service=compliance_service,
         rules_service=rules_service,
         qualification_condition_service=qualification_condition_service,

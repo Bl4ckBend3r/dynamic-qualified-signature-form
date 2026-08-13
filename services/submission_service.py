@@ -71,8 +71,9 @@ class SubmissionService:
         request_form,
         *,
         form_version_id: int | None = None,
+        submission_id: str | None = None,
     ) -> dict:
-        submission_id = str(uuid4())
+        submission_id = submission_id or str(uuid4())
         submission_data = extract_submission_data(form_config, request_form)
         submission_data = apply_pesel_derived_values(form_config, submission_data)
         mapped_submission, map_meta = build_submission_from_form(

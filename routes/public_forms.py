@@ -5,13 +5,14 @@ import hmac
 import secrets
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, render_template, request, send_file, session, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template, request, send_file, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
-from models import ContactPage, Form, FormField, FormRegulationVersion, FormSubmission, FormVersion, Logo, ServiceDocument
+from models import ContactPage, Form, FormDraft, FormField, FormRegulationVersion, FormSubmission, FormVersion, Logo, ServiceDocument
+from services.form_draft_service import FormDraftError
 from services.process_service import ProcessStatus
 from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
@@ -129,6 +130,7 @@ def form_page(slug: str):
             values={},
             form_version_id=form_version.id if form_version else None,
             form_version_token=_form_version_token(slug, form_version.id) if form_version else "",
+            draft_enabled=True,
         )
 
     form_meta = services.form_config_service.get_form_meta(services.storage, slug)
@@ -146,7 +148,205 @@ def form_page(slug: str):
         form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
         errors={},
         values={},
+        draft_enabled=False,
     )
+
+
+@bp.post("/form/<slug>/draft")
+def create_form_draft(slug: str):
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    request_data = request.form
+    csrf_valid, _csrf_missing = _valid_public_csrf(request_data)
+    if not csrf_valid:
+        abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
+    version_token = str(request_data.get("form_version_token") or "")
+    form_meta, form_config, version = get_public_db_form_versioned(
+        slug, version_token=version_token, require_version_token=True
+    )
+    if not form_meta or not form_config or not version:
+        abort(409, description="Wersja formularza nie jest dostępna. Otwórz formularz ponownie.")
+    initial_config = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug)).scalar_one()
+        try:
+            created = get_services().form_draft_service.create(
+                db, form=form, form_version=version, form_config=initial_config, request_data=request_data
+            )
+        except FormDraftError as exc:
+            return render_template(
+                "form_page.html", slug=slug, form_meta=form_meta, form_definition=initial_config,
+                errors={"email": str(exc)}, values=request_data, form_version_id=version.id,
+                form_version_token=version_token, form_error=str(exc), draft_enabled=True,
+            ), 400
+        draft_public_id = created.draft.public_id
+        raw_token = created.raw_token
+        db.commit()
+    resume_url = url_for("public_forms.resume_form_draft", slug=slug, token=raw_token, _external=True)
+    try:
+        get_services().mail_dispatch_service.dispatch_form_draft_resume(draft_public_id, resume_url)
+    except Exception as exc:
+        current_app.logger.exception("form_draft_mail_failed slug=%s error=%s", slug, exc.__class__.__name__)
+    return redirect(url_for("public_forms.resume_form_draft", slug=slug, token=raw_token, saved="1"))
+
+
+@bp.get("/form/<slug>/draft/<token>")
+def resume_form_draft(slug: str, token: str):
+    resolved = _resolve_form_draft(slug, token)
+    if not resolved:
+        abort(404)
+    form_meta, form_config, draft = resolved
+    response = make_response(render_template(
+        "form_page.html", slug=slug, form_meta=form_meta, form_definition=form_config,
+        errors={}, values=dict(draft.data_json or {}), draft_enabled=True, draft_mode=True,
+        draft_token=token,
+        form_action=url_for("public_forms.submit_form_draft", slug=slug, token=token),
+        autosave_url=url_for("public_forms.autosave_form_draft", slug=slug, token=token),
+        draft_message=(
+            f"Wczytano wersję roboczą zapisaną {draft.updated_at.strftime('%Y-%m-%d %H:%M')}."
+            if request.args.get("saved") != "1"
+            else "Wersja robocza została zapisana. Link do powrotu wysłaliśmy e-mailem."
+        ),
+    ))
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@bp.post("/form/<slug>/draft/<token>/autosave")
+def autosave_form_draft(slug: str, token: str):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Nieprawidłowe dane."}), 400
+    csrf_valid, _csrf_missing = _valid_public_csrf(payload)
+    if not csrf_valid:
+        return jsonify({"ok": False, "error": "Sesja wygasła."}), 400
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug, Form.is_active.is_(True), Form.is_public.is_(True))).scalar_one_or_none()
+        if not form:
+            abort(404)
+        draft = get_services().form_draft_service.get_by_token(db, form_id=form.id, raw_token=token)
+        if not draft:
+            abort(404)
+        form_config = _definition_for_draft(db, form, draft)
+        try:
+            get_services().form_draft_service.autosave(db, draft=draft, form_config=form_config, request_data=payload)
+        except FormDraftError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        db.commit()
+        saved_at = draft.last_autosave_at.isoformat()
+    return jsonify({"ok": True, "saved_at": saved_at})
+
+
+@bp.post("/form/<slug>/draft/<token>/submit")
+def submit_form_draft(slug: str, token: str):
+    resolved = _resolve_form_draft(slug, token)
+    if not resolved:
+        abort(404)
+    form_meta, form_config, draft = resolved
+    request_data = request.form
+    csrf_valid, _csrf_missing = _valid_public_csrf(request_data)
+    if not csrf_valid:
+        abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
+    session_factory = db_session_factory()
+    with session_factory() as db:
+        claimed = get_services().form_draft_service.claim_for_submit(db, draft_id=draft.id, raw_token=token)
+    if not claimed:
+        abort(409, description="Ta wersja robocza jest już wysyłana albo została wysłana.")
+    existing_submission = get_services().submission_repository.get_by_id(claimed.submission_public_id)
+    if existing_submission:
+        with session_factory() as db:
+            get_services().form_draft_service.complete(
+                db, draft_id=draft.id, submission_internal_id=int(existing_submission["id"])
+            )
+        abort(409, description="Ta wersja robocza została już wysłana.")
+    try:
+        result = get_services().submission_service.submit_form(
+            slug, form_config, request_data, form_version_id=draft.form_version_id,
+            submission_id=claimed.submission_public_id,
+        )
+        if not result["ok"]:
+            with session_factory() as db:
+                get_services().form_draft_service.release_submit_claim(db, draft.id)
+            return render_template(
+                "form_page.html", slug=slug, form_meta=form_meta, form_definition=form_config,
+                errors=result["errors"], values=result["values"], draft_enabled=True, draft_mode=True,
+                draft_token=token, form_action=url_for("public_forms.submit_form_draft", slug=slug, token=token),
+                autosave_url=url_for("public_forms.autosave_form_draft", slug=slug, token=token),
+                form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
+            ), 400
+        submission_internal_id = int(result["submission"]["id"])
+        with session_factory() as db:
+            get_services().form_draft_service.complete(
+                db, draft_id=draft.id, submission_internal_id=submission_internal_id
+            )
+        return render_template("result.html", result=result["result"])
+    except Exception:
+        with session_factory() as db:
+            get_services().form_draft_service.release_submit_claim(db, draft.id)
+        raise
+
+
+@bp.post("/form/<slug>/draft/resend")
+def resend_form_draft(slug: str):
+    neutral = "Jeżeli istnieje aktywna wersja robocza dla tego adresu, wysłaliśmy link."
+    request_data = request.form
+    csrf_valid, _csrf_missing = _valid_public_csrf(request_data)
+    if not csrf_valid:
+        abort(400)
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    rotated = None
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug, Form.is_active.is_(True), Form.is_public.is_(True))).scalar_one_or_none()
+        if not form:
+            abort(404)
+        rotated = get_services().form_draft_service.rotate_for_email(
+            db, form_id=form.id, email=str(request_data.get("draft_email") or "")
+        )
+        db.commit()
+    if rotated:
+        resume_url = url_for("public_forms.resume_form_draft", slug=slug, token=rotated.raw_token, _external=True)
+        try:
+            get_services().mail_dispatch_service.dispatch_form_draft_resume(rotated.draft.public_id, resume_url)
+        except Exception as exc:
+            current_app.logger.exception("form_draft_resend_failed slug=%s error=%s", slug, exc.__class__.__name__)
+    flash(neutral, "success")
+    return redirect(url_for("public_forms.form_page", slug=slug))
+
+
+def _resolve_form_draft(slug: str, token: str):
+    session_factory = db_session_factory()
+    if not session_factory:
+        return None
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug, Form.is_active.is_(True), Form.is_public.is_(True))).scalar_one_or_none()
+        if not form:
+            return None
+        draft = get_services().form_draft_service.get_by_token(db, form_id=form.id, raw_token=token)
+        if not draft:
+            return None
+        definition = _definition_for_draft(db, form, draft)
+        meta = form_to_public_meta(form)
+        db.expunge(draft)
+        return meta, form_definition_for_stage(definition, FIELD_STAGE_INITIAL), draft
+
+
+def _definition_for_draft(db, form: Form, draft: FormDraft) -> dict:
+    if draft.form_version_id:
+        version = db.get(FormVersion, draft.form_version_id)
+        if not version or version.form_id != form.id:
+            raise FormDraftError("Brak wersji formularza przypisanej do wersji roboczej.")
+        return dict(version.definition_json or {})
+    fields = db.execute(
+        select(FormField).where(FormField.form_id == form.id, FormField.active.is_(True)).order_by(FormField.sort_order, FormField.id)
+    ).scalars().all()
+    return form_to_definition(form, fields)
 
 
 @bp.post("/submit/<slug>")

@@ -605,6 +605,59 @@ class MailDispatchService:
             self._commit_email_log(db)
             return result
 
+    def dispatch_form_draft_resume(self, draft_public_id: str, resume_url: str) -> MailDispatchResult:
+        """Send a resumable-draft link without persisting its bearer token in EmailLog."""
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from models import Form, FormDraft, MailTemplate
+        from sqlalchemy import or_, select
+
+        with create_session_factory(database_url)() as db:
+            draft = db.execute(select(FormDraft).where(FormDraft.public_id == draft_public_id)).scalar_one_or_none()
+            if draft is None or draft.status != "active":
+                return MailDispatchResult("skipped", error_message="Brak aktywnej wersji roboczej.")
+            form = db.get(Form, draft.form_id)
+            if form is None:
+                return MailDispatchResult("skipped", error_message="Brak formularza.")
+            template = db.execute(
+                select(MailTemplate)
+                .where(
+                    MailTemplate.form_id == form.id,
+                    MailTemplate.is_active.is_(True),
+                    or_(MailTemplate.template_type == "form_draft_resume", MailTemplate.trigger_event == "form_draft_resume"),
+                )
+                .order_by(MailTemplate.id.desc())
+            ).scalars().first()
+            if template is None:
+                template = SimpleNamespace(
+                    name="Link do wersji roboczej formularza",
+                    subject="Dokończ formularz {{ form_title }}",
+                    html_body='<p>Twoja wersja robocza została zapisana.</p><p><a href="{{ draft_resume_url }}">Dokończ formularz</a></p><p>Link wygasa: {{ draft_expires_at }}</p>',
+                    text_body="Twoja wersja robocza została zapisana.\n{{ draft_resume_url }}\nLink wygasa: {{ draft_expires_at }}",
+                    is_active=True,
+                    show_process_status=False,
+                )
+            result = self.dispatch_to_submission(
+                db=db,
+                form=form,
+                submission=None,
+                template=template,
+                to_email=draft.email,
+                event_type="form_draft_resume",
+                extra_context={
+                    "draft_resume_url": resume_url,
+                    "draft_expires_at": draft.expires_at.isoformat(),
+                    "form_title": form.title or form.name,
+                },
+            )
+            if result.log is not None:
+                result.log.html_body = "[redacted: resumable draft link]"
+                result.log.text_body = "[redacted: resumable draft link]"
+            self._commit_email_log(db)
+            return result
+
     def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
         message = str(evaluation.get("user_message") or "").strip() or (
             "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."

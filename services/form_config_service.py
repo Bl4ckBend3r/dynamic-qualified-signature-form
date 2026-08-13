@@ -19,6 +19,7 @@ TRIGGER_DESCRIPTIONS = {
     "declaration_required": "Oznacza, że workflow wymaga obsługi deklaracji.",
     "email_requested": "Uruchamiany, gdy workflow wymaga wysłania wiadomości e-mail.",
     "additional_fields_completed": "Uruchamiany po uzupełnieniu przez użytkownika dodatkowych pól wymaganych po akceptacji wniosku.",
+    "form_draft_resume": "Wysyłany po zapisaniu wersji roboczej formularza lub ponowieniu bezpiecznego linku.",
 }
 
 

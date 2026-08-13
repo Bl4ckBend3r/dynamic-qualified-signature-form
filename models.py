@@ -510,6 +510,44 @@ class FormVersion(Base):
     )
 
 
+class FormDraft(Base):
+    __tablename__ = "form_drafts"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'submitted', 'expired', 'abandoned')", name="ck_form_drafts_status"),
+        Index("ix_form_drafts_form_email_status", "form_id", "email", "status"),
+        Index("ix_form_drafts_status_expires", "status", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    form_version_id: Mapped[int | None] = mapped_column(ForeignKey("form_versions.id", ondelete="RESTRICT"), nullable=True)
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    data_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_autosave_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submit_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("form_submissions.id", ondelete="SET NULL"), unique=True, nullable=True
+    )
+    submission_public_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    form: Mapped[Form] = relationship()
+    form_version: Mapped[FormVersion | None] = relationship()
+    submission: Mapped[FormSubmission | None] = relationship()
+
+
 class SystemMailSettings(Base):
     __tablename__ = "system_mail_settings"
 

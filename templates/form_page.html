@@ -36,6 +36,9 @@
                 <p>Uzupełnij formularz i wyślij go ponownie. Warunki kwalifikujące zostaną sprawdzone ponownie.</p>
             </div>
         {% endif %}
+        {% if draft_message %}
+            <div class="alert alert-success" role="status"><strong>{{ draft_message }}</strong></div>
+        {% endif %}
         {% if form_error %}
             <div class="alert alert-error form-validation-summary" role="alert">{{ form_error }}</div>
         {% endif %}
@@ -215,13 +218,71 @@
             {% endfor %}
 
             <div class="submit-row">
+                {% if draft_enabled and not correction_mode and not draft_mode %}
+                    <button type="submit" class="btn-secondary" formaction="{{ url_for('public_forms.create_form_draft', slug=slug) }}" formnovalidate>Zapisz i dokończ później</button>
+                {% endif %}
+                {% if draft_mode %}<span class="draft-autosave-status" data-draft-autosave-status aria-live="polite">Wersja robocza jest aktywna.</span>{% endif %}
                 <button type="submit" class="btn-primary">{{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}</button>
             </div>
+            {% if draft_mode %}<p class="form-hint">Załączniki nie są zapisywane automatycznie. Wybierz je przed ostatecznym wysłaniem formularza.</p>{% endif %}
         </form>
+        {% if draft_enabled and not correction_mode and not draft_mode %}
+        <details class="draft-resend-panel">
+            <summary>Mam zapisaną wersję roboczą</summary>
+            <form method="post" action="{{ url_for('public_forms.resend_form_draft', slug=slug) }}" class="draft-resend-form">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                <label for="draft_email_{{ slug }}">Adres e-mail</label>
+                <input type="email" id="draft_email_{{ slug }}" name="draft_email" required autocomplete="email">
+                <button type="submit" class="btn-secondary">Wyślij nowy link</button>
+            </form>
+        </details>
+        {% endif %}
     </div>
 
     <script>
     document.addEventListener("DOMContentLoaded", function () {
+        {% if draft_mode and autosave_url %}
+        (() => {
+            const form = document.querySelector(".dynamic-form");
+            const status = document.querySelector("[data-draft-autosave-status]");
+            let dirty = false;
+            let saving = false;
+            const csrfToken = () => form.querySelector('[name="csrf_token"]').value;
+            const serialize = () => {
+                const payload = { csrf_token: csrfToken() };
+                form.querySelectorAll("[name]").forEach((field) => {
+                    if (field.type === "file" || ["csrf_token", "form_version_token", "form_version_id"].includes(field.name)) return;
+                    if (field.type === "checkbox" || field.type === "radio") {
+                        if (field.checked) payload[field.name] = field.value;
+                    } else if (!field.disabled) payload[field.name] = field.value;
+                });
+                return payload;
+            };
+            const autosave = async () => {
+                if (!dirty || saving) return;
+                saving = true;
+                status.textContent = "Zapisywanie...";
+                try {
+                    const response = await fetch({{ autosave_url|tojson }}, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
+                        body: JSON.stringify(serialize()),
+                        credentials: "same-origin",
+                    });
+                    if (!response.ok) throw new Error("autosave_failed");
+                    dirty = false;
+                    status.textContent = `Zapisano ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+                } catch (_error) {
+                    status.textContent = "Nie udało się zapisać.";
+                } finally {
+                    saving = false;
+                }
+            };
+            form.addEventListener("input", () => { dirty = true; });
+            form.addEventListener("change", () => { dirty = true; });
+            window.setInterval(autosave, 20000);
+        })();
+        {% endif %}
         document.querySelectorAll("[data-attachment-dropzone]").forEach((zone) => {
             const input = zone.querySelector("input[type=file]");
             const list = zone.parentElement.querySelector("[data-attachment-list]");

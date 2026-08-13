@@ -89,6 +89,8 @@ class Config:
     SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 10, minimum=1, maximum=120)
 
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
+    FORM_DRAFT_TTL_DAYS = _env_int("FORM_DRAFT_TTL_DAYS", 30, minimum=1, maximum=365)
+    FORM_DRAFT_MAX_DATA_BYTES = _env_int("FORM_DRAFT_MAX_DATA_BYTES", 262144, minimum=4096, maximum=1048576)
 
     @classmethod
     def validate(cls) -> None:

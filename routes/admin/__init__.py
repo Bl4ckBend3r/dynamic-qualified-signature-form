@@ -99,6 +99,7 @@ MAIL_TEMPLATE_TYPES = [
     "returned_for_correction",
     "custom",
     "correction_accepted",
+    "form_draft_resume",
 ]
 
 

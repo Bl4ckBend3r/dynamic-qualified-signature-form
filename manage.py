@@ -7,6 +7,7 @@ from pathlib import Path
 
 from database import get_database_url
 from services.form_config_service import FormConfigService
+from services.form_draft_service import FormDraftService
 from services.database_schema_service import (
     MIGRATION_HINT,
     check_database_schema,
@@ -73,6 +74,19 @@ def db_upgrade(database_url: str | None = None) -> int:
     return 0
 
 
+def expire_form_drafts(database_url: str | None = None) -> int:
+    selected_url = str(database_url or get_database_url() or "").strip()
+    if not selected_url:
+        print("DATABASE_URL jest wymagany.", file=sys.stderr)
+        return 2
+    from database import create_session_factory
+
+    with create_session_factory(selected_url)() as db:
+        count = FormDraftService.mark_expired(db)
+    print(f"Oznaczono wygasłe wersje robocze: {count}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -84,6 +98,8 @@ def main() -> int:
     check_parser.add_argument("--database-url")
     upgrade_parser = subparsers.add_parser("db-upgrade")
     upgrade_parser.add_argument("--database-url")
+    expire_parser = subparsers.add_parser("drafts-expire")
+    expire_parser.add_argument("--database-url")
     args = parser.parse_args()
     if args.command == "validate-form":
         return validate_form(
@@ -95,6 +111,8 @@ def main() -> int:
         return db_check(args.database_url)
     if args.command == "db-upgrade":
         return db_upgrade(args.database_url)
+    if args.command == "drafts-expire":
+        return expire_form_drafts(args.database_url)
     return 1
 
 

@@ -242,6 +242,35 @@
         <p>Brak audytowalnych snapshotów. Starsze pola logiczne nie stanowią pełnego dowodu zaakceptowanej treści.</p>
     {% endif %}
 </section>
+<section class="admin-card" id="participant-attachments">
+    <h2>Załączniki uczestnika</h2>
+    {% if participant_attachments %}
+    <div class="admin-table-wrap"><table class="admin-table admin-table--responsive">
+        <thead><tr><th>Pole</th><th>Nazwa</th><th>Wersja</th><th>Data</th><th>Rozmiar</th><th>SHA-256</th><th>Status / AV</th><th>Akcje</th></tr></thead>
+        <tbody>{% for attachment in participant_attachments %}<tr>
+            <td>{{ attachment_labels.get(attachment.field_key, attachment.field_key) }}</td>
+            <td>{{ attachment.original_filename }}</td>
+            <td>{{ attachment.attachment_version }}</td>
+            <td>{{ attachment.created_at.strftime('%Y-%m-%d %H:%M:%S') if attachment.created_at else '-' }}</td>
+            <td>{{ '%.1f KB'|format((attachment.size_bytes or 0) / 1024) }}</td>
+            <td><code title="{{ attachment.checksum_sha256 }}">{{ attachment.checksum_sha256[:16] }}…</code></td>
+            <td>{{ attachment.status }}<br><small>AV: {{ attachment.antivirus_status }}</small>{% if attachment.rejection_reason %}<br><small>{{ attachment.rejection_reason }}</small>{% endif %}</td>
+            <td>
+                <a href="{{ url_for('admin.participant_attachment_download', form_id=form.id, submission_pk=submission.id, file_id=attachment.id) }}">Pobierz</a>
+                {% if not read_only and attachment.status not in ['superseded', 'archived'] %}
+                <form method="post" action="{{ url_for('admin.participant_attachment_status', form_id=form.id, submission_pk=submission.id, file_id=attachment.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                    <button class="admin-link-button" name="attachment_status" value="valid" type="submit">Oznacz poprawny</button>
+                    <input name="reason" placeholder="Powód poprawy">
+                    <button class="admin-link-button admin-danger-link" name="attachment_status" value="requires_correction" type="submit">Wymaga poprawy</button>
+                </form>
+                {% endif %}
+                <details><summary>Historia wersji</summary>Wszystkie wersje pola są widoczne w tej tabeli; starsze mają status superseded.</details>
+            </td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p>Brak załączników uczestnika.</p>{% endif %}
+</section>
 <h2>Dane zgłoszenia</h2>
 {% for section in detail_view.sections %}
     <section class="admin-card">

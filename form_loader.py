@@ -24,6 +24,8 @@ SUPPORTED_FIELD_TYPES = {
     "section",
     "static_text",
     "training_selection",
+    "file",
+    "attachment",
 }
 NON_INPUT_FIELD_TYPES = {"section", "static_text"}
 
@@ -219,6 +221,8 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
     normalized = normalize_signature_config(normalized)
 
     for field in normalized["fields"]:
+        if field.get("type") == "attachment":
+            field["type"] = "file"
         if field.get("id") and not field.get("name"):
             field["name"] = field["id"]
         field.setdefault("label", "")
@@ -234,6 +238,15 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
         field.setdefault("width", "full")
         field.setdefault("visible_if", None)
         field.setdefault("readonly", False)
+        if field.get("type") == "file":
+            field.setdefault("description", "")
+            field.setdefault("allowed_extensions", ["pdf"])
+            field.setdefault("allowed_mime_types", [])
+            field.setdefault("max_size_mb", 10)
+            field.setdefault("max_files", 1)
+            field.setdefault("required_if", None)
+            field.setdefault("document_type", "submission_attachment")
+            field.setdefault("category", "")
         if field.get("stage") not in SUPPORTED_FIELD_STAGES:
             field["stage"] = FIELD_STAGE_INITIAL
 
@@ -293,7 +306,7 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
         field_type = field["type"]
         field_name = field.get("name")
 
-        if field_type in {"section", "static_text"} or not field_name:
+        if field_type in {"section", "static_text", "file"} or not field_name:
             continue
 
         if field_type == "checkbox":
@@ -348,8 +361,15 @@ def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
         return True
 
     field_name = rule.get("field")
-    operator = rule.get("operator", "equals")
+    operator = rule.get("operator")
     expected = rule.get("value")
+    if not operator:
+        for candidate in ("equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"):
+            if candidate in rule:
+                operator = candidate
+                expected = rule.get(candidate)
+                break
+    operator = operator or "equals"
     current_value = current_data.get(field_name, "")
 
     if operator == "equals":
@@ -357,9 +377,13 @@ def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
     if operator == "not_equals":
         return current_value != expected
     if operator == "in":
-        return current_value in rule.get("values", [])
+        return current_value in (rule.get("values") if "values" in rule else expected or [])
     if operator == "not_in":
-        return current_value not in rule.get("values", [])
+        return current_value not in (rule.get("values") if "values" in rule else expected or [])
+    if operator == "is_empty":
+        return current_value in (None, "", [], {})
+    if operator == "is_not_empty":
+        return current_value not in (None, "", [], {})
 
     return True
 
@@ -374,7 +398,7 @@ def validate_submission(
         field_type = field["type"]
         field_name = field.get("name")
 
-        if field_type in {"section", "static_text"} or not field_name:
+        if field_type in {"section", "static_text", "file"} or not field_name:
             continue
 
         if not evaluate_visible_if(field.get("visible_if"), submission_data):
@@ -770,7 +794,7 @@ def build_submission_view(
             }
             continue
 
-        if field_type == "static_text":
+        if field_type in {"static_text", "file"}:
             continue
 
         field_name = field.get("name")

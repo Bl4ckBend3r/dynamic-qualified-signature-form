@@ -25,6 +25,7 @@
                     <th>Etykieta w dokumentach</th>
                     <th>Typ</th>
                     <th>Opcje</th>
+                    <th>Konfiguracja pliku</th>
                     <th>Wymagane</th>
                     <th>Etap</th>
                     <th>Sekcja</th>
@@ -46,6 +47,22 @@
                         </select>
                     </td>
                     <td><textarea class="admin-textarea-small" name="field_{{ field.id }}_options" placeholder="Jedna opcja w linii">{{ field_options_text(field) }}</textarea></td>
+                    {% set config = field_configs.get(field.name, {}) %}
+                    <td>{% if field.type == 'file' %}
+                        <details open><summary>Ustawienia</summary>
+                            <label><small>Opis</small><textarea name="field_{{ field.id }}_description">{{ config.get('description', '') }}</textarea></label>
+                            <label><small>Rozszerzenia</small><input name="field_{{ field.id }}_allowed_extensions" value="{{ config.get('allowed_extensions', ['pdf'])|join(', ') }}"></label>
+                            <label><small>MIME</small><input name="field_{{ field.id }}_allowed_mime_types" value="{{ config.get('allowed_mime_types', [])|join(', ') }}"></label>
+                            <label><small>Maks. MB</small><input type="number" min="1" max="25" name="field_{{ field.id }}_max_size_mb" value="{{ config.get('max_size_mb', 10) }}"></label>
+                            <label><small>Maks. plików</small><input type="number" min="1" max="10" name="field_{{ field.id }}_max_files" value="{{ config.get('max_files', 1) }}"></label>
+                            <label><small>Typ dokumentu</small><input name="field_{{ field.id }}_document_type" value="{{ config.get('document_type', 'submission_attachment') }}"></label>
+                            <label><small>Kategoria</small><input name="field_{{ field.id }}_category" value="{{ config.get('category', '') }}"></label>
+                            {% set required_if = config.get('required_if') or {} %}
+                            <label><small>required_if: pole</small><input name="field_{{ field.id }}_required_if_field" value="{{ required_if.get('field', '') }}"></label>
+                            <label><small>Operator</small><select name="field_{{ field.id }}_required_if_operator">{% for op in ['equals','not_equals','in','not_in','is_empty','is_not_empty'] %}<option value="{{ op }}" {% if required_if.get('operator', 'equals') == op %}selected{% endif %}>{{ op }}</option>{% endfor %}</select></label>
+                            <label><small>Wartość</small><input name="field_{{ field.id }}_required_if_value" value="{{ required_if.get('value', '')|join(', ') if required_if.get('value') is sequence and required_if.get('value') is not string else required_if.get('value', '') }}"></label>
+                        </details>
+                    {% else %}—{% endif %}</td>
                     <td>
                         <label class="admin-check compact"><input type="checkbox" name="field_{{ field.id }}_required" {% if field.required %}checked{% endif %}><span>Tak</span></label>
                     </td>
@@ -91,6 +108,16 @@
             </label>
             <label class="admin-check"><input type="checkbox" name="new_required" checked><span>Wymagane</span></label>
             <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox można użyć value|label."></textarea></label>
+            <label><span>Rozszerzenia pliku</span><input name="new_allowed_extensions" value="pdf"></label>
+            <label><span>Dozwolone MIME</span><input name="new_allowed_mime_types" placeholder="application/pdf"></label>
+            <label><span>Maks. MB</span><input type="number" min="1" max="25" name="new_max_size_mb" value="10"></label>
+            <label><span>Maks. plików</span><input type="number" min="1" max="10" name="new_max_files" value="1"></label>
+            <label><span>Typ dokumentu</span><input name="new_document_type" value="submission_attachment"></label>
+            <label><span>Kategoria</span><input name="new_category"></label>
+            <label><span>required_if: pole</span><input name="new_required_if_field" placeholder="nazwa pola"></label>
+            <label><span>required_if: operator</span><select name="new_required_if_operator">{% for op in ['equals','not_equals','in','not_in','is_empty','is_not_empty'] %}<option value="{{ op }}">{{ op }}</option>{% endfor %}</select></label>
+            <label><span>required_if: wartość</span><input name="new_required_if_value"></label>
+            <label class="admin-form-wide"><span>Opis pliku</span><textarea name="new_description"></textarea></label>
         </div>
         <div class="admin-form-actions">
             <button class="admin-button-secondary" type="submit" name="action" value="add">Dodaj pole</button>

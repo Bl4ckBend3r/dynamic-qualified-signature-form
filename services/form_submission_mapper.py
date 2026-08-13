@@ -296,7 +296,7 @@ def validate_required_submission_fields(
 
     if form_config is not None:
         for field in form_config.get("fields", []):
-            if not field.get("required") or field.get("type") in {"section", "static_text", "checkbox"}:
+            if not field.get("required") or field.get("type") in {"section", "static_text", "checkbox", "file", "attachment"}:
                 continue
             field_name = str(field.get("name") or "")
             column_name = FORM_FIELD_MAP.get(field_name, field_name)

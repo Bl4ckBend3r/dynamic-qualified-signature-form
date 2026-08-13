@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from io import BytesIO
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -353,6 +354,16 @@ def submission_detail(form_id: int, submission_pk: int):
             }
             for item in submission.consents
         ]
+        attachment_labels = {
+            str(item.get("name")): str(item.get("label") or item.get("name"))
+            for item in submission_form_config.get("fields", [])
+            if isinstance(item, dict) and item.get("type") in {"file", "attachment"}
+        }
+        participant_attachments = db.execute(
+            select(SubmissionFile)
+            .where(SubmissionFile.submission_id == submission.id, SubmissionFile.field_key != "")
+            .order_by(SubmissionFile.field_key, SubmissionFile.attachment_version.desc(), SubmissionFile.id.desc())
+        ).scalars().all()
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -368,6 +379,8 @@ def submission_detail(form_id: int, submission_pk: int):
             participant_training_view=participant_training_view,
             correspondence=correspondence,
             submission_consents=submission_consents,
+            participant_attachments=participant_attachments,
+            attachment_labels=attachment_labels,
             status_label=lambda status: admin_status_label(status, form),
             read_only=not can_manage,
         )
@@ -385,6 +398,43 @@ def regulation_version_download(form_id: int, regulation_version_id: int):
         if not path.is_file():
             abort(404)
         return send_file(path, mimetype=version.mime_type or None, download_name=version.original_filename)
+
+
+@bp.get("/forms/<int:form_id>/submissions/<int:submission_pk>/attachments/<int:file_id>/download")
+@login_required
+def participant_attachment_download(form_id: int, submission_pk: int, file_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        attachment = db.get(SubmissionFile, file_id) or abort(404)
+        if submission.form_slug != form.slug or attachment.submission_id != submission.id or not attachment.field_key:
+            abort(404)
+        content = current_app.extensions["services"].storage.read_bytes(attachment.storage_path)
+        return send_file(
+            BytesIO(content),
+            mimetype=attachment.mime_type or "application/octet-stream",
+            as_attachment=True,
+            download_name=Path(attachment.original_filename or attachment.filename).name,
+        )
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/attachments/<int:file_id>/status")
+@login_required
+def participant_attachment_status(form_id: int, submission_pk: int, file_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        attachment = db.get(SubmissionFile, file_id) or abort(404)
+        if submission.form_slug != form.slug or attachment.submission_id != submission.id or not attachment.field_key:
+            abort(404)
+        status = str(request.form.get("attachment_status") or "").strip()
+        if status not in {"valid", "requires_correction"}:
+            abort(400)
+        attachment.status = status
+        attachment.rejection_reason = str(request.form.get("reason") or "").strip() if status == "requires_correction" else ""
+        db.commit()
+        flash("Status załącznika został zaktualizowany.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id) + "#participant-attachments")
 
 
 @bp.post("/submissions/<submission_id>/rollback-stage")

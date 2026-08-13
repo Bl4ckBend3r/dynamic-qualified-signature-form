@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from flask import current_app, request, url_for
+from flask import current_app, has_request_context, request, url_for
 
 from form_loader import (
     apply_pesel_derived_values,
@@ -23,6 +23,7 @@ from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_fro
 from services.process_service import OfficerDecision, ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
 from services.qualification_condition_service import QualificationConditionService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
+from services.submission_attachment_service import SubmissionAttachmentService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class SubmissionService:
         submission_document_service: SubmissionDocumentService | None = None,
         qualification_condition_service: QualificationConditionService | None = None,
         compliance_service: ComplianceService | None = None,
+        submission_attachment_service: SubmissionAttachmentService | None = None,
         validator=validate_submission,
     ) -> None:
         self.submission_repository = submission_repository
@@ -57,6 +59,9 @@ class SubmissionService:
         )
         self.qualification_condition_service = qualification_condition_service or QualificationConditionService()
         self.compliance_service = compliance_service or ComplianceService(submission_repository)
+        self.submission_attachment_service = submission_attachment_service or SubmissionAttachmentService(
+            submission_repository, storage
+        )
         self.validator = validator
 
     def submit_form(
@@ -83,6 +88,12 @@ class SubmissionService:
         )
 
         errors = self._validate(form_config, submission_data)
+        attachments, attachment_errors = self.submission_attachment_service.validate_uploads(
+            form_config,
+            submission_data,
+            request.files if has_request_context() else None,
+        )
+        errors.update(attachment_errors)
         mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
         mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
         errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
@@ -137,6 +148,16 @@ class SubmissionService:
             form_config.get("fields") or [],
         )
         self._persist_qualification_result(submission, submission_data, qualification)
+        try:
+            self.submission_attachment_service.persist(
+                form_slug=form_slug,
+                submission_id=submission_id,
+                attachments=attachments,
+                workflow_step=str((form_config.get("workflow") or {}).get("initial_step") or "submission"),
+            )
+        except Exception:
+            self.compliance_service.remove_incomplete_submission(submission_id)
+            raise
         failed_conditions = qualification.get("failed_conditions", [])
 
         auto_rejected = any(
@@ -267,6 +288,13 @@ class SubmissionService:
         )
         mapped_submission = build_submission_from_form(submission_data, form_config)
         errors = self._validate(form_config, submission_data)
+        attachments, attachment_errors = self.submission_attachment_service.validate_uploads(
+            form_config,
+            submission_data,
+            request.files if has_request_context() else None,
+            submission_id=submission_id,
+        )
+        errors.update(attachment_errors)
         mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
         mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
         errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
@@ -302,6 +330,12 @@ class SubmissionService:
             "officer_decision_reason": "",
         }
         self.submission_repository.update(submission_id, updates)
+        self.submission_attachment_service.persist(
+            form_slug=form_slug,
+            submission_id=submission_id,
+            attachments=attachments,
+            workflow_step=str(existing.get("workflow_step") or "returned_for_correction"),
+        )
         refreshed = {**existing, **updates}
         failed_conditions = qualification.get(
             "failed_conditions",

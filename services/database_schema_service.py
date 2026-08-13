@@ -45,6 +45,17 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
         {"submission_id", "consent_key", "consent_version", "consent_sha256", "accepted", "accepted_at"}
     ),
     "form_submissions": frozenset({"form_version_id"}),
+    "submission_files": frozenset(
+        {
+            "field_key",
+            "attachment_version",
+            "category",
+            "uploaded_by_source",
+            "workflow_step_at_upload",
+            "antivirus_status",
+            "rejection_reason",
+        }
+    ),
     "email_logs": frozenset({"event_type", "error_type", "administrator_message", "html_body", "text_body"}),
     "site_footers": frozenset(
         {

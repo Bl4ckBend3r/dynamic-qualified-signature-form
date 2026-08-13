@@ -30,10 +30,57 @@ MAX_PDF_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_LOGO_UPLOAD_BYTES = 5 * 1024 * 1024
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+SAFE_ATTACHMENT_TYPES = {
+    "pdf": ("application/pdf", (b"%PDF",)),
+    "doc": ("application/msword", (b"\xd0\xcf\x11\xe0",)),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", (b"PK",)),
+    "xls": ("application/vnd.ms-excel", (b"\xd0\xcf\x11\xe0",)),
+    "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (b"PK",)),
+    "png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
+    "jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    "jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
+}
+SAFE_ATTACHMENT_EXTENSIONS = frozenset(SAFE_ATTACHMENT_TYPES)
+SAFE_ATTACHMENT_MIME_TYPES = frozenset(
+    {item[0] for item in SAFE_ATTACHMENT_TYPES.values()} | {"application/x-pdf"}
+)
 
 
 class UploadValidationError(ValueError):
     pass
+
+
+def validate_attachment_upload(
+    filename: str,
+    content: bytes,
+    mime_type: str | None,
+    *,
+    allowed_extensions: list[str],
+    allowed_mime_types: list[str] | None = None,
+    max_size_bytes: int,
+) -> tuple[str, str]:
+    extensions = {str(item).lower().lstrip(".") for item in allowed_extensions}
+    if not extensions or not extensions.issubset(SAFE_ATTACHMENT_EXTENSIONS):
+        raise UploadValidationError("Konfiguracja zawiera niedozwolone rozszerzenie pliku.")
+    clean_name = validate_upload_filename(filename, allowed_suffixes={f".{item}" for item in extensions})
+    if not content:
+        raise UploadValidationError("Plik jest pusty.")
+    if len(content) > max_size_bytes:
+        raise UploadValidationError("Plik jest zbyt duzy.")
+    extension = PurePath(clean_name).suffix.lower().lstrip(".")
+    detected_mime, signatures = SAFE_ATTACHMENT_TYPES[extension]
+    if not any(content.startswith(signature) for signature in signatures):
+        raise UploadValidationError("Zawartosc pliku nie zgadza sie z jego rozszerzeniem.")
+    client_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    compatible = {detected_mime}
+    if detected_mime == "application/pdf":
+        compatible.add("application/x-pdf")
+    if client_mime and client_mime not in compatible:
+        raise UploadValidationError("Typ MIME nie zgadza sie z zawartoscia pliku.")
+    configured_mimes = {str(item).lower() for item in (allowed_mime_types or [])}
+    if configured_mimes and not compatible.intersection(configured_mimes):
+        raise UploadValidationError("Typ MIME pliku nie jest dozwolony dla tego pola.")
+    return clean_name, detected_mime
 
 
 def validate_upload_filename(filename: str, *, allowed_suffixes: set[str]) -> str:

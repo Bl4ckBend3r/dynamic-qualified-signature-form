@@ -98,7 +98,7 @@ from . import (
 )
 
 
-FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel"]
+FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel", "file"]
 FORM_EDITOR_TABS = {
     "basic",
     "fields",
@@ -1977,6 +1977,7 @@ def form_fields(form_id: int):
                     form,
                     {field_name: request.form.get("new_document_label", "").strip()},
                 )
+                _update_file_field_config(form, field_name, request.form, "new_", saved_field.type)
                 _sync_editable_form_version(db, form)
                 db.commit()
                 flash("Pole formularza zostało dodane.", "success")
@@ -2008,6 +2009,8 @@ def form_fields(form_id: int):
                     for field in fields
                 },
             )
+            for field in fields:
+                _update_file_field_config(form, field.name, request.form, f"field_{field.id}_", field.type)
             _sync_editable_form_version(db, form)
             db.commit()
             flash("Pola formularza zostały zapisane.", "success")
@@ -2020,7 +2023,57 @@ def form_fields(form_id: int):
             field_stages=FIELD_STAGES,
             field_options_text=field_options_text,
             document_field_labels=(form.definition_json or {}).get("document_field_labels") or {},
+            field_configs={
+                str(item.get("name")): item
+                for item in (form.definition_json or {}).get("fields", [])
+                if isinstance(item, dict) and item.get("name")
+            },
         )
+
+
+def _update_file_field_config(form: Form, field_name: str, form_data, prefix: str, field_type: str) -> None:
+    if field_type != "file":
+        return
+    definition = deepcopy(form.definition_json or {})
+    fields = list(definition.get("fields") or [])
+    config = next((item for item in fields if isinstance(item, dict) and item.get("name") == field_name), None)
+    if config is None:
+        config = {"name": field_name, "type": "file"}
+        fields.append(config)
+    split_values = lambda key, default="": [
+        item.strip().lower().lstrip(".") for item in str(form_data.get(prefix + key, default) or "").replace("\n", ",").split(",") if item.strip()
+    ]
+    condition_field = str(form_data.get(prefix + "required_if_field", "") or "").strip()
+    condition_operator = str(form_data.get(prefix + "required_if_operator", "equals") or "equals").strip()
+    condition_value = str(form_data.get(prefix + "required_if_value", "") or "").strip()
+    condition = None
+    if condition_field:
+        parsed_value = [item.strip() for item in condition_value.split(",") if item.strip()] if condition_operator in {"in", "not_in"} else condition_value
+        condition = {"field": condition_field, "operator": condition_operator, "value": parsed_value}
+    from services.upload_validation import SAFE_ATTACHMENT_EXTENSIONS, SAFE_ATTACHMENT_MIME_TYPES
+    extensions = split_values("allowed_extensions", "pdf") or ["pdf"]
+    mime_types = split_values("allowed_mime_types")
+    max_size_mb = parse_int(form_data.get(prefix + "max_size_mb"), 10)
+    max_files = parse_int(form_data.get(prefix + "max_files"), 1)
+    if not set(extensions).issubset(SAFE_ATTACHMENT_EXTENSIONS):
+        abort(400, description="Niedozwolone rozszerzenie załącznika.")
+    if not set(mime_types).issubset(SAFE_ATTACHMENT_MIME_TYPES):
+        abort(400, description="Niedozwolony typ MIME załącznika.")
+    if not 1 <= max_size_mb <= 25 or not 1 <= max_files <= 10:
+        abort(400, description="Nieprawidłowy limit załączników.")
+    config.update({
+        "type": "file",
+        "description": str(form_data.get(prefix + "description", "") or "").strip(),
+        "allowed_extensions": extensions,
+        "allowed_mime_types": mime_types,
+        "max_size_mb": max_size_mb,
+        "max_files": max_files,
+        "required_if": condition,
+        "document_type": str(form_data.get(prefix + "document_type", "submission_attachment") or "submission_attachment").strip(),
+        "category": str(form_data.get(prefix + "category", "") or "").strip(),
+    })
+    definition["fields"] = fields
+    form.definition_json = definition
 
 
 def _update_document_field_labels(form: Form, updates: dict[str, str]) -> None:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import string
+import re
 from pathlib import Path
 
 from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
 from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
 from services.workflow_config_service import is_workflow_step_active
+from services.upload_validation import SAFE_ATTACHMENT_EXTENSIONS, SAFE_ATTACHMENT_MIME_TYPES
 
 
 ALLOWED_FILENAME_PLACEHOLDERS = {
@@ -64,6 +66,48 @@ class FormConfigValidator:
                 if field_name in names:
                     errors.append(f"fields[{index}].name is duplicated: {field_name}")
                 names.add(field_name)
+            if field_type in {"file", "attachment"}:
+                self._validate_file_field(field, index, errors)
+
+        for index, field in enumerate(fields):
+            condition = field.get("required_if")
+            if condition:
+                if not isinstance(condition, dict) or str(condition.get("field") or "") not in names:
+                    errors.append(f"fields[{index}].required_if.field must reference an existing field")
+                operators = {"equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"}
+                operator = condition.get("operator") or next((key for key in operators if key in condition), None)
+                if operator not in operators:
+                    errors.append(f"fields[{index}].required_if operator is unsupported")
+
+    def _validate_file_field(self, field: dict, index: int, errors: list[str]) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", str(field.get("name") or "")):
+            errors.append(f"fields[{index}].name is unsafe for attachment storage")
+        extensions = field.get("allowed_extensions", ["pdf"])
+        if not isinstance(extensions, list) or not extensions:
+            errors.append(f"fields[{index}].allowed_extensions must be a non-empty list")
+        else:
+            unsafe = [str(item).lower().lstrip(".") for item in extensions if str(item).lower().lstrip(".") not in SAFE_ATTACHMENT_EXTENSIONS]
+            if unsafe:
+                errors.append(f"fields[{index}].allowed_extensions contains unsafe types: {', '.join(unsafe)}")
+        mime_types = field.get("allowed_mime_types", [])
+        if not isinstance(mime_types, list) or any(str(item).lower() not in SAFE_ATTACHMENT_MIME_TYPES for item in mime_types):
+            errors.append(f"fields[{index}].allowed_mime_types contains unsupported types")
+        try:
+            size = float(field.get("max_size_mb", 10))
+            if size <= 0 or size > 25:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"fields[{index}].max_size_mb must be between 0 and 25")
+        try:
+            count = int(field.get("max_files", 1))
+            if count < 1 or count > 10:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"fields[{index}].max_files must be between 1 and 10")
+        for key in ("document_type", "category"):
+            value = str(field.get(key) or "")
+            if value and not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value):
+                errors.append(f"fields[{index}].{key} contains unsupported characters")
 
     def _validate_documents(self, documents: list[dict], errors: list[str]) -> set[str]:
         ids = set()

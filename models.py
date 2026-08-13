@@ -204,6 +204,7 @@ class SubmissionFile(Base):
         Index("ix_submission_files_document_type", "document_type"),
         Index("ix_submission_files_status", "status"),
         Index("ix_submission_files_created_at", "created_at"),
+        Index("ix_submission_files_attachment_field", "submission_id", "field_key", "attachment_version"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -226,6 +227,13 @@ class SubmissionFile(Base):
     signature_validation_result: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     agreement_number: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     training_key: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    field_key: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    attachment_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    category: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    uploaded_by_source: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    workflow_step_at_upload: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    antivirus_status: Mapped[str] = mapped_column(String(64), default="not_configured", nullable=False)
+    rejection_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

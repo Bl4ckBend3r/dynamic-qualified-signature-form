@@ -33,6 +33,7 @@ from services.strict_mode_stabilization_service import StrictModeStabilizationSe
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_attachment_service import SubmissionAttachmentService
 from services.submission_training_service import SubmissionTrainingService
 from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
@@ -46,6 +47,7 @@ class ServiceContainer:
     storage_repository: StorageRepository
     submission_repository: object
     submission_service: SubmissionService
+    submission_attachment_service: SubmissionAttachmentService
     submission_training_service: SubmissionTrainingService
     workflow_service: WorkflowService
     beneficiary_agreement_service: BeneficiaryAgreementService
@@ -168,6 +170,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         strict_document_metadata_read=bool(app.config.get("STRICT_DOCUMENT_METADATA_READ")),
     )
     compliance_service = ComplianceService(submission_repository)
+    submission_attachment_service = SubmissionAttachmentService(submission_repository, storage)
     submission_service = SubmissionService(
         submission_repository,
         storage=storage,
@@ -180,6 +183,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_document_service=submission_document_service,
         qualification_condition_service=qualification_condition_service,
         compliance_service=compliance_service,
+        submission_attachment_service=submission_attachment_service,
     )
     submission_training_service = SubmissionTrainingService()
     document_signing_service = DocumentSigningService(
@@ -196,6 +200,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage_repository=storage_repository,
         submission_repository=submission_repository,
         submission_service=submission_service,
+        submission_attachment_service=submission_attachment_service,
         submission_training_service=submission_training_service,
         workflow_service=workflow_service,
         beneficiary_agreement_service=beneficiary_agreement_service,

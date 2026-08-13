@@ -371,6 +371,13 @@ class PostgresSubmissionRepository(SubmissionRepository):
             file_row.signature_validation_result = metadata.get("signature_validation_result") or {}
             file_row.agreement_number = str(metadata.get("agreement_number") or "")
             file_row.training_key = str(metadata.get("training_key") or "")
+            file_row.field_key = str(metadata.get("field_key") or "")
+            file_row.attachment_version = metadata.get("attachment_version")
+            file_row.category = str(metadata.get("category") or "")
+            file_row.uploaded_by_source = str(metadata.get("uploaded_by_source") or "")
+            file_row.workflow_step_at_upload = str(metadata.get("workflow_step_at_upload") or "")
+            file_row.antivirus_status = str(metadata.get("antivirus_status") or "not_configured")
+            file_row.rejection_reason = str(metadata.get("rejection_reason") or "")
             file_row.generated_at = metadata.get("generated_at")
             file_row.signed_at = metadata.get("signed_at")
             if not existing:

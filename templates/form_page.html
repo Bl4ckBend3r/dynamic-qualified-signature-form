@@ -39,7 +39,7 @@
         {% if form_error %}
             <div class="alert alert-error form-validation-summary" role="alert">{{ form_error }}</div>
         {% endif %}
-        <form method="post" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
+        <form method="post" enctype="multipart/form-data" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
             <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
             {% if form_version_token %}
                 <input type="hidden" name="form_version_id" value="{{ form_version_id }}">
@@ -81,7 +81,26 @@
                             </label>
                         {% endif %}
 
-                        {% if field.type in ["text", "email", "number", "date", "tel", "phone", "pesel"] %}
+                        {% if field.type == "file" %}
+                            <div class="attachment-dropzone" data-attachment-dropzone>
+                                <input
+                                    class="attachment-input {% if has_error %}has-error{% endif %}"
+                                    type="file"
+                                    id="{{ field.name }}"
+                                    name="{{ field.name }}"
+                                    accept="{% for extension in field.allowed_extensions %}.{{ extension|lower|replace('.', '') }}{% if not loop.last %},{% endif %}{% endfor %}"
+                                    {% if field.max_files|int > 1 %}multiple{% endif %}
+                                    {% if field.required and not field.required_if %}required aria-required="true"{% endif %}
+                                    {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+                                >
+                                <button type="button" class="btn-secondary" data-attachment-select>Wybierz {{ 'pliki' if field.max_files|int > 1 else 'plik' }}</button>
+                                <span>lub przeciągnij i upuść tutaj</span>
+                                <small>Dozwolone: {{ field.allowed_extensions|join(', ') }} · maks. {{ field.max_size_mb }} MB{% if field.max_files|int > 1 %} · do {{ field.max_files }} plików{% endif %}</small>
+                            </div>
+                            {% if field.description %}<div class="field-description">{{ field.description|trusted_html }}</div>{% endif %}
+                            <ul class="attachment-file-list" data-attachment-list aria-live="polite"></ul>
+
+                        {% elif field.type in ["text", "email", "number", "date", "tel", "phone", "pesel"] %}
                             <input
                                 class="{% if has_error %}has-error{% endif %}"
                                 type="{% if field.type == 'pesel' %}text{% elif field.type == 'phone' or field.name|lower == 'telefon' %}tel{% else %}{{ field.type }}{% endif %}"
@@ -203,6 +222,47 @@
 
     <script>
     document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll("[data-attachment-dropzone]").forEach((zone) => {
+            const input = zone.querySelector("input[type=file]");
+            const list = zone.parentElement.querySelector("[data-attachment-list]");
+            const formatSize = (bytes) => bytes < 1024 * 1024
+                ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+                : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+            const render = () => {
+                list.replaceChildren(...Array.from(input.files).map((file, index) => {
+                    const item = document.createElement("li");
+                    const text = document.createElement("span");
+                    text.textContent = `${file.name} (${formatSize(file.size)})`;
+                    const remove = document.createElement("button");
+                    remove.type = "button";
+                    remove.textContent = "Usuń";
+                    remove.addEventListener("click", () => {
+                        const transfer = new DataTransfer();
+                        Array.from(input.files).forEach((candidate, candidateIndex) => {
+                            if (candidateIndex !== index) transfer.items.add(candidate);
+                        });
+                        input.files = transfer.files;
+                        render();
+                    });
+                    item.append(text, remove);
+                    return item;
+                }));
+            };
+            zone.querySelector("[data-attachment-select]").addEventListener("click", () => input.click());
+            input.addEventListener("change", render);
+            ["dragenter", "dragover"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
+                event.preventDefault(); zone.classList.add("is-dragging");
+            }));
+            ["dragleave", "drop"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
+                event.preventDefault(); zone.classList.remove("is-dragging");
+            }));
+            zone.addEventListener("drop", (event) => {
+                const transfer = new DataTransfer();
+                Array.from(event.dataTransfer.files).forEach((file) => transfer.items.add(file));
+                input.files = transfer.files;
+                render();
+            });
+        });
         const dynamicRows = document.querySelectorAll("[data-visible-field]");
 
         function getFieldValue(fieldName) {

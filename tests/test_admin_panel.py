@@ -119,6 +119,37 @@ def login(client, email="admin@example.com", password="secret"):
     return client.post("/admin/", data={"email": email, "password": password, "csrf_token": token})
 
 
+def create_participant_attachment(app):
+    form_id = create_form(
+        app,
+        slug="attachment_form",
+        definition_json={"title": "Attachments", "fields": [{"type": "file", "name": "proof", "label": "Dowód"}]},
+    )
+    session_factory = create_session_factory(app.config["DATABASE_URL"])
+    with session_factory() as db:
+        owner = FormSubmission(submission_id="attachment-owner", form_slug="attachment_form")
+        stranger = FormSubmission(submission_id="attachment-stranger", form_slug="attachment_form")
+        db.add_all([owner, stranger])
+        db.flush()
+        attachment = SubmissionFile(
+            submission_id=owner.id,
+            public_submission_id=owner.submission_id,
+            form_slug="attachment_form",
+            filename="safe.pdf",
+            original_filename="proof.pdf",
+            storage_path="output/attachment_form/submissions/attachment-owner/attachments/proof/safe.pdf",
+            mime_type="application/pdf",
+            field_key="proof",
+            attachment_version=1,
+            status="active",
+        )
+        db.add(attachment)
+        db.commit()
+        result = (form_id, owner.id, stranger.id, attachment.id, attachment.storage_path)
+    app.extensions["services"].storage.write_bytes(result[4], b"%PDF-1.4\ntest", "application/pdf")
+    return result
+
+
 def readable_workflow_definition():
     return {
         "title": "Workflow Form",
@@ -216,6 +247,67 @@ def create_blocked_agreement_submission(
 def admin_csrf(client):
     with client.session_transaction() as session:
         return session["admin_csrf_token"]
+
+
+def test_participant_attachment_download_is_scoped_to_owning_submission(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, owner_pk, stranger_pk, file_id, _ = create_participant_attachment(admin_app)
+    login(admin_client)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{owner_pk}/attachments/{file_id}/download"
+    )
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{owner_pk}")
+    foreign = admin_client.get(
+        f"/admin/forms/{form_id}/submissions/{stranger_pk}/attachments/{file_id}/download"
+    )
+
+    assert response.status_code == 200
+    assert detail.status_code == 200
+    assert "Załączniki uczestnika" in detail.get_data(as_text=True)
+    assert response.data.startswith(b"%PDF")
+    assert "attachment" in response.headers["Content-Disposition"]
+    assert foreign.status_code == 404
+
+
+def test_admin_can_request_attachment_replacement_without_deleting_history(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, owner_pk, _, file_id, _ = create_participant_attachment(admin_app)
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{owner_pk}/attachments/{file_id}/status",
+        data={"csrf_token": admin_csrf(admin_client), "attachment_status": "requires_correction", "reason": "Nieczytelny skan"},
+    )
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        attachment = db.get(SubmissionFile, file_id)
+        assert attachment.status == "requires_correction"
+        assert attachment.rejection_reason == "Nieczytelny skan"
+
+
+def test_admin_can_create_secure_conditional_file_field(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="file_config_form")
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/fields",
+        data={
+            "csrf_token": admin_csrf(admin_client), "action": "add",
+            "new_name": "employment_certificate", "new_label": "Zaświadczenie", "new_type": "file",
+            "new_required": "on", "new_allowed_extensions": "pdf", "new_allowed_mime_types": "application/pdf",
+            "new_max_size_mb": "10", "new_max_files": "1", "new_document_type": "employment_certificate",
+            "new_category": "employment", "new_required_if_field": "employment_status",
+            "new_required_if_operator": "equals", "new_required_if_value": "employed",
+        },
+    )
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        field = next(item for item in form.definition_json["fields"] if item.get("name") == "employment_certificate")
+        assert field["type"] == "file"
+        assert field["allowed_extensions"] == ["pdf"]
+        assert field["required_if"] == {"field": "employment_status", "operator": "equals", "value": "employed"}
 
 
 @pytest.mark.parametrize("role,email", [("admin", "rollback-admin@example.com"), ("super_admin", "rollback-super@example.com")])

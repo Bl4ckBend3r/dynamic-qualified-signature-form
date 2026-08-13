@@ -6,11 +6,12 @@ import secrets
 from pathlib import Path
 
 from flask import Blueprint, abort, current_app, flash, render_template, request, send_file, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
-from models import ContactPage, Form, FormField, FormRegulation, FormSubmission, Logo, ServiceDocument
+from models import ContactPage, Form, FormField, FormSubmission, FormVersion, Logo, ServiceDocument
 from services.process_service import ProcessStatus
 from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint("public_forms", __name__)
 PUBLIC_CSRF_SESSION_KEY = "public_form_csrf_token"
+FORM_VERSION_TOKEN_SALT = "public-form-version"
 
 
 def public_csrf_token() -> str:
@@ -70,6 +72,30 @@ def db_session_factory():
     return create_session_factory(database_url)
 
 
+def _form_version_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.secret_key, salt=FORM_VERSION_TOKEN_SALT)
+
+
+def _form_version_token(slug: str, version_id: int) -> str:
+    return _form_version_serializer().dumps({"slug": slug, "version_id": version_id})
+
+
+def _version_id_from_token(slug: str, token: str) -> int | None:
+    try:
+        payload = _form_version_serializer().loads(
+            str(token or ""),
+            max_age=int(current_app.config.get("FORM_VERSION_TOKEN_MAX_AGE", 86400)),
+        )
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or str(payload.get("slug") or "") != slug:
+        return None
+    try:
+        return int(payload.get("version_id"))
+    except (TypeError, ValueError):
+        return None
+
+
 @bp.get("/")
 def index():
     services = get_services()
@@ -91,7 +117,7 @@ def index():
 def form_page(slug: str):
     services = get_services()
     if current_app.config.get("DATABASE_URL"):
-        form_meta, form_config = get_public_db_form(slug)
+        form_meta, form_config, form_version = get_public_db_form_versioned(slug)
         if not form_meta or not form_config:
             abort(404)
         return render_template(
@@ -101,6 +127,8 @@ def form_page(slug: str):
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
             values={},
+            form_version_id=form_version.id if form_version else None,
+            form_version_token=_form_version_token(slug, form_version.id) if form_version else "",
         )
 
     form_meta = services.form_config_service.get_form_meta(services.storage, slug)
@@ -124,10 +152,17 @@ def form_page(slug: str):
 @bp.post("/submit/<slug>")
 def submit(slug: str):
     services = get_services()
+    request_data = request.get_json(silent=True) if request.is_json else request.form
+    form_version = None
+    form_version_token = str((request_data or {}).get("form_version_token") or "")
     if current_app.config.get("DATABASE_URL"):
-        form_meta, form_config = get_public_db_form(slug)
+        form_meta, form_config, form_version = get_public_db_form_versioned(
+            slug,
+            version_token=form_version_token,
+            require_version_token=True,
+        )
         if not form_meta or not form_config:
-            abort(404)
+            abort(409, description="Wersja formularza wygasła albo nie jest już dostępna. Otwórz formularz ponownie.")
     else:
         form_meta = services.form_config_service.get_form_meta(services.storage, slug)
         if not form_meta:
@@ -137,7 +172,6 @@ def submit(slug: str):
         if not form_config:
             abort(404)
 
-    request_data = request.get_json(silent=True) if request.is_json else request.form
     csrf_valid, csrf_missing = _valid_public_csrf(request_data or {})
     if not csrf_valid:
         logger.warning(
@@ -153,12 +187,19 @@ def submit(slug: str):
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
             values=request_data or {},
+            form_version_id=form_version.id if form_version else None,
+            form_version_token=form_version_token,
             form_error="Sesja formularza wygasła lub brakuje tokenu bezpieczeństwa. Odśwież stronę i spróbuj ponownie.",
         ), 400
 
     try:
         initial_form_config = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
-        submission_result = services.submission_service.submit_form(slug, initial_form_config, request_data or {})
+        submission_result = services.submission_service.submit_form(
+            slug,
+            initial_form_config,
+            request_data or {},
+            form_version_id=form_version.id if form_version else None,
+        )
         if not submission_result["ok"]:
             invalid_fields = sorted(str(name) for name in submission_result["errors"])
             logger.warning(
@@ -175,6 +216,8 @@ def submit(slug: str):
                 form_definition=initial_form_config,
                 errors=submission_result["errors"],
                 values=submission_result["values"],
+                form_version_id=form_version.id if form_version else None,
+                form_version_token=form_version_token,
                 form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
             ), 400
 
@@ -190,6 +233,8 @@ def submit(slug: str):
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
             values=request_data or request.form,
+            form_version_id=form_version.id if form_version else None,
+            form_version_token=form_version_token,
         ), 500
 
 
@@ -220,13 +265,17 @@ def correct_submission(slug: str, submission_id: str):
             abort(403)
         if submission.process_status != ProcessStatus.RETURNED_FOR_CORRECTION.value:
             abort(404)
-        fields = db.execute(
-            select(FormField)
-            .where(FormField.form_id == form.id, FormField.active.is_(True))
-            .order_by(FormField.sort_order, FormField.id)
-        ).scalars().all()
-        form_meta = form_to_public_meta(form)
-        form_config = form_to_definition(form, fields)
+        version = services.form_version_service.resolve_for_submission(db, submission)
+        if version:
+            form_meta, form_config = version_to_public_form(db, form, version)
+        else:
+            fields = db.execute(
+                select(FormField)
+                .where(FormField.form_id == form.id, FormField.active.is_(True))
+                .order_by(FormField.sort_order, FormField.id)
+            ).scalars().all()
+            form_meta = form_to_public_meta(form)
+            form_config = form_to_definition(form, fields)
         stored_values = {
             key: value
             for key, value in dict(submission.data_json or {}).items()
@@ -330,18 +379,19 @@ def form_regulation_file(slug: str):
     if not session_factory:
         abort(404)
     with session_factory() as db:
-        regulation = (
-            db.execute(
-                select(FormRegulation)
-                .join(Form)
-                .where(
-                    Form.slug == slug,
-                    Form.is_active.is_(True),
-                    Form.is_public.is_(True),
-                )
+        form = db.execute(
+            select(Form).where(
+                Form.slug == slug,
+                Form.is_active.is_(True),
+                Form.is_public.is_(True),
             )
-            .scalar_one_or_none()
-        )
+        ).scalar_one_or_none()
+        if not form:
+            abort(404)
+        version_service = get_services().form_version_service
+        if version_service.has_versions(db, form.id) and not version_service.resolve_published(db, form.id):
+            abort(404)
+        regulation = form.regulation
         if not regulation:
             abort(404)
         path = Path(regulation.storage_path)
@@ -375,13 +425,34 @@ def list_public_db_forms() -> list[dict]:
             .where(Form.is_active.is_(True), Form.is_public.is_(True))
             .order_by(Form.sort_order, Form.name)
         ).scalars().all()
-        return [form_to_public_meta(form) for form in forms]
+        result = []
+        version_service = get_services().form_version_service
+        for form in forms:
+            if version_service.has_versions(db, form.id):
+                version = version_service.resolve_published(db, form.id)
+                if not version:
+                    continue
+                meta, _definition = version_to_public_form(db, form, version)
+                result.append(meta)
+            else:
+                result.append(form_to_public_meta(form))
+        return result
 
 
 def get_public_db_form(slug: str) -> tuple[dict | None, dict | None]:
+    form_meta, form_config, _version = get_public_db_form_versioned(slug)
+    return form_meta, form_config
+
+
+def get_public_db_form_versioned(
+    slug: str,
+    *,
+    version_token: str = "",
+    require_version_token: bool = False,
+) -> tuple[dict | None, dict | None, FormVersion | None]:
     session_factory = db_session_factory()
     if not session_factory:
-        return None, None
+        return None, None, None
     with session_factory() as db:
         form = db.execute(
             select(Form).where(
@@ -391,26 +462,54 @@ def get_public_db_form(slug: str) -> tuple[dict | None, dict | None]:
             )
         ).scalar_one_or_none()
         if not form:
-            return None, None
+            return None, None, None
+        version_service = get_services().form_version_service
+        if version_service.has_versions(db, form.id):
+            if version_token:
+                version_id = _version_id_from_token(slug, version_token)
+                version = version_service.resolve_rendered_version(db, form, version_id) if version_id else None
+            elif require_version_token:
+                version = None
+            else:
+                version = version_service.resolve_published(db, form.id)
+            if not version:
+                return None, None, None
+            meta, definition = version_to_public_form(db, form, version)
+            return meta, definition, version
         fields = db.execute(
             select(FormField)
             .where(FormField.form_id == form.id, FormField.active.is_(True))
             .order_by(FormField.sort_order, FormField.id)
         ).scalars().all()
-        return form_to_public_meta(form), form_to_definition(form, fields)
+        return form_to_public_meta(form), form_to_definition(form, fields), None
 
 
-def form_to_public_meta(form: Form) -> dict:
-    logo_alignment = normalize_logo_alignment(form.logo_alignment)
+def version_to_public_form(db, form: Form, version: FormVersion) -> tuple[dict, dict]:
+    definition = dict(version.definition_json or {})
+    metadata = definition.get("_form_metadata") if isinstance(definition.get("_form_metadata"), dict) else {}
+    logo_id = metadata.get("logo_id", form.logo_id)
+    logo = db.get(Logo, logo_id) if logo_id else None
+    definition["logo_url"] = logo_url(logo)
+    definition["regulation_url"] = url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else ""
+    definition["logo_alignment"] = normalize_logo_alignment(
+        str(metadata.get("logo_alignment") or definition.get("logo_alignment") or "left")
+    )
+    normalized = normalize_form_definition(definition)
+    return form_to_public_meta(form, definition=normalized, logo=logo), normalized
+
+
+def form_to_public_meta(form: Form, *, definition: dict | None = None, logo: Logo | None = None) -> dict:
+    definition = definition or {}
+    logo_alignment = normalize_logo_alignment(str(definition.get("logo_alignment") or form.logo_alignment))
     return {
         "slug": form.slug,
-        "title": form.title or form.name,
-        "description": form.description,
-        "label_text": form.label_text,
-        "label_variant": form.label_variant,
-        "label_color": form.label_color,
-        "label_background": form.label_background,
-        "logo_url": logo_url(form.logo),
+        "title": definition.get("title") or form.title or form.name,
+        "description": definition.get("description", form.description),
+        "label_text": definition.get("label_text", form.label_text),
+        "label_variant": definition.get("label_variant", form.label_variant),
+        "label_color": definition.get("label_color", form.label_color),
+        "label_background": definition.get("label_background", form.label_background),
+        "logo_url": logo_url(logo if definition else form.logo),
         "logo_alignment": logo_alignment,
         "regulation_url": url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else "",
     }

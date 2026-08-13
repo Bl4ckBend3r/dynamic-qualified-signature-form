@@ -65,6 +65,7 @@
                             {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
                             {% if g.admin_user.role in ["super_admin", "admin"] %}
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
+                                <a role="menuitem" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wersje i publikacja</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}">Workflow</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Szkolenia</a>
@@ -76,6 +77,10 @@
                                 <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz zmienić aktywność formularza?">
                                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                     <button class="admin-link-button" type="submit" role="menuitem">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
+                                </form>
+                                <form method="post" action="{{ url_for('admin.form_public_toggle', form_id=form.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                    <button class="admin-link-button" type="submit" role="menuitem">{{ "Ukryj publicznie" if form.is_public else "Pokaż publicznie" }}</button>
                                 </form>
                             {% endif %}
                             {% if g.admin_user.role == "super_admin" %}

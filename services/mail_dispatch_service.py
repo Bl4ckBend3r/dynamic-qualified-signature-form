@@ -483,7 +483,9 @@ class MailDispatchService:
             if submission is None or not getattr(submission, "correction_completed_at", None):
                 return MailDispatchResult("skipped", error_message="Zgłoszenie nie jest zaakceptowaną korektą.")
             form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
-            workflow = ((getattr(form, "definition_json", {}) or {}).get("workflow") or {}) if form else {}
+            version = submission.form_version if getattr(submission, "form_version_id", None) else None
+            form_definition = version.definition_json if version else getattr(form, "definition_json", {})
+            workflow = ((form_definition or {}).get("workflow") or {}) if form else {}
             if form is None or not workflow.get("send_email_notifications"):
                 return MailDispatchResult("skipped", error_message="Powiadomienia formularza są wyłączone.")
             if not str(submission.email or "").strip():

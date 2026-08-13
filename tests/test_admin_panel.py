@@ -1159,6 +1159,17 @@ def test_upload_form_saves_basic_mail_and_appearance_settings_for_public_views(a
             "timeout": 10,
             "reply_to": "odpowiedz@example.test",
         }
+        version_service = admin_app.extensions["services"].form_version_service
+        draft = version_service.editable_draft(db, form.id)
+        assert draft is not None
+        version_service.publish(
+            db,
+            form,
+            draft,
+            actor_id=None,
+            change_summary="Publikacja po imporcie",
+        )
+        db.commit()
 
     index_html = admin_client.get("/").get_data(as_text=True)
     public_form_html = admin_client.get("/form/ustawienia_importu").get_data(as_text=True)

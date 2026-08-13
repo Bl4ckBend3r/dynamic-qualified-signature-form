@@ -48,6 +48,7 @@ class AgreementDocxTemplateService:
         uploaded_by_user_id: int | None,
         document_type: str = "agreement",
         form_definition: Mapping[str, Any] | None = None,
+        version_key: str | None = None,
     ) -> dict:
         document_type = str(document_type or "agreement").strip().casefold()
         if document_type not in {"agreement", "declaration"}:
@@ -63,8 +64,8 @@ class AgreementDocxTemplateService:
         else:
             known = AgreementVariableCatalog.context_names(fields)
         unknown = sorted(set(parsed.variables) - known)
-        storage_path = self.storage_path(form_slug, document_type=document_type)
-        self._ensure_directory(form_slug, document_type=document_type)
+        storage_path = self.storage_path(form_slug, document_type=document_type, version_key=version_key)
+        self._ensure_directory(form_slug, document_type=document_type, version_key=version_key)
         self.storage.write_bytes(storage_path, content, DOCX_MIME_TYPE)
         return {
             "storage_path": storage_path,
@@ -143,11 +144,34 @@ class AgreementDocxTemplateService:
         document.save(buffer)
         return buffer.getvalue()
 
-    def storage_path(self, form_slug: str, *, document_type: str = "agreement") -> str:
+    def storage_path(
+        self,
+        form_slug: str,
+        *,
+        document_type: str = "agreement",
+        version_key: str | None = None,
+    ) -> str:
         filename = "agreement-template.docx" if document_type == "agreement" else "declaration-template.docx"
-        return f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/{filename}"
+        version_segment = f"/versions/{self._safe_version_key(version_key)}" if version_key else ""
+        return f"{self.storage.output_dir}/{form_slug}/templates/{document_type}{version_segment}/{filename}"
 
-    def _ensure_directory(self, form_slug: str, *, document_type: str = "agreement") -> None:
+    def _ensure_directory(
+        self,
+        form_slug: str,
+        *,
+        document_type: str = "agreement",
+        version_key: str | None = None,
+    ) -> None:
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}")
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates")
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{document_type}")
+        if version_key:
+            self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/versions")
+            self.storage.mkdir(
+                f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/versions/{self._safe_version_key(version_key)}"
+            )
+
+    @staticmethod
+    def _safe_version_key(value: str | None) -> str:
+        normalized = "".join(character for character in str(value or "") if character.isalnum() or character in {"-", "_"})
+        return normalized or "draft"

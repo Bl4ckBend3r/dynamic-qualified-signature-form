@@ -50,7 +50,7 @@ def storage():
     return get_services().storage
 
 
-def get_form_config(slug: str) -> dict | None:
+def get_form_config(slug: str, submission_id: str | None = None) -> dict | None:
     services = get_services()
     if current_app.config.get("DATABASE_URL"):
         session_factory = create_session_factory(current_app.config["DATABASE_URL"])
@@ -58,6 +58,14 @@ def get_form_config(slug: str) -> dict | None:
             form = db.execute(select(Form).where(Form.slug == slug, Form.is_active.is_(True))).scalar_one_or_none()
             if not form:
                 return None
+            if submission_id:
+                submission = db.execute(
+                    select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+                ).scalar_one_or_none()
+                if submission and submission.form_slug == slug:
+                    version = services.form_version_service.resolve_for_submission(db, submission)
+                    if version:
+                        return services.form_config_service.normalize_form_config(version.definition_json or {})
             return services.form_config_service.normalize_form_config(form.definition_json or {})
     return services.form_config_service.get_form_config(services.storage, slug)
 
@@ -371,7 +379,9 @@ def training_selection(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        field = get_training_selection_field(form.definition_json or {})
+        version = get_services().form_version_service.resolve_for_submission(db, submission)
+        version_definition = version.definition_json if version else form.definition_json
+        field = get_training_selection_field(version_definition or {})
         if field is None or not field.get("enabled", True):
             abort(404)
         decision = str(
@@ -536,7 +546,7 @@ def declaration_form(slug: str, submission_id: str):
         flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
         return redirect(documents_to_sign_url(submission_id))
 
-    form_config = get_form_config(slug)
+    form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
     if requires_additional_fields(form_config, submission["row"]):
@@ -598,7 +608,7 @@ def save_additional_fields(slug: str, submission_id: str):
     if not submission["can_sign_documents"]:
         flash("Wniosek nie został jeszcze zaakceptowany przez urzędnika.", "error")
         return redirect(documents_to_sign_url(submission_id))
-    form_config = get_form_config(slug)
+    form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
     if not services.declaration_flow_service.has_additional_fields(form_config):
@@ -639,7 +649,7 @@ def generate_training_agreements(slug: str, submission_id: str):
         flash("Nie znaleziono wniosku dla umów.", "error")
         return redirect(documents_to_sign_url(submission_id))
 
-    form_config = get_form_config(slug)
+    form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
 
@@ -856,7 +866,7 @@ def upload_signed_agreement(slug: str, submission_id: str):
 
 @bp.post("/upload-signed/<slug>/<submission_id>")
 def upload_signed_pdf(slug: str, submission_id: str):
-    if not get_form_config(slug):
+    if not get_form_config(slug, submission_id):
         abort(404)
 
     services = get_services()
@@ -879,7 +889,7 @@ def upload_signed_pdf(slug: str, submission_id: str):
 @bp.get("/result/<slug>/<submission_id>")
 def show_result(slug: str, submission_id: str):
     services = get_services()
-    form_config = get_form_config(slug)
+    form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
     submission = services.submission_repository.get_by_id(submission_id)
@@ -936,7 +946,7 @@ def build_documents_to_sign_result(
     additional_values: dict | None = None,
 ) -> dict:
     services = get_services()
-    form_config = get_form_config(submission["form_slug"]) or {}
+    form_config = get_form_config(submission["form_slug"], submission_id) or {}
     row = submission["row"]
     if requires_additional_fields(form_config, row):
         return services.document_service.document_view_service.build_additional_fields_result(
@@ -1165,7 +1175,7 @@ def download_pdf(slug: str, filename: str):
         }
         if metadata and str(metadata.get("document_type") or "") not in allowed_types:
             abort(404)
-        form_config = get_form_config(slug) or {}
+        form_config = get_form_config(slug, str(submission.get("submission_id") or "")) or {}
         if clean_filename == str(submission.get("declaration_filename") or "") and requires_additional_fields(form_config, submission):
             flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
             abort(403)

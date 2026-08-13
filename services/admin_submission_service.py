@@ -242,8 +242,12 @@ DEFAULT_LABELS = {
 }
 
 
-def build_submission_detail_sections(form: Form, submission: FormSubmission) -> dict:
-    form_config = normalize_admin_form_definition(form.definition_json or {})
+def build_submission_detail_sections(
+    form: Form,
+    submission: FormSubmission,
+    form_config: dict | None = None,
+) -> dict:
+    form_config = normalize_admin_form_definition(form_config if form_config is not None else form.definition_json or {})
     labels = build_field_labels(form_config)
     options_by_field = build_field_options(form_config)
     row = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}

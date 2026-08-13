@@ -41,6 +41,10 @@
         {% endif %}
         <form method="post" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
             <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            {% if form_version_token %}
+                <input type="hidden" name="form_version_id" value="{{ form_version_id }}">
+                <input type="hidden" name="form_version_token" value="{{ form_version_token }}">
+            {% endif %}
             {% if correction_mode %}<input type="hidden" name="token" value="{{ access_token }}">{% endif %}
             {% if form_definition.fields|selectattr('required')|list %}
                 <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>

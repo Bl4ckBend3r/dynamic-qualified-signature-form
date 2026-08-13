@@ -43,7 +43,7 @@ def status_payload(process_status: str | None) -> dict:
     }
 
 
-def get_form_instruction_context(form_slug: str) -> dict:
+def get_form_instruction_context(form_slug: str, form_version_id: int | str | None = None) -> dict:
     services = get_services()
     instruction = ""
     instruction_config = None
@@ -53,16 +53,23 @@ def get_form_instruction_context(form_slug: str) -> dict:
     if database_url:
         try:
             from database import create_session_factory
-            from models import Form
+            from models import Form, FormVersion
             from sqlalchemy import select
 
             with create_session_factory(database_url)() as db:
                 form = db.execute(select(Form).where(Form.slug == form_slug)).scalar_one_or_none()
                 if form:
-                    instruction = str(form.user_instruction or "").strip()
-                    instruction_config = form.user_instruction_config or {}
-                    updated_at = form.updated_at.isoformat() if form.updated_at else ""
-                    form_config = services.form_config_service.normalize_form_config(form.definition_json or {})
+                    version = db.get(FormVersion, int(form_version_id)) if str(form_version_id or "").isdigit() else None
+                    if version and version.form_id == form.id:
+                        form_config = services.form_config_service.normalize_form_config(version.definition_json or {})
+                        instruction = str(form_config.get("user_instruction") or "").strip()
+                        instruction_config = form_config.get("user_instruction_config") or {}
+                        updated_at = version.updated_at.isoformat() if version.updated_at else ""
+                    else:
+                        instruction = str(form.user_instruction or "").strip()
+                        instruction_config = form.user_instruction_config or {}
+                        updated_at = form.updated_at.isoformat() if form.updated_at else ""
+                        form_config = services.form_config_service.normalize_form_config(form.definition_json or {})
         except Exception:
             logger.warning("Nie udało się odczytać instrukcji formularza %s z bazy.", form_slug, exc_info=True)
     if form_config is None:
@@ -83,7 +90,7 @@ def get_form_instruction_context(form_slug: str) -> dict:
 
 
 def instruction_payload(submission: dict) -> dict:
-    form_context = get_form_instruction_context(submission["form_slug"])
+    form_context = get_form_instruction_context(submission["form_slug"], submission.get("form_version_id"))
     instruction = form_context["instruction"]
     process_view = build_process_instruction_view(
         submission.get("process_status"),

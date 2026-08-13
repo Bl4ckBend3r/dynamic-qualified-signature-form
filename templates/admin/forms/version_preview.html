@@ -1,0 +1,55 @@
+{% extends "admin/base.html" %}
+{% block title %}Podgląd wersji {{ version.version_label }}{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Podgląd tylko do odczytu</p>
+        <h1>{{ form.name }} · v{{ version.version_label }}</h1>
+        <p>
+            {% if version.status == 'published' %}Wersja opublikowana{% elif version.status == 'draft' %}Wersja robocza{% else %}Wersja archiwalna{% endif %}.
+            Ten widok korzysta wyłącznie z zapisanej migawki wersji.
+        </p>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wróć do wersji</a>
+        {% if version.status == 'draft' %}<a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj draft</a>{% endif %}
+    </div>
+</div>
+
+<div class="admin-card">
+    <h2>{{ definition.title or form.name }}</h2>
+    {% if definition.description %}<p>{{ definition.description }}</p>{% endif %}
+    {% if definition.user_instruction %}<div class="admin-notice">{{ definition.user_instruction }}</div>{% endif %}
+</div>
+
+<div class="admin-card admin-table-wrap">
+    <h2>Pola formularza</h2>
+    <table class="admin-table admin-table--responsive">
+        <thead><tr><th>Nazwa</th><th>Etykieta</th><th>Typ</th><th>Etap</th><th>Wymagane</th></tr></thead>
+        <tbody>
+        {% for field in definition.fields or [] %}
+            {% if field is mapping and field.name %}
+            <tr>
+                <td><code>{{ field.name }}</code></td>
+                <td>{{ field.label or field.name }}</td>
+                <td>{{ field.type or 'text' }}</td>
+                <td>{{ field.stage or 'initial_submission' }}</td>
+                <td>{{ 'Tak' if field.required else 'Nie' }}</td>
+            </tr>
+            {% endif %}
+        {% else %}
+            <tr><td colspan="5">Brak pól w migawce.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="admin-card">
+    <h2>Workflow i konfiguracja dokumentów</h2>
+    <p>Snapshot zawiera {{ (definition.workflow.steps or [])|length if definition.workflow is mapping else 0 }} etapów workflow oraz {{ (definition.documents or [])|length }} definicji dokumentów.</p>
+    <details>
+        <summary>Pokaż pełną migawkę JSON</summary>
+        <pre>{{ definition|tojson(indent=2) }}</pre>
+    </details>
+</div>
+{% endblock %}

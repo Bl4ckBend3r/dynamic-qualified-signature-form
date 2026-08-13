@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
     "forms": frozenset({"user_instruction", "user_instruction_config"}),
+    "form_versions": frozenset(
+        {
+            "form_id",
+            "version_major",
+            "version_minor",
+            "version_label",
+            "status",
+            "definition_json",
+            "created_by_id",
+            "published_at",
+            "published_by_id",
+            "archived_at",
+            "change_summary",
+            "source_version_id",
+        }
+    ),
+    "form_submissions": frozenset({"form_version_id"}),
     "email_logs": frozenset({"event_type", "error_type", "administrator_message", "html_body", "text_body"}),
     "site_footers": frozenset(
         {

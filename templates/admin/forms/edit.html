@@ -7,6 +7,7 @@
         <h1>{{ form.name }}</h1>
     </div>
     <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Historia wersji</a>
         <a class="admin-button-secondary" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrót</a>
     </div>
@@ -15,6 +16,7 @@
 <form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
+    {% if form.editable_version_id %}<input type="hidden" name="form_version_id" value="{{ form.editable_version_id }}">{% endif %}
     <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
     <section class="admin-form-tab-panel" id="form-tab-basic" role="tabpanel" data-form-tab-panel="basic" {% if active_tab != 'basic' %}hidden{% endif %}>
         <div class="admin-section-heading"><div><h2>Podstawowe</h2><p>Najważniejsze informacje i dostępność formularza.</p></div></div>

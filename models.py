@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -21,6 +21,11 @@ class FormSubmission(Base):
     submission_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     form_slug: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     form_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    form_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("form_versions.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -153,6 +158,7 @@ class FormSubmission(Base):
         back_populates="submission",
         cascade="all, delete-orphan",
     )
+    form_version: Mapped["FormVersion | None"] = relationship(back_populates="submissions")
 
 
 class SubmissionTraining(Base):
@@ -399,6 +405,11 @@ class Form(Base):
     creator: Mapped[User | None] = relationship(back_populates="forms_created")
     logo: Mapped[Logo | None] = relationship(back_populates="forms")
     fields: Mapped[list["FormField"]] = relationship(back_populates="form", cascade="all, delete-orphan")
+    versions: Mapped[list["FormVersion"]] = relationship(
+        back_populates="form",
+        cascade="all, delete-orphan",
+        order_by="FormVersion.version_major, FormVersion.version_minor",
+    )
     permissions: Mapped[list["FormPermission"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_templates: Mapped[list["MailTemplate"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     mail_footers: Mapped[list["MailFooter"]] = relationship(back_populates="form", cascade="all, delete-orphan")
@@ -415,6 +426,55 @@ class Form(Base):
     @active.setter
     def active(self, value: bool) -> None:
         self.is_active = bool(value)
+
+
+class FormVersion(Base):
+    __tablename__ = "form_versions"
+    __table_args__ = (
+        UniqueConstraint("form_id", "version_major", "version_minor", name="uq_form_versions_number"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_form_versions_status"),
+        Index("ix_form_versions_form_status", "form_id", "status"),
+        Index(
+            "uq_form_versions_one_published",
+            "form_id",
+            unique=True,
+            postgresql_where=text("status = 'published'"),
+            sqlite_where=text("status = 'published'"),
+        ).ddl_if(dialect=("postgresql", "sqlite")),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    version_major: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    definition_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    change_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_version_id: Mapped[int | None] = mapped_column(ForeignKey("form_versions.id", ondelete="SET NULL"), nullable=True)
+
+    form: Mapped[Form] = relationship(back_populates="versions")
+    created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_id])
+    published_by: Mapped[User | None] = relationship(foreign_keys=[published_by_id])
+    source_version: Mapped["FormVersion | None"] = relationship(remote_side=[id], foreign_keys=[source_version_id])
+    submissions: Mapped[list[FormSubmission]] = relationship(back_populates="form_version")
 
 
 class SystemMailSettings(Base):

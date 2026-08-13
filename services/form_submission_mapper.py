@@ -140,6 +140,7 @@ FORM_FIELD_MAP: dict[str, str] = {
 
 FORM_SUBMISSION_COLUMNS = set(FORM_FIELD_MAP.values()) | {
     "id",
+    "form_version_id",
 }
 
 BOOLEAN_COLUMNS = {
@@ -167,7 +168,7 @@ DATETIME_COLUMNS = {
     "correction_completed_at",
 }
 
-INTEGER_COLUMNS = {"wiek"}
+INTEGER_COLUMNS = {"wiek", "form_version_id"}
 NUMERIC_COLUMNS: set[str] = set()
 JSON_COLUMNS = {"data_json", "document_states"}
 

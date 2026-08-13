@@ -56,7 +56,14 @@ class SubmissionService:
         self.qualification_condition_service = qualification_condition_service or QualificationConditionService()
         self.validator = validator
 
-    def submit_form(self, form_slug: str, form_config: dict, request_form) -> dict:
+    def submit_form(
+        self,
+        form_slug: str,
+        form_config: dict,
+        request_form,
+        *,
+        form_version_id: int | None = None,
+    ) -> dict:
         submission_id = str(uuid4())
         submission_data = extract_submission_data(form_config, request_form)
         submission_data = apply_pesel_derived_values(form_config, submission_data)
@@ -97,6 +104,7 @@ class SubmissionService:
                 "signed_pdf_filename": "",
                 "signature_status": "manual",
                 "signature_request_id": "mobywatel-manual",
+                "form_version_id": form_version_id,
             },
             submission_id=submission_id,
             dispatch_received=False,
@@ -161,6 +169,7 @@ class SubmissionService:
         form_data: dict,
         submission_id: str | None = None,
         dispatch_received: bool = True,
+        form_version_id: int | None = None,
     ) -> dict:
         submission_id = submission_id or str(uuid4())
         document_ids = self._enabled_document_ids(form_config)
@@ -171,6 +180,7 @@ class SubmissionService:
             "form_name": form_config.get("title", form_slug),
             "access_token": self.access_token_service.generate_token(),
             **form_data,
+            "form_version_id": form_version_id if form_version_id is not None else form_data.get("form_version_id"),
             **build_initial_process_fields(
                 declaration_required="declaration" in document_ids,
                 agreement_required=bool({"agreement", "training_agreement"} & document_ids),

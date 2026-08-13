@@ -18,6 +18,7 @@ from services.documents.document_access_service import DocumentAccessService
 from services.documents.document_download_service import DocumentDownloadService
 from services.documents.document_signing_service import DocumentSigningService
 from services.form_config_service import FormConfigService
+from services.form_version_service import FormVersionService
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.legacy_fallback_readiness_service import LegacyFallbackReadinessService
 from services.mail_dispatch_service import MailDispatchService
@@ -68,6 +69,7 @@ class ServiceContainer:
     audit_log_service: AuditLogService
     access_token_service: AccessTokenService
     form_config_service: FormConfigService
+    form_version_service: FormVersionService
     rules_service: RulesService
     qualification_condition_service: QualificationConditionService
     submission_correction_service: SubmissionCorrectionService
@@ -77,6 +79,7 @@ class ServiceContainer:
 def create_services(app, storage_override=None) -> ServiceContainer:
     storage = storage_override or create_nextcloud_storage_from_env()
     form_config_service = FormConfigService()
+    form_version_service = FormVersionService()
     access_token_service = AccessTokenService()
     qualification_condition_service = QualificationConditionService()
     submission_correction_service = SubmissionCorrectionService()
@@ -213,6 +216,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         audit_log_service=audit_log_service,
         access_token_service=access_token_service,
         form_config_service=form_config_service,
+        form_version_service=form_version_service,
         rules_service=rules_service,
         qualification_condition_service=qualification_condition_service,
         submission_correction_service=submission_correction_service,

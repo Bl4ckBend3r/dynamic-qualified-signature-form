@@ -218,6 +218,7 @@ def submission_detail(form_id: int, submission_pk: int):
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         submission_data = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
         services = current_app.extensions["services"]
+        submission_form_config = _submission_form_config(db, form, submission)
         files = services.submission_document_service.list_documents(submission.submission_id)
         workflow_history = services.submission_workflow_history_service.list_history(submission_data)
         decision_history = services.submission_decision_service.list_decisions(submission_data)
@@ -232,8 +233,8 @@ def submission_detail(form_id: int, submission_pk: int):
             decisions=decision_history.get("decisions") or [],
             can_review_agreement=can_review_agreement,
         )
-        detail_view = build_submission_detail_sections(form, submission)
-        training_field = get_training_selection_field(form.definition_json or {})
+        detail_view = build_submission_detail_sections(form, submission, submission_form_config)
+        training_field = get_training_selection_field(submission_form_config)
         participant_training_view = None
         if training_field:
             availability = TrainingAvailabilityService(
@@ -306,7 +307,7 @@ def submission_detail(form_id: int, submission_pk: int):
                 db,
                 submission,
                 actor_role=g.admin_user.role,
-                form_config=form.definition_json or {},
+                form_config=submission_form_config,
             )
         correspondence_logs = db.execute(
             select(EmailLog)
@@ -373,6 +374,7 @@ def submission_stage_rollback(submission_id: str):
         reason = request.form.get("rollback_reason", "").strip()
         send_notification = request.form.get("send_notification") == "on"
         service = current_app.extensions["services"].submission_stage_rollback_service
+        submission_form_config = _submission_form_config(db, form, submission)
         try:
             result = service.rollback(
                 db,
@@ -380,7 +382,7 @@ def submission_stage_rollback(submission_id: str):
                 target_status=target_status,
                 reason=reason,
                 actor=g.admin_user,
-                form_config=form.definition_json or {},
+                form_config=submission_form_config,
             )
             db.commit()
         except StageRollbackError as exc:
@@ -587,11 +589,12 @@ def submission_return_for_correction(submission_id: str):
         ensure_form_access(db, form.id, manage=True)
         if not str(submission.access_token or "").strip():
             submission.access_token = current_app.extensions["services"].access_token_service.generate_token()
+        submission_form_config = _submission_form_config(db, form, submission)
         try:
             result = current_app.extensions["services"].submission_correction_service.return_for_correction(
                 db,
                 submission,
-                form_config=form.definition_json or {},
+                form_config=submission_form_config,
                 reason=reason,
                 message_to_user=message_to_user,
                 clear_submission=clear_submission,
@@ -1511,3 +1514,8 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         "send_mail": bool(mail_result and mail_result.sent),
         "skipped": False,
     }
+
+
+def _submission_form_config(db, form: Form, submission: FormSubmission) -> dict:
+    version = current_app.extensions["services"].form_version_service.resolve_for_submission(db, submission)
+    return dict(version.definition_json or {}) if version else dict(form.definition_json or {})

@@ -1,6 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}Pola formularza{% endblock %}
 {% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/form_builder.css') }}">
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">{{ form.name }}</p>
@@ -13,131 +14,45 @@
 </div>
 {% set active_tab = 'fields' %}
 {% include "admin/forms/_tabs.html" %}
-<form method="post" class="admin-card">
+
+<form method="post" class="form-builder" data-form-builder>
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-    <div class="admin-table-wrap">
-        <table class="admin-table">
-            <thead>
-                <tr>
-                    <th>Kolejność</th>
-                    <th>Nazwa pola</th>
-                    <th>Etykieta</th>
-                    <th>Etykieta w dokumentach</th>
-                    <th>Typ</th>
-                    <th>Opcje</th>
-                    <th>Konfiguracja pliku</th>
-                    <th>Dostępność w procesie</th>
-                    <th>Sekcja</th>
-                    <th>Akcje</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for field in fields %}
-                <tr>
-                    <td><input class="admin-input-small" name="field_{{ field.id }}_sort_order" value="{{ field.sort_order }}" inputmode="numeric"></td>
-                    <td><code>{{ field.name }}</code></td>
-                    <td><input name="field_{{ field.id }}_label" value="{{ field.label }}"></td>
-                    <td><input name="field_{{ field.id }}_document_label" value="{{ document_field_labels.get(field.name, '') }}" placeholder="Domyślnie jak etykieta"></td>
-                    <td>
-                        <select name="field_{{ field.id }}_type">
-                            {% for option in field_types %}
-                                <option value="{{ option }}" {% if field.type == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    </td>
-                    <td><textarea class="admin-textarea-small" name="field_{{ field.id }}_options" placeholder="Jedna opcja w linii">{{ field_options_text(field) }}</textarea></td>
-                    {% set config = field_configs.get(field.name, {}) %}
-                    <td>{% if field.type == 'file' %}
-                        <details open><summary>Ustawienia</summary>
-                            <label><small>Opis</small><textarea name="field_{{ field.id }}_description">{{ config.get('description', '') }}</textarea></label>
-                            <label><small>Rozszerzenia</small><input name="field_{{ field.id }}_allowed_extensions" value="{{ config.get('allowed_extensions', ['pdf'])|join(', ') }}"></label>
-                            <label><small>MIME</small><input name="field_{{ field.id }}_allowed_mime_types" value="{{ config.get('allowed_mime_types', [])|join(', ') }}"></label>
-                            <label><small>Maks. MB</small><input type="number" min="1" max="25" name="field_{{ field.id }}_max_size_mb" value="{{ config.get('max_size_mb', 10) }}"></label>
-                            <label><small>Maks. plików</small><input type="number" min="1" max="10" name="field_{{ field.id }}_max_files" value="{{ config.get('max_files', 1) }}"></label>
-                            <label><small>Typ dokumentu</small><input name="field_{{ field.id }}_document_type" value="{{ config.get('document_type', 'submission_attachment') }}"></label>
-                            <label><small>Kategoria</small><input name="field_{{ field.id }}_category" value="{{ config.get('category', '') }}"></label>
-                            {% set required_if = config.get('required_if') or {} %}
-                            <label><small>required_if: pole</small><input name="field_{{ field.id }}_required_if_field" value="{{ required_if.get('field', '') }}"></label>
-                            <label><small>Operator</small><select name="field_{{ field.id }}_required_if_operator">{% for op in ['equals','not_equals','in','not_in','is_empty','is_not_empty'] %}<option value="{{ op }}" {% if required_if.get('operator', 'equals') == op %}selected{% endif %}>{{ op }}</option>{% endfor %}</select></label>
-                            <label><small>Wartość</small><input name="field_{{ field.id }}_required_if_value" value="{{ required_if.get('value', '')|join(', ') if required_if.get('value') is sequence and required_if.get('value') is not string else required_if.get('value', '') }}"></label>
-                        </details>
-                    {% else %}—{% endif %}</td>
-                    <td>
-                        <input type="hidden" name="field_{{ field.id }}_availability_present" value="1">
-                        <details class="field-availability"><summary>Ustaw etapy</summary>
-                            <table class="admin-table compact"><thead><tr><th>Etap</th><th>Widoczne</th><th>Edytowalne</th><th>Wymagane</th></tr></thead><tbody>
-                            {% set configured = field_availability.get(field.name, []) %}
-                            {% for step in workflow_steps %}
-                                {% set permission = configured|selectattr('step', 'equalto', step.get('id'))|first|default({}) %}
-                                <tr><td>{{ step.get('admin_label') or step.get('user_label') or step.get('id') }}<br><code>{{ step.get('id') }}</code></td>
-                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_visible" {% if permission.get('visible') %}checked{% endif %}></td>
-                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_editable" {% if permission.get('editable') %}checked{% endif %}></td>
-                                    <td><input type="checkbox" name="field_{{ field.id }}_availability_{{ loop.index0 }}_required" {% if permission.get('required') %}checked{% endif %}></td>
-                                </tr>
-                            {% endfor %}
-                            </tbody></table>
-                        </details>
-                    </td>
-                    <td><input name="field_{{ field.id }}_section" value="{{ field.section }}"></td>
-                    <td><button class="admin-link-button admin-danger-link" type="submit" name="action" value="delete:{{ field.id }}">Usuń pole</button></td>
-                </tr>
-            {% else %}
-                <tr><td colspan="10">Brak aktywnych pól.</td></tr>
+    <input type="hidden" name="action" value="builder_save">
+    <input type="hidden" name="builder_state" data-builder-state>
+    <div hidden aria-hidden="true">
+        {% for field in fields %}
+            <input type="hidden" value="{{ document_field_labels.get(field.name, '') }}">
+            {% for step in workflow_steps %}
+            <span data-legacy-field-name="field_{{ field.id }}_availability_{{ loop.index0 }}_visible"></span>
             {% endfor %}
-            </tbody>
-        </table>
+        {% endfor %}
     </div>
-    <div class="admin-section">
-        <h2>Dodaj pole</h2>
-        <div class="admin-form-grid">
-            <label><span>Nazwa pola</span><input name="new_name" placeholder="np. numer_telefonu"></label>
-            <label><span>Etykieta</span><input name="new_label" placeholder="np. Numer telefonu"></label>
-            <label><span>Etykieta w dokumentach</span><input name="new_document_label" placeholder="Opcjonalna krótsza etykieta"></label>
-            <label>
-                <span>Typ</span>
-                <select name="new_type">
-                    {% for option in field_types %}
-                        <option value="{{ option }}">{{ option }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label><span>Kolejność</span><input type="number" name="new_sort_order" value="{{ fields|length + 1 }}"></label>
-            <label><span>Sekcja</span><input name="new_section"></label>
-            <div class="admin-form-wide field-availability">
-                <span>Dostępność w procesie</span>
-                <input type="hidden" name="new_availability_present" value="1">
-                <table class="admin-table compact"><thead><tr><th>Etap</th><th>Widoczne</th><th>Edytowalne</th><th>Wymagane</th></tr></thead><tbody>
-                {% for step in workflow_steps %}
-                    {% set selected = step.get('id') == initial_workflow_step %}
-                    <tr><td>{{ step.get('admin_label') or step.get('user_label') or step.get('id') }}<br><code>{{ step.get('id') }}</code></td>
-                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_visible" {% if selected %}checked{% endif %}></td>
-                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_editable" {% if selected %}checked{% endif %}></td>
-                        <td><input type="checkbox" name="new_availability_{{ loop.index0 }}_required" {% if selected %}checked{% endif %}></td>
-                    </tr>
-                {% endfor %}
-                </tbody></table>
+    <header class="form-builder__toolbar">
+        <div>
+            <h2>Wizualny układ formularza</h2>
+            <p>Dodawaj pola, przeciągaj je i ustawiaj ich szerokość. Na telefonie pola automatycznie zajmą cały wiersz.</p>
+        </div>
+        <div class="form-builder__toolbar-actions">
+            <div class="form-builder__mode" role="group" aria-label="Tryb edytora">
+                <button type="button" class="is-active" data-builder-mode="edit">Edytor</button>
+                <button type="button" data-builder-mode="preview">Podgląd</button>
             </div>
-            <label class="admin-form-wide"><span>Opcje select/radio/checkbox</span><textarea name="new_options" placeholder="Jedna opcja w linii. Dla checkbox można użyć value|label."></textarea></label>
-            <label><span>Rozszerzenia pliku</span><input name="new_allowed_extensions" value="pdf"></label>
-            <label><span>Dozwolone MIME</span><input name="new_allowed_mime_types" placeholder="application/pdf"></label>
-            <label><span>Maks. MB</span><input type="number" min="1" max="25" name="new_max_size_mb" value="10"></label>
-            <label><span>Maks. plików</span><input type="number" min="1" max="10" name="new_max_files" value="1"></label>
-            <label><span>Typ dokumentu</span><input name="new_document_type" value="submission_attachment"></label>
-            <label><span>Kategoria</span><input name="new_category"></label>
-            <label><span>required_if: pole</span><input name="new_required_if_field" placeholder="nazwa pola"></label>
-            <label><span>required_if: operator</span><select name="new_required_if_operator">{% for op in ['equals','not_equals','in','not_in','is_empty','is_not_empty'] %}<option value="{{ op }}">{{ op }}</option>{% endfor %}</select></label>
-            <label><span>required_if: wartość</span><input name="new_required_if_value"></label>
-            <label class="admin-form-wide"><span>Opis pliku</span><textarea name="new_description"></textarea></label>
+            <button class="admin-button" type="submit">Zapisz</button>
         </div>
-        <div class="admin-form-actions">
-            <button class="admin-button-secondary" type="submit" name="action" value="add">Dodaj pole</button>
-        </div>
+    </header>
+
+    <div class="form-builder__workspace">
+        {% include "admin/forms/form_builder/_field_palette.html" %}
+        {% include "admin/forms/form_builder/_form_canvas.html" %}
+        {% include "admin/forms/form_builder/_properties_panel.html" %}
     </div>
-    <div class="admin-form-actions">
-        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
-        <button class="admin-button" type="submit" name="action" value="save">Zapisz</button>
-    </div>
+    <p class="form-builder__status" data-builder-status aria-live="polite"></p>
 </form>
+
+<script type="application/json" data-builder-initial-state>{{ builder_fields|tojson }}</script>
+<script type="application/json" data-builder-widths>{{ layout_widths|tojson }}</script>
+<script type="application/json" data-builder-types>{{ field_types|tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/form_builder/form-builder.js') }}"></script>
 <script>
 const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id)|tojson }};
 document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
@@ -145,20 +60,6 @@ document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
 });
 document.querySelector("[data-form-tab-select]")?.addEventListener("change", (event) => {
     if (event.target.value !== "fields") window.location.href = `${editFormUrl}?tab=${encodeURIComponent(event.target.value)}`;
-});
-document.querySelectorAll(".field-availability tbody tr").forEach((row) => {
-    const visible = row.querySelector('input[name$="_visible"]');
-    const editable = row.querySelector('input[name$="_editable"]');
-    const required = row.querySelector('input[name$="_required"]');
-    const reconcile = () => {
-        if (!visible.checked) { editable.checked = false; required.checked = false; }
-        if (!editable.checked) required.checked = false;
-        editable.disabled = !visible.checked;
-        required.disabled = !visible.checked || !editable.checked;
-    };
-    visible?.addEventListener("change", reconcile);
-    editable?.addEventListener("change", reconcile);
-    reconcile();
 });
 </script>
 {% endblock %}

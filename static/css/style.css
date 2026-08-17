@@ -262,6 +262,14 @@ main,
     grid-column: span 3;
 }
 
+.width-two-thirds {
+    grid-column: span 8;
+}
+
+.width-three-quarters {
+    grid-column: span 9;
+}
+
 .training-selection-row {
     grid-column: 1 / -1;
 }
@@ -1116,7 +1124,9 @@ textarea:focus {
 @media (max-width: 900px) {
     .width-half,
     .width-third,
-    .width-quarter {
+    .width-quarter,
+    .width-two-thirds,
+    .width-three-quarters {
         grid-column: span 12;
     }
 

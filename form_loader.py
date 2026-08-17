@@ -27,6 +27,8 @@ SUPPORTED_FIELD_TYPES = {
     "file",
     "attachment",
 }
+SUPPORTED_FIELD_WIDTHS = {"quarter", "third", "half", "two-thirds", "three-quarters", "full"}
+LEGACY_FIELD_WIDTHS = {3: "quarter", 4: "third", 6: "half", 8: "two-thirds", 9: "three-quarters", 12: "full"}
 NON_INPUT_FIELD_TYPES = {"section", "static_text"}
 
 
@@ -235,7 +237,13 @@ def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]
         field.setdefault("help_text", "")
         field.setdefault("default", "")
         field.setdefault("validation", {})
-        field.setdefault("width", "full")
+        raw_width = field.get("width", "full")
+        if isinstance(raw_width, int) or str(raw_width).isdigit():
+            field["width"] = LEGACY_FIELD_WIDTHS.get(int(raw_width), "full")
+        elif raw_width not in SUPPORTED_FIELD_WIDTHS:
+            field["width"] = "full"
+        else:
+            field["width"] = raw_width
         field.setdefault("visible_if", None)
         field.setdefault("readonly", False)
         if field.get("type") == "file":

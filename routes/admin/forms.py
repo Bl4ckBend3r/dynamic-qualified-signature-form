@@ -34,6 +34,12 @@ from services.admin_form_service import (
     validate_admin_form_config,
 )
 from services.form_config_service import TRIGGER_DESCRIPTIONS
+from services.form_builder_service import (
+    FormBuilderError,
+    LAYOUT_WIDTHS,
+    apply_builder_state,
+    serialize_builder_fields,
+)
 from services.field_availability_service import FieldAvailabilityService
 from services.form_version_service import (
     FORM_VERSION_DRAFT,
@@ -2056,6 +2062,24 @@ def form_fields(form_id: int):
         if request.method == "POST":
             _editable_form_version(db, form)
             action = request.form.get("action", "save")
+            if action == "builder_save":
+                try:
+                    builder_state = json.loads(request.form.get("builder_state", "[]"))
+                    apply_builder_state(
+                        db,
+                        form,
+                        builder_state,
+                        field_types=set(FIELD_TYPES),
+                        availability_definition=availability_definition,
+                    )
+                except (json.JSONDecodeError, FormBuilderError) as exc:
+                    db.rollback()
+                    flash(str(exc) or "Nie udało się odczytać danych edytora.", "error")
+                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                _sync_editable_form_version(db, form)
+                db.commit()
+                flash("Układ i pola formularza zostały zapisane.", "success")
+                return redirect(url_for("admin.form_fields", form_id=form.id))
             if action == "add":
                 field_name = normalize_slug(request.form.get("new_name", "")).replace("-", "_")
                 if not field_name:
@@ -2168,6 +2192,8 @@ def form_fields(form_id: int):
             "admin/forms/fields.html",
             form=form,
             fields=fields,
+            builder_fields=serialize_builder_fields(form, fields),
+            layout_widths=LAYOUT_WIDTHS,
             field_types=FIELD_TYPES,
             field_stages=FIELD_STAGES,
             workflow_steps=workflow_steps,

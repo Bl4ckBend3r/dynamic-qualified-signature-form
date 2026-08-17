@@ -1,0 +1,16 @@
+<aside class="form-builder__palette" data-field-palette aria-label="Biblioteka pól">
+    <h3>Pola</h3>
+    <p>Kliknij lub przeciągnij na formularz.</p>
+    {% set type_labels = {
+        'text': 'Tekst', 'textarea': 'Dłuższy tekst', 'email': 'E-mail', 'tel': 'Telefon',
+        'number': 'Liczba', 'date': 'Data', 'select': 'Lista', 'radio': 'Radio',
+        'checkbox': 'Checkbox', 'pesel': 'PESEL', 'file': 'Plik'
+    } %}
+    <div class="form-builder__palette-list">
+        {% for type in field_types %}
+        <button type="button" draggable="true" data-add-field="{{ type }}">
+            <span aria-hidden="true">＋</span> {{ type_labels.get(type, type) }}
+        </button>
+        {% endfor %}
+    </div>
+</aside>

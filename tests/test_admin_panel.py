@@ -1597,6 +1597,52 @@ def test_form_fields_can_be_edited(admin_app, admin_client):
     assert 'value="Adres e-mail uczestnika"' in reloaded
 
 
+def test_visual_form_builder_saves_layout_and_reopens_it(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="visual_builder",
+        name="Visual Builder",
+        definition_json={
+            "title": "Visual Builder",
+            "fields": [
+                {"name": "imie", "label": "Imię", "type": "text", "custom_setting": "zachowaj"},
+                {"name": "nazwisko", "label": "Nazwisko", "type": "text"},
+            ],
+        },
+    )
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        sync_form_fields(db, db.get(Form, form_id), db.get(Form, form_id).definition_json)
+        db.commit()
+        fields = {field.name: field for field in db.query(FormField).filter_by(form_id=form_id).all()}
+        state = [
+            {"id": fields["nazwisko"].id, "name": "nazwisko", "label": "Nazwisko kandydata", "type": "text", "required": True, "width": "half", "width_span": 6, "placeholder": "", "section": "Dane", "document_label": "", "options": []},
+            {"id": fields["imie"].id, "name": "imie", "label": "Imię kandydata", "type": "text", "required": True, "width": "half", "width_span": 6, "placeholder": "Wpisz imię", "section": "Dane", "document_label": "", "options": []},
+            {"id": None, "name": "email", "label": "Adres e-mail", "type": "email", "required": False, "width": "full", "width_span": 12, "placeholder": "name@example.org", "section": "Kontakt", "document_label": "", "options": []},
+        ]
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+    assert "Wizualny układ formularza" in html
+    assert "data-form-canvas" in html
+    token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/fields",
+        data={"csrf_token": token, "action": "builder_save", "builder_state": json.dumps(state)},
+    )
+    assert response.status_code == 302
+    with factory() as db:
+        form = db.get(Form, form_id)
+        active = db.query(FormField).filter_by(form_id=form_id, active=True).order_by(FormField.sort_order).all()
+        assert [field.name for field in active] == ["nazwisko", "imie", "email"]
+        configs = {item["name"]: item for item in form.definition_json["fields"]}
+        assert configs["nazwisko"]["width"] == configs["imie"]["width"] == "half"
+        assert configs["imie"]["custom_setting"] == "zachowaj"
+    reopened = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
+    assert '"width_span": 6' in reopened
+    assert "Adres e-mail" in reopened
+
+
 def test_form_field_availability_uses_configured_workflow_steps(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="availability_form", name="Availability")
@@ -6804,7 +6850,9 @@ def test_fields_editor_uses_same_tabs(admin_app, admin_client):
 
     assert 'class="admin-form-tab is-active">Pola formularza</a>' in html
     assert "Regulaminy i dokumenty" in html
-    assert "Kolejność" in html
+    assert "Wizualny układ formularza" in html
+    assert "data-form-canvas" in html
+    assert "new_sort_order" not in html
 
 
 def test_form_upload_uses_tabs_and_polish_labels(admin_app, admin_client):

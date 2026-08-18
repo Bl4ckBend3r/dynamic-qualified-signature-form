@@ -24,8 +24,10 @@ SUPPORTED_FIELD_TYPES = {
     "section",
     "static_text",
     "training_selection",
+    "repeatable_group",
     "file",
     "attachment",
+    "time"
 }
 SUPPORTED_FIELD_WIDTHS = {"quarter", "third", "half", "two-thirds", "three-quarters", "full"}
 LEGACY_FIELD_WIDTHS = {3: "quarter", 4: "third", 6: "half", 8: "two-thirds", 9: "three-quarters", 12: "full"}
@@ -132,6 +134,83 @@ def load_form_definition(path: Path) -> Dict[str, Any]:
     validate_form_definition(data)
     return normalize_form_definition(data)
 
+def _validate_field_definition(
+    field: Dict[str, Any],
+    *,
+    inside_repeatable_group: bool = False,
+) -> None:
+    field_type = field.get("type")
+
+    if field_type not in SUPPORTED_FIELD_TYPES:
+        raise ValueError(f"Nieobsługiwany typ pola: {field_type}")
+
+    if field_type not in {"section", "static_text"} and not field.get("name"):
+        raise ValueError(f"Pole typu '{field_type}' musi zawierać 'name'.")
+
+    if field_type in {"select", "radio"} and not isinstance(field.get("options"), list):
+        raise ValueError(
+            f"Pole '{field.get('name')}' musi zawierać listę 'options'."
+        )
+
+    if field_type == "repeatable_group":
+        if inside_repeatable_group:
+            raise ValueError(
+                "Pole 'repeatable_group' nie może być zagnieżdżone "
+                "wewnątrz innego 'repeatable_group'."
+            )
+
+        nested_fields = field.get("fields")
+
+        if not isinstance(nested_fields, list):
+            raise ValueError(
+                f"Grupa '{field.get('name')}' musi zawierać listę 'fields'."
+            )
+
+        min_items = field.get("min_items", 1)
+        max_items = field.get("max_items", 20)
+
+        if not isinstance(min_items, int) or isinstance(min_items, bool):
+            raise ValueError(
+                f"Grupa '{field.get('name')}' ma nieprawidłowe 'min_items'."
+            )
+
+        if not isinstance(max_items, int) or isinstance(max_items, bool):
+            raise ValueError(
+                f"Grupa '{field.get('name')}' ma nieprawidłowe 'max_items'."
+            )
+
+        if min_items < 0:
+            raise ValueError(
+                f"Grupa '{field.get('name')}' musi mieć min_items >= 0."
+            )
+
+        if max_items < min_items:
+            raise ValueError(
+                f"Grupa '{field.get('name')}' musi mieć max_items >= min_items."
+            )
+
+        nested_names: set[str] = set()
+
+        for nested_field in nested_fields:
+            if not isinstance(nested_field, dict):
+                raise ValueError(
+                    f"Grupa '{field.get('name')}' zawiera nieprawidłową definicję pola."
+                )
+
+            _validate_field_definition(
+                nested_field,
+                inside_repeatable_group=True,
+            )
+
+            nested_name = nested_field.get("name")
+            if nested_name:
+                if nested_name in nested_names:
+                    raise ValueError(
+                        f"Grupa '{field.get('name')}' zawiera "
+                        f"zduplikowaną nazwę pola: {nested_name}."
+                    )
+
+                nested_names.add(nested_name)
 
 def validate_form_definition(form_definition: Dict[str, Any]) -> None:
     if "title" not in form_definition:
@@ -214,6 +293,42 @@ def normalize_signature_config(form_definition: Dict[str, Any]) -> Dict[str, Any
     form_definition["signature"] = normalized_signature
     return form_definition
 
+
+def _normalize_field_definition(
+    field: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized = deepcopy(field)
+
+    if normalized.get("id") and not normalized.get("name"):
+        normalized["name"] = normalized["id"]
+
+    normalized.setdefault("label", "")
+    normalized.setdefault("placeholder", "")
+    normalized.setdefault("required", False)
+    normalized.setdefault("options", [])
+    normalized.setdefault("help_text", "")
+    normalized.setdefault("default", "")
+    normalized.setdefault("validation", {})
+    normalized.setdefault("width", "full")
+    normalized.setdefault("visible_if", None)
+    normalized.setdefault("readonly", False)
+
+    if normalized.get("stage") not in SUPPORTED_FIELD_STAGES:
+        normalized["stage"] = FIELD_STAGE_INITIAL
+
+    if normalized.get("type") == "repeatable_group":
+        normalized.setdefault("min_items", 1)
+        normalized.setdefault("max_items", 20)
+        normalized.setdefault("add_label", "Dodaj")
+        normalized.setdefault("item_label", "Element")
+
+        normalized["fields"] = [
+            _normalize_field_definition(child)
+            for child in normalized.get("fields", [])
+            if isinstance(child, dict)
+        ]
+
+    return normalized
 
 def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]:
     normalized = deepcopy(form_definition)
@@ -303,11 +418,11 @@ def has_additional_fields_after_acceptance(form_definition: Dict[str, Any]) -> b
     )
 
 
-def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Dict[str, Any]:
+def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
 
     for field in form_definition["fields"]:
-        field_type = field["type"]
+        field_type = field.get("type")
         field_name = field.get("name")
 
         if (
@@ -321,18 +436,28 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form) -> Di
             continue
 
         if field_type == "checkbox":
-            data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
+            data[field_name] = (
+                "Tak" if _is_checked(request_form, field_name) else "Nie"
+            )
+
         elif field_type == "training_selection":
-            data[field_name] = ",".join(_getlist(request_form, field_name))
+            data[field_name] = ",".join(
+                _getlist(request_form, field_name)
+            )
+
         else:
-            data[field_name] = str(_get(request_form, field_name, "") or "").strip()
+            data[field_name] = str(
+                _get(request_form, field_name, "") or ""
+            ).strip()
 
     signature = form_definition.get("signature", {})
+
     if signature.get("show_user_choice"):
-        data["signature_method"] = str(_get(request_form, "signature_method", "") or "").strip()
+        data["signature_method"] = str(
+            _get(request_form, "signature_method", "") or ""
+        ).strip()
 
     return data
-
 
 def _get(request_data, key: str, default: Any = None) -> Any:
     if hasattr(request_data, "get"):
@@ -456,6 +581,12 @@ def validate_submission(
                 datetime.strptime(value, "%Y-%m-%d")
             except ValueError:
                 errors[field_name] = "Podaj poprawną datę w formacie RRRR-MM-DD."
+                
+        if field_type == "time":
+            try:
+                datetime.strptime(value, "%H:%M")
+            except ValueError:
+                errors[field_name] = "Podaj poprawną godzinę w formacie GG:MM."
 
         if field_type in {"select", "radio"}:
             from services.form_option_service import option_value

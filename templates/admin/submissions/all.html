@@ -15,6 +15,7 @@
             <option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
     </select>
+    <select name="checklist_status"><option value="">Każdy stan checklisty</option><option value="incomplete" {% if filters.get('checklist_status') == 'incomplete' %}selected{% endif %}>Checklista niekompletna</option><option value="blocking_failure" {% if filters.get('checklist_status') == 'blocking_failure' %}selected{% endif %}>Kryterium blokujące: NIE</option><option value="ready" {% if filters.get('checklist_status') == 'ready' %}selected{% endif %}>Gotowe do decyzji</option></select>
     <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
     <label><span>Data do</span><input type="date" name="date_to" value="{{ filters.get('date_to', '') }}"></label>
     <select name="sort">

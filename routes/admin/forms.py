@@ -23,7 +23,10 @@ from models import (
     FormVersion,
     SubmissionTraining,
     User,
+    VerificationChecklistDefinition,
+    VerificationChecklistItemDefinition,
 )
+from services.verification_checklist_service import VerificationChecklistError
 from services.admin_form_service import (
     build_form_definition_from_admin_form,
     get_declaration_training_field,
@@ -321,6 +324,82 @@ def form_versions(form_id: int):
             form=form,
             versions=versions,
             diffs=diffs,
+            can_manage=can_manage_form(db, g.admin_user, form.id),
+        )
+
+
+@bp.route("/forms/<int:form_id>/checklists", methods=["GET", "POST"])
+@login_required
+def form_checklists(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=request.method == "POST")
+        version_service = current_app.extensions["services"].form_version_service
+        checklist_service = current_app.extensions["services"].verification_checklist_service
+        draft = version_service.editable_draft(db, form.id)
+        if request.method == "POST":
+            if not draft:
+                flash("Najpierw utwórz wersję roboczą formularza.", "error")
+                return redirect(url_for("admin.form_versions", form_id=form.id))
+            action = str(request.form.get("action") or "").strip()
+            try:
+                if action == "create_checklist":
+                    checklist_service.create_checklist(
+                        db, draft, name=request.form.get("name", ""),
+                        workflow_step=request.form.get("workflow_step", ""),
+                        position=parse_int(request.form.get("position")),
+                    )
+                elif action in {"update_checklist", "delete_checklist", "add_item"}:
+                    checklist = db.get(VerificationChecklistDefinition, parse_int(request.form.get("checklist_id"))) or abort(404)
+                    if checklist.form_version_id != draft.id:
+                        abort(404)
+                    if action == "delete_checklist":
+                        checklist_service.delete_checklist(db, checklist)
+                    elif action == "update_checklist":
+                        checklist.name = str(request.form.get("name") or "").strip() or checklist.name
+                        step = str(request.form.get("workflow_step") or "").strip()
+                        checklist_service._require_workflow_step(draft, step)
+                        checklist.workflow_step = step
+                        checklist.position = parse_int(request.form.get("position"))
+                        checklist.active = request.form.get("active") == "on"
+                    else:
+                        checklist_service.add_item(
+                            db, checklist, key=request.form.get("key"), label=request.form.get("label"),
+                            description=request.form.get("description"), position=parse_int(request.form.get("position")),
+                            blocking=request.form.get("blocking") == "on", required=request.form.get("required") == "on",
+                            document_required=request.form.get("document_required") == "on",
+                            allow_not_applicable=request.form.get("allow_not_applicable") == "on",
+                            sensitive=request.form.get("sensitive") == "on",
+                        )
+                elif action in {"update_item", "delete_item"}:
+                    item = db.get(VerificationChecklistItemDefinition, parse_int(request.form.get("item_id"))) or abort(404)
+                    if item.checklist.form_version_id != draft.id:
+                        abort(404)
+                    if action == "delete_item":
+                        checklist_service.delete_item(db, item)
+                    else:
+                        item.label = str(request.form.get("label") or "").strip() or item.label
+                        item.description = str(request.form.get("description") or "").strip()
+                        item.position = parse_int(request.form.get("position"))
+                        item.blocking = request.form.get("blocking") == "on"
+                        item.required = request.form.get("required") == "on"
+                        item.document_required = request.form.get("document_required") == "on"
+                        item.allow_not_applicable = request.form.get("allow_not_applicable") == "on"
+                        item.sensitive = request.form.get("sensitive") == "on"
+                else:
+                    abort(400)
+                db.commit()
+                flash("Zapisano konfigurację checklisty.", "success")
+            except VerificationChecklistError as exc:
+                db.rollback()
+                flash(str(exc), "error")
+            return redirect(url_for("admin.form_checklists", form_id=form.id))
+
+        version = draft or version_service.resolve_published(db, form.id)
+        checklists = checklist_service.list_for_version(db, version.id) if version else []
+        steps = (((version.definition_json or {}).get("workflow") or {}).get("steps") or []) if version else []
+        return render_template(
+            "admin/forms/checklists.html", form=form, version=version, draft=draft,
+            checklists=checklists, workflow_steps=steps,
             can_manage=can_manage_form(db, g.admin_user, form.id),
         )
 

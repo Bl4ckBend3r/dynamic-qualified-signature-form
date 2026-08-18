@@ -131,6 +131,42 @@
         </form>
     </dialog>
 {% endif %}
+{% if checklist_view %}
+<section class="admin-card" id="verification-checklists">
+    <h2>Weryfikacja formalna</h2>
+    {% for checklist_entry in checklist_view %}
+    <section class="admin-card">
+        <h3>{{ checklist_entry.checklist.name }}</h3>
+        <p><span class="admin-badge">Etap: {{ checklist_entry.checklist.workflow_step }}</span></p>
+        {% for entry in checklist_entry.items %}
+        {% set item = entry.item %}{% set result = entry.result %}
+        <form method="post" action="{{ url_for('admin.submission_checklist_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="item_id" value="{{ item.id }}">
+            <h4>{{ "Kryterium wrażliwe" if entry.restricted else item.label }} {% if not entry.restricted and item.blocking %}<span class="admin-badge">blokujące</span>{% endif %} {% if not entry.restricted and item.required %}<span class="required-marker" title="wymagane">*</span>{% endif %}</h4>
+            {% if entry.restricted %}<p class="admin-alert admin-alert-warning">To kryterium zawiera informacje wrażliwe. Nie masz uprawnienia do ich wyświetlenia.</p>
+            {% else %}
+                {% if item.description %}<p>{{ item.description }}</p>{% endif %}
+                <fieldset {% if not can_review_checklist %}disabled{% endif %}><legend>Ocena urzędnika</legend>
+                    <label class="admin-check"><input type="radio" name="result" value="yes" {% if result and result.result == 'yes' %}checked{% endif %}><span>TAK</span></label>
+                    <label class="admin-check"><input type="radio" name="result" value="no" {% if result and result.result == 'no' %}checked{% endif %}><span>NIE</span></label>
+                    {% if item.allow_not_applicable %}<label class="admin-check"><input type="radio" name="result" value="not_applicable" {% if result and result.result == 'not_applicable' %}checked{% endif %}><span>NIE DOTYCZY</span></label>{% endif %}
+                    <label class="admin-check"><input type="radio" name="result" value="pending" {% if not result or result.result == 'pending' %}checked{% endif %}><span>OCZEKUJE</span></label>
+                </fieldset>
+                <label><span>Komentarz</span><textarea name="comment" rows="2" {% if not can_review_checklist %}disabled{% endif %}>{{ result.comment if result else '' }}</textarea></label>
+                <label><span>Dokument będący podstawą{% if item.document_required %} *{% endif %}</span><select name="evidence_file_id" multiple {% if not can_review_checklist %}disabled{% endif %}>
+                    {% set selected_ids = result.evidence_links|map(attribute='submission_file_id')|list if result else [] %}
+                    {% for file in checklist_evidence_files %}<option value="{{ file.id }}" {% if file.id in selected_ids %}selected{% endif %}>{{ file.original_filename or file.filename }} ({{ file.document_type or file.field_key }})</option>{% endfor %}
+                </select><small>Możesz zaznaczyć kilka dokumentów. Lista obejmuje wyłącznie pliki tej sprawy.</small></label>
+                {% if result and result.officer %}<p><strong>Zweryfikował:</strong> {{ result.officer.email }} · <strong>Data:</strong> {{ result.reviewed_at.strftime('%d.%m.%Y %H:%M') if result.reviewed_at else '-' }}</p>{% endif %}
+                {% if result and result.history %}<details><summary>Historia zmian ({{ result.history|length }})</summary><ul>{% for change in result.history|sort(attribute='changed_at', reverse=true) %}<li>{{ change.changed_at.strftime('%d.%m.%Y %H:%M') }}: {{ change.previous_result }} → {{ change.new_result }}{% if change.officer %} ({{ change.officer.email }}){% endif %}</li>{% endfor %}</ul></details>{% endif %}
+                {% if can_review_checklist %}<button class="admin-button" type="submit">Zapisz ocenę</button>{% endif %}
+            {% endif %}
+        </form>
+        {% endfor %}
+    </section>
+    {% endfor %}
+</section>
+{% endif %}
 <h2>Workflow zgłoszenia</h2>
 <div class="admin-workflow-grid">
     {% for section in workflow_view.sections %}
@@ -143,7 +179,7 @@
                 <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
             </dl>
 
-            {% if section.key == "application" and workflow_view.can_edit_application_decision and g.admin_user.role in ["admin", "super_admin"] %}
+            {% if section.key == "application" and workflow_view.can_edit_application_decision and can_make_decision and g.admin_user.role in ["admin", "super_admin"] %}
                 <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="next" value="{{ request.path }}">

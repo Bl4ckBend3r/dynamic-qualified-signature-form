@@ -42,6 +42,7 @@ from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 from services.workflow_service import WorkflowService
+from services.verification_checklist_service import VerificationChecklistService
 
 
 @dataclass
@@ -84,6 +85,7 @@ class ServiceContainer:
     qualification_condition_service: QualificationConditionService
     submission_correction_service: SubmissionCorrectionService
     blocked_agreement_admin_service: BlockedAgreementAdminService
+    verification_checklist_service: VerificationChecklistService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -100,6 +102,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     submission_correction_service = SubmissionCorrectionService()
     submission_assignment_service = SubmissionAssignmentService()
     blocked_agreement_admin_service = BlockedAgreementAdminService()
+    verification_checklist_service = VerificationChecklistService()
 
     form_slugs = []
     try:
@@ -247,4 +250,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         qualification_condition_service=qualification_condition_service,
         submission_correction_service=submission_correction_service,
         blocked_agreement_admin_service=blocked_agreement_admin_service,
+        verification_checklist_service=verification_checklist_service,
     )

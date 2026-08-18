@@ -11,6 +11,7 @@
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Lista formularzy</a>
         {% if versions|selectattr('status', 'equalto', 'draft')|list %}
             <a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj wersję roboczą</a>
+            <a class="admin-button-secondary" href="{{ url_for('admin.form_checklists', form_id=form.id) }}">Checklisty weryfikacyjne</a>
         {% endif %}
     </div>
 </div>

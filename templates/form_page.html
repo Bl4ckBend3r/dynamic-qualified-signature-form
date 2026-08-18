@@ -103,7 +103,7 @@
                             {% if field.description %}<div class="field-description">{{ field.description|trusted_html }}</div>{% endif %}
                             <ul class="attachment-file-list" data-attachment-list aria-live="polite"></ul>
 
-                        {% elif field.type in ["text", "email", "number", "date", "tel", "phone", "pesel"] %}
+                        {% elif field.type in ["text", "email", "number", "date", "time", "tel", "phone", "pesel"] %}
                             <input
                                 class="{% if has_error %}has-error{% endif %}"
                                 type="{% if field.type == 'pesel' %}text{% elif field.type == 'phone' or field.name|lower == 'telefon' %}tel{% else %}{{ field.type }}{% endif %}"

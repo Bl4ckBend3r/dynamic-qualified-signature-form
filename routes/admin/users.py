@@ -127,6 +127,8 @@ def user_edit(user_id: int | None = None):
             db.flush()
             selected_form_ids = {int(item) for item in request.form.getlist("form_ids") if item.isdigit()}
             review_form_ids = {int(item) for item in request.form.getlist("review_form_ids") if item.isdigit()}
+            decision_form_ids = {int(item) for item in request.form.getlist("decision_form_ids") if item.isdigit()}
+            sensitive_form_ids = {int(item) for item in request.form.getlist("sensitive_form_ids") if item.isdigit()}
             assign_form_ids = {int(item) for item in request.form.getlist("assign_form_ids") if item.isdigit()}
             manage_form_ids = {int(item) for item in request.form.getlist("manage_form_ids") if item.isdigit()}
             existing = {permission.form_id: permission for permission in user.permissions}
@@ -137,6 +139,8 @@ def user_edit(user_id: int | None = None):
                         permission = FormPermission(user_id=user.id, form_id=form.id)
                         db.add(permission)
                     permission.can_review = form.id in review_form_ids
+                    permission.can_make_decision = form.id in decision_form_ids
+                    permission.can_view_sensitive_data = form.id in sensitive_form_ids
                     permission.can_assign_submissions = form.id in assign_form_ids
                     permission.can_manage = form.id in manage_form_ids
                 if form.id not in selected_form_ids and form.id in existing:

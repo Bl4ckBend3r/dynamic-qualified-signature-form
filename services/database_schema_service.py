@@ -53,7 +53,12 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
         {"submission_id", "assigned_to_user_id", "assigned_by_user_id", "previous_user_id", "assigned_at", "unassigned_at", "reason", "source"}
     ),
     "form_assignment_states": frozenset({"form_id", "last_assigned_user_id", "updated_at"}),
-    "form_permissions": frozenset({"can_manage", "can_review", "can_assign_submissions"}),
+    "form_permissions": frozenset({"can_manage", "can_review", "can_assign_submissions", "can_make_decision", "can_view_sensitive_data"}),
+    "verification_checklist_definitions": frozenset({"form_version_id", "name", "workflow_step", "position", "active"}),
+    "verification_checklist_item_definitions": frozenset({"checklist_id", "key", "label", "blocking", "required", "document_required", "allow_not_applicable", "sensitive", "rules_json"}),
+    "submission_checklist_item_results": frozenset({"submission_id", "checklist_item_definition_id", "result", "comment", "officer_user_id", "reviewed_at"}),
+    "submission_checklist_evidence": frozenset({"result_id", "submission_file_id", "position"}),
+    "submission_checklist_result_history": frozenset({"result_id", "previous_result", "new_result", "officer_user_id", "changed_at"}),
     "form_fields": frozenset({"availability_json"}),
     "form_drafts": frozenset(
         {"public_id", "form_id", "form_version_id", "email", "data_json", "status", "token_hash", "expires_at", "completed_at", "last_autosave_at", "submission_public_id"}

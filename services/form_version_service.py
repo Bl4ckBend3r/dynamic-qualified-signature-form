@@ -273,6 +273,8 @@ class FormVersionService:
         db.flush()
         self.apply_to_legacy_editor(db, form, draft.definition_json)
         ComplianceService().stage_form_version(db, form, draft, actor_id=actor_id)
+        from services.verification_checklist_service import VerificationChecklistService
+        VerificationChecklistService().clone_definitions(db, source_version.id, draft)
         return draft
 
     def publish(
@@ -294,6 +296,8 @@ class FormVersionService:
         if version.version_label != expected_label:
             raise FormVersionError("Etykieta wersji musi odpowiadać numerowi major/minor.")
         errors = validate_admin_form_config(version.definition_json or {})
+        from services.verification_checklist_service import VerificationChecklistService
+        errors.extend(VerificationChecklistService().validate_version(db, version))
         if not any(
             isinstance(field, dict) and field.get("name")
             for field in (version.definition_json or {}).get("fields") or []

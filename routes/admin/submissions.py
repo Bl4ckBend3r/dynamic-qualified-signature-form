@@ -18,10 +18,17 @@ from models import (
     MailFooter,
     MailTemplate,
     SubmissionDecision,
+    SubmissionChecklistEvidence,
+    SubmissionChecklistItemResult,
     SubmissionAssignmentHistory,
     SubmissionFile,
     SubmissionWorkflowEvent,
     User,
+    VerificationChecklistItemDefinition,
+)
+from services.verification_checklist_service import (
+    VerificationChecklistError,
+    VerificationChecklistPermissionError,
 )
 from services.admin_form_service import form_has_additional_fields
 from services.admin_workflow_view_service import build_admin_workflow_view
@@ -194,6 +201,10 @@ def submissions_all():
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
         )
+        checklist_status = str(request.args.get("checklist_status") or "").strip()
+        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
+            checklist_service = current_app.extensions["services"].verification_checklist_service
+            submissions = [item for item in submissions if checklist_service.status_for_submission(db, item) == checklist_status]
 
 
 @bp.get("/forms/<int:form_id>/submissions")
@@ -243,6 +254,10 @@ def submissions_list(form_id: int):
             priority_labels=PRIORITY_LABELS,
             read_only=not can_manage_form(db, g.admin_user, form),
         )
+        checklist_status = str(request.args.get("checklist_status") or "").strip()
+        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
+            checklist_service = current_app.extensions["services"].verification_checklist_service
+            submissions = [item for item in submissions if checklist_service.status_for_submission(db, item) == checklist_status]
 
 
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>", methods=["GET", "POST"])
@@ -415,6 +430,17 @@ def submission_detail(form_id: int, submission_pk: int):
             .where(SubmissionFile.submission_id == submission.id, SubmissionFile.field_key != "")
             .order_by(SubmissionFile.field_key, SubmissionFile.attachment_version.desc(), SubmissionFile.id.desc())
         ).scalars().all()
+        checklist_service = services.verification_checklist_service
+        can_review_checklist = checklist_service.can_review(db, g.admin_user, form)
+        can_make_decision = checklist_service.can_make_decision(db, g.admin_user, form)
+        can_view_sensitive_data = checklist_service.can_view_sensitive_data(db, g.admin_user, form)
+        checklist_view = checklist_service.build_submission_view(
+            db, submission, include_sensitive=can_view_sensitive_data
+        )
+        evidence_files = db.execute(
+            select(SubmissionFile).where(SubmissionFile.submission_id == submission.id)
+            .order_by(SubmissionFile.created_at.desc(), SubmissionFile.id.desc())
+        ).scalars().all()
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -440,7 +466,40 @@ def submission_detail(form_id: int, submission_pk: int):
             can_claim_submission=can_claim_submission,
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
+            checklist_view=checklist_view,
+            checklist_evidence_files=evidence_files,
+            can_review_checklist=can_review_checklist,
+            can_make_decision=can_make_decision,
+            can_view_sensitive_data=can_view_sensitive_data,
         )
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/checklist")
+@login_required
+def submission_checklist_update(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        item = db.get(VerificationChecklistItemDefinition, int(request.form.get("item_id") or 0)) or abort(404)
+        try:
+            current_app.extensions["services"].verification_checklist_service.save_result(
+                db, submission, item,
+                result=request.form.get("result", "pending"),
+                comment=request.form.get("comment", ""),
+                evidence_file_ids=[int(value) for value in request.form.getlist("evidence_file_id") if str(value).isdigit()],
+                officer=g.admin_user,
+            )
+            db.commit()
+            flash("Zapisano wynik weryfikacji.", "success")
+        except VerificationChecklistPermissionError:
+            db.rollback()
+            abort(403)
+        except VerificationChecklistError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk) + "#verification-checklists")
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/assignment")
@@ -1362,7 +1421,14 @@ def submission_decision_update(form_id: int, submission_pk: int):
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
+        checklist_service = current_app.extensions["services"].verification_checklist_service
+        if not checklist_service.can_make_decision(db, g.admin_user, form):
+            abort(403)
         result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""))
+        if result.get("checklist_errors"):
+            for error in result["checklist_errors"]:
+                flash(error, "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         if result["invalid_stage"]:
             flash("Decyzja o wniosku jest dostępna tylko na etapie jego weryfikacji.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
@@ -1558,8 +1624,11 @@ def submissions_decisions_update(form_id: int):
     missing_reason_count = 0
     invalid_stage_count = 0
     schema_warning = False
+    checklist_errors = []
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
+        if not current_app.extensions["services"].verification_checklist_service.can_make_decision(db, g.admin_user, form):
+            abort(403)
         raw_ids = request.form.getlist("submission_row_ids")
         submission_ids = [int(item) for item in raw_ids if str(item).isdigit()]
         submissions = db.execute(
@@ -1569,6 +1638,9 @@ def submissions_decisions_update(form_id: int):
             decision = request.form.get(f"officer_decision_{submission.id}", "")
             reason = request.form.get(f"officer_decision_reason_{submission.id}", "")
             result = save_officer_decision(db, form, submission, decision, reason, skip_unchanged=True)
+            if result.get("checklist_errors"):
+                checklist_errors.extend(f"{submission.submission_id}: {error}" for error in result["checklist_errors"])
+                continue
             if result["invalid_stage"]:
                 invalid_stage_count += 1
                 continue
@@ -1589,6 +1661,8 @@ def submissions_decisions_update(form_id: int):
             flash(f"Pominieto {missing_reason_count} decyzji: podaj powod odrzucenia albo poprawy.", "error")
         if invalid_stage_count:
             flash(f"Pominieto {invalid_stage_count} decyzji: etap weryfikacji wniosku jest juz zakonczony.", "warning")
+        for error in checklist_errors[:10]:
+            flash(error, "error")
         flash(f"Zapisano decyzje: {saved_count}. Bez zmian: {skipped_count}.", "success" if saved_count else "warning")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
@@ -1624,6 +1698,16 @@ def submissions_delete_selected(form_id: int):
 def delete_submissions_transactionally(db, submissions: list[FormSubmission]) -> None:
     ids = [submission.id for submission in submissions]
     public_ids = [submission.submission_id for submission in submissions]
+    result_ids = db.execute(select(SubmissionChecklistItemResult.id).where(
+        SubmissionChecklistItemResult.submission_id.in_(ids)
+    )).scalars().all()
+    if result_ids:
+        db.query(SubmissionChecklistEvidence).filter(
+            SubmissionChecklistEvidence.result_id.in_(result_ids)
+        ).delete(synchronize_session=False)
+        db.query(SubmissionChecklistItemResult).filter(
+            SubmissionChecklistItemResult.id.in_(result_ids)
+        ).delete(synchronize_session=False)
     db.query(SubmissionFile).filter(SubmissionFile.submission_id.in_(ids)).delete(synchronize_session=False)
     db.query(SubmissionDecision).filter(
         (SubmissionDecision.submission_id.in_(ids)) | (SubmissionDecision.public_submission_id.in_(public_ids))
@@ -1651,6 +1735,19 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     allowed_decisions = {value for value, _ in OFFICER_DECISIONS}
     if decision not in allowed_decisions:
         abort(400)
+
+    if decision == "accepted":
+        validation = current_app.extensions["services"].verification_checklist_service.validate_for_decision(
+            db, submission, decision=decision, workflow_step=submission.workflow_step,
+            include_sensitive_labels=current_app.extensions["services"].verification_checklist_service.can_view_sensitive_data(
+                db, g.admin_user, form
+            ),
+        )
+        if not validation.valid:
+            return {
+                "invalid_stage": False, "missing_reason": False, "skipped": False,
+                "schema_warning": False, "send_mail": False, "checklist_errors": list(validation.errors),
+            }
 
     reason = str(reason_value or "").strip() if decision in {"rejected", "correction"} else ""
     if decision in {"rejected", "correction"} and not reason:

@@ -176,6 +176,9 @@ class FormSubmission(Base):
         cascade="all, delete-orphan",
         order_by="SubmissionConsent.id",
     )
+    checklist_results: Mapped[list["SubmissionChecklistItemResult"]] = relationship(
+        back_populates="submission", cascade="all, delete-orphan"
+    )
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_user_id])
     assigned_by: Mapped["User | None"] = relationship(foreign_keys=[assigned_by_user_id])
     assignment_history: Mapped[list["SubmissionAssignmentHistory"]] = relationship(
@@ -577,6 +580,126 @@ class FormVersion(Base):
         cascade="all, delete-orphan",
         order_by="FormVersionConsent.sort_order, FormVersionConsent.id",
     )
+    verification_checklists: Mapped[list["VerificationChecklistDefinition"]] = relationship(
+        back_populates="form_version",
+        cascade="all, delete-orphan",
+        order_by="VerificationChecklistDefinition.position, VerificationChecklistDefinition.id",
+    )
+
+
+class VerificationChecklistDefinition(Base):
+    __tablename__ = "verification_checklist_definitions"
+    __table_args__ = (
+        Index("ix_verification_checklists_version_step", "form_version_id", "workflow_step"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_version_id: Mapped[int] = mapped_column(ForeignKey("form_versions.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    workflow_step: Mapped[str] = mapped_column(String(128), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    form_version: Mapped[FormVersion] = relationship(back_populates="verification_checklists")
+    items: Mapped[list["VerificationChecklistItemDefinition"]] = relationship(
+        back_populates="checklist", cascade="all, delete-orphan",
+        order_by="VerificationChecklistItemDefinition.position, VerificationChecklistItemDefinition.id",
+    )
+
+
+class VerificationChecklistItemDefinition(Base):
+    __tablename__ = "verification_checklist_item_definitions"
+    __table_args__ = (UniqueConstraint("checklist_id", "key", name="uq_verification_checklist_item_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    checklist_id: Mapped[int] = mapped_column(ForeignKey("verification_checklist_definitions.id", ondelete="CASCADE"), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    blocking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    document_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_not_applicable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rules_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+
+    checklist: Mapped[VerificationChecklistDefinition] = relationship(back_populates="items")
+    results: Mapped[list["SubmissionChecklistItemResult"]] = relationship(back_populates="item_definition")
+
+
+class SubmissionChecklistItemResult(Base):
+    __tablename__ = "submission_checklist_item_results"
+    __table_args__ = (
+        UniqueConstraint("submission_id", "checklist_item_definition_id", name="uq_submission_checklist_item_result"),
+        CheckConstraint("result IN ('yes', 'no', 'not_applicable', 'pending')", name="ck_submission_checklist_item_result"),
+        Index("ix_submission_checklist_results_submission_result", "submission_id", "result"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), nullable=False)
+    checklist_item_definition_id: Mapped[int] = mapped_column(ForeignKey("verification_checklist_item_definitions.id", ondelete="RESTRICT"), nullable=False)
+    result: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    officer_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    submission: Mapped[FormSubmission] = relationship(back_populates="checklist_results")
+    item_definition: Mapped[VerificationChecklistItemDefinition] = relationship(back_populates="results")
+    officer: Mapped[User | None] = relationship()
+    evidence_links: Mapped[list["SubmissionChecklistEvidence"]] = relationship(back_populates="result_record", cascade="all, delete-orphan")
+    history: Mapped[list["SubmissionChecklistResultHistory"]] = relationship(back_populates="result_record", cascade="all, delete-orphan")
+
+
+class SubmissionChecklistEvidence(Base):
+    __tablename__ = "submission_checklist_evidence"
+    __table_args__ = (UniqueConstraint("result_id", "submission_file_id", name="uq_submission_checklist_evidence"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    result_id: Mapped[int] = mapped_column(ForeignKey("submission_checklist_item_results.id", ondelete="CASCADE"), nullable=False)
+    submission_file_id: Mapped[int] = mapped_column(ForeignKey("submission_files.id", ondelete="RESTRICT"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    result_record: Mapped[SubmissionChecklistItemResult] = relationship(back_populates="evidence_links")
+    submission_file: Mapped[SubmissionFile] = relationship()
+
+
+class SubmissionChecklistResultHistory(Base):
+    __tablename__ = "submission_checklist_result_history"
+    __table_args__ = (Index("ix_submission_checklist_history_result_changed", "result_id", "changed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    result_id: Mapped[int] = mapped_column(ForeignKey("submission_checklist_item_results.id", ondelete="CASCADE"), nullable=False)
+    previous_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    new_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    new_comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    officer_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    result_record: Mapped[SubmissionChecklistItemResult] = relationship(back_populates="history")
+    officer: Mapped[User | None] = relationship()
+
+
+def _reject_published_checklist_mutation(_mapper, _connection, target) -> None:
+    checklist = target if isinstance(target, VerificationChecklistDefinition) else target.checklist
+    if checklist.form_version.status in {"published", "archived"}:
+        raise ValueError("Checklisty opublikowanej lub archiwalnej wersji formularza są immutable.")
+
+
+for _model in (VerificationChecklistDefinition, VerificationChecklistItemDefinition):
+    event.listen(_model, "before_update", _reject_published_checklist_mutation)
+    event.listen(_model, "before_delete", _reject_published_checklist_mutation)
+
+
+def _reject_checklist_history_mutation(_mapper, _connection, _target) -> None:
+    raise ValueError("Historia wyniku checklisty jest immutable.")
+
+
+event.listen(SubmissionChecklistResultHistory, "before_update", _reject_checklist_history_mutation)
+event.listen(SubmissionChecklistResultHistory, "before_delete", _reject_checklist_history_mutation)
 
 
 class FormDraft(Base):
@@ -903,6 +1026,8 @@ class FormPermission(Base):
     form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=False)
     can_manage: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     can_review: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_make_decision: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_view_sensitive_data: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     can_assign_submissions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

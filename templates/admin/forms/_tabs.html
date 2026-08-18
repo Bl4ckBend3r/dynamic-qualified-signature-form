@@ -1,5 +1,6 @@
 <nav class="admin-form-tabs" role="tablist" aria-label="Obszary konfiguracji formularza" data-form-tabs-nav>
     <a role="tab" data-form-external-tab href="{{ url_for('admin.form_versions', form_id=form.id) }}" class="admin-form-tab">Wersje</a>
+    <a role="tab" data-form-external-tab href="{{ url_for('admin.form_checklists', form_id=form.id) }}" class="admin-form-tab">Checklisty weryfikacyjne</a>
     <button type="button" role="tab" data-form-tab-target="basic" aria-controls="form-tab-basic" aria-selected="{{ 'true' if active_tab == 'basic' else 'false' }}" class="admin-form-tab{% if active_tab == 'basic' %} is-active{% endif %}">Podstawowe</button>
     <a role="tab" data-form-external-tab href="{{ url_for('admin.form_fields', form_id=form.id) }}" aria-selected="{{ 'true' if active_tab == 'fields' else 'false' }}" class="admin-form-tab{% if active_tab == 'fields' %} is-active{% endif %}">Pola formularza</a>
     <button type="button" role="tab" data-form-tab-target="trainings" aria-controls="form-tab-trainings" aria-selected="{{ 'true' if active_tab == 'trainings' else 'false' }}" class="admin-form-tab{% if active_tab == 'trainings' %} is-active{% endif %}">Szkolenia</button>

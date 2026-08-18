@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, event, func, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -177,6 +177,9 @@ class FormSubmission(Base):
         order_by="SubmissionConsent.id",
     )
     checklist_results: Mapped[list["SubmissionChecklistItemResult"]] = relationship(
+        back_populates="submission", cascade="all, delete-orphan"
+    )
+    internal_notes: Mapped[list["SubmissionInternalNote"]] = relationship(
         back_populates="submission", cascade="all, delete-orphan"
     )
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_user_id])
@@ -388,6 +391,10 @@ event.listen(SubmissionAssignmentHistory, "before_update", _reject_assignment_hi
 event.listen(SubmissionAssignmentHistory, "before_delete", _reject_assignment_history_mutation)
 
 
+def _reject_internal_note_revision_mutation(_mapper, _connection, _target) -> None:
+    raise ValueError("Submission internal note revision is immutable.")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -413,6 +420,94 @@ class User(Base):
 
     permissions: Mapped[list["FormPermission"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     forms_created: Mapped[list["Form"]] = relationship(back_populates="creator")
+
+
+class SubmissionInternalNote(Base):
+    __tablename__ = "submission_internal_notes"
+    __table_args__ = (
+        Index("ix_submission_internal_notes_submission_created", "submission_id", "created_at"),
+        Index("ix_submission_internal_notes_submission_important", "submission_id", "is_important"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), nullable=False)
+    author_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_important: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    parent_note_id: Mapped[int | None] = mapped_column(ForeignKey("submission_internal_notes.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    submission: Mapped[FormSubmission] = relationship(back_populates="internal_notes")
+    author: Mapped[User] = relationship(foreign_keys=[author_user_id])
+    archived_by: Mapped[User | None] = relationship(foreign_keys=[archived_by_user_id])
+    parent_note: Mapped["SubmissionInternalNote | None"] = relationship(remote_side=[id], foreign_keys=[parent_note_id])
+    revisions: Mapped[list["SubmissionInternalNoteRevision"]] = relationship(
+        back_populates="note", cascade="all, delete-orphan", order_by="SubmissionInternalNoteRevision.edited_at"
+    )
+    mentions: Mapped[list["SubmissionInternalNoteMention"]] = relationship(
+        back_populates="note", cascade="all, delete-orphan"
+    )
+
+
+class SubmissionInternalNoteRevision(Base):
+    __tablename__ = "submission_internal_note_revisions"
+    __table_args__ = (Index("ix_submission_internal_note_revisions_note_edited", "note_id", "edited_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey("submission_internal_notes.id", ondelete="CASCADE"), nullable=False)
+    previous_content: Mapped[str] = mapped_column(Text, nullable=False)
+    new_content: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_is_important: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    new_is_important: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    edited_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    note: Mapped[SubmissionInternalNote] = relationship(back_populates="revisions")
+    edited_by: Mapped[User] = relationship()
+
+
+class SubmissionInternalNoteMention(Base):
+    __tablename__ = "submission_internal_note_mentions"
+    __table_args__ = (UniqueConstraint("note_id", "mentioned_user_id", name="uq_submission_internal_note_mention"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey("submission_internal_notes.id", ondelete="CASCADE"), nullable=False)
+    mentioned_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    note: Mapped[SubmissionInternalNote] = relationship(back_populates="mentions")
+    mentioned_user: Mapped[User] = relationship()
+
+
+event.listen(SubmissionInternalNoteRevision, "before_update", _reject_internal_note_revision_mutation)
+
+
+@event.listens_for(Session, "before_flush")
+def _require_internal_note_revision(session, _flush_context, _instances) -> None:
+    for note in (item for item in session.dirty if isinstance(item, SubmissionInternalNote)):
+        state = inspect(note)
+        content_history = state.attrs.content.history
+        important_history = state.attrs.is_important.history
+        if not content_history.has_changes() and not important_history.has_changes():
+            continue
+        previous_content = content_history.deleted[0] if content_history.deleted else note.content
+        new_content = content_history.added[0] if content_history.added else note.content
+        previous_important = important_history.deleted[0] if important_history.deleted else note.is_important
+        new_important = important_history.added[0] if important_history.added else note.is_important
+        has_revision = any(
+            isinstance(item, SubmissionInternalNoteRevision)
+            and item.note_id == note.id
+            and item.previous_content == previous_content
+            and item.new_content == new_content
+            and item.previous_is_important == previous_important
+            and item.new_is_important == new_important
+            for item in session.new
+        )
+        if not has_revision:
+            raise ValueError("Submission internal note content cannot change without a revision.")
 
 
 class Logo(Base):
@@ -1029,6 +1124,9 @@ class FormPermission(Base):
     can_make_decision: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     can_view_sensitive_data: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     can_assign_submissions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_view_internal_notes: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_add_internal_notes: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_internal_notes: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -14,6 +14,57 @@
     </form>{% endif %}
     {% if can_claim_submission and submission.assigned_to_user_id != g.admin_user.id and (not submission.assigned_to_user_id or can_assign_submissions) %}<form method="post" action="{{ url_for('admin.submission_assignment_claim', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary" type="submit">Przejmij sprawę</button></form>{% endif %}
 </section>
+{% if can_view_internal_notes %}
+<section class="admin-card admin-section" id="internal-notes" aria-labelledby="internal-notes-title">
+    <div class="admin-section-heading">
+        <div><h2 id="internal-notes-title">Notatki wewnętrzne</h2><p>Widoczne wyłącznie dla uprawnionych urzędników. Nie są wysyłane uczestnikowi.</p></div>
+    </div>
+    <form method="get" action="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-search">
+        <label><span>Szukaj w aktywnych notatkach</span><input type="search" name="notes_q" value="{{ notes_search }}" maxlength="200"></label>
+        <button class="admin-button-secondary" type="submit">Szukaj</button>
+        {% if notes_search %}<a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#internal-notes">Wyczyść</a>{% endif %}
+    </form>
+    {% if can_add_internal_notes %}
+    <form method="post" action="{{ url_for('admin.submission_internal_note_create', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-form">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <label><span>Nowa notatka</span><textarea name="content" rows="4" maxlength="5000" required aria-required="true" placeholder="Treść notatki. Użyj @login lub @adres@example.org, aby oznaczyć użytkownika."></textarea></label>
+        <label class="admin-check"><input type="checkbox" name="is_important"><span>Oznacz jako ważną</span></label>
+        <button class="admin-button" type="submit">Dodaj notatkę</button>
+    </form>
+    {% endif %}
+    <div class="admin-internal-notes">
+    {% for note in internal_notes %}
+        <article class="admin-internal-note{% if note.is_important %} admin-internal-note--important{% endif %}{% if note.archived_at %} admin-internal-note--archived{% endif %}">
+            <header class="admin-internal-note__header">
+                <div><strong>{{ note.author.email }}</strong> · <time datetime="{{ note.created_at.isoformat() }}">{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</time>{% if note.edited_at %} · poprawiono {{ note.edited_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}</div>
+                {% if note.is_important %}<span class="admin-badge admin-internal-note__important">Ważna</span>{% endif %}
+            </header>
+            {% if note.archived_at %}
+                <p class="admin-alert admin-alert-info">Notatka została ukryta przez {{ note.archived_by.email if note.archived_by else 'użytkownika systemu' }} dnia {{ note.archived_at.strftime('%d.%m.%Y %H:%M') }}.</p>
+            {% else %}
+                <p class="admin-internal-note__content">{{ note.content }}</p>
+                {% if note.mentions %}<p class="admin-internal-note__mentions"><strong>Wzmianki:</strong> {% for mention in note.mentions %}<span class="admin-badge">@{{ mention.mentioned_user.email }}</span>{% endfor %}</p>{% endif %}
+                {% if can_manage_internal_notes %}
+                <details class="admin-internal-note__edit"><summary>Popraw lub archiwizuj</summary>
+                    <form method="post" action="{{ url_for('admin.submission_internal_note_edit', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" class="admin-form">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <label><span>Treść poprawiona</span><textarea name="content" rows="4" maxlength="5000" required>{{ note.content }}</textarea></label>
+                        <label class="admin-check"><input type="checkbox" name="is_important" {% if note.is_important %}checked{% endif %}><span>Oznacz jako ważną</span></label>
+                        <button class="admin-button-secondary" type="submit">Zapisz poprawkę</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin.submission_internal_note_archive', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" data-admin-confirm-message="Ukryć tę notatkę? Treść pozostanie w historii audytowej.">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-button-secondary" type="submit">Archiwizuj</button>
+                    </form>
+                </details>
+                {% endif %}
+            {% endif %}
+            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at.strftime('%d.%m.%Y %H:%M') }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
+        </article>
+    {% else %}<p>{{ 'Nie znaleziono notatek.' if notes_search else 'Brak notatek wewnętrznych.' }}</p>{% endfor %}
+    </div>
+</section>
+{% endif %}
 {% if blocked_agreement_view.is_blocked %}
 <section class="admin-card admin-blocked-agreement" aria-labelledby="blocked-agreement-title">
     <h2 id="blocked-agreement-title">Umowa zablokowana</h2>

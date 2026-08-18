@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+from uuid import UUID, uuid4
 from services.training_service import format_admin_value, parse_training_snapshots
 
 
@@ -145,73 +145,94 @@ def _validate_field_definition(
         raise ValueError(f"Nieobsługiwany typ pola: {field_type}")
 
     if field_type not in {"section", "static_text"} and not field.get("name"):
-        raise ValueError(f"Pole typu '{field_type}' musi zawierać 'name'.")
-
-    if field_type in {"select", "radio"} and not isinstance(field.get("options"), list):
         raise ValueError(
-            f"Pole '{field.get('name')}' musi zawierać listę 'options'."
+            f"Pole typu '{field_type}' musi zawierać 'name'."
         )
 
-    if field_type == "repeatable_group":
-        if inside_repeatable_group:
+    if field_type in {"select", "radio"}:
+        if not isinstance(field.get("options"), list):
             raise ValueError(
-                "Pole 'repeatable_group' nie może być zagnieżdżone "
-                "wewnątrz innego 'repeatable_group'."
+                f"Pole '{field.get('name')}' musi zawierać listę 'options'."
             )
 
-        nested_fields = field.get("fields")
+    if field_type != "repeatable_group":
+        return
 
-        if not isinstance(nested_fields, list):
+    # W P1 nie obsługujemy repeatable_group wewnątrz repeatable_group.
+    if inside_repeatable_group:
+        raise ValueError(
+            "Pole 'repeatable_group' nie może być zagnieżdżone "
+            "wewnątrz innego 'repeatable_group'."
+        )
+
+    group_name = str(field.get("name") or "").strip()
+
+    nested_fields = field.get("fields")
+
+    if not isinstance(nested_fields, list):
+        raise ValueError(
+            f"Grupa '{group_name}' musi zawierać listę 'fields'."
+        )
+
+    min_items = field.get("min_items", 1)
+    max_items = field.get("max_items", 20)
+
+    # bool jest podtypem int w Pythonie, dlatego sprawdzamy go osobno.
+    if (
+        not isinstance(min_items, int)
+        or isinstance(min_items, bool)
+        or min_items < 0
+    ):
+        raise ValueError(
+            f"Grupa '{group_name}' musi mieć 'min_items' "
+            "będące liczbą całkowitą >= 0."
+        )
+
+    if (
+        not isinstance(max_items, int)
+        or isinstance(max_items, bool)
+        or max_items < 0
+    ):
+        raise ValueError(
+            f"Grupa '{group_name}' musi mieć 'max_items' "
+            "będące liczbą całkowitą >= 0."
+        )
+
+    if max_items < min_items:
+        raise ValueError(
+            f"Grupa '{group_name}' musi mieć max_items >= min_items."
+        )
+
+    nested_names: set[str] = set()
+
+    for index, nested_field in enumerate(nested_fields, start=1):
+        if not isinstance(nested_field, dict):
             raise ValueError(
-                f"Grupa '{field.get('name')}' musi zawierać listę 'fields'."
+                f"Pole nr {index} w grupie '{group_name}' "
+                "musi być obiektem."
             )
 
-        min_items = field.get("min_items", 1)
-        max_items = field.get("max_items", 20)
+        _validate_field_definition(
+            nested_field,
+            inside_repeatable_group=True,
+        )
 
-        if not isinstance(min_items, int) or isinstance(min_items, bool):
+        nested_name = str(
+            nested_field.get("name") or ""
+        ).strip()
+
+        if not nested_name:
+            continue
+
+        if nested_name in nested_names:
             raise ValueError(
-                f"Grupa '{field.get('name')}' ma nieprawidłowe 'min_items'."
+                f"Grupa '{group_name}' zawiera zduplikowaną "
+                f"nazwę pola: '{nested_name}'."
             )
 
-        if not isinstance(max_items, int) or isinstance(max_items, bool):
-            raise ValueError(
-                f"Grupa '{field.get('name')}' ma nieprawidłowe 'max_items'."
-            )
-
-        if min_items < 0:
-            raise ValueError(
-                f"Grupa '{field.get('name')}' musi mieć min_items >= 0."
-            )
-
-        if max_items < min_items:
-            raise ValueError(
-                f"Grupa '{field.get('name')}' musi mieć max_items >= min_items."
-            )
-
-        nested_names: set[str] = set()
-
-        for nested_field in nested_fields:
-            if not isinstance(nested_field, dict):
-                raise ValueError(
-                    f"Grupa '{field.get('name')}' zawiera nieprawidłową definicję pola."
-                )
-
-            _validate_field_definition(
-                nested_field,
-                inside_repeatable_group=True,
-            )
-
-            nested_name = nested_field.get("name")
-            if nested_name:
-                if nested_name in nested_names:
-                    raise ValueError(
-                        f"Grupa '{field.get('name')}' zawiera "
-                        f"zduplikowaną nazwę pola: {nested_name}."
-                    )
-
-                nested_names.add(nested_name)
-
+        nested_names.add(nested_name)
+        
+        
 def validate_form_definition(form_definition: Dict[str, Any]) -> None:
     if "title" not in form_definition:
         raise ValueError("Brak pola 'title' w definicji formularza.")
@@ -240,23 +261,30 @@ def validate_form_definition(form_definition: Dict[str, Any]) -> None:
                 )
 
     seen_names: set[str] = set()
-    for index, field in enumerate(form_definition["fields"], start=1):
+
+    for index, field in enumerate(
+        form_definition["fields"],
+        start=1,
+    ):
         if not isinstance(field, dict):
-            raise ValueError(f"Pole nr {index} musi być obiektem.")
-        field_name = str(field.get("name") or "").strip()
+            raise ValueError(
+                f"Pole nr {index} musi być obiektem."
+            )
+
+        field_name = str(
+            field.get("name") or ""
+        ).strip()
+
         if field_name:
             if field_name in seen_names:
-                raise ValueError(f"Duplikat pola 'name': '{field_name}'. Każde pole musi mieć unikalną nazwę.")
+                raise ValueError(
+                    f"Duplikat pola 'name': '{field_name}'. "
+                    "Każde pole musi mieć unikalną nazwę."
+                )
+
             seen_names.add(field_name)
-        field_type = field.get("type")
-        if field_type not in SUPPORTED_FIELD_TYPES:
-            raise ValueError(f"Nieobsługiwany typ pola: {field_type}")
 
-        if field_type not in {"section", "static_text"} and not field.get("name"):
-            raise ValueError(f"Pole typu '{field_type}' musi zawierać 'name'.")
-
-        if field_type in {"select", "radio"} and not isinstance(field.get("options"), list):
-            raise ValueError(f"Pole '{field.get('name')}' musi zawierać listę 'options'.")
+        _validate_field_definition(field)
 
 
 def normalize_signature_config(form_definition: Dict[str, Any]) -> Dict[str, Any]:
@@ -299,85 +327,139 @@ def _normalize_field_definition(
 ) -> Dict[str, Any]:
     normalized = deepcopy(field)
 
+    # Legacy alias.
+    if normalized.get("type") == "attachment":
+        normalized["type"] = "file"
+
     if normalized.get("id") and not normalized.get("name"):
         normalized["name"] = normalized["id"]
 
     normalized.setdefault("label", "")
     normalized.setdefault("placeholder", "")
-    normalized.setdefault("required", False)
+
+    if "required" not in normalized:
+        normalized["required"] = field_is_user_input(
+            normalized
+        )
+    else:
+        normalized["required"] = bool(
+            normalized["required"]
+        )
+
     normalized.setdefault("options", [])
     normalized.setdefault("help_text", "")
     normalized.setdefault("default", "")
     normalized.setdefault("validation", {})
-    normalized.setdefault("width", "full")
     normalized.setdefault("visible_if", None)
     normalized.setdefault("readonly", False)
 
-    if normalized.get("stage") not in SUPPORTED_FIELD_STAGES:
+    # Normalizacja szerokości.
+    raw_width = normalized.get("width", "full")
+
+    if isinstance(raw_width, int) or str(
+        raw_width
+    ).isdigit():
+        normalized["width"] = LEGACY_FIELD_WIDTHS.get(
+            int(raw_width),
+            "full",
+        )
+    elif raw_width not in SUPPORTED_FIELD_WIDTHS:
+        normalized["width"] = "full"
+    else:
+        normalized["width"] = raw_width
+
+    # Stage.
+    if (
+        normalized.get("stage")
+        not in SUPPORTED_FIELD_STAGES
+    ):
         normalized["stage"] = FIELD_STAGE_INITIAL
 
+    # Konfiguracja pliku.
+    if normalized.get("type") == "file":
+        normalized.setdefault("description", "")
+        normalized.setdefault(
+            "allowed_extensions",
+            ["pdf"],
+        )
+        normalized.setdefault(
+            "allowed_mime_types",
+            [],
+        )
+        normalized.setdefault("max_size_mb", 10)
+        normalized.setdefault("max_files", 1)
+        normalized.setdefault("required_if", None)
+        normalized.setdefault(
+            "document_type",
+            "submission_attachment",
+        )
+        normalized.setdefault("category", "")
+
+    # Konfiguracja grupy powtarzalnej.
     if normalized.get("type") == "repeatable_group":
         normalized.setdefault("min_items", 1)
         normalized.setdefault("max_items", 20)
-        normalized.setdefault("add_label", "Dodaj")
-        normalized.setdefault("item_label", "Element")
+        normalized.setdefault(
+            "add_label",
+            "Dodaj",
+        )
+        normalized.setdefault(
+            "item_label",
+            "Element",
+        )
 
         normalized["fields"] = [
             _normalize_field_definition(child)
-            for child in normalized.get("fields", [])
+            for child in normalized.get(
+                "fields",
+                [],
+            )
             if isinstance(child, dict)
         ]
 
     return normalized
 
-def normalize_form_definition(form_definition: Dict[str, Any]) -> Dict[str, Any]:
+
+def normalize_form_definition(
+    form_definition: Dict[str, Any],
+) -> Dict[str, Any]:
     normalized = deepcopy(form_definition)
+
     normalized.setdefault("description", "")
-    normalized.setdefault("submit_label", "Generuj i wyślij")
+    normalized.setdefault(
+        "submit_label",
+        "Generuj i wyślij",
+    )
 
-    normalized = normalize_signature_config(normalized)
+    normalized = normalize_signature_config(
+        normalized
+    )
 
-    for field in normalized["fields"]:
-        if field.get("type") == "attachment":
-            field["type"] = "file"
-        if field.get("id") and not field.get("name"):
-            field["name"] = field["id"]
-        field.setdefault("label", "")
-        field.setdefault("placeholder", "")
-        if "required" not in field:
-            field["required"] = field_is_user_input(field)
-        else:
-            field["required"] = bool(field["required"])
-        field.setdefault("options", [])
-        field.setdefault("help_text", "")
-        field.setdefault("default", "")
-        field.setdefault("validation", {})
-        raw_width = field.get("width", "full")
-        if isinstance(raw_width, int) or str(raw_width).isdigit():
-            field["width"] = LEGACY_FIELD_WIDTHS.get(int(raw_width), "full")
-        elif raw_width not in SUPPORTED_FIELD_WIDTHS:
-            field["width"] = "full"
-        else:
-            field["width"] = raw_width
-        field.setdefault("visible_if", None)
-        field.setdefault("readonly", False)
-        if field.get("type") == "file":
-            field.setdefault("description", "")
-            field.setdefault("allowed_extensions", ["pdf"])
-            field.setdefault("allowed_mime_types", [])
-            field.setdefault("max_size_mb", 10)
-            field.setdefault("max_files", 1)
-            field.setdefault("required_if", None)
-            field.setdefault("document_type", "submission_attachment")
-            field.setdefault("category", "")
-        if not str(field.get("stage") or "").strip():
-            field["stage"] = FIELD_STAGE_INITIAL
-
-    from services.field_availability_service import FieldAvailabilityService
-
-    availability_service = FieldAvailabilityService()
+    # Normalizacja wszystkich pól.
+    # _normalize_field_definition() obsługuje również
+    # pola wewnątrz repeatable_group.
     normalized["fields"] = [
-        availability_service.normalize_field(field, normalized)
+        _normalize_field_definition(field)
+        for field in normalized.get(
+            "fields",
+            [],
+        )
+        if isinstance(field, dict)
+    ]
+
+    from services.field_availability_service import (
+        FieldAvailabilityService,
+    )
+
+    availability_service = (
+        FieldAvailabilityService()
+    )
+
+    normalized["fields"] = [
+        availability_service.normalize_field(
+            field,
+            normalized,
+        )
         for field in normalized["fields"]
     ]
 
@@ -417,6 +499,55 @@ def has_additional_fields_after_acceptance(form_definition: Dict[str, Any]) -> b
         for field in additional_fields_for_acceptance(form_definition)
     )
 
+def _normalize_repeatable_group_records(
+    raw_value: Any,
+) -> List[Dict[str, Any]]:
+    if raw_value in (None, ""):
+        return []
+
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return []
+    else:
+        parsed = raw_value
+
+    if not isinstance(parsed, list):
+        return []
+
+    records: List[Dict[str, Any]] = []
+    used_ids: set[str] = set()
+
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+
+        record = deepcopy(item)
+
+        raw_id = str(record.get("id") or "").strip()
+        record_id = ""
+
+        if raw_id:
+            try:
+                record_id = str(UUID(raw_id))
+            except (ValueError, AttributeError, TypeError):
+                record_id = ""
+
+        # Brak UUID, niepoprawny UUID albo duplikat:
+        # generujemy nową tożsamość rekordu.
+        if not record_id or record_id in used_ids:
+            record_id = str(uuid4())
+
+            while record_id in used_ids:
+                record_id = str(uuid4())
+
+        record["id"] = record_id
+
+        used_ids.add(record_id)
+        records.append(record)
+
+    return records
 
 def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
@@ -435,7 +566,12 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
         ):
             continue
 
-        if field_type == "checkbox":
+        if field_type == "repeatable_group":
+            data[field_name] = _normalize_repeatable_group_records(
+                _get(request_form, field_name, [])
+            )
+
+        elif field_type == "checkbox":
             data[field_name] = (
                 "Tak" if _is_checked(request_form, field_name) else "Nie"
             )

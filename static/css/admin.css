@@ -3448,3 +3448,42 @@ html:has(body.agreement-builder-window), body.agreement-builder-window { width: 
     .agreement-builder__toolset { flex-wrap: wrap; }
     .agreement-builder--standalone .agreement-builder__toolbar-group + .agreement-builder__toolbar-group { width: 100%; padding-top: .4rem; padding-left: 0; border-top: 1px solid #d8deea; border-left: 0; }
 }
+.admin-internal-notes {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.admin-internal-note {
+    border: 1px solid var(--admin-border, #d8dee8);
+    border-radius: .65rem;
+    padding: 1rem;
+    background: var(--admin-surface, #fff);
+}
+
+.admin-internal-note--important {
+    border-color: #d7b867;
+    background: #fffaf0;
+}
+
+.admin-internal-note--archived {
+    background: #f7f8fa;
+}
+
+.admin-internal-note__header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.admin-internal-note__important {
+    background: #f1dfaa;
+    color: #5b4612;
+}
+
+.admin-internal-note__content,
+.admin-internal-note__revision {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

@@ -53,7 +53,10 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
         {"submission_id", "assigned_to_user_id", "assigned_by_user_id", "previous_user_id", "assigned_at", "unassigned_at", "reason", "source"}
     ),
     "form_assignment_states": frozenset({"form_id", "last_assigned_user_id", "updated_at"}),
-    "form_permissions": frozenset({"can_manage", "can_review", "can_assign_submissions", "can_make_decision", "can_view_sensitive_data"}),
+    "form_permissions": frozenset({"can_manage", "can_review", "can_assign_submissions", "can_make_decision", "can_view_sensitive_data", "can_view_internal_notes", "can_add_internal_notes", "can_manage_internal_notes"}),
+    "submission_internal_notes": frozenset({"submission_id", "author_user_id", "content", "is_important", "parent_note_id", "created_at", "edited_at", "archived_at", "archived_by_user_id"}),
+    "submission_internal_note_revisions": frozenset({"note_id", "previous_content", "new_content", "previous_is_important", "new_is_important", "edited_by_user_id", "edited_at"}),
+    "submission_internal_note_mentions": frozenset({"note_id", "mentioned_user_id", "created_at"}),
     "verification_checklist_definitions": frozenset({"form_version_id", "name", "workflow_step", "position", "active"}),
     "verification_checklist_item_definitions": frozenset({"checklist_id", "key", "label", "blocking", "required", "document_required", "allow_not_applicable", "sensitive", "rules_json"}),
     "submission_checklist_item_results": frozenset({"submission_id", "checklist_item_definition_id", "result", "comment", "officer_user_id", "reviewed_at"}),

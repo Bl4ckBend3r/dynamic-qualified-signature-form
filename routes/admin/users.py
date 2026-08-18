@@ -4,7 +4,10 @@ from flask import abort, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import func, or_, select
 from werkzeug.security import generate_password_hash
 
-from models import EmailLog, Form, FormPermission, FormSubmission, Logo, SubmissionAssignmentHistory, User
+from models import (
+    EmailLog, Form, FormPermission, FormSubmission, Logo, SubmissionAssignmentHistory,
+    SubmissionInternalNote, SubmissionInternalNoteRevision, User,
+)
 
 from . import ROLE_FORM_MANAGER, ROLE_SUPER_ADMIN, ROLES, bp, db_session_factory, login_required, role_required
 
@@ -58,8 +61,18 @@ def user_delete(user_id: int):
                 or_(FormSubmission.assigned_to_user_id == user.id, FormSubmission.assigned_by_user_id == user.id)
             )
         ).scalar() or 0
-        if assignment_references or current_cases:
-            flash("Nie można usunąć użytkownika powiązanego z bieżącym lub historycznym przydziałem spraw.", "error")
+        note_references = db.execute(
+            select(func.count(SubmissionInternalNote.id)).where(
+                or_(SubmissionInternalNote.author_user_id == user.id, SubmissionInternalNote.archived_by_user_id == user.id)
+            )
+        ).scalar() or 0
+        revision_references = db.execute(
+            select(func.count(SubmissionInternalNoteRevision.id)).where(
+                SubmissionInternalNoteRevision.edited_by_user_id == user.id
+            )
+        ).scalar() or 0
+        if assignment_references or current_cases or note_references or revision_references:
+            flash("Nie można usunąć użytkownika powiązanego z przydziałem spraw lub historią notatek wewnętrznych.", "error")
             return redirect(url_for("admin.users_list"))
         db.execute(Form.__table__.update().where(Form.created_by_id == user.id).values(created_by_id=None))
         db.execute(Logo.__table__.update().where(Logo.uploaded_by_user_id == user.id).values(uploaded_by_user_id=None))
@@ -131,6 +144,9 @@ def user_edit(user_id: int | None = None):
             sensitive_form_ids = {int(item) for item in request.form.getlist("sensitive_form_ids") if item.isdigit()}
             assign_form_ids = {int(item) for item in request.form.getlist("assign_form_ids") if item.isdigit()}
             manage_form_ids = {int(item) for item in request.form.getlist("manage_form_ids") if item.isdigit()}
+            view_note_form_ids = {int(item) for item in request.form.getlist("view_note_form_ids") if item.isdigit()}
+            add_note_form_ids = {int(item) for item in request.form.getlist("add_note_form_ids") if item.isdigit()}
+            manage_note_form_ids = {int(item) for item in request.form.getlist("manage_note_form_ids") if item.isdigit()}
             existing = {permission.form_id: permission for permission in user.permissions}
             for form in forms:
                 if form.id in selected_form_ids:
@@ -143,6 +159,9 @@ def user_edit(user_id: int | None = None):
                     permission.can_view_sensitive_data = form.id in sensitive_form_ids
                     permission.can_assign_submissions = form.id in assign_form_ids
                     permission.can_manage = form.id in manage_form_ids
+                    permission.can_view_internal_notes = form.id in view_note_form_ids
+                    permission.can_add_internal_notes = form.id in add_note_form_ids
+                    permission.can_manage_internal_notes = form.id in manage_note_form_ids
                 if form.id not in selected_form_ids and form.id in existing:
                     db.delete(existing[form.id])
             db.commit()

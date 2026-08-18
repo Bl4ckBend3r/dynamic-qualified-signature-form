@@ -29,6 +29,9 @@
                     <label class="admin-check"><input type="checkbox" name="sensitive_form_ids" value="{{ form.id }}" {% if not permission or permission.can_view_sensitive_data %}checked{% endif %}><span>Może widzieć dane wrażliwe</span></label>
                     <label class="admin-check"><input type="checkbox" name="assign_form_ids" value="{{ form.id }}" {% if permission and permission.can_assign_submissions %}checked{% endif %}><span>Może przydzielać sprawy</span></label>
                     <label class="admin-check"><input type="checkbox" name="manage_form_ids" value="{{ form.id }}" {% if permission and permission.can_manage %}checked{% endif %}><span>Może zarządzać formularzem</span></label>
+                    <label class="admin-check"><input type="checkbox" name="view_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_view_internal_notes %}checked{% endif %}><span>Może widzieć notatki wewnętrzne</span></label>
+                    <label class="admin-check"><input type="checkbox" name="add_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_add_internal_notes %}checked{% endif %}><span>Może dodawać notatki wewnętrzne</span></label>
+                    <label class="admin-check"><input type="checkbox" name="manage_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_manage_internal_notes %}checked{% endif %}><span>Może poprawiać i archiwizować notatki</span></label>
                 </div>
             {% else %}
                 <p>Brak formularzy do przypisania.</p>

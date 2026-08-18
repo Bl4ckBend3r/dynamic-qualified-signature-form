@@ -20,6 +20,7 @@ from models import (
     SubmissionDecision,
     SubmissionChecklistEvidence,
     SubmissionChecklistItemResult,
+    SubmissionInternalNote,
     SubmissionAssignmentHistory,
     SubmissionFile,
     SubmissionWorkflowEvent,
@@ -29,6 +30,10 @@ from models import (
 from services.verification_checklist_service import (
     VerificationChecklistError,
     VerificationChecklistPermissionError,
+)
+from services.submission_internal_note_service import (
+    SubmissionInternalNoteError,
+    SubmissionInternalNotePermissionError,
 )
 from services.admin_form_service import form_has_additional_fields
 from services.admin_workflow_view_service import build_admin_workflow_view
@@ -441,6 +446,14 @@ def submission_detail(form_id: int, submission_pk: int):
             select(SubmissionFile).where(SubmissionFile.submission_id == submission.id)
             .order_by(SubmissionFile.created_at.desc(), SubmissionFile.id.desc())
         ).scalars().all()
+        note_service = services.submission_internal_note_service
+        can_view_internal_notes = note_service.can_view(db, g.admin_user, form)
+        can_add_internal_notes = note_service.can_add(db, g.admin_user, form)
+        can_manage_internal_notes = note_service.can_manage(db, g.admin_user, form)
+        notes_search = str(request.args.get("notes_q") or "").strip()
+        internal_notes = note_service.list_notes(
+            db, submission, search=notes_search, form=form, viewer=g.admin_user
+        ) if can_view_internal_notes else []
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -471,7 +484,89 @@ def submission_detail(form_id: int, submission_pk: int):
             can_review_checklist=can_review_checklist,
             can_make_decision=can_make_decision,
             can_view_sensitive_data=can_view_sensitive_data,
+            internal_notes=internal_notes,
+            notes_search=notes_search,
+            can_view_internal_notes=can_view_internal_notes,
+            can_add_internal_notes=can_add_internal_notes,
+            can_manage_internal_notes=can_manage_internal_notes,
         )
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/internal-notes")
+@login_required
+def submission_internal_note_create(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        service = current_app.extensions["services"].submission_internal_note_service
+        try:
+            service.create(
+                db, submission, form, author=g.admin_user,
+                content=request.form.get("content", ""),
+                is_important=request.form.get("is_important") == "on",
+                parent_note_id=(int(request.form["parent_note_id"]) if str(request.form.get("parent_note_id") or "").isdigit() else None),
+            )
+            db.commit()
+            flash("Dodano notatkę wewnętrzną.", "success")
+        except SubmissionInternalNotePermissionError:
+            db.rollback()
+            abort(403)
+        except SubmissionInternalNoteError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk) + "#internal-notes")
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/internal-notes/<int:note_id>/edit")
+@login_required
+def submission_internal_note_edit(form_id: int, submission_pk: int, note_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        note = db.get(SubmissionInternalNote, note_id) or abort(404)
+        if submission.form_slug != form.slug or note.submission_id != submission.id:
+            abort(404)
+        service = current_app.extensions["services"].submission_internal_note_service
+        try:
+            service.edit(
+                db, submission, form, note, editor=g.admin_user,
+                content=request.form.get("content", ""),
+                is_important=request.form.get("is_important") == "on",
+            )
+            db.commit()
+            flash("Zapisano poprawkę notatki wraz z historią.", "success")
+        except SubmissionInternalNotePermissionError:
+            db.rollback()
+            abort(403)
+        except SubmissionInternalNoteError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk) + "#internal-notes")
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/internal-notes/<int:note_id>/archive")
+@login_required
+def submission_internal_note_archive(form_id: int, submission_pk: int, note_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        note = db.get(SubmissionInternalNote, note_id) or abort(404)
+        if submission.form_slug != form.slug or note.submission_id != submission.id:
+            abort(404)
+        service = current_app.extensions["services"].submission_internal_note_service
+        try:
+            service.archive(db, submission, form, note, actor=g.admin_user)
+            db.commit()
+            flash("Notatka została zarchiwizowana.", "success")
+        except SubmissionInternalNotePermissionError:
+            db.rollback()
+            abort(403)
+        except SubmissionInternalNoteError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk) + "#internal-notes")
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/checklist")

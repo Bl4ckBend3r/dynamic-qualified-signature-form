@@ -43,6 +43,7 @@ from services.submission_stage_rollback_service import SubmissionStageRollbackSe
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 from services.workflow_service import WorkflowService
 from services.verification_checklist_service import VerificationChecklistService
+from services.submission_internal_note_service import SubmissionInternalNoteService
 
 
 @dataclass
@@ -86,6 +87,7 @@ class ServiceContainer:
     submission_correction_service: SubmissionCorrectionService
     blocked_agreement_admin_service: BlockedAgreementAdminService
     verification_checklist_service: VerificationChecklistService
+    submission_internal_note_service: SubmissionInternalNoteService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -122,6 +124,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         app.logger.info("Submission repository: CSV/Nextcloud")
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
+    submission_internal_note_service = SubmissionInternalNoteService(audit_log_service=audit_log_service)
     workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)
     beneficiary_agreement_service = BeneficiaryAgreementService()
     office_signed_agreement_service = OfficeSignedAgreementService(storage)
@@ -251,4 +254,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_correction_service=submission_correction_service,
         blocked_agreement_admin_service=blocked_agreement_admin_service,
         verification_checklist_service=verification_checklist_service,
+        submission_internal_note_service=submission_internal_note_service,
     )

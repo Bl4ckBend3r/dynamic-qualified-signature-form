@@ -418,7 +418,43 @@
 .agreement-builder-list-config-collapse > summary::-webkit-details-marker {
     display: none;
 }
+.document-repeatable-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+    margin: 8px 0 12px;
+    font-size: 9px;
+}
 
+.document-repeatable-table th,
+.document-repeatable-table td {
+    padding: 4px 5px;
+    vertical-align: top;
+    text-align: left;
+
+    word-break: normal;
+    overflow-wrap: normal;
+    white-space: normal;
+}
+
+.document-repeatable-table th {
+    font-weight: 700;
+}
+
+.document-repeatable-table th:first-child,
+.document-repeatable-table td:first-child {
+    width: 24px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.document-repeatable-table td {
+    break-inside: avoid;
+}
+
+.document-repeatable-table tr {
+    break-inside: avoid;
+}
 .agreement-builder-list-config__chevron {
     flex: 0 0 auto;
     transition: transform 0.2s ease;

@@ -27,9 +27,12 @@ def dashboard():
     with db_session_factory()() as db:
         form_ids = accessible_form_ids(db, user)
         forms_count = count_accessible_forms(db, user, form_ids)
+        view_form_ids = current_app.extensions["services"].permission_service.form_ids_with_permission(
+            db, user, "can_view_submissions"
+        )
         submissions_query = select(func.count(FormSubmission.id))
         if user.role != ROLE_SUPER_ADMIN:
-            slugs = accessible_form_slugs(db, form_ids)
+            slugs = accessible_form_slugs(db, view_form_ids)
             submissions_query = submissions_query.where(FormSubmission.form_slug.in_(slugs or [""]))
         else:
             slugs = None
@@ -56,11 +59,14 @@ def dashboard():
             FormSubmission.process_status.in_(["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION"])
         )
         if user.role != ROLE_SUPER_ADMIN:
-            slugs = accessible_form_slugs(db, form_ids)
+            slugs = accessible_form_slugs(db, view_form_ids)
             pending_query = pending_query.where(FormSubmission.form_slug.in_(slugs or [""]))
         pending_count = db.execute(pending_query).scalar() or 0
         try:
-            documents_count = db.execute(select(func.count(SubmissionFile.id))).scalar() or 0
+            documents_query = select(func.count(SubmissionFile.id))
+            if user.role != ROLE_SUPER_ADMIN:
+                documents_query = documents_query.where(SubmissionFile.form_slug.in_(slugs or [""]))
+            documents_count = db.execute(documents_query).scalar() or 0
         except SQLAlchemyError as exc:
             db.rollback()
             current_app.logger.warning(
@@ -71,7 +77,7 @@ def dashboard():
             documents_count = 0
         email_scope = []
         if user.role != ROLE_SUPER_ADMIN:
-            email_scope.append(EmailLog.form_id.in_(form_ids or [-1]))
+            email_scope.append(EmailLog.form_id.in_(view_form_ids or [-1]))
         try:
             delivery_scope = [
                 or_(EmailLog.event_type.is_(None), EmailLog.event_type != "smtp_test"),

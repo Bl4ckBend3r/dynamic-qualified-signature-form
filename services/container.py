@@ -29,6 +29,7 @@ from services.mail_settings_service import MailSettingsService
 from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
 from services.office_signed_agreement_service import OfficeSignedAgreementService
+from services.permission_service import PermissionService
 from services.qualification_condition_service import QualificationConditionService
 from services.rules_service import RulesService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
@@ -90,6 +91,7 @@ class ServiceContainer:
     verification_checklist_service: VerificationChecklistService
     submission_internal_note_service: SubmissionInternalNoteService
     workflow_sla_service: WorkflowSlaService
+    permission_service: PermissionService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -107,6 +109,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     submission_assignment_service = SubmissionAssignmentService()
     blocked_agreement_admin_service = BlockedAgreementAdminService()
     verification_checklist_service = VerificationChecklistService()
+    permission_service = PermissionService()
 
     form_slugs = []
     try:
@@ -264,4 +267,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         verification_checklist_service=verification_checklist_service,
         submission_internal_note_service=submission_internal_note_service,
         workflow_sla_service=workflow_sla_service,
+        permission_service=permission_service,
     )

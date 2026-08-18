@@ -11,12 +11,49 @@ export function readBuilderConfig(root) {
 }
 
 export function withKey(field) {
-    const generated = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    return {...field, _key: field._key || `field-${field.id || generated}`};
+    const generated =
+        globalThis.crypto?.randomUUID?.() ||
+        `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    const result = {
+        ...field,
+        _key:
+            field._key ||
+            `field-${field.id || generated}`,
+    };
+
+    if (
+        result.type === "repeatable_group" &&
+        Array.isArray(result.fields)
+    ) {
+        result.fields =
+            result.fields.map(withKey);
+    }
+
+    return result;
 }
 
 export function serializeFields(fields) {
-    return fields.map(({_key, ...field}) => field);
+    return fields.map(serializeField);
+}
+
+function serializeField(field) {
+    const {
+        _key,
+        ...serialized
+    } = field;
+
+    if (
+        serialized.type === "repeatable_group" &&
+        Array.isArray(serialized.fields)
+    ) {
+        serialized.fields =
+            serialized.fields.map(
+                serializeField
+            );
+    }
+
+    return serialized;
 }
 
 export function uniqueFieldName(fields, type, preferred = "") {

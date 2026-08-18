@@ -4,18 +4,18 @@ from copy import deepcopy
 from datetime import date
 import json
 
-from flask import abort, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import select
 
 from models import BusinessCalendar, BusinessCalendarHoliday, Form
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 
-from . import ROLE_SUPER_ADMIN, bp, db_session_factory, ensure_form_access, login_required, role_required
+from . import bp, db_session_factory, ensure_form_access, login_required, permission_required
 
 
 @bp.route("/business-calendars", methods=["GET", "POST"])
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def business_calendars():
     with db_session_factory()() as db:
         selected_id = request.args.get("id", type=int) or request.form.get("calendar_id", type=int)
@@ -61,9 +61,16 @@ def business_calendars():
 @login_required
 def form_sla(form_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, manage=request.method == "POST")
+        form = ensure_form_access(
+            db,
+            form_id,
+            permission="can_edit_workflow" if request.method == "POST" else "can_view_submissions",
+        )
         definition = deepcopy(form.definition_json or {})
         workflow = WorkflowConfigNormalizer().normalize(definition.get("workflow") or {})
+        can_edit_workflow = current_app.extensions["services"].permission_service.has_permission(
+            db, g.admin_user, "can_edit_workflow", form=form
+        )
         calendars = db.execute(select(BusinessCalendar).where(BusinessCalendar.active.is_(True)).order_by(BusinessCalendar.name)).scalars().all()
         if request.method == "POST":
             try:
@@ -100,4 +107,7 @@ def form_sla(form_id: int):
                 db.commit()
                 flash("Konfiguracja SLA została zapisana w roboczej definicji formularza.", "success")
                 return redirect(url_for("admin.form_sla", form_id=form.id))
-        return render_template("admin/sla/form.html", form=form, workflow=workflow, calendars=calendars)
+        return render_template(
+            "admin/sla/form.html", form=form, workflow=workflow, calendars=calendars,
+            can_edit_workflow=can_edit_workflow,
+        )

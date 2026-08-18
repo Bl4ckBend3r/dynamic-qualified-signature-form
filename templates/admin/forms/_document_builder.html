@@ -78,7 +78,60 @@
             <label><span>Szukaj zmiennej…</span><input type="search" data-builder-variable-search placeholder="Nazwa, etykieta lub opis"></label>
             <div data-builder-recent-variables hidden><strong>Ostatnio używane</strong><div data-builder-recent-list></div></div>
             {% set insertable_builder_variables = (document_builder_variables|default([]))|rejectattr('type', 'equalto', 'criterion')|list %}
-            <div class="agreement-builder__variable-list">{% for category, variables in insertable_builder_variables|groupby('category') %}<details open data-builder-variable-category><summary>{{ category }}</summary>{% for variable in variables %}<article class="agreement-builder__variable" draggable="true" data-builder-variable="{{ variable.name }}" data-builder-variable-search-text="{{ (variable.name ~ ' ' ~ variable.label ~ ' ' ~ variable.description)|lower }}"><strong>{{ variable.label }}</strong><code>{{ variable.placeholder }}</code><small>{{ variable.description }}</small><span>Przykład: {{ variable.example }}</span><div><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-insert-variable="{{ variable.name }}">Wstaw</button><button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-copy-variable="{{ variable.name }}">Kopiuj</button></div></article>{% endfor %}</details>{% endfor %}</div>
+            <div class="agreement-builder__variable-list">
+    {% for category, variables in insertable_builder_variables|groupby('category') %}
+        <details open data-builder-variable-category>
+            <summary>{{ category }}</summary>
+
+            {% for variable in variables %}
+                <article
+                    class="agreement-builder__variable{% if variable.type == 'repeatable_group' %} agreement-builder__variable--repeatable{% endif %}"
+                    draggable="true"
+                    data-builder-variable="{{ variable.name }}"
+                    data-builder-variable-search-text="{{ (variable.name ~ ' ' ~ variable.label ~ ' ' ~ variable.description)|lower }}"
+                >
+                    {% if variable.type == 'repeatable_group' %}
+                        <span class="admin-badge">
+                            ⟳ Grupa powtarzalna
+                        </span>
+                    {% endif %}
+
+                    <strong>{{ variable.label }}</strong>
+
+                    <code>{{ variable.placeholder }}</code>
+
+                    <small>{{ variable.description }}</small>
+
+                    <span>
+                        Przykład: {{ variable.example }}
+                    </span>
+
+                    <div>
+                        <button
+                            type="button"
+                            class="builder-button builder-button--secondary builder-button--compact"
+                            data-builder-insert-variable="{{ variable.name }}"
+                        >
+                            {% if variable.type == 'repeatable_group' %}
+                                Wstaw grupę
+                            {% else %}
+                                Wstaw
+                            {% endif %}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="builder-button builder-button--secondary builder-button--compact"
+                            data-builder-copy-variable="{{ variable.name }}"
+                        >
+                            Kopiuj
+                        </button>
+                    </div>
+                </article>
+            {% endfor %}
+        </details>
+    {% endfor %}
+</div>
         </aside>
     </div>
 

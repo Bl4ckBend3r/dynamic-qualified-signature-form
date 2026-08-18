@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import csv
 from io import BytesIO
+from io import StringIO
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -13,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from models import (
     EmailLog,
     Form,
+    FormField,
     FormRegulationVersion,
     FormSubmission,
     MailFooter,
@@ -45,6 +48,7 @@ from services.beneficiary_agreement_service import (
 )
 from services.blocked_agreement_admin_service import BlockedAgreementActionError
 from services.admin_submission_service import (
+    BUILTIN_SENSITIVE_FIELDS,
     admin_status_label,
     build_status_filter_options,
     build_submission_detail_sections,
@@ -66,6 +70,7 @@ from services.submission_assignment_service import (
     PRIORITIES,
     PRIORITY_LABELS,
     SubmissionAssignmentError,
+    SubmissionAssignmentPermissionError,
 )
 from statuses import WAITING_FOR_CORRECTION
 
@@ -78,6 +83,7 @@ from . import (
     can_manage_form,
     db_session_factory,
     ensure_form_access,
+    has_permission,
     list_accessible_forms,
     login_required,
     role_required,
@@ -92,6 +98,16 @@ def _pagination_urls(endpoint: str, pagination: dict, **route_values) -> dict[st
     if pagination["has_next"]:
         result["next"] = url_for(endpoint, **route_values, **{**values, "page": pagination["page"] + 1})
     return result
+
+
+def _require_email_permission(db, form: Form, requested: bool) -> None:
+    if requested and not has_permission(db, "can_send_email", form=form):
+        abort(403)
+
+
+def _csv_safe(value):
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
 
 
 def _submission_sort_urls(endpoint: str, **route_values) -> dict[str, str]:
@@ -151,7 +167,15 @@ def _parse_due_at(value: str) -> datetime | None:
 def submissions_all():
     user = g.admin_user
     with db_session_factory()() as db:
-        forms = list_accessible_forms(db, user)
+        permission_service = current_app.extensions["services"].permission_service
+        view_form_ids = permission_service.form_ids_with_permission(
+            db, user, "can_view_submissions"
+        )
+        forms = list(db.execute(
+            select(Form)
+            .where(Form.id.in_(view_form_ids or [-1]))
+            .order_by(Form.sort_order, Form.name)
+        ).scalars())
         form_by_slug = {form.slug: form for form in forms}
         slugs = list(form_by_slug.keys())
         if user.role != ROLE_SUPER_ADMIN and not slugs:
@@ -174,6 +198,13 @@ def submissions_all():
             filter_args,
             timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
         )
+        checklist_status = str(request.args.get("checklist_status") or "").strip()
+        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
+            checklist_service = current_app.extensions["services"].verification_checklist_service
+            submissions = [
+                item for item in submissions
+                if checklist_service.status_for_submission(db, item) == checklist_status
+            ]
         submissions = sort_submissions(
             submissions,
             request.args.get("sort") or "created_at",
@@ -191,6 +222,13 @@ def submissions_all():
             for form in forms
             for item in assignment_service.eligible_users(db, form)
         }
+        permission_slugs = {
+            key: {
+                form.slug for form in forms
+                if current_app.extensions["services"].permission_service.has_permission(db, user, key, form=form)
+            }
+            for key in ("can_view_sensitive_data", "can_send_email", "can_make_decision")
+        }
         return render_template(
             "admin/submissions/all.html",
             submissions=submissions,
@@ -206,13 +244,8 @@ def submissions_all():
             assignment_users=sorted(eligible_users.values(), key=lambda item: item.email.casefold()),
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
+            permission_slugs=permission_slugs,
         )
-        checklist_status = str(request.args.get("checklist_status") or "").strip()
-        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
-            checklist_service = current_app.extensions["services"].verification_checklist_service
-            submissions = [item for item in submissions if checklist_service.status_for_submission(db, item) == checklist_status]
-
-
 @bp.get("/forms/<int:form_id>/submissions")
 @login_required
 def submissions_list(form_id: int):
@@ -228,6 +261,13 @@ def submissions_list(form_id: int):
             request.args,
             timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
         )
+        checklist_status = str(request.args.get("checklist_status") or "").strip()
+        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
+            checklist_service = current_app.extensions["services"].verification_checklist_service
+            submissions = [
+                item for item in submissions
+                if checklist_service.status_for_submission(db, item) == checklist_status
+            ]
         submissions = sort_submissions(submissions, request.args.get("sort") or "created_at", request.args.get("direction") or "desc")
         status_options = build_status_filter_options(form, submissions)
         filter_fields = build_filter_fields(fields, submissions)
@@ -238,6 +278,14 @@ def submissions_list(form_id: int):
         sort_urls = _submission_sort_urls("admin.submissions_list", form_id=form.id)
         assignment_users = assignment_service.eligible_users(db, form)
         can_assign_submissions = assignment_service.can_assign(db, g.admin_user, form)
+        list_permissions = {
+            key: current_app.extensions["services"].permission_service.has_permission(db, g.admin_user, key, form=form)
+            for key in (
+                "can_make_decision", "can_return_for_correction", "can_edit_workflow",
+                "can_send_email", "can_sign_office_agreement", "can_view_sensitive_data",
+                "can_export_data",
+            )
+        }
         return render_template(
             "admin/submissions/list.html",
             form=form,
@@ -255,15 +303,48 @@ def submissions_list(form_id: int):
             sort_urls=sort_urls,
             assignment_users=assignment_users,
             can_assign_submissions=can_assign_submissions,
-            can_claim_submission=assignment_service.can_review(db, g.admin_user, form),
+            **list_permissions,
+            can_claim_submission=assignment_service.can_assign(db, g.admin_user, form),
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
             read_only=not can_manage_form(db, g.admin_user, form),
         )
-        checklist_status = str(request.args.get("checklist_status") or "").strip()
-        if checklist_status in {"incomplete", "blocking_failure", "ready"}:
-            checklist_service = current_app.extensions["services"].verification_checklist_service
-            submissions = [item for item in submissions if checklist_service.status_for_submission(db, item) == checklist_status]
+@bp.get("/forms/<int:form_id>/submissions/export.csv")
+@login_required
+def submissions_export(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_export_data")
+        fields = active_fields_for_form(db, form.id)
+        submissions = db.execute(
+            select(FormSubmission).where(FormSubmission.form_slug == form.slug).order_by(FormSubmission.created_at)
+        ).scalars().all()
+        can_view_sensitive = has_permission(db, "can_view_sensitive_data", form=form)
+        classified = {
+            field.name for field in fields
+            if str(field.data_classification or "normal") != "normal"
+        } | BUILTIN_SENSITIVE_FIELDS
+        field_names = ["submission_id", "created_at", "process_status", *[field.name for field in fields]]
+        output = StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=field_names, extrasaction="ignore")
+        writer.writeheader()
+        for submission in submissions:
+            row = {
+                "submission_id": _csv_safe(submission.submission_id),
+                "created_at": _csv_safe(submission.created_at.isoformat() if submission.created_at else ""),
+                "process_status": _csv_safe(submission.process_status),
+            }
+            for field in fields:
+                row[field.name] = _csv_safe(
+                    submission_value(submission, field.name)
+                    if can_view_sensitive or field.name not in classified
+                    else "Dane ukryte — brak uprawnienia"
+                )
+            writer.writerow(row)
+        payload = output.getvalue().encode("utf-8-sig")
+        return send_file(
+            BytesIO(payload), mimetype="text/csv; charset=utf-8", as_attachment=True,
+            download_name=f"zgloszenia_{form.slug}.csv",
+        )
 
 
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>", methods=["GET", "POST"])
@@ -296,7 +377,7 @@ def submission_detail(form_id: int, submission_pk: int):
         if submission.assigned_to and all(item.id != submission.assigned_to.id for item in assignment_users):
             assignment_users.append(submission.assigned_to)
         can_assign_submissions = services.submission_assignment_service.can_assign(db, g.admin_user, form)
-        can_claim_submission = services.submission_assignment_service.can_review(db, g.admin_user, form)
+        can_claim_submission = services.submission_assignment_service.can_assign(db, g.admin_user, form)
         can_review_agreement = services.beneficiary_agreement_service.can_review(db, submission)
         office_signed_agreement_view = {
             "folder": services.office_signed_agreement_service.folder_for_form(form),
@@ -308,7 +389,12 @@ def submission_detail(form_id: int, submission_pk: int):
             decisions=decision_history.get("decisions") or [],
             can_review_agreement=can_review_agreement,
         )
-        detail_view = build_submission_detail_sections(form, submission, submission_form_config)
+        can_view_sensitive_data = services.permission_service.has_permission(
+            db, g.admin_user, "can_view_sensitive_data", form=form
+        )
+        detail_view = build_submission_detail_sections(
+            form, submission, submission_form_config, include_sensitive=can_view_sensitive_data
+        )
         training_field = get_training_selection_field(submission_form_config)
         participant_training_view = None
         if training_field:
@@ -362,6 +448,13 @@ def submission_detail(form_id: int, submission_pk: int):
             )
             db.commit()
         can_manage = can_manage_form(db, g.admin_user, form.id)
+        action_permissions = {
+            key: services.permission_service.has_permission(db, g.admin_user, key, form=form)
+            for key in (
+                "can_return_for_correction", "can_manage_documents", "can_sign_office_agreement",
+                "can_send_email", "can_edit_workflow",
+            )
+        }
         is_agreement_blocked = (
             submission.process_status == ProcessStatus.AGREEMENT_BLOCKED.value
             or str(submission.agreement_blocked or "").strip().lower() == "tak"
@@ -372,16 +465,17 @@ def submission_detail(form_id: int, submission_pk: int):
             "reason": str(submission.agreement_block_reason or "").strip(),
             "blocked_at": block_data.get("_agreement_blocked_at"),
             "source": str(block_data.get("_agreement_block_source") or "Warunki deklaracji"),
-            "can_manage": can_manage and g.admin_user.role in {ROLE_ADMIN, ROLE_SUPER_ADMIN},
+            "can_manage": any((action_permissions["can_return_for_correction"], action_permissions["can_edit_workflow"], services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form), g.admin_user.role == ROLE_SUPER_ADMIN)),
             "can_unblock": can_manage and g.admin_user.role == ROLE_SUPER_ADMIN,
-            "can_reject_final": can_manage and g.admin_user.role in {ROLE_ADMIN, ROLE_SUPER_ADMIN},
+            "can_reject_final": services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form),
         }
         rollback_options = []
-        if can_manage and g.admin_user.role in ALLOWED_ROLES:
+        if action_permissions["can_edit_workflow"]:
             rollback_options = services.submission_stage_rollback_service.get_allowed_targets(
                 db,
                 submission,
                 actor_role=g.admin_user.role,
+                authorized=True,
                 form_config=submission_form_config,
             )
         correspondence_logs = db.execute(
@@ -469,6 +563,16 @@ def submission_detail(form_id: int, submission_pk: int):
             }
             for row in deadline_rows
         ]
+        if not can_view_sensitive_data:
+            files = []
+            evidence_files = []
+            participant_attachments = []
+            correspondence = []
+            if participant_training_view:
+                for training in (*participant_training_view.get("active_items", []), *participant_training_view.get("history_items", [])):
+                    for key in list(training):
+                        if key.endswith("_url"):
+                            training[key] = ""
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -499,6 +603,7 @@ def submission_detail(form_id: int, submission_pk: int):
             can_review_checklist=can_review_checklist,
             can_make_decision=can_make_decision,
             can_view_sensitive_data=can_view_sensitive_data,
+            **action_permissions,
             internal_notes=internal_notes,
             notes_search=notes_search,
             can_view_internal_notes=can_view_internal_notes,
@@ -638,6 +743,9 @@ def submission_assignment_update(form_id: int, submission_pk: int):
                 due_at=_parse_due_at(request.form.get("due_at", "")),
             )
             db.commit()
+        except SubmissionAssignmentPermissionError:
+            db.rollback()
+            abort(403)
         except SubmissionAssignmentError as exc:
             db.rollback()
             flash(str(exc), "error")
@@ -662,6 +770,9 @@ def submission_assignment_claim(form_id: int, submission_pk: int):
                 db, submission, form, actor=g.admin_user
             )
             db.commit()
+        except SubmissionAssignmentPermissionError:
+            db.rollback()
+            abort(403)
         except SubmissionAssignmentError as exc:
             db.rollback()
             flash(str(exc), "error")
@@ -727,6 +838,14 @@ def participant_attachment_download(form_id: int, submission_pk: int, file_id: i
         attachment = db.get(SubmissionFile, file_id) or abort(404)
         if submission.form_slug != form.slug or attachment.submission_id != submission.id or not attachment.field_key:
             abort(404)
+        field = db.execute(select(FormField).where(
+            FormField.form_id == form.id, FormField.name == attachment.field_key
+        )).scalar_one_or_none()
+        classifications = {attachment.data_classification or "normal", field.data_classification if field else "normal"}
+        if any(classification != "normal" for classification in classifications) and not has_permission(
+            db, "can_view_sensitive_data", form=form
+        ):
+            abort(403)
         content = current_app.extensions["services"].storage.read_bytes(attachment.storage_path)
         return send_file(
             BytesIO(content),
@@ -740,7 +859,7 @@ def participant_attachment_download(form_id: int, submission_pk: int, file_id: i
 @login_required
 def participant_attachment_status(form_id: int, submission_pk: int, file_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, manage=True)
+        form = ensure_form_access(db, form_id, permission="can_manage_documents")
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         attachment = db.get(SubmissionFile, file_id) or abort(404)
         if submission.form_slug != form.slug or attachment.submission_id != submission.id or not attachment.field_key:
@@ -757,7 +876,6 @@ def participant_attachment_status(form_id: int, submission_pk: int, file_id: int
 
 @bp.post("/submissions/<submission_id>/rollback-stage")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_stage_rollback(submission_id: str):
     public_submission_id = str(submission_id or "").strip()
     with db_session_factory()() as db:
@@ -769,11 +887,12 @@ def submission_stage_rollback(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        ensure_form_access(db, form.id, manage=True)
+        ensure_form_access(db, form.id, permission="can_edit_workflow")
 
         target_status = request.form.get("target_status", "").strip()
         reason = request.form.get("rollback_reason", "").strip()
         send_notification = request.form.get("send_notification") == "on"
+        _require_email_permission(db, form, send_notification)
         service = current_app.extensions["services"].submission_stage_rollback_service
         submission_form_config = _submission_form_config(db, form, submission)
         previous_step = str(submission.workflow_step or submission.workflow_stage or "")
@@ -784,6 +903,7 @@ def submission_stage_rollback(submission_id: str):
                 target_status=target_status,
                 reason=reason,
                 actor=g.admin_user,
+                authorized=True,
                 form_config=submission_form_config,
             )
             current_app.extensions["services"].workflow_sla_service.transition(
@@ -898,7 +1018,6 @@ def submission_agreement_unblock(submission_id: str):
 
 @bp.post("/submissions/<submission_id>/reject-final")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_reject_final(submission_id: str):
     with db_session_factory()() as db:
         submission = db.execute(
@@ -909,9 +1028,10 @@ def submission_reject_final(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        ensure_form_access(db, form.id, manage=True)
+        ensure_form_access(db, form.id, permission="can_make_decision")
         reason = request.form.get("reason", "").strip()
         send_notification = request.form.get("send_notification") == "on"
+        _require_email_permission(db, form, send_notification)
         try:
             result = current_app.extensions["services"].blocked_agreement_admin_service.reject_final(
                 db,
@@ -919,6 +1039,7 @@ def submission_reject_final(submission_id: str):
                 reason=reason,
                 actor=g.admin_user,
                 email_requested=send_notification,
+                authorized=True,
             )
             db.commit()
         except (BlockedAgreementActionError, PermissionError) as exc:
@@ -977,7 +1098,6 @@ def _log_blocked_agreement_action(event_type: str, submission, result, *, reason
 
 @bp.post("/submissions/<submission_id>/return-for-correction")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_return_for_correction(submission_id: str):
     payload = request.get_json(silent=True) if request.is_json else request.form
     payload = payload or {}
@@ -995,7 +1115,8 @@ def submission_return_for_correction(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        ensure_form_access(db, form.id, manage=True)
+        ensure_form_access(db, form.id, permission="can_return_for_correction")
+        _require_email_permission(db, form, send_email)
         if not str(submission.access_token or "").strip():
             submission.access_token = current_app.extensions["services"].access_token_service.generate_token()
         submission_form_config = _submission_form_config(db, form, submission)
@@ -1541,7 +1662,6 @@ def _notify_beneficiary_agreement_decision(
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/decision")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submission_decision_update(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
@@ -1574,14 +1694,13 @@ def submission_decision_update(form_id: int, submission_pk: int):
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/beneficiary-agreement-decision")
 @login_required
 def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
-    if g.admin_user.role not in AGREEMENT_DECISION_ROLES:
-        abort(403)
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id)
+        form = ensure_form_access(db, form_id, permission="can_manage_documents")
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
         send_notification = request.form.get("send_notification") == "on"
+        _require_email_permission(db, form, send_notification)
         try:
             result = current_app.extensions["services"].beneficiary_agreement_service.decide(
                 db,
@@ -1590,6 +1709,7 @@ def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
                 reason=request.form.get("agreement_decision_reason", ""),
                 actor=g.admin_user,
                 email_requested=send_notification,
+                authorized=True,
             )
             db.commit()
         except BeneficiaryAgreementDecisionError as exc:
@@ -1615,10 +1735,10 @@ def beneficiary_agreement_decision_update(form_id: int, submission_pk: int):
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/check-office-signed-agreement")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def check_office_signed_agreement(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id)
+        form = ensure_form_access(db, form_id, permission="can_sign_office_agreement")
+        _require_email_permission(db, form, request.form.get("send_notification") == "on")
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
@@ -1645,13 +1765,13 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
 
 @bp.post("/forms/<int:form_id>/submissions/check-office-signed-agreements")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def check_office_signed_agreements_bulk(form_id: int):
     checked_submissions = found = missing = already = checked_agreements = 0
     errors = []
     notifications = []
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id)
+        form = ensure_form_access(db, form_id, permission="can_sign_office_agreement")
+        _require_email_permission(db, form, request.form.get("send_notification") == "on")
         public_ids = list(dict.fromkeys(request.form.getlist("submission_ids")))
         submissions = db.execute(
             select(FormSubmission).where(
@@ -1695,10 +1815,9 @@ def check_office_signed_agreements_bulk(form_id: int):
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/send-office-signed-agreements")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def send_office_signed_agreements(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id)
+        form = ensure_form_access(db, form_id, permission="can_send_email")
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
@@ -1744,7 +1863,6 @@ def send_office_signed_agreements(form_id: int, submission_pk: int):
 
 @bp.post("/forms/<int:form_id>/submissions/decisions")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def submissions_decisions_update(form_id: int):
     saved_count = 0
     skipped_count = 0

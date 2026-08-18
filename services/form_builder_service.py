@@ -36,34 +36,170 @@ def width_name(value: Any) -> str:
     return value if value in LAYOUT_WIDTHS else "full"
 
 
-def serialize_builder_fields(form: Form, fields: Iterable[FormField]) -> list[dict]:
+def _normalize_nested_builder_fields(
+    value: Any,
+    *,
+    field_types: set[str] | None = None,
+) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+
+    allowed_types = (
+        set(field_types)
+        if field_types is not None
+        else {
+            "text",
+            "textarea",
+            "email",
+            "tel",
+            "number",
+            "date",
+            "time",
+            "select",
+            "radio",
+            "checkbox",
+            "pesel",
+            "file",
+        }
+    )
+
+    # P1: zakaz repeatable_group wewnątrz repeatable_group.
+    allowed_types.discard("repeatable_group")
+
+    result: list[dict] = []
+    seen_names: set[str] = set()
+
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise FormBuilderError(
+                f"Pole nr {index + 1} w grupie musi być obiektem."
+            )
+
+        name = str(item.get("name") or "").strip()
+        label = str(item.get("label") or "").strip()
+        field_type = str(item.get("type") or "text").strip()
+
+        if not name or not name.replace("_", "").isalnum():
+            raise FormBuilderError(
+                "Nazwa pola w grupie może zawierać tylko "
+                "litery, cyfry i podkreślenia."
+            )
+
+        if name in seen_names:
+            raise FormBuilderError(
+                f"Nazwa pola „{name}” występuje w grupie więcej niż raz."
+            )
+
+        if field_type not in allowed_types:
+            raise FormBuilderError(
+                f"Nieobsługiwany typ pola w grupie: {field_type}."
+            )
+
+        seen_names.add(name)
+
+        config = deepcopy(item)
+
+        # Techniczny klucz frontendu nie trafia do definition_json.
+        config.pop("_key", None)
+        config.pop("id", None)
+
+        config["name"] = name
+        config["label"] = label or name
+        config["type"] = field_type
+        config["required"] = bool(item.get("required"))
+        config["width"] = width_name(item.get("width"))
+        config["placeholder"] = str(
+            item.get("placeholder") or ""
+        ).strip()
+
+        config["options"] = _normalize_options(
+            field_type,
+            item.get("options"),
+        )
+
+        result.append(config)
+
+    return result
+
+def serialize_builder_fields(
+    form: Form,
+    fields: Iterable[FormField],
+) -> list[dict]:
     definition = deepcopy(form.definition_json or {})
+
     configs = {
         str(item.get("name")): item
         for item in definition.get("fields") or []
         if isinstance(item, dict) and item.get("name")
     }
-    document_labels = definition.get("document_field_labels") or {}
-    result = []
-    for field in fields:
-        config = configs.get(field.name, {})
-        result.append(
-            {
-                "id": field.id,
-                "name": field.name,
-                "label": field.label or field.name,
-                "document_label": document_labels.get(field.name, config.get("document_label", "")),
-                "type": field.type or "text",
-                "required": bool(field.required),
-                "width": width_name(config.get("width")),
-                "width_span": LAYOUT_WIDTHS[width_name(config.get("width"))],
-                "placeholder": str(config.get("placeholder") or ""),
-                "section": field.section or "",
-                "options": deepcopy(field.options or []),
-            }
-        )
-    return result
 
+    document_labels = (
+        definition.get("document_field_labels") or {}
+    )
+
+    result = []
+
+    for field in fields:
+        config = deepcopy(
+            configs.get(field.name, {})
+        )
+
+        item = {
+            "id": field.id,
+            "name": field.name,
+            "label": field.label or field.name,
+            "document_label": document_labels.get(
+                field.name,
+                config.get("document_label", ""),
+            ),
+            "type": field.type or "text",
+            "required": bool(field.required),
+            "width": width_name(
+                config.get("width")
+            ),
+            "width_span": LAYOUT_WIDTHS[
+                width_name(config.get("width"))
+            ],
+            "placeholder": str(
+                config.get("placeholder") or ""
+            ),
+            "section": field.section or "",
+            "data_classification": (
+                field.data_classification
+                or config.get(
+                    "data_classification",
+                    "normal",
+                )
+            ),
+            "options": deepcopy(
+                field.options or []
+            ),
+        }
+
+        if field.type == "repeatable_group":
+            item["min_items"] = int(
+                config.get("min_items", 1)
+            )
+            item["max_items"] = int(
+                config.get("max_items", 20)
+            )
+            item["add_label"] = str(
+                config.get("add_label")
+                or "Dodaj"
+            )
+            item["item_label"] = str(
+                config.get("item_label")
+                or "Element"
+            )
+
+            # Najważniejsze:
+            item["fields"] = deepcopy(
+                config.get("fields") or []
+            )
+
+        result.append(item)
+
+    return result
 
 def apply_builder_state(
     db,
@@ -133,6 +269,10 @@ def apply_builder_state(
         field.label = label or name
         field.type = field_type
         field.section = str(item.get("section") or "").strip()
+        classification = str(item.get("data_classification") or "normal").strip()
+        if classification not in {"normal", "personal", "sensitive"}:
+            raise FormBuilderError("Nieprawidłowa klasyfikacja danych pola.")
+        field.data_classification = classification
         field.sort_order = order
         field.options = _normalize_options(field_type, item.get("options"))
 
@@ -166,8 +306,60 @@ def apply_builder_state(
                 "placeholder": str(item.get("placeholder") or "").strip(),
                 "stage": field.stage,
                 "availability": deepcopy(availability),
+                "data_classification": classification,
             }
         )
+        if field_type == "repeatable_group":
+            min_items = item.get("min_items", 1)
+            max_items = item.get("max_items", 20)
+
+            try:
+                min_items = int(min_items)
+                max_items = int(max_items)
+            except (TypeError, ValueError) as exc:
+                raise FormBuilderError(
+                    "Minimalna i maksymalna liczba elementów "
+                    "grupy muszą być liczbami całkowitymi."
+                ) from exc
+
+            if min_items < 0:
+                raise FormBuilderError(
+                    "Minimalna liczba elementów grupy "
+                    "nie może być mniejsza od 0."
+                )
+
+            if max_items < min_items:
+                raise FormBuilderError(
+                    "Maksymalna liczba elementów grupy "
+                    "nie może być mniejsza od minimalnej."
+                )
+
+            config["min_items"] = min_items
+            config["max_items"] = max_items
+
+            config["add_label"] = str(
+                item.get("add_label")
+                or "Dodaj"
+            ).strip()
+
+            config["item_label"] = str(
+                item.get("item_label")
+                or "Element"
+            ).strip()
+
+            config["fields"] = (
+                _normalize_nested_builder_fields(
+                    item.get("fields"),
+                    field_types=field_types,
+                )
+            )
+
+        else:
+            config.pop("fields", None)
+            config.pop("min_items", None)
+            config.pop("max_items", None)
+            config.pop("add_label", None)
+            config.pop("item_label", None)
         saved_fields.append(field)
         saved_configs.append(config)
         document_label = str(item.get("document_label") or "").strip()

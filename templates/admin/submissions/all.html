@@ -64,8 +64,8 @@
             {% set form = form_by_slug.get(submission.form_slug) %}
             <tr>
                 <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
-                <td>{{ ((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-" }}</td>
-                <td class="column-secondary">{{ submission.email or "-" }}</td><td class="column-secondary">{{ submission.telefon or "-" }}</td>
+                <td>{{ (((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
+                <td class="column-secondary">{{ (submission.email or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td><td class="column-secondary">{{ (submission.telefon or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
                 <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
                 <td>{{ form.name if form else submission.form_slug }}</td>
                 <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
@@ -84,7 +84,7 @@
       }.get(submission.officer_decision, submission.officer_decision or "-") }}
     </span>
 
-    {% if form and g.admin_user.role in ["admin", "super_admin"] %}
+    {% if form and submission.form_slug in permission_slugs.can_make_decision %}
       <div class="admin-decision-actions">
         <a class="admin-link-button"
            href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#officer-decision">
@@ -99,7 +99,7 @@
                             <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="all-submission-actions-{{ submission.id }}">Akcje</button>
                             <div id="all-submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
-                            {% if g.admin_user.role in ['super_admin', 'admin'] %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
+                            {% if submission.form_slug in permission_slugs.can_send_email %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#correspondence">Pokaż korespondencję</a>
                             </div>
                         </div>

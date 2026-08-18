@@ -63,12 +63,12 @@
                         <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
                             {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
+                            {% if form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.form_sla', form_id=form.id) }}">Terminy i SLA</a>{% endif %}
                             {% if g.admin_user.role in ["super_admin", "admin"] %}
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wersje i publikacja</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}">Workflow</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_sla', form_id=form.id) }}">Terminy i SLA</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Szkolenia</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='documents') }}">Dokumenty</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='emails') }}">E-mail</a>

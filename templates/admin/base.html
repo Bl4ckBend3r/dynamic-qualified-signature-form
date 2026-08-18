@@ -111,7 +111,7 @@
               >Szablony maili</a
             >
 
-            {% if g.admin_user.role == "super_admin" %}
+            {% if has_permission('can_manage_site') or has_permission('can_manage_users') or has_permission('can_manage_roles') %}
             <div class="admin-nav-dropdown">
               <button
                 type="button"
@@ -124,10 +124,12 @@
 
               <div class="admin-nav-dropdown-menu" hidden>
                 
-                <a href="{{ url_for('admin.system_mail_settings') }}"
+                {% if has_permission('can_manage_site') %}<a href="{{ url_for('admin.system_mail_settings') }}"
                   >Poczta systemowa</a
-                >
-                <a href="{{ url_for('admin.users_list') }}">Użytkownicy</a>
+                >{% endif %}
+                {% if has_permission('can_manage_users') %}<a href="{{ url_for('admin.users_list') }}">Użytkownicy</a>{% endif %}
+                {% if has_permission('can_manage_roles') %}<a href="{{ url_for('admin.roles_list') }}">Role i uprawnienia</a>{% endif %}
+                {% if has_permission('can_manage_site') %}
                 <a href="{{ url_for('admin.business_calendars') }}">Kalendarze SLA</a>
                 <a href="{{ url_for('admin.global_mail_footer_edit') }}"
                   >Stopka ogólna maili</a
@@ -142,6 +144,7 @@
                 <a href="{{ url_for('admin.service_documents_edit') }}"
                   >Dokumenty serwisu</a
                 >
+                {% endif %}
               </div>
             </div>
             {% endif %}

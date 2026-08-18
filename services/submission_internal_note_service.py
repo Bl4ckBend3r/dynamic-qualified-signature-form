@@ -8,13 +8,13 @@ from sqlalchemy.orm import selectinload
 
 from models import (
     Form,
-    FormPermission,
     FormSubmission,
     SubmissionInternalNote,
     SubmissionInternalNoteMention,
     SubmissionInternalNoteRevision,
     User,
 )
+from services.permission_service import PermissionService
 
 
 MAX_NOTE_LENGTH = 5000
@@ -36,32 +36,16 @@ class SubmissionInternalNoteService:
     def __init__(self, audit_log_service=None) -> None:
         self.audit_log_service = audit_log_service
 
-    @staticmethod
-    def _permission(db, user: User, form: Form) -> FormPermission | None:
-        if user.role == "super_admin":
-            return None
-        return db.execute(select(FormPermission).where(
-            FormPermission.user_id == user.id,
-            FormPermission.form_id == form.id,
-        )).scalar_one_or_none()
-
     def can_view(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(user.is_active and not user.is_blocked and permission and permission.can_view_internal_notes)
+        return PermissionService().has_permission(db, user, "can_view_internal_notes", form=form)
 
     def can_add(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(user.is_active and not user.is_blocked and permission and permission.can_view_internal_notes and permission.can_add_internal_notes)
+        service = PermissionService()
+        return service.has_permission(db, user, "can_view_internal_notes", form=form) and service.has_permission(db, user, "can_add_internal_notes", form=form)
 
     def can_manage(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(user.is_active and not user.is_blocked and permission and permission.can_view_internal_notes and permission.can_manage_internal_notes)
+        service = PermissionService()
+        return service.has_permission(db, user, "can_view_internal_notes", form=form) and service.has_permission(db, user, "can_manage_internal_notes", form=form)
 
     def list_notes(self, db, submission: FormSubmission, *, search: str = "", form: Form | None = None,
                    viewer: User | None = None) -> list[SubmissionInternalNote]:
@@ -153,13 +137,15 @@ class SubmissionInternalNoteService:
             self._audit("internal_note_archived", submission, actor, note, {})
 
     def _sync_mentions(self, db, note: SubmissionInternalNote, form: Form) -> list[User]:
-        users = db.execute(
-            select(User).outerjoin(FormPermission, FormPermission.user_id == User.id).where(
-                User.is_active.is_(True),
-                User.is_blocked.is_(False),
-                or_(User.role == "super_admin", FormPermission.form_id == form.id),
-            ).distinct()
-        ).scalars().all()
+        permission_service = PermissionService()
+        users = [
+            user for user in permission_service.users_with_permission(
+                db, "can_view_internal_notes", form
+            )
+            if permission_service.has_permission(
+                db, user, "can_view_submissions", form=form
+            )
+        ]
         by_email = {user.email.casefold(): user for user in users}
         by_handle: dict[str, list[User]] = {}
         for user in users:

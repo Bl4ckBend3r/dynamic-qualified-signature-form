@@ -27,7 +27,6 @@ from models import (
     EmailLog,
     Form,
     FormField,
-    FormPermission,
     FormSubmission,
     MailFooter,
     MailTemplate,
@@ -68,6 +67,7 @@ from services.logo_service import (
     safe_asset_filename as logo_safe_asset_filename,
 )
 from services.mail_dispatch_service import MailDispatchService
+from services.permission_service import PermissionService
 
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -110,7 +110,7 @@ def db_session_factory():
     return create_session_factory(database_url)
 
 
-from .auth import get_current_user, login_required, role_required  # noqa: E402,F401
+from .auth import get_current_user, login_required, permission_required, role_required  # noqa: E402,F401
 
 
 def normalize_slug(value: str) -> str:
@@ -222,9 +222,7 @@ def format_json(value: Any) -> str:
 
 
 def accessible_form_ids(db, user: User) -> list[int]:
-    if user.role == ROLE_SUPER_ADMIN:
-        return [item for item in db.execute(select(Form.id)).scalars().all()]
-    return [item for item in db.execute(select(FormPermission.form_id).where(FormPermission.user_id == user.id)).scalars().all()]
+    return PermissionService().accessible_form_ids(db, user)
 
 
 def accessible_form_slugs(db, form_ids: list[int]) -> list[str]:
@@ -248,31 +246,26 @@ def list_accessible_forms(db, user: User) -> list[Form]:
     return db.execute(select(Form).where(Form.id.in_(form_ids)).order_by(Form.sort_order, Form.name)).scalars().all()
 
 
-def ensure_form_access(db, form_id: int, manage: bool = False) -> Form:
+def ensure_form_access(db, form_id: int, manage: bool = False, permission: str | None = None) -> Form:
     form = db.get(Form, form_id)
     if not form:
         abort(404)
     user = g.admin_user
-    if user.role == ROLE_SUPER_ADMIN:
-        return form
-    permission = db.execute(
-        select(FormPermission).where(FormPermission.form_id == form_id, FormPermission.user_id == user.id)
-    ).scalar_one_or_none()
-    if not permission or (manage and (user.role != ROLE_ADMIN or not permission.can_manage)):
+    required = permission or ("can_edit_form" if manage else "can_view_submissions")
+    if not PermissionService().has_permission(db, user, required, form=form):
         abort(403)
     return form
 
 
 def can_manage_form(db, user: User, form_id: int) -> bool:
     """Return the effective write permission, including the role policy."""
-    if user.role == ROLE_SUPER_ADMIN:
-        return True
-    if user.role != ROLE_ADMIN:
-        return False
-    permission = db.execute(
-        select(FormPermission).where(FormPermission.form_id == form_id, FormPermission.user_id == user.id)
-    ).scalar_one_or_none()
-    return bool(permission and permission.can_manage)
+    return PermissionService().has_permission(db, user, "can_edit_form", form=form_id)
+
+
+def has_permission(db, permission: str, *, form=None, submission=None, user=None) -> bool:
+    return PermissionService().has_permission(
+        db, user or g.admin_user, permission, form=form, submission=submission
+    )
 
 
 def build_mail_context(form: Form, submission: FormSubmission | None, files: list[SubmissionFile]) -> dict:

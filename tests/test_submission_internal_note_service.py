@@ -7,7 +7,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from models import (
-    Base, Form, FormPermission, FormSubmission, SubmissionInternalNoteRevision, User,
+    AccessRole, AccessRolePermission, Base, Form, FormPermission, FormSubmission,
+    FormUserRole, Permission, SubmissionInternalNoteRevision, User,
 )
 from services.mail_template_service import build_mail_context
 from services.public_submission_status_service import build_public_submission_status
@@ -35,17 +36,31 @@ def note_db(tmp_path):
         mentioned = User(email="jan@example.test", password_hash="x", role="form_manager")
         viewer = User(email="viewer@example.test", password_hash="x", role="form_manager")
         denied = User(email="denied@example.test", password_hash="x", role="form_manager")
-        db.add_all([form, author, mentioned, viewer, denied]); db.flush()
+        mention_denied = User(email="hidden@example.test", password_hash="x", role="form_manager")
+        db.add_all([form, author, mentioned, viewer, denied, mention_denied]); db.flush()
         db.add_all([
             FormPermission(user_id=author.id, form_id=form.id, can_manage=False, can_review=True, can_view_internal_notes=True, can_add_internal_notes=True, can_manage_internal_notes=True),
             FormPermission(user_id=mentioned.id, form_id=form.id, can_manage=False, can_review=True, can_view_internal_notes=True, can_add_internal_notes=True, can_manage_internal_notes=False),
             FormPermission(user_id=viewer.id, form_id=form.id, can_manage=False, can_review=False, can_view_internal_notes=True, can_add_internal_notes=False, can_manage_internal_notes=False),
             FormPermission(user_id=denied.id, form_id=form.id, can_manage=False, can_review=False, can_view_internal_notes=False, can_add_internal_notes=False, can_manage_internal_notes=False),
         ])
+        note_permission = Permission(
+            key="can_view_internal_notes", name="notes", category="notes",
+            scope="form", is_active=True,
+        )
+        note_only_role = AccessRole(
+            key="note_only_without_case_access", name="Notes only",
+            scope="form", is_active=True,
+        )
+        db.add_all([note_permission, note_only_role]); db.flush()
+        db.add_all([
+            AccessRolePermission(role_id=note_only_role.id, permission_id=note_permission.id),
+            FormUserRole(user_id=mention_denied.id, form_id=form.id, role_id=note_only_role.id),
+        ])
         first = FormSubmission(submission_id="note-1", form_slug=form.slug, form_name=form.name)
         second = FormSubmission(submission_id="note-2", form_slug=form.slug, form_name=form.name)
         db.add_all([first, second]); db.flush()
-        ids = {name: value.id for name, value in {"form": form, "author": author, "mentioned": mentioned, "viewer": viewer, "denied": denied, "first": first, "second": second}.items()}
+        ids = {name: value.id for name, value in {"form": form, "author": author, "mentioned": mentioned, "viewer": viewer, "denied": denied, "mention_denied": mention_denied, "first": first, "second": second}.items()}
     yield Session, ids
     engine.dispose()
 
@@ -56,7 +71,9 @@ def test_create_view_important_mentions_and_audit_without_content(note_db):
     with Session.begin() as db:
         note = service.create(
             db, db.get(FormSubmission, ids["first"]), db.get(Form, ids["form"]),
-            author=db.get(User, ids["author"]), content="Pilne dla @jan oraz @jan@example.test", is_important=True,
+            author=db.get(User, ids["author"]),
+            content="Pilne dla @jan, @jan@example.test i @hidden@example.test",
+            is_important=True,
         )
         assert note.is_important
         assert [mention.mentioned_user_id for mention in note.mentions] == [ids["mentioned"]]

@@ -22,16 +22,18 @@ def assignment_db(tmp_path):
         jan = User(email="jan@example.test", password_hash="x", role="form_manager")
         ola = User(email="ola@example.test", password_hash="x", role="form_manager")
         disabled = User(email="disabled@example.test", password_hash="x", role="form_manager", is_active=False)
+        reviewer = User(email="reviewer@example.test", password_hash="x", role="form_manager")
         no_access = User(email="no-access@example.test", password_hash="x", role="form_manager")
         form = Form(slug="case-form", name="Case form", definition_json={})
-        db.add_all([actor, anna, jan, ola, disabled, no_access, form])
+        db.add_all([actor, anna, jan, ola, disabled, reviewer, no_access, form])
         db.flush()
         db.add_all([
             FormPermission(user_id=actor.id, form_id=form.id, can_manage=False, can_review=True, can_assign_submissions=True),
-            FormPermission(user_id=anna.id, form_id=form.id, can_manage=False, can_review=True),
-            FormPermission(user_id=jan.id, form_id=form.id, can_manage=False, can_review=True),
-            FormPermission(user_id=ola.id, form_id=form.id, can_manage=False, can_review=True),
-            FormPermission(user_id=disabled.id, form_id=form.id, can_manage=False, can_review=True),
+            FormPermission(user_id=anna.id, form_id=form.id, can_manage=False, can_assign_submissions=True),
+            FormPermission(user_id=jan.id, form_id=form.id, can_manage=False, can_assign_submissions=True),
+            FormPermission(user_id=ola.id, form_id=form.id, can_manage=False, can_assign_submissions=True),
+            FormPermission(user_id=disabled.id, form_id=form.id, can_manage=False, can_assign_submissions=True),
+            FormPermission(user_id=reviewer.id, form_id=form.id, can_manage=False, can_review=True),
         ])
         submissions = [
             FormSubmission(submission_id=f"case-{index}", form_slug=form.slug, form_name=form.name)
@@ -41,7 +43,7 @@ def assignment_db(tmp_path):
         db.commit()
         ids = {
             "actor": actor.id, "anna": anna.id, "jan": jan.id, "ola": ola.id,
-            "disabled": disabled.id, "no_access": no_access.id, "form": form.id,
+            "disabled": disabled.id, "reviewer": reviewer.id, "no_access": no_access.id, "form": form.id,
             "submissions": [item.id for item in submissions],
         }
     yield factory, ids
@@ -82,7 +84,7 @@ def test_assignment_requires_permission_and_eligible_target(assignment_db):
     service = SubmissionAssignmentService()
     with factory() as db:
         form = db.get(Form, ids["form"])
-        actor = db.get(User, ids["anna"])
+        actor = db.get(User, ids["reviewer"])
         submission = db.get(FormSubmission, ids["submissions"][0])
         with pytest.raises(SubmissionAssignmentPermissionError):
             service.assign(db, submission, form, assignee_id=ids["jan"], actor=actor)
@@ -117,7 +119,7 @@ def test_combined_assignment_filters_and_sql_queue_counts(assignment_db):
 def test_round_robin_rotates_three_users_and_skips_ineligible_accounts(assignment_db):
     factory, ids = assignment_db
     service = SubmissionAssignmentService()
-    configured = [ids["anna"], ids["disabled"], ids["jan"], ids["no_access"], ids["ola"]]
+    configured = [ids["anna"], ids["disabled"], ids["reviewer"], ids["jan"], ids["no_access"], ids["ola"]]
     assigned = [
         service.auto_assign_created(
             factory,

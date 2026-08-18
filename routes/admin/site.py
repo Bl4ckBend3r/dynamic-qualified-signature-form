@@ -26,21 +26,20 @@ from services.site_document_service import (
 from services.upload_validation import UploadValidationError
 
 from . import (
-    ROLE_SUPER_ADMIN,
     bp,
     can_select_active_logo,
     db_session_factory,
     list_active_logos,
     login_required,
+    permission_required,
     parse_optional_int,
 )
 
 
 @bp.route("/site/footer", methods=["GET", "POST"])
 @login_required
+@permission_required("can_manage_site")
 def site_footer_edit():
-    if g.admin_user.role != ROLE_SUPER_ADMIN:
-        return "Nie masz uprawnień do edycji stopki strony.", 403
     with db_session_factory()() as db:
         footer = db.execute(select(SiteFooter).order_by(SiteFooter.id)).scalars().first()
         footer = footer or SiteFooter(name="Stopka strony", html_body="", is_active=True)
@@ -146,9 +145,8 @@ def _site_footer_dimension(value: str | None, minimum: int, maximum: int, label:
 
 @bp.route("/site/contact", methods=["GET", "POST"])
 @login_required
+@permission_required("can_manage_site")
 def contact_page_edit():
-    if g.admin_user.role != ROLE_SUPER_ADMIN:
-        return "Nie masz uprawnień do edycji tej strony.", 403
     with db_session_factory()() as db:
         page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()
         if not page:
@@ -172,9 +170,8 @@ def contact_page_edit():
 
 @bp.route("/site/documents", methods=["GET", "POST"])
 @login_required
+@permission_required("can_manage_site")
 def service_documents_edit():
-    if g.admin_user.role != ROLE_SUPER_ADMIN:
-        return "Nie masz uprawnień.", 403
     with db_session_factory()() as db:
         if request.method == "POST":
             document_type = request.form.get("document_type", "").strip()
@@ -231,9 +228,8 @@ def service_documents_edit():
 
 @bp.post("/site/documents/form-import-instruction/delete")
 @login_required
+@permission_required("can_manage_site")
 def form_import_instruction_delete():
-    if g.admin_user.role != ROLE_SUPER_ADMIN:
-        return "Nie masz uprawnień.", 403
     with db_session_factory()() as db:
         document = db.execute(
             select(ServiceDocument).where(ServiceDocument.document_type == FORM_IMPORT_INSTRUCTION_TYPE)
@@ -250,9 +246,8 @@ def form_import_instruction_delete():
 
 @bp.get("/site/documents/<int:document_id>/file")
 @login_required
+@permission_required("can_manage_site")
 def service_document_admin_file(document_id: int):
-    if g.admin_user.role != ROLE_SUPER_ADMIN:
-        return "Nie masz uprawnień.", 403
     with db_session_factory()() as db:
         document = db.get(ServiceDocument, document_id) or abort(404)
         path = Path(document.storage_path or "")

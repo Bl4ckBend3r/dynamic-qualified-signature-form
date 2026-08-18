@@ -74,9 +74,10 @@ class BeneficiaryAgreementService:
         reason: str,
         actor,
         email_requested: bool = False,
+        authorized: bool = False,
     ) -> BeneficiaryAgreementDecisionResult:
         actor_role = str(getattr(actor, "role", "") or "")
-        if actor_role not in AGREEMENT_DECISION_ROLES:
+        if not authorized and actor_role not in AGREEMENT_DECISION_ROLES:
             raise BeneficiaryAgreementDecisionError("Nie masz uprawnień do oceny podpisanej umowy.")
 
         normalized_decision = str(decision or "").strip().lower()

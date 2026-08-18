@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import html
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
 from services.training_service import format_price_pln, normalize_training_dates, parse_decimal_price, parse_training_snapshots
@@ -40,7 +41,160 @@ def _dynamic_field_example(name: str, label: str, field_type: str) -> str:
         return "Wybrana odpowiedź"
     return label or "Dane przykładowe"
 
+def _repeatable_group_fields(field: Any) -> list[Mapping[str, Any]]:
+    raw_fields = None
+    config = None
 
+    if isinstance(field, Mapping):
+        raw_fields = field.get("fields")
+
+        config = (
+            field.get("config")
+            or field.get("config_json")
+        )
+    else:
+        raw_fields = getattr(field, "fields", None)
+
+        config = (
+            getattr(field, "config", None)
+            or getattr(field, "config_json", None)
+        )
+
+    if not raw_fields and isinstance(config, Mapping):
+        raw_fields = config.get("fields")
+
+    # Czasami config może być zapisany jako JSON.
+    if not raw_fields and isinstance(config, str):
+        try:
+            parsed_config = json.loads(config)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_config = {}
+
+        if isinstance(parsed_config, Mapping):
+            raw_fields = parsed_config.get("fields")
+
+    if not isinstance(raw_fields, (list, tuple)):
+        return []
+
+    return [
+        item
+        for item in raw_fields
+        if isinstance(item, Mapping)
+    ]
+
+
+def _repeatable_group_records(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, str):
+        text = value.strip()
+
+        if not text:
+            return []
+
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    return [
+        item
+        for item in value
+        if isinstance(item, Mapping)
+    ]
+
+
+def _repeatable_document_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, bool):
+        return "Tak" if value else "Nie"
+
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(
+            _repeatable_document_value(item)
+            for item in value
+        )
+
+    if isinstance(value, Mapping):
+        return ", ".join(
+            f"{key}: {_repeatable_document_value(item)}"
+            for key, item in value.items()
+            if key != "id"
+        )
+
+    return str(value)
+
+
+def _repeatable_group_table(value: Any, field: Any) -> Markup:
+    child_fields = [
+        item
+        for item in _repeatable_group_fields(field)
+        if str(item.get("type") or item.get("field_type") or "").casefold()
+        not in {"section", "static_text", "file", "repeatable_group"}
+    ]
+
+    records = _repeatable_group_records(value)
+    print(
+        "REPEATABLE DEBUG:",
+        {
+            "value": value,
+            "records": records,
+            "child_fields": child_fields,
+        }
+    )
+
+    if not child_fields or not records:
+        return Markup("")
+
+    header_cells = [
+        "<th>Lp.</th>"
+    ]
+
+    for child in child_fields:
+        label = str(
+            child.get("label")
+            or child.get("name")
+            or ""
+        )
+
+        header_cells.append(
+            f"<th>{escape(label)}</th>"
+        )
+
+    rows = []
+
+    for index, record in enumerate(records, start=1):
+        cells = [
+            f"<td>{index}</td>"
+        ]
+
+        for child in child_fields:
+            name = str(child.get("name") or "")
+            value_text = _repeatable_document_value(
+                record.get(name)
+            )
+
+            cells.append(
+                f"<td>{escape(value_text)}</td>"
+            )
+
+        rows.append(
+            "<tr>" + "".join(cells) + "</tr>"
+        )
+
+    return Markup(
+       '<table class="document-table document-repeatable-table">'
+        "<thead><tr>"
+        + "".join(header_cells)
+        + "</tr></thead>"
+        "<tbody>"
+        + "".join(rows)
+        + "</tbody>"
+        "</table>"
+    )
 class AgreementVariableCatalog:
     """Single source of truth for variables exposed by every agreement editor."""
 
@@ -143,24 +297,87 @@ class AgreementVariableCatalog:
 
     @classmethod
     def variables(cls, fields: Iterable[Any] = ()) -> list[dict[str, str]]:
-        catalog = [dict(item, placeholder="{{ " + item["name"] + " }}") for item in cls._STANDARD]
-        known = {item["name"] for item in catalog}
+        catalog = [
+            dict(
+                item,
+                placeholder="{{ " + item["name"] + " }}"
+            )
+            for item in cls._STANDARD
+        ]
+
+        known = {
+            item["name"]
+            for item in catalog
+        }
+
         for field in fields:
             name = _field_value(field, "name").strip()
-            if not name or name in known:
+
+            if not name:
                 continue
-            label = _field_value(field, "label").strip() or name
-            field_type = _field_value(field, "field_type").strip() or _field_value(field, "type").strip() or "text"
+
+            label = (
+                _field_value(field, "label").strip()
+                or name
+            )
+
+            field_type = (
+                _field_value(field, "field_type").strip()
+                or _field_value(field, "type").strip()
+                or "text"
+            )
+
+            if field_type.casefold() == "repeatable_group":
+                variable_name = f"{name}_table"
+
+                if variable_name in known:
+                    continue
+
+                children = _repeatable_group_fields(field)
+
+                catalog.append({
+                    "category": "Grupy powtarzalne",
+                    "name": variable_name,
+                    "label": label,
+                    "type": "repeatable_group",
+                    "example": (
+                        f"Tabela — {len(children)} pól"
+                        if children
+                        else "Tabela grupy"
+                    ),
+                    "description": (
+                        f"Cała grupa powtarzalna „{label}”. "
+                        "W dokumencie zostanie rozwinięta do tabeli "
+                        "z wszystkimi rekordami."
+                    ),
+                    "placeholder": "{{ " + variable_name + " }}",
+                })
+
+                known.add(variable_name)
+                continue
+
+            if name in known:
+                continue
+
             catalog.append({
                 "category": "Pola formularza",
                 "name": name,
                 "label": label,
                 "type": field_type,
-                "example": _dynamic_field_example(name, label, field_type),
-                "description": f"Dynamiczne pole formularza „{label}”; jest dostępne automatycznie bez zmiany kodu.",
+                "example": _dynamic_field_example(
+                    name,
+                    label,
+                    field_type,
+                ),
+                "description": (
+                    f"Dynamiczne pole formularza „{label}”; "
+                    "jest dostępne automatycznie bez zmiany kodu."
+                ),
                 "placeholder": "{{ " + name + " }}",
             })
+
             known.add(name)
+
         return catalog
 
     @classmethod
@@ -288,6 +505,63 @@ def build_agreement_template_context(
     result.update(_training_scalar_context(current_training))
     result.setdefault("submission", submission or dict(context))
     catalog_fields = list(fields) or _list_of_mappings(definition.get("fields"))
+    definition_fields = _list_of_mappings(
+        definition.get("fields")
+    )
+
+    database_fields = list(fields)
+
+    if not database_fields:
+        catalog_fields = definition_fields
+    else:
+        definition_by_name = {
+            str(item.get("name") or ""): item
+            for item in definition_fields
+            if isinstance(item, Mapping)
+        }
+
+        catalog_fields = []
+
+        for field in database_fields:
+            name = _field_value(field, "name")
+
+            definition_field = definition_by_name.get(name)
+
+            # Dla repeatable_group używamy pełnej definicji JSON,
+            # ponieważ zawiera ona zagnieżdżone "fields".
+            if definition_field:
+                definition_type = str(
+                    definition_field.get("type")
+                    or definition_field.get("field_type")
+                    or ""
+                ).casefold()
+
+                if definition_type == "repeatable_group":
+                    catalog_fields.append(definition_field)
+                    continue
+
+            catalog_fields.append(field)
+    
+    
+    
+    for field in catalog_fields:
+        field_type = (
+            _field_value(field, "field_type")
+            or _field_value(field, "type")
+        ).casefold()
+
+        if field_type != "repeatable_group":
+            continue
+
+        name = _field_value(field, "name")
+
+        if not name:
+            continue
+
+        result[f"{name}_table"] = _repeatable_group_table(
+            result.get(name),
+            field,
+        )
     for variable in AgreementVariableCatalog.variables(catalog_fields):
         result.setdefault(variable["name"], _empty_catalog_value(variable["type"]))
     return result

@@ -135,7 +135,7 @@ class SubmissionAttachmentService:
             return self._persist_legacy(form_slug, submission_id, attachments, workflow_step, source)
 
         from sqlalchemy import func, select
-        from models import FormSubmission, SubmissionFile
+        from models import Form, FormField, FormSubmission, SubmissionFile
 
         written_paths: list[str] = []
         result: list[dict] = []
@@ -144,6 +144,11 @@ class SubmissionAttachmentService:
                 submission = db.execute(
                     select(FormSubmission).where(FormSubmission.submission_id == submission_id)
                 ).scalar_one()
+                form = db.execute(select(Form).where(Form.slug == form_slug)).scalar_one_or_none()
+                field_classifications = {
+                    field.name: field.data_classification
+                    for field in db.execute(select(FormField).where(FormField.form_id == form.id)).scalars()
+                } if form else {}
                 by_field: dict[str, list[PreparedAttachment]] = {}
                 for item in attachments:
                     by_field.setdefault(item.field_key, []).append(item)
@@ -190,6 +195,7 @@ class SubmissionAttachmentService:
                             field_key=field_key,
                             attachment_version=version,
                             category=item.category,
+                            data_classification=field_classifications.get(field_key, "normal"),
                             uploaded_by_source=source,
                             workflow_step_at_upload=workflow_step,
                             antivirus_status=item.antivirus_status,

@@ -260,6 +260,7 @@ class SubmissionFile(Base):
     field_key: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     attachment_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    data_classification: Mapped[str] = mapped_column(String(32), default="normal", server_default="normal", nullable=False)
     uploaded_by_source: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     workflow_step_at_upload: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     antivirus_status: Mapped[str] = mapped_column(String(64), default="not_configured", nullable=False)
@@ -1014,6 +1015,7 @@ class FormField(Base):
     availability_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    data_classification: Mapped[str] = mapped_column(String(32), default="normal", server_default="normal", nullable=False)
 
     form: Mapped[Form] = relationship(back_populates="fields")
 
@@ -1251,6 +1253,93 @@ class FormPermission(Base):
 
     user: Mapped[User] = relationship(back_populates="permissions")
     form: Mapped[Form] = relationship(back_populates="permissions")
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    __table_args__ = (UniqueConstraint("key", name="uq_permissions_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), default="submissions", nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="form", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class AccessRole(Base):
+    __tablename__ = "access_roles"
+    __table_args__ = (UniqueConstraint("key", name="uq_access_roles_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="form", nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    permission_links: Mapped[list["AccessRolePermission"]] = relationship(back_populates="role", cascade="all, delete-orphan")
+
+
+class AccessRolePermission(Base):
+    __tablename__ = "access_role_permissions"
+    __table_args__ = (UniqueConstraint("role_id", "permission_id", name="uq_access_role_permissions_role_permission"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_roles.id", ondelete="CASCADE"), index=True, nullable=False)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), index=True, nullable=False)
+
+    role: Mapped[AccessRole] = relationship(back_populates="permission_links")
+    permission: Mapped[Permission] = relationship()
+
+
+class FormUserRole(Base):
+    __tablename__ = "form_user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "form_id", "role_id", name="uq_form_user_roles_assignment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), index=True, nullable=False)
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_roles.id", ondelete="CASCADE"), index=True, nullable=False)
+    granted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    role: Mapped[AccessRole] = relationship()
+
+
+class UserGlobalRole(Base):
+    __tablename__ = "user_global_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_global_roles_assignment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_roles.id", ondelete="CASCADE"), index=True, nullable=False)
+    granted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    role: Mapped[AccessRole] = relationship()
+
+
+class RoleAssignmentAudit(Base):
+    __tablename__ = "role_assignment_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    target_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
+    role_id: Mapped[int | None] = mapped_column(ForeignKey("access_roles.id", ondelete="SET NULL"), nullable=True)
+    form_id: Mapped[int | None] = mapped_column(ForeignKey("forms.id", ondelete="SET NULL"), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+
+
+def _reject_role_assignment_audit_mutation(_mapper, _connection, _target) -> None:
+    raise ValueError("Role assignment audit is immutable.")
+
+
+event.listen(RoleAssignmentAudit, "before_update", _reject_role_assignment_audit_mutation)
+event.listen(RoleAssignmentAudit, "before_delete", _reject_role_assignment_audit_mutation)
 
 
 class MailTemplate(Base):

@@ -8,7 +8,8 @@
     </div>
     <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
 </div>
-{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać zgłoszenia, ale nie możesz zmieniać decyzji, usuwać danych ani wysyłać wiadomości.</div>{% endif %}
+{% if can_export_data %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submissions_export', form_id=form.id) }}">Eksportuj CSV</a></div>{% endif %}
+{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 <form id="submission-advanced-filters" method="get" class="admin-card admin-filters admin-filters--compact">
     <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
     <select name="status">
@@ -71,17 +72,18 @@
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="next" value="{{ request.full_path }}"><div data-assignment-selection></div>
 </form>{% endif %}
 {% if can_assign_submissions %}<div class="admin-bulk-actions"><label class="admin-check"><input type="checkbox" id="select-all-assignments"><span>Zaznacz wszystkie na stronie</span></label><div class="admin-actions"><select name="assigned_to_user_id" form="bulk-assignment-form"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select><input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany"><button class="admin-button-secondary" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz prowadzącego</button></div></div>{% endif %}
-{% if not read_only %}<div class="admin-bulk-actions">
+{% set can_select_rows = can_make_decision or can_send_email or can_sign_office_agreement or can_assign_submissions or not read_only %}
+{% if can_make_decision or can_send_email or can_sign_office_agreement or not read_only %}<div class="admin-bulk-actions">
     <label class="admin-check">
         <input type="checkbox" id="select-all-submissions">
         <span>Zaznacz wszystkie na stronie</span>
     </label>
     <div class="admin-actions">
-        <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyślij mail do zaznaczonych</button>
-        <button class="admin-button-secondary" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź umowy podpisane przez urząd</button>
-        <label class="admin-check"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>
-        <button class="admin-button-secondary" type="submit" form="bulk-delete-form" data-delete-button hidden disabled>Usuń</button>
-        <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
+        {% if can_send_email %}<button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyślij mail do zaznaczonych</button>{% endif %}
+        {% if can_sign_office_agreement %}<button class="admin-button-secondary" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź umowy podpisane przez urząd</button>{% endif %}
+        {% if can_sign_office_agreement and can_send_email %}<label class="admin-check"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>{% endif %}
+        {% if not read_only %}<button class="admin-button-secondary" type="submit" form="bulk-delete-form" data-delete-button hidden disabled>Usuń</button>{% endif %}
+        {% if can_make_decision %}<button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>{% endif %}
     </div>
 </div>{% endif %}
 <form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
@@ -91,7 +93,7 @@
         <table class="admin-table admin-table--submissions admin-table--responsive">
             <thead>
                 <tr>
-                    {% if not read_only or can_assign_submissions %}<th class="column-secondary">Wybierz</th>{% endif %}
+                    {% if can_select_rows %}<th class="column-secondary">Wybierz</th>{% endif %}
                     <th>{{ sortable('ID', 'submission_id') }}</th>
                     <th>{{ sortable('Imię i nazwisko', 'full_name') }}</th>
                     <th class="column-secondary">{{ sortable('E-mail', 'email') }}</th>
@@ -106,7 +108,7 @@
                     <th class="actions-column">Akcje</th>
                 </tr>
                 <tr class="admin-column-filters">
-                    {% if not read_only or can_assign_submissions %}<th class="column-secondary"></th>{% endif %}
+                    {% if can_select_rows %}<th class="column-secondary"></th>{% endif %}
                     <th><a class="admin-sort-link" href="{{ sort_urls.submission_id }}" aria-label="Sortuj po ID">↕</a><input form="submission-column-filters" name="submission_id" value="{{ filters.get('submission_id', '') }}" aria-label="Filtruj po ID"></th>
                     <th><a class="admin-sort-link" href="{{ sort_urls.full_name }}" aria-label="Sortuj po imieniu i nazwisku">↕</a><input form="submission-column-filters" name="full_name" value="{{ filters.get('full_name', '') }}" aria-label="Filtruj po imieniu i nazwisku"></th>
                     <th class="column-secondary"><a class="admin-sort-link" href="{{ sort_urls.email }}" aria-label="Sortuj po e-mailu">↕</a><input form="submission-column-filters" name="email" value="{{ filters.get('email', '') }}" aria-label="Filtruj po e-mailu"></th>
@@ -123,22 +125,22 @@
             </thead>
             <tbody>{% for submission in submissions %}
                 <tr>
-                    {% if not read_only or can_assign_submissions %}<td class="column-secondary">
+                    {% if can_select_rows %}<td class="column-secondary">
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
                         <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" data-submission-pk="{{ submission.id }}" form="bulk-mail-form">
                     </td>{% endif %}
                     <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
-                    <td>{{ ((submission.imiona or submission_value(submission, 'imie') or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-" }}</td>
-                    <td class="column-secondary">{{ submission.email or "-" }}</td>
-                    <td class="column-secondary">{{ submission.telefon or "-" }}</td>
+                    <td>{{ (((submission.imiona or submission_value(submission, 'imie') or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
+                    <td class="column-secondary">{{ (submission.email or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
+                    <td class="column-secondary">{{ (submission.telefon or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
                     <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
                     <td>{{ form.name }}</td>
                     <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
                     <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
                     <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
-                    {% if not read_only %}<td class="column-secondary">
-                        {% if not read_only and can_edit_application_decision(submission) %}
+                    <td class="column-secondary">
+                        {% if can_make_decision and can_edit_application_decision(submission) %}
                             <div class="admin-decision-controls">
                                 <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
                                     {% for value, label in officer_decisions %}
@@ -157,24 +159,24 @@
                         {% else %}
                             <span>Etap zakończony</span>
                         {% endif %}
-                    </td>{% endif %}
+                    </td>
                     <td class="actions-column">
                         <div class="admin-action-dropdown">
                             <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="submission-actions-{{ submission.id }}">Akcje</button>
                             <div id="submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
-                            {% if not read_only and g.admin_user.role in ['super_admin', 'admin'] and submission.process_status not in ['FORM_SUBMITTED', 'WAITING_FOR_OFFICER_DECISION'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#rollback-stage-dialog">Cofnij etap</a>{% endif %}
-                            {% if not read_only and can_edit_application_decision(submission) %}
+                            {% if can_edit_workflow and submission.process_status not in ['FORM_SUBMITTED', 'WAITING_FOR_OFFICER_DECISION'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#rollback-stage-dialog">Cofnij etap</a>{% endif %}
+                            {% if can_make_decision and can_edit_application_decision(submission) %}
                                 <button type="button" class="admin-link-button" data-quick-decision="accepted" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Zaakceptuj</button>
                                 <button type="button" class="admin-link-button" data-quick-decision="rejected" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Odrzuć</button>
-                                <button type="button" class="admin-link-button" data-quick-decision="correction" data-action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" data-submission-id="{{ submission.submission_id }}">Wyślij do poprawy</button>
+                                {% if can_return_for_correction %}<button type="button" class="admin-link-button" data-quick-decision="correction" data-action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" data-submission-id="{{ submission.submission_id }}">Wyślij do poprawy</button>{% endif %}
                             {% endif %}
                             {% if submission.process_status in ['DECLARATION_READY', 'DECLARATION_WAITING_FOR_SIGNATURE'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wygeneruj deklarację</a>{% endif %}
                             {% if submission.process_status in ['DECLARATION_SIGNED', 'DECLARATION_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź podpis</a>{% endif %}
                             {% if submission.process_status == 'TRAINING_SELECTION_OPEN' %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wybierz szkolenia</a>{% endif %}
                             {% if submission.process_status in ['AGREEMENT_READY', 'AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wygeneruj umowę</a>{% endif %}
                             {% if submission.process_status in ['AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE', 'AGREEMENT_SIGNED_BY_OFFICE', 'AGREEMENT_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź umowę podpisaną przez urząd</a>{% endif %}
-                            {% if not read_only %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
+                            {% if can_send_email %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#correspondence">Pokaż korespondencję</a>
                             </div>
                         </div>
@@ -185,7 +187,7 @@
             {% endfor %}</tbody>
         </table>
     </div>
-    {% if not read_only %}<div class="admin-bulk-actions admin-bulk-actions-bottom">
+    {% if can_make_decision %}<div class="admin-bulk-actions admin-bulk-actions-bottom">
         <span></span>
         <button class="admin-button" type="submit">Zapisz decyzje</button>
     </div>{% endif %}
@@ -197,7 +199,7 @@
         {% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}
     </div>
 </nav>
-{% if not read_only %}
+{% if can_make_decision or can_return_for_correction %}
 <dialog class="admin-modal admin-modal-backdrop" id="quick-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-decision-title" data-admin-modal>
     <form method="post" class="admin-modal__surface admin-form" id="quick-decision-form">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">

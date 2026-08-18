@@ -51,29 +51,59 @@ class DeclarationVariableCatalog:
         include_criteria_technical: bool = True,
     ) -> list[dict[str, Any]]:
         fields = tuple(fields)
+
+        definition_fields = tuple(
+            (form_definition or {}).get("fields") or ()
+        )
+
+        catalog_fields = definition_fields or fields
+
         variables = [
             dict(item)
-            for item in AgreementVariableCatalog.variables(fields)
+            for item in AgreementVariableCatalog.variables(catalog_fields)
             if item["category"] not in _EXCLUDED_CATEGORIES
         ]
-        by_name = {item["name"]: item for item in variables}
+
+        by_name = {
+            item["name"]: item
+            for item in variables
+        }
+
         for item in _DECLARATION_VARIABLES:
-            by_name[item["name"]] = {**item, "placeholder": "{{ " + item["name"] + " }}"}
-        for field in fields:
+            by_name[item["name"]] = {
+                **item,
+                "placeholder": "{{ " + item["name"] + " }}",
+            }
+
+        for field in catalog_fields:
             name = _field_value(field, "name")
+
             if not name:
                 continue
+
             label = _field_value(field, "label") or name
-            field_type = (_field_value(field, "field_type") or _field_value(field, "type")).casefold()
+
+            field_type = (
+                _field_value(field, "field_type")
+                or _field_value(field, "type")
+            ).casefold()
+
+            if field_type == "repeatable_group":
+                continue
+
             by_name[f"{name}_display"] = {
                 "category": "Pola formularza",
                 "name": f"{name}_display",
                 "label": f"{label} — wartość do dokumentu",
                 "type": "text",
                 "example": _field_example(by_name.get(name)),
-                "description": "Czytelna wartość pola; listy są łączone, a pola logiczne mają wartość Tak/Nie.",
+                "description": (
+                    "Czytelna wartość pola; listy są łączone, "
+                    "a pola logiczne mają wartość Tak/Nie."
+                ),
                 "placeholder": "{{ " + name + "_display }}",
             }
+
             if field_type in {"checkbox", "boolean", "bool"}:
                 by_name[f"{name}_yes_no"] = {
                     "category": "Pola formularza",
@@ -81,32 +111,56 @@ class DeclarationVariableCatalog:
                     "label": f"{label} — Tak/Nie",
                     "type": "text",
                     "example": "Tak",
-                    "description": "Jednoznaczna reprezentacja logiczna Tak/Nie.",
+                    "description": (
+                        "Jednoznaczna reprezentacja logiczna Tak/Nie."
+                    ),
                     "placeholder": "{{ " + name + "_yes_no }}",
                 }
+
         if include_criteria_technical:
-            for criterion in declaration_criteria_catalog(form_definition, fields):
+            for criterion in declaration_criteria_catalog(
+                form_definition,
+                fields,
+            ):
                 prefix = criterion["variable_prefix"]
+
                 technical = (
                     ("label", "Etykieta", criterion["label"]),
-                    ("answer", "Odpowiedź", criterion.get("example") or "Przykładowa odpowiedź"),
+                    (
+                        "answer",
+                        "Odpowiedź",
+                        criterion.get("example")
+                        or "Przykładowa odpowiedź",
+                    ),
                     ("yes_checked", "Znacznik TAK", "X"),
                     ("no_checked", "Znacznik NIE", ""),
                     ("other_enabled", "Kolumna innej odpowiedzi", ""),
                     ("other_checked", "Znacznik innej odpowiedzi", ""),
                     ("other_label", "Inna odpowiedź", ""),
                 )
+
                 for suffix, label_suffix, example in technical:
-                    name = f"{prefix}_{suffix}"
-                    by_name[name] = {
-                        "category": "Kryteria kwalifikacyjne — techniczne",
-                        "name": name,
-                        "label": f"{criterion['label']} — {label_suffix}",
+                    variable_name = f"{prefix}_{suffix}"
+
+                    by_name[variable_name] = {
+                        "category": (
+                            "Kryteria kwalifikacyjne — techniczne"
+                        ),
+                        "name": variable_name,
+                        "label": (
+                            f"{criterion['label']} — {label_suffix}"
+                        ),
                         "type": "text",
                         "example": example,
-                        "description": "Techniczna zmienna tabeli kryteriów do szablonów DOCX i HTML.",
-                        "placeholder": "{{ " + name + " }}",
+                        "description": (
+                            "Techniczna zmienna tabeli kryteriów "
+                            "do szablonów DOCX i HTML."
+                        ),
+                        "placeholder": (
+                            "{{ " + variable_name + " }}"
+                        ),
                     }
+
         return list(by_name.values())
 
     @classmethod
@@ -277,9 +331,15 @@ def declaration_preview_context(
     submission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     fields = tuple(fields)
+    preview_fields = tuple(
+            (form_definition or {}).get("fields") or fields
+        )
     sample = {
         item["name"]: item.get("example", "")
-        for item in DeclarationVariableCatalog.variables(fields, form_definition=form_definition)
+        for item in DeclarationVariableCatalog.variables(
+            preview_fields,
+            form_definition=form_definition
+        )
     }
     for criterion in declaration_criteria_catalog(form_definition, fields):
         sample[criterion["field_key"]] = criterion.get("example", "")
@@ -301,11 +361,115 @@ def declaration_preview_context(
         "declaration_filename": "Jan_Kowalski-deklaracja.pdf",
         "form_definition": dict(form_definition or {}),
     })
+    
     if submission is not None:
         sample.update(_flatten_values(submission))
-    sample["submission"] = dict(sample)
-    return build_declaration_render_context(sample, form_definition=form_definition, fields=fields)
+    for field in preview_fields:
+        field_type = (
+            _field_value(field, "field_type")
+            or _field_value(field, "type")
+        ).casefold()
 
+        if field_type != "repeatable_group":
+            continue
+
+        group_name = _field_value(field, "name")
+
+        if not group_name:
+            continue
+
+        # Jeżeli rzeczywiste zgłoszenie zawiera rekordy grupy,
+        # pozostawiamy je bez zmian.
+        current_value = sample.get(group_name)
+
+        if isinstance(current_value, str):
+            try:
+                import json
+                parsed_value = json.loads(current_value)
+            except (TypeError, ValueError):
+                parsed_value = []
+        else:
+            parsed_value = current_value
+
+        if isinstance(parsed_value, list) and parsed_value:
+            continue
+
+        # Pola zagnieżdżone mogą znajdować się bezpośrednio
+        # w definicji albo w config/config_json.
+        child_fields = _field_raw(field, "fields")
+
+        if not child_fields:
+            config = _field_raw(field, "config")
+
+            if not isinstance(config, Mapping):
+                config = _field_raw(field, "config_json")
+
+            if isinstance(config, Mapping):
+                child_fields = config.get("fields")
+
+        if not isinstance(child_fields, (list, tuple)):
+            child_fields = []
+
+        record_1 = {"id": "preview-repeatable-1"}
+        record_2 = {"id": "preview-repeatable-2"}
+
+        for child in child_fields:
+            if not isinstance(child, Mapping):
+                continue
+
+            child_name = str(child.get("name") or "").strip()
+
+            if not child_name:
+                continue
+
+            child_label = str(
+                child.get("label")
+                or child_name
+            ).strip()
+
+            child_type = str(
+                child.get("type")
+                or child.get("field_type")
+                or "text"
+            ).casefold()
+
+            if child_type == "date":
+                value_1 = "18.08.2026"
+                value_2 = "19.08.2026"
+
+            elif child_type == "time":
+                value_1 = "08:30"
+                value_2 = "10:15"
+
+            elif child_type == "email":
+                value_1 = "jan.kowalski@example.org"
+                value_2 = "anna.nowak@example.org"
+
+            elif child_type == "number":
+                value_1 = "1"
+                value_2 = "2"
+
+            elif child_type == "checkbox":
+                value_1 = ["Opcja 1"]
+                value_2 = ["Opcja 2"]
+
+            else:
+                value_1 = f"{child_label} 1"
+                value_2 = f"{child_label} 2"
+
+            record_1[child_name] = value_1
+            record_2[child_name] = value_2
+
+        sample[group_name] = [
+            record_1,
+            record_2,
+    ]
+    sample["submission"] = dict(sample)
+    return build_declaration_render_context(
+        sample,
+        form_definition=form_definition,
+        fields=preview_fields,
+    )
 
 def _display_value(value: Any, field_type: str) -> str:
     normalized_type = field_type.strip().casefold()

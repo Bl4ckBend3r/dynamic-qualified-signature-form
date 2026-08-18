@@ -15,10 +15,12 @@ from models import (
     BusinessCalendar,
     BusinessCalendarHoliday,
     Form,
+    FormPermission,
     FormSubmission,
     FormVersion,
     SubmissionDeadlineNotification,
     SubmissionStepDeadline,
+    User,
 )
 from services.workflow_sla_service import WorkflowSlaService, add_duration
 
@@ -165,6 +167,39 @@ def test_completed_deadline_never_dispatches():
         result = service.process_due(db, now=NOW + timedelta(hours=1))
         assert result["examined"] == 0
         assert dispatcher.calls == []
+
+
+def test_office_recipient_falls_back_when_assigned_officer_loses_access():
+    engine = _engine()
+    service = WorkflowSlaService()
+    with Session(engine) as db:
+        submission, workflow = _seed(db, actor_type="office")
+        assigned = User(
+            email="inactive-officer@example.org", password_hash="x",
+            role="form_manager", is_active=False,
+        )
+        manager = User(email="workflow-manager@example.org", password_hash="x", role="admin")
+        db.add_all([assigned, manager])
+        db.flush()
+        db.add_all([
+            FormPermission(
+                user_id=assigned.id, form_id=submission.form_version.form_id,
+                can_manage=False, can_review=True,
+            ),
+            FormPermission(
+                user_id=manager.id, form_id=submission.form_version.form_id,
+                can_manage=True, can_review=False,
+            ),
+        ])
+        submission.assigned_to_user_id = assigned.id
+        db.flush()
+        deadline = service.enter_step(
+            db, submission, "correction", form_config={"workflow": workflow}, now=NOW
+        )
+
+        assert service._recipients(db, deadline, ["office"]) == [
+            (manager.email, manager.id)
+        ]
 
 
 def test_two_parallel_jobs_cannot_claim_same_delivery(tmp_path):

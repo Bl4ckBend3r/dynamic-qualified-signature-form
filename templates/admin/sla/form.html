@@ -1,8 +1,10 @@
 {% extends "admin/base.html" %}
 {% block title %}SLA formularza{% endblock %}
 {% block content %}
-<div class="admin-page-title"><div><p class="admin-eyebrow">{{ form.name }}</p><h1>Terminy, przypomnienia i SLA</h1><p>Zmiany dotyczą roboczej konfiguracji. Po publikacji wersji nowe wejścia użyją nowej reguły; istniejące terminy zachowają snapshot.</p></div><a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Wróć do formularza</a></div>
+<div class="admin-page-title"><div><p class="admin-eyebrow">{{ form.name }}</p><h1>Terminy, przypomnienia i SLA</h1><p>Zmiany dotyczą roboczej konfiguracji. Po publikacji wersji nowe wejścia użyją nowej reguły; istniejące terminy zachowają snapshot.</p></div><a class="admin-button-secondary" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Wróć do zgłoszeń</a></div>
+{% if not can_edit_workflow %}<div class="admin-alert admin-alert-info">Konfiguracja jest dostępna tylko do odczytu. Edycja wymaga uprawnienia do workflow.</div>{% endif %}
 <form method="post" class="admin-form"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+<fieldset {% if not can_edit_workflow %}disabled{% endif %}>
 {% for step in workflow.steps %}{% set sla = step.sla if step.sla is mapping else {} %}{% set deadline = sla.deadline if sla.deadline is mapping else {} %}
 <section class="admin-card admin-section"><h2>{{ step.admin_label }}</h2><p><code>{{ step.id }}</code></p><div class="admin-form-grid">
 <label><span>Wartość terminu (puste = brak SLA)</span><input type="number" min="0" name="deadline_value__{{ step.id }}" value="{{ deadline.value if deadline else '' }}"></label>
@@ -10,6 +12,7 @@
 <label><span>Odpowiedzialność</span><select name="actor_type__{{ step.id }}"><option value="office" {% if sla.actor_type != 'participant' %}selected{% endif %}>Urząd</option><option value="participant" {% if sla.actor_type == 'participant' %}selected{% endif %}>Uczestnik</option></select></label>
 <label><span>Kalendarz</span><select name="calendar__{{ step.id }}"><option value="">Poniedziałek–piątek, bez świąt</option>{% for calendar in calendars %}<option value="{{ calendar.id }}" {% if sla.business_calendar_id == calendar.id %}selected{% endif %}>{{ calendar.name }}</option>{% endfor %}</select></label></div>
 <label><span>Przypomnienia JSON</span><textarea name="reminders__{{ step.id }}" rows="5">{{ (sla.reminders or [])|tojson(indent=2) }}</textarea><small>Przykład: [{"offset":-1,"unit":"calendar_days","recipients":["participant"]}]</small></label>
-<label><span>Eskalacja JSON</span><textarea name="escalation__{{ step.id }}" rows="4">{{ (sla.escalation or {})|tojson(indent=2) }}</textarea><small>Przykład: {"offset":2,"unit":"business_days","recipients":["form_managers"]}</small></label></section>{% endfor %}
-<button class="admin-button" type="submit">Zapisz SLA</button></form>
+    <label><span>Eskalacja JSON</span><textarea name="escalation__{{ step.id }}" rows="4">{{ (sla.escalation or {})|tojson(indent=2) }}</textarea><small>Przykład: {"offset":2,"unit":"business_days","recipients":["form_managers"]}</small></label></section>{% endfor %}
+</fieldset>
+{% if can_edit_workflow %}<button class="admin-button" type="submit">Zapisz SLA</button>{% endif %}</form>
 {% endblock %}

@@ -229,6 +229,15 @@ TECHNICAL_FIELDS = {
     "updated_at",
 }
 
+BUILTIN_SENSITIVE_FIELDS = {
+    "imiona", "nazwisko", "obywatelstwo", "wyksztalcenie",
+    "pesel", "data_urodzenia", "miejsce_urodzenia", "plec", "wiek",
+    "telefon", "email", "wojewodztwo", "powiat", "gmina", "miejscowosc",
+    "ulica", "nr_budynku", "nr_lokalu", "kod_pocztowy",
+    "osoba_niepelnosprawna", "specjalne_potrzeby", "specjalne_potrzeby_opis",
+    "mniejszosc_narodowa", "osoba_bezdomna", "niekorzystna_sytuacja",
+}
+
 
 DEFAULT_LABELS = {
     "submission_id": "ID zgloszenia",
@@ -246,10 +255,18 @@ def build_submission_detail_sections(
     form: Form,
     submission: FormSubmission,
     form_config: dict | None = None,
+    *,
+    include_sensitive: bool = True,
 ) -> dict:
     form_config = normalize_admin_form_definition(form_config if form_config is not None else form.definition_json or {})
     labels = build_field_labels(form_config)
     options_by_field = build_field_options(form_config)
+    classified_fields = {
+        str(field.get("name") or field.get("key") or "")
+        for field in form_config.get("fields", []) if isinstance(field, dict)
+        and str(field.get("data_classification") or field.get("sensitivity") or "normal") != "normal"
+    }
+    sensitive_fields = BUILTIN_SENSITIVE_FIELDS | classified_fields
     row = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
     row.update(submission.data_json or {})
     used_fields: set[str] = set()
@@ -260,7 +277,7 @@ def build_submission_detail_sections(
             value = row.get(field_name)
             if is_empty_admin_value(value):
                 continue
-            display_value = option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value)
+            display_value = "Dane ukryte — brak uprawnienia" if not include_sensitive and field_name in sensitive_fields else (option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value))
             items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": display_value})
             used_fields.add(field_name)
         if items:
@@ -270,7 +287,7 @@ def build_submission_detail_sections(
     for key, value in (submission.data_json or {}).items():
         if str(key).startswith("_") or key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
             continue
-        display_value = option_label_for_value(options_by_field.get(key), value) if key in options_by_field else format_admin_value(value)
+        display_value = "Dane ukryte — brak uprawnienia" if not include_sensitive and key in sensitive_fields else (option_label_for_value(options_by_field.get(key), value) if key in options_by_field else format_admin_value(value))
         dynamic_items.append({"label": labels.get(key, key), "value": display_value})
         used_fields.add(key)
     if dynamic_items:
@@ -279,13 +296,13 @@ def build_submission_detail_sections(
     technical_items = [
         {"label": key, "value": format_admin_value(value)}
         for key, value in row.items()
-        if key in TECHNICAL_FIELDS and not is_empty_admin_value(value)
+        if key in TECHNICAL_FIELDS and key not in {"access_token", "data_json"} and not is_empty_admin_value(value)
     ]
     return {
         "sections": sections,
         "trainings": parse_training_snapshots(submission.selected_trainings),
         "technical_items": technical_items,
-        "qualification": build_qualification_detail(submission.data_json or {}, form_config),
+        "qualification": build_qualification_detail(submission.data_json or {}, form_config) if include_sensitive else None,
     }
 
 

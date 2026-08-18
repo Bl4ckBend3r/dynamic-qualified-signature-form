@@ -13,7 +13,7 @@
     <div class="mail-composer__workspace">
         <div class="mail-composer__main">
             <div class="admin-form-grid">
-                <label><span>Adresat</span><input name="to_email" value="{{ submission.email }}" required></label>
+                {% if can_view_sensitive_data %}<label><span>Adresat</span><input name="to_email" value="{{ submission.email }}" required></label>{% else %}<label><span>Adresat</span><input value="Dane ukryte — wiadomość zostanie wysłana na adres ze zgłoszenia" disabled><input type="hidden" name="to_email" value=""></label>{% endif %}
                 <label>
                     <span>Szablon</span>
                     <select name="template_id">

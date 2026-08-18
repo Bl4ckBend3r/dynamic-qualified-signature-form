@@ -13,25 +13,29 @@
     <div class="admin-form-grid">
         <label><span>E-mail</span><input type="email" name="email" value="{{ user.email }}" required></label>
         <label><span>Haslo {% if user.id %}(wypelnij tylko przy zmianie){% endif %}</span><input type="password" name="password"></label>
-        <label><span>Rola</span><select name="role">{% for role in roles %}<option value="{{ role }}" {% if user.role == role %}selected{% endif %}>{{ role }}</option>{% endfor %}</select></label>
+        <label><span>Typ konta (zgodność)</span><select name="role">{% for role in roles %}<option value="{{ role }}" {% if user.role == role %}selected{% endif %}>{{ role }}</option>{% endfor %}</select></label>
         <label class="admin-check"><input type="checkbox" name="is_active" {% if user.is_active or not user.id %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_blocked" {% if user.is_blocked %}checked{% endif %}><span>Zablokowany</span></label>
+    </div>
+    <div class="admin-section">
+        <h2>Role globalne</h2>
+        <p class="admin-muted">Role globalne nie nadają automatycznie dostępu do spraw konkretnych formularzy.</p>
+        <div class="admin-check-grid">
+            {% for access_role in global_roles %}
+                <label class="admin-check"><input type="checkbox" name="global_role_ids" value="{{ access_role.id }}" {% if access_role.id in assigned_global_role_ids %}checked{% endif %}><span>{{ access_role.name }}</span></label>
+            {% else %}<p>Brak aktywnych ról globalnych.</p>{% endfor %}
+        </div>
     </div>
     <div class="admin-section">
         <h2>Dostep do formularzy</h2>
         <div class="admin-check-grid">
             {% for form in forms %}
-                {% set permission = permission_settings.get(form.id) %}
+                {% set selected_roles = assigned_role_ids.get(form.id, []) %}
                 <div class="admin-card">
-                    <label class="admin-check"><input type="checkbox" name="form_ids" value="{{ form.id }}" {% if form.id in assigned_form_ids %}checked{% endif %}><span>{{ form.name }} — dostęp</span></label>
-                    <label class="admin-check"><input type="checkbox" name="review_form_ids" value="{{ form.id }}" {% if not permission or permission.can_review %}checked{% endif %}><span>Może prowadzić i opiniować sprawy</span></label>
-                    <label class="admin-check"><input type="checkbox" name="decision_form_ids" value="{{ form.id }}" {% if not permission or permission.can_make_decision %}checked{% endif %}><span>Może podejmować decyzje</span></label>
-                    <label class="admin-check"><input type="checkbox" name="sensitive_form_ids" value="{{ form.id }}" {% if not permission or permission.can_view_sensitive_data %}checked{% endif %}><span>Może widzieć dane wrażliwe</span></label>
-                    <label class="admin-check"><input type="checkbox" name="assign_form_ids" value="{{ form.id }}" {% if permission and permission.can_assign_submissions %}checked{% endif %}><span>Może przydzielać sprawy</span></label>
-                    <label class="admin-check"><input type="checkbox" name="manage_form_ids" value="{{ form.id }}" {% if permission and permission.can_manage %}checked{% endif %}><span>Może zarządzać formularzem</span></label>
-                    <label class="admin-check"><input type="checkbox" name="view_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_view_internal_notes %}checked{% endif %}><span>Może widzieć notatki wewnętrzne</span></label>
-                    <label class="admin-check"><input type="checkbox" name="add_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_add_internal_notes %}checked{% endif %}><span>Może dodawać notatki wewnętrzne</span></label>
-                    <label class="admin-check"><input type="checkbox" name="manage_note_form_ids" value="{{ form.id }}" {% if permission and permission.can_manage_internal_notes %}checked{% endif %}><span>Może poprawiać i archiwizować notatki</span></label>
+                    <h3>{{ form.name }}</h3>
+                    {% for access_role in form_roles %}
+                        <label class="admin-check"><input type="checkbox" name="form_role_ids_{{ form.id }}" value="{{ access_role.id }}" {% if access_role.id in selected_roles %}checked{% endif %}><span>{{ access_role.name }}</span></label>
+                    {% endfor %}
                 </div>
             {% else %}
                 <p>Brak formularzy do przypisania.</p>

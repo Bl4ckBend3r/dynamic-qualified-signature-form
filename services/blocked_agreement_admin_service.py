@@ -84,9 +84,10 @@ class BlockedAgreementAdminService:
         reason: str,
         actor,
         email_requested: bool = False,
+        authorized: bool = False,
     ) -> BlockedAgreementActionResult:
         actor_role = self._actor_role(actor)
-        if actor_role not in BLOCKED_AGREEMENT_ROLES:
+        if not authorized and actor_role not in BLOCKED_AGREEMENT_ROLES:
             raise PermissionError("Brak uprawnień do zakończenia procesu jako odrzuconego.")
         normalized_reason = self._required_reason(reason, "Podaj powód ostatecznego odrzucenia.")
         self._require_blocked(submission)

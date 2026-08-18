@@ -1,7 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}Zgloszenie{% endblock %}
 {% block content %}
-{% if g.admin_user.role == "form_manager" %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać dane i dokumenty zgłoszenia, ale nie możesz zmieniać decyzji ani wysyłać wiadomości.</div>{% endif %}
+{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 <h1>Zgloszenie {{ submission.submission_id }}</h1>
 <p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
 <section class="admin-card admin-section" id="assignment">
@@ -94,15 +94,15 @@
     </dl>
     {% if blocked_agreement_view.can_manage %}
     <div class="admin-actions">
-        <button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>
-        {% if rollback_options %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
+        {% if can_return_for_correction %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
+        {% if can_edit_workflow and rollback_options %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
         {% if blocked_agreement_view.can_unblock %}<button class="admin-button" type="button" data-admin-modal-target="unblock-agreement-dialog">Odblokuj umowę</button>{% endif %}
         {% if blocked_agreement_view.can_reject_final %}<button class="admin-button-danger" type="button" data-admin-modal-target="reject-final-dialog">Zakończ jako odrzucone</button>{% endif %}
     </div>
     {% endif %}
 </section>
 {% endif %}
-{% if g.admin_user.role in ["admin", "super_admin"] and rollback_options %}
+{% if can_edit_workflow and rollback_options %}
     {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
     <dialog class="admin-modal admin-modal-backdrop" id="rollback-stage-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-stage-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
@@ -130,7 +130,7 @@
         </form>
     </dialog>
 {% endif %}
-{% if not read_only and g.admin_user.role in ["admin", "super_admin"] and submission.process_status != "RETURNED_FOR_CORRECTION" %}
+{% if can_return_for_correction and submission.process_status != "RETURNED_FOR_CORRECTION" %}
     {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
     <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
@@ -244,7 +244,7 @@
                 <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
             </dl>
 
-            {% if section.key == "application" and workflow_view.can_edit_application_decision and can_make_decision and g.admin_user.role in ["admin", "super_admin"] %}
+            {% if section.key == "application" and workflow_view.can_edit_application_decision and can_make_decision %}
                 <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="next" value="{{ request.path }}">
@@ -263,7 +263,7 @@
                 </form>
             {% endif %}
 
-            {% if section.key == "agreement" and workflow_view.can_review_agreement and g.admin_user.role in ["admin", "super_admin"] %}
+            {% if section.key == "agreement" and workflow_view.can_review_agreement and can_manage_documents %}
                 <section class="admin-alert admin-alert-info">
                     <h4>Umowa podpisana przez urząd</h4>
                     <p><strong>Folder podpisanych umów przez urząd:</strong> {{ office_signed_agreement_view.folder }}/</p>
@@ -298,7 +298,7 @@
         </section>
     {% endfor %}
 </div>
-{% if g.admin_user.role in ["admin", "super_admin"] %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></div>{% endif %}
+{% if can_send_email %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></div>{% endif %}
 {% if detail_view.qualification %}
 <section class="admin-card">
     <h2>Warunki kwalifikujące</h2>
@@ -368,7 +368,7 @@
             <td>{{ attachment.status }}<br><small>AV: {{ attachment.antivirus_status }}</small>{% if attachment.rejection_reason %}<br><small>{{ attachment.rejection_reason }}</small>{% endif %}</td>
             <td>
                 <a href="{{ url_for('admin.participant_attachment_download', form_id=form.id, submission_pk=submission.id, file_id=attachment.id) }}">Pobierz</a>
-                {% if not read_only and attachment.status not in ['superseded', 'archived'] %}
+                {% if can_manage_documents and attachment.status not in ['superseded', 'archived'] %}
                 <form method="post" action="{{ url_for('admin.participant_attachment_status', form_id=form.id, submission_pk=submission.id, file_id=attachment.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <button class="admin-link-button" name="attachment_status" value="valid" type="submit">Oznacz poprawny</button>
@@ -426,7 +426,7 @@
                     <td>{{ training.locked_at.strftime("%Y-%m-%d %H:%M") if training.locked_at else "-" }}</td>
                     <td>{% if training.agreement_url %}<a href="{{ training.agreement_url }}">Umowa wygenerowana</a>{% endif %}{% if training.signed_agreement_url %} · <a href="{{ training.signed_agreement_url }}">Podpisana przez beneficjenta</a>{% endif %}{% if training.office_signed_agreement_url %} · <a href="{{ training.office_signed_agreement_url }}">Finalna podpisana przez urząd</a>{% endif %}{% if not training.agreement_url and not training.signed_agreement_url and not training.office_signed_agreement_url %}-{% endif %}</td>
                     <td>
-                        {% if training.signed_agreement_uploaded and not training.office_signed_agreement_filename and not read_only %}
+                        {% if training.signed_agreement_uploaded and not training.office_signed_agreement_filename and can_sign_office_agreement %}
                             <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <input type="hidden" name="training_key" value="{{ training.agreement_id or training.id }}">
@@ -448,7 +448,7 @@
             {% endfor %}
         </tbody>
     </table></div>
-    {% if participant_trainings | selectattr("office_signed_agreement_filename") | list %}
+    {% if can_send_email and participant_trainings | selectattr("office_signed_agreement_filename") | list %}
         <form method="post" action="{{ url_for('admin.send_office_signed_agreements', form_id=form.id, submission_pk=submission.id) }}" class="admin-actions">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
             <button class="admin-button-secondary" type="submit">Wyślij podpisane umowy do uczestnika</button>

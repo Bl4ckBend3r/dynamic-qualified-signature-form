@@ -37,3 +37,24 @@ def test_internal_note_migration_schema_and_permission_backfill(tmp_path):
         assert row["can_view_internal_notes"] is True
         assert row["can_add_internal_notes"] is True
         assert row["can_manage_internal_notes"] is False
+
+
+def test_repair_migration_adds_missing_revision_importance_columns(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'notes-repair.db'}"
+    engine = create_engine(database_url)
+    metadata = MetaData()
+    Table(
+        "submission_internal_note_revisions", metadata,
+        Column("id", Integer, primary_key=True),
+    )
+    metadata.create_all(engine)
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.stamp(config, "20260818_0041")
+    command.upgrade(config, "head")
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("submission_internal_note_revisions")
+    }
+    assert {"previous_is_important", "new_is_important"} <= columns

@@ -756,6 +756,10 @@ def sync_form_fields(db, form: Form, form_definition: dict) -> None:
         form_field.required = bool(field.get("required"))
         form_field.options = field.get("options") or []
         form_field.default_value = str(field.get("default", ""))
+        classification = str(field.get("data_classification") or field.get("sensitivity") or "normal").strip()
+        if classification not in {"normal", "personal", "sensitive"}:
+            raise ValueError(f"Pole {name} ma nieprawidłową klasyfikację danych.")
+        form_field.data_classification = classification
         form_field.section = current_section
         normalized_field = FieldAvailabilityService().normalize_field(field, form_definition)
         form_field.availability_json = normalized_field.get("availability") or []

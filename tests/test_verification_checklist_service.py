@@ -20,7 +20,8 @@ def checklist_db(tmp_path):
         form = Form(slug="manual-review", name="Manual review", definition_json={})
         officer = User(email="anna@example.test", password_hash="x", role="admin")
         no_review = User(email="viewer@example.test", password_hash="x", role="admin")
-        db.add_all([form, officer, no_review]); db.flush()
+        limited = User(email="limited@example.test", password_hash="x", role="admin")
+        db.add_all([form, officer, no_review, limited]); db.flush()
         version = FormVersion(
             form_id=form.id, version_major=1, version_minor=0, version_label="1.0", status="draft",
             definition_json={"fields": [{"name": "email"}], "workflow": {"steps": [{"id": "officer_review"}]}},
@@ -29,19 +30,25 @@ def checklist_db(tmp_path):
         db.add_all([
             FormPermission(user_id=officer.id, form_id=form.id, can_manage=False, can_review=True, can_make_decision=True, can_view_sensitive_data=True),
             FormPermission(user_id=no_review.id, form_id=form.id, can_manage=False, can_review=False, can_make_decision=False, can_view_sensitive_data=False),
+            FormPermission(user_id=limited.id, form_id=form.id, can_manage=False, can_review=True, can_make_decision=False, can_view_sensitive_data=False),
         ])
         service = VerificationChecklistService()
         checklist = service.create_checklist(db, version, name="Weryfikacja formalna", workflow_step="officer_review")
         blocking = service.add_item(db, checklist, key="signed", label="Dokument podpisany właściwie", blocking=True, required=True, document_required=True, allow_not_applicable=False)
         optional = service.add_item(db, checklist, key="match", label="Zgodność danych", blocking=False, required=True, document_required=False, allow_not_applicable=True, position=1)
+        sensitive = service.add_item(
+            db, checklist, key="health", label="Dane zdrowotne",
+            sensitive=True, required=False, position=2,
+        )
         version.status = "published"
         submission = FormSubmission(submission_id="public-1", form_slug=form.slug, form_name=form.name, form_version_id=version.id, workflow_step="officer_review")
         other = FormSubmission(submission_id="public-2", form_slug=form.slug, form_name=form.name, form_version_id=version.id, workflow_step="officer_review")
         db.add_all([submission, other]); db.flush()
         own_file = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id, form_slug=form.slug, filename="own.pdf", storage_path="x/own.pdf")
         foreign_file = SubmissionFile(submission_id=other.id, public_submission_id=other.submission_id, form_slug=form.slug, filename="foreign.pdf", storage_path="x/foreign.pdf")
-        db.add_all([own_file, foreign_file]); db.flush()
-        ids = {name: obj.id for name, obj in {"form": form, "officer": officer, "no_review": no_review, "version": version, "submission": submission, "other": other, "blocking": blocking, "optional": optional, "own_file": own_file, "foreign_file": foreign_file}.items()}
+        sensitive_file = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id, form_slug=form.slug, filename="health.pdf", storage_path="x/health.pdf", data_classification="sensitive")
+        db.add_all([own_file, foreign_file, sensitive_file]); db.flush()
+        ids = {name: obj.id for name, obj in {"form": form, "officer": officer, "no_review": no_review, "limited": limited, "version": version, "submission": submission, "other": other, "blocking": blocking, "optional": optional, "sensitive": sensitive, "own_file": own_file, "foreign_file": foreign_file, "sensitive_file": sensitive_file}.items()}
     yield Session, ids
     engine.dispose()
 
@@ -92,6 +99,26 @@ def test_clone_preserves_historical_definition(checklist_db):
         clone = service.list_for_version(db, target.id)[0]
         clone.items[0].label = "Nowa treść"
         assert service.list_for_version(db, source.id)[0].items[0].label == "Dokument podpisany właściwie"
+
+
+def test_sensitive_item_and_evidence_require_sensitive_permission(checklist_db):
+    Session, ids = checklist_db
+    service = VerificationChecklistService()
+    with Session.begin() as db:
+        submission = db.get(FormSubmission, ids["submission"])
+        limited = db.get(User, ids["limited"])
+        normal_item = db.get(VerificationChecklistItemDefinition, ids["blocking"])
+        sensitive_item = db.get(VerificationChecklistItemDefinition, ids["sensitive"])
+        with pytest.raises(VerificationChecklistPermissionError, match="chronionego dokumentu"):
+            service.save_result(
+                db, submission, normal_item, result="yes", comment="",
+                evidence_file_ids=[ids["sensitive_file"]], officer=limited,
+            )
+        with pytest.raises(VerificationChecklistPermissionError, match="wrażliwego kryterium"):
+            service.save_result(
+                db, submission, sensitive_item, result="yes", comment="",
+                evidence_file_ids=[], officer=limited,
+            )
 
 
 def test_published_definition_and_history_are_immutable(checklist_db):

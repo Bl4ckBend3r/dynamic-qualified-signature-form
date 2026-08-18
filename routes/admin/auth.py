@@ -53,6 +53,20 @@ def role_required(*roles: str):
     return decorator
 
 
+def permission_required(permission: str):
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            from services.permission_service import PermissionService
+            with db_session_factory()() as db:
+                user = db.get(User, g.admin_user.id) if g.admin_user else None
+                if not PermissionService().has_permission(db, user, permission):
+                    abort(403)
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
 def get_current_user() -> User | None:
     user_id = session.get("admin_user_id")
     if not user_id:
@@ -74,7 +88,17 @@ def load_current_user():
 
 @bp.app_context_processor
 def inject_admin_helpers():
-    return {"admin_csrf_token": csrf_token, "admin_is_active": admin_is_active}
+    def template_has_permission(permission: str, form=None, submission=None) -> bool:
+        from services.permission_service import PermissionService
+        with db_session_factory()() as db:
+            user = db.get(User, g.admin_user.id) if g.admin_user else None
+            return PermissionService().has_permission(db, user, permission, form=form, submission=submission)
+
+    return {
+        "admin_csrf_token": csrf_token,
+        "admin_is_active": admin_is_active,
+        "has_permission": template_has_permission,
+    }
 
 
 def admin_is_active(*endpoints: str) -> bool:

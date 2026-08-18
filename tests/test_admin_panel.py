@@ -19,11 +19,14 @@ from conftest import InMemoryStorage
 from config import Config
 from database import create_session_factory
 from models import (
+    AccessRole,
+    AccessRolePermission,
     ContactPage,
     EmailLog,
     Form,
     FormField,
     FormPermission,
+    FormUserRole,
     FormRegulation,
     FormSubmission,
     Logo,
@@ -31,14 +34,17 @@ from models import (
     MailTemplate,
     MailTemplateAsset,
     PlatformMailTemplate,
+    Permission,
     ServiceDocument,
     SubmissionDecision,
     SubmissionAssignmentHistory,
     SubmissionFile,
+    SubmissionInternalNote,
     SubmissionTraining,
     SubmissionWorkflowEvent,
     SystemMailSettings,
     User,
+    UserGlobalRole,
 )
 from services.admin_form_service import build_definition_from_html, sync_form_fields
 from form_loader import normalize_form_definition, validate_form_definition
@@ -120,13 +126,101 @@ def login(client, email="admin@example.com", password="secret"):
     return client.post("/admin/", data={"email": email, "password": password, "csrf_token": token})
 
 
+def grant_rbac(app, user_id, permission_keys, *, form_id=None, global_scope=False):
+    factory = create_session_factory(app.config["DATABASE_URL"])
+    with factory() as db:
+        scope = "global" if global_scope else "form"
+        role = AccessRole(key=f"test_{user_id}_{scope}_{'_'.join(permission_keys)}", name="Test role", scope=scope, is_active=True)
+        db.add(role)
+        db.flush()
+        for key in permission_keys:
+            permission = db.execute(select(Permission).where(Permission.key == key)).scalar_one_or_none()
+            if permission is None:
+                permission = Permission(key=key, name=key, scope=scope, category=scope, is_active=True)
+                db.add(permission)
+                db.flush()
+            db.add(AccessRolePermission(role_id=role.id, permission_id=permission.id))
+        db.flush()
+        if global_scope:
+            db.add(UserGlobalRole(user_id=user_id, role_id=role.id))
+        else:
+            db.add(FormUserRole(user_id=user_id, form_id=form_id, role_id=role.id))
+        db.commit()
+        return role.id
+
+
+def test_rbac_backend_separates_view_decision_and_mail(admin_app, admin_client):
+    user_id = create_user(admin_app, email="rbac@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="rbac_form")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add(FormField(form_id=form_id, name="email", label="E-mail", type="email", data_classification="personal"))
+        submission = FormSubmission(
+            submission_id="rbac-submission", form_slug="rbac_form",
+            process_status="WAITING_FOR_OFFICER_DECISION", email="participant@example.org",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="rbac@example.com")
+
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert detail.status_code == 200
+    assert b"participant@example.org" not in detail.data
+    variables = admin_client.get(f"/admin/submissions/{submission_pk}/mail-variables")
+    assert variables.status_code == 200
+    assert b"participant@example.org" not in variables.data
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").status_code == 403
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/export.csv").status_code == 403
+    assert admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": admin_csrf(admin_client), "officer_decision": "accepted"},
+    ).status_code == 403
+
+    grant_rbac(admin_app, user_id, ["can_send_email", "can_make_decision", "can_export_data"], form_id=form_id)
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").status_code == 200
+    export = admin_client.get(f"/admin/forms/{form_id}/submissions/export.csv")
+    assert export.status_code == 200
+    assert b"participant@example.org" not in export.data
+    assert admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={"csrf_token": admin_csrf(admin_client), "officer_decision": "accepted"},
+    ).status_code == 302
+
+
+def test_rbac_sensitive_attachment_download_requires_permission(admin_app, admin_client):
+    user_id = create_user(admin_app, email="files@example.com", role="form_manager")
+    form_id, owner_pk, _, file_id, _ = create_participant_attachment(admin_app)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.get(SubmissionFile, file_id).data_classification = "sensitive"
+        db.commit()
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="files@example.com")
+    url = f"/admin/forms/{form_id}/submissions/{owner_pk}/attachments/{file_id}/download"
+    assert admin_client.get(url).status_code == 403
+    grant_rbac(admin_app, user_id, ["can_view_sensitive_data"], form_id=form_id)
+    assert admin_client.get(url).status_code == 200
+
+
+def test_global_manage_users_role_is_enforced_by_backend(admin_app, admin_client):
+    user_id = create_user(admin_app, email="global-admin@example.com", role="form_manager")
+    grant_rbac(admin_app, user_id, ["can_manage_users"], global_scope=True)
+    login(admin_client, email="global-admin@example.com")
+    assert admin_client.get("/admin/users").status_code == 200
+
+
 def test_super_admin_assigns_submission_and_route_writes_audit(admin_app, admin_client):
     admin_id = create_user(admin_app)
     assignee_id = create_user(admin_app, email="officer@example.com", role="form_manager")
     form_id = create_form(admin_app)
     factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with factory() as db:
-        db.add(FormPermission(user_id=assignee_id, form_id=form_id, can_manage=False, can_review=True))
+        db.add(FormPermission(
+            user_id=assignee_id, form_id=form_id, can_manage=False,
+            can_review=True, can_assign_submissions=True,
+        ))
         submission = FormSubmission(submission_id="assigned-route", form_slug="sample_form")
         db.add(submission)
         db.commit()
@@ -172,6 +266,94 @@ def test_form_manager_without_assignment_permission_gets_403(admin_app, admin_cl
         },
     )
     assert response.status_code == 403
+    claim = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/claim",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    assert claim.status_code == 403
+
+
+def test_sla_is_read_only_without_workflow_permission_and_editable_with_it(admin_app, admin_client):
+    user_id = create_user(admin_app, email="sla-viewer@example.com", role="form_manager")
+    form_id = create_form(
+        admin_app,
+        slug="sla-rbac",
+        definition_json={
+            "workflow": {
+                "initial_step": "review",
+                "steps": [{"id": "review", "admin_label": "Weryfikacja"}],
+            }
+        },
+    )
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="sla-viewer@example.com")
+    url = f"/admin/forms/{form_id}/sla"
+
+    read_only = admin_client.get(url)
+    assert read_only.status_code == 200
+    assert "Zapisz SLA" not in read_only.get_data(as_text=True)
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 403
+
+    grant_rbac(admin_app, user_id, ["can_edit_workflow"], form_id=form_id)
+    editable = admin_client.get(url)
+    assert editable.status_code == 200
+    assert "Zapisz SLA" in editable.get_data(as_text=True)
+
+
+def test_submission_lists_and_dashboard_require_view_permission_per_form(admin_app, admin_client):
+    user_id = create_user(admin_app, email="scoped-dashboard@example.com", role="form_manager")
+    visible_id = create_form(admin_app, slug="visible-scope")
+    hidden_id = create_form(admin_app, slug="hidden-scope")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add_all([
+            FormSubmission(submission_id="VISIBLE-CASE", form_slug="visible-scope"),
+            FormSubmission(submission_id="HIDDEN-CASE", form_slug="hidden-scope"),
+        ])
+        db.commit()
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=visible_id)
+    grant_rbac(admin_app, user_id, ["can_edit_workflow"], form_id=hidden_id)
+    login(admin_client, email="scoped-dashboard@example.com")
+
+    listing = admin_client.get("/admin/submissions").get_data(as_text=True)
+    assert "VISIBLE-CASE" in listing
+    assert "HIDDEN-CASE" not in listing
+    dashboard = admin_client.get("/admin/dashboard").get_data(as_text=True)
+    assert "Nieprzydzielone</span><strong>1</strong>" in dashboard
+
+
+def test_internal_note_routes_enforce_dedicated_permissions(admin_app, admin_client):
+    user_id = create_user(admin_app, email="notes-rbac@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="notes-rbac")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(submission_id="NOTES-RBAC", form_slug="notes-rbac")
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="notes-rbac@example.com")
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/internal-notes"
+
+    denied = admin_client.post(
+        url,
+        data={"csrf_token": admin_csrf(admin_client), "content": "Poufna notatka"},
+    )
+    assert denied.status_code == 403
+
+    grant_rbac(
+        admin_app, user_id,
+        ["can_view_internal_notes", "can_add_internal_notes"],
+        form_id=form_id,
+    )
+    created = admin_client.post(
+        url,
+        data={"csrf_token": admin_csrf(admin_client), "content": "Poufna notatka"},
+    )
+    assert created.status_code == 302
+    with factory() as db:
+        note = db.execute(select(SubmissionInternalNote)).scalar_one()
+        assert note.author_user_id == user_id
 
 
 def create_participant_attachment(app):

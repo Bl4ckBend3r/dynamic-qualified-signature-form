@@ -9,12 +9,12 @@ from sqlalchemy import and_, case, func, or_, select
 from models import (
     Form,
     FormAssignmentState,
-    FormPermission,
     FormSubmission,
     SubmissionAssignmentHistory,
     SubmissionStepDeadline,
     User,
 )
+from services.permission_service import PermissionService
 
 
 PRIORITIES = ("low", "normal", "high", "urgent")
@@ -26,9 +26,6 @@ FINAL_STATUSES = (
     "COMPLETED", "CANCELLED", "OFFICER_REJECTED", "AUTO_REJECTED",
     "AGREEMENT_SIGNED_BY_OFFICE", "AGREEMENT_REJECTED_BY_OFFICE",
 )
-ADMIN_ROLES = ("super_admin", "admin", "form_manager")
-
-
 class SubmissionAssignmentError(ValueError):
     pass
 
@@ -40,27 +37,8 @@ class SubmissionAssignmentPermissionError(SubmissionAssignmentError):
 class SubmissionAssignmentService:
     """Owns assignment mutations, audit rows, queues and automatic routing."""
 
-    def _permission(self, db, user_id: int, form_id: int) -> FormPermission | None:
-        return db.execute(
-            select(FormPermission).where(
-                FormPermission.user_id == user_id,
-                FormPermission.form_id == form_id,
-            )
-        ).scalar_one_or_none()
-
     def can_assign(self, db, actor: User, form: Form) -> bool:
-        if actor.role == "super_admin":
-            return True
-        permission = self._permission(db, actor.id, form.id)
-        return bool(permission and permission.can_assign_submissions)
-
-    def can_review(self, db, user: User, form: Form) -> bool:
-        if not user.is_active or user.is_blocked or user.role not in ADMIN_ROLES:
-            return False
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user.id, form.id)
-        return bool(permission and permission.can_review)
+        return PermissionService().has_permission(db, actor, "can_assign_submissions", form=form)
 
     def eligible_users(
         self,
@@ -70,21 +48,12 @@ class SubmissionAssignmentService:
         configured_user_ids: Iterable[int] | None = None,
     ) -> list[User]:
         configured = {int(item) for item in (configured_user_ids or ()) if str(item).isdigit()}
-        permission_user_ids = select(FormPermission.user_id).where(
-            FormPermission.form_id == form.id,
-            FormPermission.can_review.is_(True),
-        )
-        query = select(User).where(
-            User.is_active.is_(True),
-            User.is_blocked.is_(False),
-            User.role.in_(ADMIN_ROLES),
-            or_(User.role == "super_admin", User.id.in_(permission_user_ids)),
-        )
+        users = PermissionService().users_with_permission(db, "can_assign_submissions", form)
         if configured:
-            query = query.where(User.id.in_(configured))
+            users = [user for user in users if user.id in configured]
         elif configured_user_ids is not None:
             return []
-        return db.execute(query.order_by(User.id)).scalars().all()
+        return sorted(users, key=lambda user: user.id)
 
     def assign(
         self,
@@ -108,7 +77,7 @@ class SubmissionAssignmentService:
         if previous_user_id == assignee_id:
             return None
         assignee = db.get(User, assignee_id) if assignee_id is not None else None
-        if assignee_id is not None and (assignee is None or not self.can_review(db, assignee, form)):
+        if assignee_id is not None and (assignee is None or not self.can_assign(db, assignee, form)):
             raise SubmissionAssignmentError("Wybrany użytkownik nie może prowadzić spraw tego formularza.")
         now = datetime.now(timezone.utc)
         history = SubmissionAssignmentHistory(
@@ -141,10 +110,8 @@ class SubmissionAssignmentService:
         submission.due_at = due_at
 
     def claim(self, db, submission: FormSubmission, form: Form, *, actor: User) -> SubmissionAssignmentHistory | None:
-        if not self.can_review(db, actor, form):
+        if not self.can_assign(db, actor, form):
             raise SubmissionAssignmentPermissionError("Brak uprawnienia do przejęcia sprawy.")
-        if submission.assigned_to_user_id not in (None, actor.id) and not self.can_assign(db, actor, form):
-            raise SubmissionAssignmentPermissionError("Sprawa ma już prowadzącego.")
         return self.assign(
             db, submission, form, assignee_id=actor.id, actor=actor,
             reason="Samodzielne przejęcie sprawy", source="manual", authorize=False,

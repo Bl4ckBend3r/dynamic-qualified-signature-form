@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 
 from models import (
     BusinessCalendar,
-    FormPermission,
     FormSubmission,
     MailTemplate,
     SubmissionDeadlineNotification,
@@ -18,6 +17,7 @@ from models import (
     User,
     WorkflowStepSlaDefinition,
 )
+from services.permission_service import PermissionService
 
 
 SUPPORTED_UNITS = {"hours", "calendar_days", "business_days"}
@@ -395,6 +395,7 @@ class WorkflowSlaService:
     def _recipients(self, db, deadline: SubmissionStepDeadline, specs: Any) -> list[tuple[str, int | None]]:
         submission = deadline.submission
         form_id = submission.form_version.form_id if submission.form_version else None
+        permission_service = PermissionService()
         result: dict[str, int | None] = {}
         for spec in self._recipient_specs(specs):
             kind = str(spec.get("type") if isinstance(spec, Mapping) else spec or "").strip()
@@ -402,22 +403,39 @@ class WorkflowSlaService:
             if kind.startswith("role:"):
                 role, kind = kind.split(":", 1)[1], "role"
             if kind == "office":
-                kind = "assigned_officer" if submission.assigned_to else "form_managers"
+                assigned = submission.assigned_to
+                kind = "assigned_officer" if (
+                    assigned
+                    and form_id is not None
+                    and permission_service.has_permission(
+                        db, assigned, "can_view_submissions", form=form_id
+                    )
+                ) else "form_managers"
             if kind == "participant" and submission.email:
                 result[submission.email.strip().casefold()] = None
             elif kind == "assigned_officer" and submission.assigned_to and submission.assigned_to.email:
-                result[submission.assigned_to.email.strip().casefold()] = submission.assigned_to.id
+                if form_id is not None and permission_service.has_permission(
+                    db, submission.assigned_to, "can_view_submissions", form=form_id
+                ):
+                    result[submission.assigned_to.email.strip().casefold()] = submission.assigned_to.id
             elif kind in {"form_managers", "role"} and form_id is not None:
-                query = select(User).where(User.is_active.is_(True), User.is_blocked.is_(False))
                 if kind == "form_managers":
-                    query = query.join(FormPermission).where(
-                        FormPermission.form_id == form_id, FormPermission.can_manage.is_(True)
-                    )
+                    users = [
+                        user for user in permission_service.users_with_permission(
+                            db, "can_edit_workflow", form_id
+                        )
+                        if permission_service.has_permission(
+                            db, user, "can_view_submissions", form=form_id
+                        )
+                    ]
                 else:
-                    query = query.where(User.role == role).outerjoin(FormPermission).where(
-                        or_(User.role == "super_admin", FormPermission.form_id == form_id)
-                    )
-                for user in db.execute(query).scalars().unique():
+                    users = [
+                        user for user in permission_service.users_with_form_role(db, role, form_id)
+                        if permission_service.has_permission(
+                            db, user, "can_view_submissions", form=form_id
+                        )
+                    ]
+                for user in users:
                     result[user.email.strip().casefold()] = user.id
         return [(email, user_id) for email, user_id in result.items() if email]
 

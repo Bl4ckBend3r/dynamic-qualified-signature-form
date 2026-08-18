@@ -1,33 +1,108 @@
-<aside class="form-builder__properties" data-properties-panel aria-label="Właściwości pola">
-    <div class="form-builder__properties-empty" data-properties-empty>
-        <h3>Właściwości pola</h3>
-        <p>Kliknij pole na formularzu, aby zmienić jego ustawienia.</p>
+<aside
+  class="form-builder__properties"
+  data-properties-panel
+  aria-label="Właściwości pola"
+>
+  <div class="form-builder__properties-empty" data-properties-empty>
+    <h3>Właściwości pola</h3>
+    <p>Kliknij pole na formularzu, aby zmienić jego ustawienia.</p>
+  </div>
+  <div data-properties-content hidden>
+    <div class="form-builder__properties-heading">
+      <h3>Właściwości pola</h3>
+      <button
+        type="button"
+        class="admin-link-button"
+        data-close-properties
+        aria-label="Zamknij właściwości"
+      >
+        ×
+      </button>
     </div>
-    <div data-properties-content hidden>
-        <div class="form-builder__properties-heading">
-            <h3>Właściwości pola</h3>
-            <button type="button" class="admin-link-button" data-close-properties aria-label="Zamknij właściwości">×</button>
-        </div>
-        <label><span>Etykieta</span><input data-property="label"></label>
-        <label><span>Nazwa pola</span><input data-property="name" spellcheck="false"></label>
-        <small data-name-help>Nazwy istniejącego pola nie można zmienić, aby nie zerwać powiązań z danymi.</small>
-        <label><span>Typ</span><select data-property="type"></select></label>
-        <fieldset class="form-builder__widths">
-            <legend>Szerokość</legend>
-            <div data-width-options></div>
-        </fieldset>
-        <label data-placeholder-setting><span>Placeholder</span><input data-property="placeholder"></label>
-        <label class="form-builder__checkbox"><input type="checkbox" data-property="required"> <span>Pole wymagane</span></label>
-        <label data-options-setting hidden><span>Opcje (jedna w wierszu)</span><textarea rows="6" data-property="options"></textarea></label>
-        <details class="form-builder__advanced">
-            <summary>Dodatkowe ustawienia</summary>
-            <label><span>Sekcja</span><input data-property="section" placeholder="np. Dane kandydata"></label>
-            <label><span>Etykieta w dokumentach</span><input data-property="document_label"></label>
-            <p>Dostępność w procesie i specjalistyczna konfiguracja pola są zachowywane bez zmian.</p>
-        </details>
-        <div class="form-builder__field-actions">
-            <button type="button" class="admin-button-secondary" data-duplicate-field>Duplikuj</button>
-            <button type="button" class="admin-link-button admin-danger-link" data-delete-field>Usuń pole</button>
-        </div>
+    <label><span>Etykieta</span><input data-property="label" /></label>
+    <label
+      ><span>Nazwa pola</span><input data-property="name" spellcheck="false"
+    /></label>
+    <small data-name-help
+      >Nazwy istniejącego pola nie można zmienić, aby nie zerwać powiązań z
+      danymi.</small
+    >
+    <label
+      ><span>Typ</span
+      ><select data-property="type"></select
+    ></label>
+    <fieldset class="form-builder__widths">
+      <legend>Szerokość</legend>
+      <div data-width-options></div>
+    </fieldset>
+    <label data-placeholder-setting
+      ><span>Placeholder</span><input data-property="placeholder"
+    /></label>
+    <label class="form-builder__checkbox"
+      ><input type="checkbox" data-property="required" />
+      <span>Pole wymagane</span></label
+    >
+    <label data-options-setting hidden
+      ><span>Opcje (jedna w wierszu)</span
+      ><textarea rows="6" data-property="options"></textarea>
+    </label>
+    <div data-repeatable-group-settings hidden>
+      <label>
+        <span>Minimalna liczba elementów</span>
+        <input type="number" min="0" data-property="min_items" />
+      </label>
+
+      <label>
+        <span>Maksymalna liczba elementów</span>
+        <input type="number" min="1" data-property="max_items" />
+      </label>
+
+      <label>
+        <span>Tekst przycisku dodawania</span>
+        <input data-property="add_label" placeholder="Dodaj" />
+      </label>
+
+      <label>
+        <span>Nazwa pojedynczego elementu</span>
+        <input data-property="item_label" placeholder="Element" />
+      </label>
+
+      <p>Pola wewnętrzne grupy zostaną skonfigurowane w kolejnym etapie.</p>
     </div>
+    <details class="form-builder__advanced">
+      <summary>Dodatkowe ustawienia</summary>
+      <label
+        ><span>Sekcja</span
+        ><input data-property="section" placeholder="np. Dane kandydata"
+      /></label>
+      <label
+        ><span>Klasyfikacja danych</span
+        ><select data-property="data_classification">
+          <option value="normal">Zwykłe</option>
+          <option value="personal">Osobowe</option>
+          <option value="sensitive">Wrażliwe</option>
+        </select></label
+      >
+      <label
+        ><span>Etykieta w dokumentach</span
+        ><input data-property="document_label"
+      /></label>
+      <p>
+        Dostępność w procesie i specjalistyczna konfiguracja pola są zachowywane
+        bez zmian.
+      </p>
+    </details>
+    <div class="form-builder__field-actions">
+      <button type="button" class="admin-button-secondary" data-duplicate-field>
+        Duplikuj
+      </button>
+      <button
+        type="button"
+        class="admin-link-button admin-danger-link"
+        data-delete-field
+      >
+        Usuń pole
+      </button>
+    </div>
+  </div>
 </aside>

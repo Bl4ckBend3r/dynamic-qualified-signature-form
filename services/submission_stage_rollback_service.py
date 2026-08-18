@@ -140,13 +140,16 @@ class SubmissionStageRollbackService:
         submission: FormSubmission,
         *,
         actor_role: str,
+        authorized: bool = False,
         form_config: Mapping[str, Any] | None = None,
     ) -> list[RollbackTarget]:
-        self._require_role(actor_role)
+        if not authorized:
+            self._require_role(actor_role)
+        effective_role = actor_role if actor_role in ALLOWED_ROLES else ROLE_ADMIN
         current_status = str(submission.process_status or "").strip()
         if not current_status:
             return []
-        if current_status in self._FINAL_STATUSES and actor_role != ROLE_SUPER_ADMIN:
+        if current_status in self._FINAL_STATUSES and effective_role != ROLE_SUPER_ADMIN:
             return []
 
         known_statuses = self._known_statuses(form_config)
@@ -164,7 +167,7 @@ class SubmissionStageRollbackService:
             and status not in self._INVALID_ROLLBACK_TARGETS
             and self._is_earlier(status, current_status, form_config)
         ]
-        if actor_role == ROLE_ADMIN:
+        if effective_role == ROLE_ADMIN:
             candidates = candidates[:1]
 
         return [
@@ -184,10 +187,12 @@ class SubmissionStageRollbackService:
         target_status: str,
         reason: str,
         actor,
+        authorized: bool = False,
         form_config: Mapping[str, Any] | None = None,
     ) -> RollbackResult:
         role = str(getattr(actor, "role", "") or "").strip()
-        self._require_role(role)
+        if not authorized:
+            self._require_role(role)
         reason = str(reason or "").strip()
         if not reason:
             raise StageRollbackError("Powód cofnięcia jest wymagany.")
@@ -199,6 +204,7 @@ class SubmissionStageRollbackService:
                 db,
                 submission,
                 actor_role=role,
+                authorized=authorized,
                 form_config=form_config,
             )
         }

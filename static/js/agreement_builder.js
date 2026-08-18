@@ -936,7 +936,10 @@
         '<option value="">Bez warunku</option>',
         ...variables
           .filter(
-            (item) => !["html", "collection", "criterion"].includes(item.type),
+            (item) =>
+              !["html", "collection", "criterion", "repeatable_group"].includes(
+                item.type,
+              ),
           )
           .map(
             (item) =>
@@ -946,14 +949,49 @@
       return `<details class="agreement-builder-block__condition"><summary>Warunek wyświetlania</summary><div><select data-builder-condition-variable data-index="${index}">${options}</select><select data-builder-condition-operator data-index="${index}"><option value="not_empty" ${condition.operator === "not_empty" ? "selected" : ""}>ma wartość</option><option value="empty" ${condition.operator === "empty" ? "selected" : ""}>jest puste</option><option value="equals" ${condition.operator === "equals" ? "selected" : ""}>równa się</option><option value="not_equals" ${condition.operator === "not_equals" ? "selected" : ""}>nie równa się</option></select><input data-builder-condition-value data-index="${index}" value="${escapeHtml(condition.value || "")}" placeholder="Wartość" ${["equals", "not_equals"].includes(condition.operator) ? "" : "hidden"}></div></details>`;
     }
 
-    function runsMarkup(holder) {
-      return normalizeRuns(holder?.runs, holder?.content || "")
-        .map(
-          (run, runIndex) =>
-            `<span class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}" data-builder-run="${runIndex}" data-bold="${run.bold}" data-italic="${run.italic}" data-underline="${run.underline}">${escapeHtml(run.text)}</span>`,
-        )
-        .join("");
-    }
+    function repeatableVariableForRun(text) {
+  const match = String(text || "").match(
+    /^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/
+  );
+
+  if (!match) return null;
+
+  return variables.find(
+    (item) =>
+      item.name === match[1] &&
+      item.type === "repeatable_group"
+  ) || null;
+}
+
+function runsMarkup(holder) {
+  return normalizeRuns(holder?.runs, holder?.content || "")
+    .map((run, runIndex) => {
+      const repeatableVariable =
+        repeatableVariableForRun(run.text);
+
+      const repeatableClass = repeatableVariable
+        ? " is-repeatable-variable"
+        : "";
+
+      const repeatableAttribute = repeatableVariable
+        ? ` data-repeatable-variable-label="${escapeHtml(
+            repeatableVariable.label
+          )}"`
+        : "";
+
+      return `
+        <span
+          class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}${repeatableClass}"
+          data-builder-run="${runIndex}"
+          data-bold="${run.bold}"
+          data-italic="${run.italic}"
+          data-underline="${run.underline}"
+          ${repeatableAttribute}
+        >${escapeHtml(run.text)}</span>
+      `;
+    })
+    .join("");
+}
 
     function editable(value, field, index, extra = "") {
       const rich =

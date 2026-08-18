@@ -1,751 +1,1571 @@
-{% extends "base.html" %}
+{% extends "base.html" %} {% block title %}{{ form_definition.title }}{%
+endblock %} {% block content %}
 
-{% block title %}{{ form_definition.title }}{% endblock %}
+<div class="back-link">
+  <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
+</div>
 
-{% block content %}
-
-    <div class="back-link">
-        <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
+<div class="card">
+  <div class="card-header">
+    {% if form_definition.label_text %}
+    <div
+      class="project-label form-project-label"
+      style="color: {{ form_definition.label_color or '#b38d45' }}; background: {{ form_definition.label_background or '#f7f3ec' }};"
+    >
+      {{ form_definition.label_text }}
     </div>
+    {% endif %}
+    <h2>{{ form_definition.title }}</h2>
 
-    <div class="card">
-        <div class="card-header">
-            {% if form_definition.label_text %}
-                <div
-                    class="project-label form-project-label"
-                    style="color: {{ form_definition.label_color or '#b38d45' }}; background: {{ form_definition.label_background or '#f7f3ec' }};"
-                >{{ form_definition.label_text }}</div>
-            {% endif %}
-            <h2>{{ form_definition.title }}</h2>
-
-            {% if form_definition.logo_url %}
-                <div class="form-logo-row form-logo-row--{{ form_definition.logo_alignment or 'left' }}">
-                    <img class="form-logo" src="{{ form_definition.logo_url }}" alt="">
-                </div>
-            {% endif %}
-
-            {% if form_definition.description %}
-                <p class="form-description">{{ form_definition.description }}</p>
-            {% endif %}
-        </div>
-
-        {% if correction_mode %}
-            <div class="alert alert-warning" role="status">
-                <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
-                {% if correction_message %}<p>{{ correction_message }}</p>{% endif %}
-                <p>Uzupełnij formularz i wyślij go ponownie. Warunki kwalifikujące zostaną sprawdzone ponownie.</p>
-            </div>
-        {% endif %}
-        {% if draft_message %}
-            <div class="alert alert-success" role="status"><strong>{{ draft_message }}</strong></div>
-        {% endif %}
-        {% if form_error %}
-            <div class="alert alert-error form-validation-summary" role="alert">{{ form_error }}</div>
-        {% endif %}
-        <form method="post" enctype="multipart/form-data" action="{{ form_action or url_for('public_forms.submit', slug=slug) }}" novalidate class="dynamic-form">
-            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
-            {% if form_version_token %}
-                <input type="hidden" name="form_version_id" value="{{ form_version_id }}">
-                <input type="hidden" name="form_version_token" value="{{ form_version_token }}">
-            {% endif %}
-            {% if correction_mode %}<input type="hidden" name="token" value="{{ access_token }}">{% endif %}
-            {% if form_definition.fields|selectattr('required')|list %}
-                <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
-            {% endif %}
-            {% for field in form_definition.fields %}
-                {% if field.type == "section" %}
-                    <section class="form-section">
-                        <h3>{{ field.label|trusted_html }}</h3>
-                    </section>
-
-                {% elif field.type == "static_text" %}
-                    <div class="static-text">{{ field.label|trusted_html }}</div>
-
-                {% else %}
-                    {% set value = values.get(field.name, field.default) %}
-                    {% set has_error = errors.get(field.name) %}
-
-                    <div
-                        class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
-                        data-field-name="{{ field.name }}"
-                        data-field-type="{{ field.type }}"
-                        {% if field.visible_if %}
-                            data-visible-field="{{ field.visible_if.field }}"
-                            data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
-                            data-visible-value="{{ field.visible_if.value or '' }}"
-                        {% endif %}
-                    >
-                        {% if field.type != "checkbox" %}
-                            <label for="{{ field.name }}">
-                                {{ field.label|trusted_html }}
-                                {% if field.required %}
-                                    <span class="required required-marker" aria-hidden="true">*</span>
-                                {% endif %}
-                            </label>
-                        {% endif %}
-
-                        {% if field.type == "file" %}
-                            <div class="attachment-dropzone" data-attachment-dropzone>
-                                <input
-                                    class="attachment-input {% if has_error %}has-error{% endif %}"
-                                    type="file"
-                                    id="{{ field.name }}"
-                                    name="{{ field.name }}"
-                                    accept="{% for extension in field.allowed_extensions %}.{{ extension|lower|replace('.', '') }}{% if not loop.last %},{% endif %}{% endfor %}"
-                                    {% if field.max_files|int > 1 %}multiple{% endif %}
-                                    {% if field.required and not field.required_if %}required aria-required="true"{% endif %}
-                                    {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                                >
-                                <button type="button" class="btn-secondary" data-attachment-select>Wybierz {{ 'pliki' if field.max_files|int > 1 else 'plik' }}</button>
-                                <span>lub przeciągnij i upuść tutaj</span>
-                                <small>Dozwolone: {{ field.allowed_extensions|join(', ') }} · maks. {{ field.max_size_mb }} MB{% if field.max_files|int > 1 %} · do {{ field.max_files }} plików{% endif %}</small>
-                            </div>
-                            {% if field.description %}<div class="field-description">{{ field.description|trusted_html }}</div>{% endif %}
-                            <ul class="attachment-file-list" data-attachment-list aria-live="polite"></ul>
-
-                        {% elif field.type in ["text", "email", "number", "date", "time", "tel", "phone", "pesel"] %}
-                            <input
-                                class="{% if has_error %}has-error{% endif %}"
-                                type="{% if field.type == 'pesel' %}text{% elif field.type == 'phone' or field.name|lower == 'telefon' %}tel{% else %}{{ field.type }}{% endif %}"
-                                id="{{ field.name }}"
-                                name="{{ field.name }}"
-                                data-field-name="{{ field.name }}"
-                                data-field-type="{{ field.type }}"
-                                value="{{ value }}"
-                                placeholder="{{ field.placeholder }}"
-                                {% if field.type in ['tel', 'phone'] or field.name|lower == 'telefon' %}pattern="(?:\+48\s?)?[0-9]{3}\s?[0-9]{3}\s?[0-9]{3}" title="Podaj poprawny numer telefonu." inputmode="tel"{% endif %}
-                                {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required aria-required="true"{% endif %}
-                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                            >
-
-                        {% elif field.type == "textarea" %}
-                            <textarea
-                                class="{% if has_error %}has-error{% endif %}"
-                                id="{{ field.name }}"
-                                name="{{ field.name }}"
-                                data-field-name="{{ field.name }}"
-                                data-field-type="{{ field.type }}"
-                                placeholder="{{ field.placeholder }}"
-                                {% if field.readonly %}readonly{% endif %}
-                                {% if field.required %}required aria-required="true"{% endif %}
-                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                            >{{ value }}</textarea>
-
-                        {% elif field.type == "select" %}
-                            <select
-                                class="{% if has_error %}has-error{% endif %}"
-                                id="{{ field.name }}"
-                                name="{{ field.name }}"
-                                data-field-name="{{ field.name }}"
-                                data-field-type="{{ field.type }}"
-                                {% if field.required %}required aria-required="true"{% endif %}
-                                {% if field.readonly %}disabled{% endif %}
-                                {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                            >
-                                <option value="">-- wybierz --</option>
-                                {% for option in field.options %}
-                                    <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
-                                {% endfor %}
-                            </select>
-
-                        {% elif field.type == "radio" %}
-                            {% if field.description %}
-                                <div class="field-description">{{ field.description|trusted_html }}</div>
-                            {% endif %}
-
-                            <div class="option-list">
-                                {% for option in field.options %}
-                                    <label class="option-item">
-                                        <input
-                                            class="{% if has_error %}has-error{% endif %}"
-                                            type="radio"
-                                            name="{{ field.name }}"
-                                            data-field-name="{{ field.name }}"
-                                            data-field-type="{{ field.type }}"
-                                            value="{{ option|option_value }}"
-                                            {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required aria-required="true"{% endif %}
-                                            {% if field.readonly %}disabled{% endif %}
-                                            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                                        >
-                                        <span>{{ option|option_label|trusted_html }}</span>
-                                    </label>
-                                {% endfor %}
-                            </div>
-
-                        {% elif field.type == "checkbox" %}
-                            <div class="option-list">
-                                {% for option in field.options %}
-                                    <label class="checkbox-item">
-                                        <input
-                                            class="{% if has_error %}has-error{% endif %}"
-                                            type="checkbox"
-                                            id="{{ field.name }}_{{ loop.index }}"
-                                            name="{{ field.name }}"
-                                            data-field-name="{{ field.name }}"
-                                            data-field-type="{{ field.type }}"
-                                            value="{{ option|option_value }}"
-                                            {% if value == (option|option_value) %}checked{% endif %}
-                                            {% if field.required %}required aria-required="true"{% endif %}
-                                            {% if field.readonly %}disabled{% endif %}
-                                            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-                                        >
-                                        <span>
-                                            {% if form_definition.regulation_url and "regulamin" in (field.name|string|lower) %}
-                                                Akceptuję <a href="{{ form_definition.regulation_url }}" target="_blank" rel="noopener noreferrer">regulamin</a>
-                                            {% else %}
-                                                {{ option|option_label|trusted_html }}
-                                            {% endif %}
-                                            {% if field.required %}
-                                                <span class="required required-marker" aria-hidden="true">*</span>
-                                            {% endif %}
-                                        </span>
-                                    </label>
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-
-                        {% if field.help_text %}
-                            <div class="help-text">{{ field.help_text|trusted_html }}</div>
-                        {% endif %}
-
-                        {% if has_error %}
-                            <div class="error-text" id="{{ field.name }}-error" role="alert">{{ has_error }}</div>
-                        {% endif %}
-                    </div>
-                {% endif %}
-            {% endfor %}
-
-            <div class="submit-row">
-                {% if draft_enabled and not correction_mode and not draft_mode %}
-                    <button type="submit" class="btn-secondary" formaction="{{ url_for('public_forms.create_form_draft', slug=slug, access=share_access_token) }}" formnovalidate>Zapisz i dokończ później</button>
-                {% endif %}
-                {% if draft_mode %}<span class="draft-autosave-status" data-draft-autosave-status aria-live="polite">Wersja robocza jest aktywna.</span>{% endif %}
-                <button type="submit" class="btn-primary">{{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}</button>
-            </div>
-            {% if draft_mode %}<p class="form-hint">Załączniki nie są zapisywane automatycznie. Wybierz je przed ostatecznym wysłaniem formularza.</p>{% endif %}
-        </form>
-        {% if draft_enabled and not correction_mode and not draft_mode %}
-        <details class="draft-resend-panel">
-            <summary>Mam zapisaną wersję roboczą</summary>
-            <form method="post" action="{{ url_for('public_forms.resend_form_draft', slug=slug) }}" class="draft-resend-form">
-                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
-                <label for="draft_email_{{ slug }}">Adres e-mail</label>
-                <input type="email" id="draft_email_{{ slug }}" name="draft_email" required autocomplete="email">
-                <button type="submit" class="btn-secondary">Wyślij nowy link</button>
-            </form>
-        </details>
-        {% endif %}
+    {% if form_definition.logo_url %}
+    <div
+      class="form-logo-row form-logo-row--{{ form_definition.logo_alignment or 'left' }}"
+    >
+      <img class="form-logo" src="{{ form_definition.logo_url }}" alt="" />
     </div>
+    {% endif %} {% if form_definition.description %}
+    <p class="form-description">{{ form_definition.description }}</p>
+    {% endif %}
+  </div>
 
-    <script>
-    document.addEventListener("DOMContentLoaded", function () {
-        {% if draft_mode and autosave_url %}
-        (() => {
-            const form = document.querySelector(".dynamic-form");
-            const status = document.querySelector("[data-draft-autosave-status]");
-            let dirty = false;
-            let saving = false;
-            const csrfToken = () => form.querySelector('[name="csrf_token"]').value;
-            const serialize = () => {
-                const payload = { csrf_token: csrfToken() };
-                form.querySelectorAll("[name]").forEach((field) => {
-                    if (field.type === "file" || ["csrf_token", "form_version_token", "form_version_id"].includes(field.name)) return;
-                    if (field.type === "checkbox" || field.type === "radio") {
-                        if (field.checked) payload[field.name] = field.value;
-                    } else if (!field.disabled) payload[field.name] = field.value;
-                });
-                return payload;
-            };
-            const autosave = async () => {
-                if (!dirty || saving) return;
-                saving = true;
-                status.textContent = "Zapisywanie...";
-                try {
-                    const response = await fetch({{ autosave_url|tojson }}, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
-                        body: JSON.stringify(serialize()),
-                        credentials: "same-origin",
-                    });
-                    if (!response.ok) throw new Error("autosave_failed");
-                    dirty = false;
-                    status.textContent = `Zapisano ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
-                } catch (_error) {
-                    status.textContent = "Nie udało się zapisać.";
-                } finally {
-                    saving = false;
-                }
-            };
-            form.addEventListener("input", () => { dirty = true; });
-            form.addEventListener("change", () => { dirty = true; });
-            window.setInterval(autosave, 20000);
-        })();
+  {% if correction_mode %}
+  <div class="alert alert-warning" role="status">
+    <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
+    {% if correction_message %}
+    <p>{{ correction_message }}</p>
+    {% endif %}
+    <p>
+      Uzupełnij formularz i wyślij go ponownie. Warunki kwalifikujące zostaną
+      sprawdzone ponownie.
+    </p>
+  </div>
+  {% endif %} {% if draft_message %}
+  <div class="alert alert-success" role="status">
+    <strong>{{ draft_message }}</strong>
+  </div>
+  {% endif %} {% if form_error %}
+  <div class="alert alert-error form-validation-summary" role="alert">
+    {{ form_error }}
+  </div>
+  {% endif %}
+  <form
+    method="post"
+    enctype="multipart/form-data"
+    action="{{ form_action or url_for('public_forms.submit', slug=slug) }}"
+    novalidate
+    class="dynamic-form"
+  >
+    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}" />
+    {% if form_version_token %}
+    <input type="hidden" name="form_version_id" value="{{ form_version_id }}" />
+    <input
+      type="hidden"
+      name="form_version_token"
+      value="{{ form_version_token }}"
+    />
+    {% endif %} {% if correction_mode %}<input
+      type="hidden"
+      name="token"
+      value="{{ access_token }}"
+    />{% endif %} {% if form_definition.fields|selectattr('required')|list %}
+    <p class="form-required-note">
+      Pola oznaczone
+      <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.
+    </p>
+    {% endif %} {% for field in form_definition.fields %} {% if field.type ==
+    "section" %}
+    <section class="form-section">
+      <h3>{{ field.label|trusted_html }}</h3>
+    </section>
+
+    {% elif field.type == "static_text" %}
+    <div class="static-text">{{ field.label|trusted_html }}</div>
+
+    {% else %} {% set value = values.get(field.name, field.default) %} {% set
+    has_error = errors.get(field.name) %}
+
+    <div
+      class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
+      data-field-name="{{ field.name }}"
+      data-field-type="{{ field.type }}"
+      {%
+      if
+      field.visible_if
+      %}
+      data-visible-field="{{ field.visible_if.field }}"
+      data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
+      data-visible-value="{{ field.visible_if.value or '' }}"
+      {%
+      endif
+      %}
+    >
+      {% if field.type != "checkbox" %}
+      <label for="{{ field.name }}">
+        {{ field.label|trusted_html }} {% if field.required %}
+        <span class="required required-marker" aria-hidden="true">*</span>
         {% endif %}
-        document.querySelectorAll("[data-attachment-dropzone]").forEach((zone) => {
-            const input = zone.querySelector("input[type=file]");
-            const list = zone.parentElement.querySelector("[data-attachment-list]");
-            const formatSize = (bytes) => bytes < 1024 * 1024
-                ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-                : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-            const render = () => {
-                list.replaceChildren(...Array.from(input.files).map((file, index) => {
-                    const item = document.createElement("li");
-                    const text = document.createElement("span");
-                    text.textContent = `${file.name} (${formatSize(file.size)})`;
-                    const remove = document.createElement("button");
-                    remove.type = "button";
-                    remove.textContent = "Usuń";
-                    remove.addEventListener("click", () => {
-                        const transfer = new DataTransfer();
-                        Array.from(input.files).forEach((candidate, candidateIndex) => {
-                            if (candidateIndex !== index) transfer.items.add(candidate);
-                        });
-                        input.files = transfer.files;
-                        render();
-                    });
-                    item.append(text, remove);
-                    return item;
-                }));
-            };
-            zone.querySelector("[data-attachment-select]").addEventListener("click", () => input.click());
-            input.addEventListener("change", render);
-            ["dragenter", "dragover"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
-                event.preventDefault(); zone.classList.add("is-dragging");
-            }));
-            ["dragleave", "drop"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
-                event.preventDefault(); zone.classList.remove("is-dragging");
-            }));
-            zone.addEventListener("drop", (event) => {
-                const transfer = new DataTransfer();
-                Array.from(event.dataTransfer.files).forEach((file) => transfer.items.add(file));
-                input.files = transfer.files;
-                render();
-            });
-        });
-        const dynamicRows = document.querySelectorAll("[data-visible-field]");
+      </label>
+      {% endif %} {% if field.type == "repeatable_group" %}
+      <div
+        class="repeatable-group"
+        data-repeatable-group="{{ field.name }}"
+        data-min-items="{{ field.min_items or 1 }}"
+        data-max-items="{{ field.max_items or 20 }}"
+        data-item-label="{{ field.item_label or 'Element' }}"
+      >
+        <input
+          type="hidden"
+          id="{{ field.name }}"
+          name="{{ field.name }}"
+          value="[]"
+          data-repeatable-value
+        />
 
-        function getFieldValue(fieldName) {
-            const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
-            if (radioChecked) return radioChecked.value;
+        <script type="application/json" data-repeatable-definition>
+          {{ field|tojson }}
+        </script>
 
-            const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
-            if (checkbox) return checkbox.checked ? "Tak" : "Nie";
+        <script type="application/json" data-repeatable-initial>
+          {{ value|tojson }}
+        </script>
 
-            const input = document.querySelector(`[name="${fieldName}"]`);
-            return input ? input.value : "";
-        }
+        <div class="repeatable-group__items" data-repeatable-items></div>
 
-        function updateVisibility() {
-            dynamicRows.forEach(row => {
-                const watchedField = row.dataset.visibleField;
-                const operator = row.dataset.visibleOperator || "equals";
-                const expectedValue = row.dataset.visibleValue || "";
-                const currentValue = getFieldValue(watchedField);
+        <button type="button" class="btn-secondary" data-repeatable-add>
+          + {{ field.add_label or "Dodaj" }}
+        </button>
+      </div>
 
-                let visible = true;
+      {% elif field.type == "file" %}
 
-                if (operator === "equals") visible = currentValue === expectedValue;
-                if (operator === "not_equals") visible = currentValue !== expectedValue;
+<div class="attachment-dropzone" data-attachment-dropzone>
+    <input
+        class="attachment-input {% if has_error %}has-error{% endif %}"
+        type="file"
+        id="{{ field.name }}"
+        name="{{ field.name }}"
+        accept="{% for extension in field.allowed_extensions %}.{{ extension|lower|replace('.', '') }}{% if not loop.last %},{% endif %}{% endfor %}"
+        {% if field.max_files|int > 1 %}multiple{% endif %}
+        {% if field.required and not field.required_if %}required aria-required="true"{% endif %}
+        {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+    >
 
-                row.style.display = visible ? "" : "none";
+    <button
+        type="button"
+        class="btn-secondary"
+        data-attachment-select
+    >
+        Wybierz {{ 'pliki' if field.max_files|int > 1 else 'plik' }}
+    </button>
 
-                row.querySelectorAll("input, select, textarea").forEach(el => {
-                    if (!visible) {
-                        if (el.type === "checkbox" || el.type === "radio") {
-                            el.checked = false;
-                        } else {
-                            el.value = "";
-                        }
-                    }
-                });
-            });
-        }
+    <span>lub przeciągnij i upuść tutaj</span>
 
-        document.querySelectorAll("input, select, textarea").forEach(el => {
-            el.addEventListener("change", updateVisibility);
-            el.addEventListener("input", updateVisibility);
-        });
+    <small>
+        Dozwolone: {{ field.allowed_extensions|join(', ') }}
+        · maks. {{ field.max_size_mb }} MB
+        {% if field.max_files|int > 1 %}
+            · do {{ field.max_files }} plików
+        {% endif %}
+    </small>
+</div>
+      {% if field.description %}
+      <div class="field-description">{{ field.description|trusted_html }}</div>
+      {% endif %}
+      <ul
+        class="attachment-file-list"
+        data-attachment-list
+        aria-live="polite"
+      ></ul>
 
-        const peselAliases = ["pesel"];
-        const birthDateAliases = ["data_urodzenia", "birth_date", "date_of_birth"];
-        const genderAliases = ["plec", "płeć", "gender"];
-        const ageAliases = ["wiek", "age"];
-        const projectJoinDateAliases = [
-            "data_przystapienia",
-            "data_przystąpienia",
-            "project_join_date",
-            "joining_date",
-            "start_date",
-            "data_rozpoczecia",
-        ];
-        const autoFillState = new Map();
-        let autoFilling = false;
+      {% elif field.type in ["text", "email", "number", "date", "time", "tel",
+      "phone", "pesel"] %}
+      <input
+        class="{% if has_error %}has-error{% endif %}"
+        type="{% if field.type == 'pesel' %}text{% elif field.type == 'phone' or field.name|lower == 'telefon' %}tel{% else %}{{ field.type }}{% endif %}"
+        id="{{ field.name }}"
+        name="{{ field.name }}"
+        data-field-name="{{ field.name }}"
+        data-field-type="{{ field.type }}"
+        value="{{ value }}"
+        placeholder="{{ field.placeholder }}"
+        {% if field.type in ['tel', 'phone'] or field.name|lower == 'telefon' %}
+            pattern="(?:\+48\s?)?[0-9]{3}\s?[0-9]{3}\s?[0-9]{3}"
+            title="Podaj poprawny numer telefonu."
+            inputmode="tel"
+            {% endif %}
+        {%
+        if
+        field.readonly
+        %}readonly{%
+        endif
+        %}
+        {%
+        if
+        field.required
+        %}required
+        aria-required="true"
+        {%
+        endif
+        %}
+        {%
+        if
+        has_error
+        %}aria-invalid="true"
+        aria-describedby="{{ field.name }}-error"
+        {%
+        endif
+        %}
+      />
 
-        function normalizeName(value) {
-            return String(value || "")
-                .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "")
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "_")
-                .replace(/^_+|_+$/g, "");
-        }
+      {% elif field.type == "textarea" %}
+      <textarea
+        class="{% if has_error %}has-error{% endif %}"
+        id="{{ field.name }}"
+        name="{{ field.name }}"
+        data-field-name="{{ field.name }}"
+        data-field-type="{{ field.type }}"
+        placeholder="{{ field.placeholder }}"
+        {%
+        if
+        field.readonly
+        %}readonly{%
+        endif
+        %}
+        {%
+        if
+        field.required
+        %}required
+        aria-required="true"
+        {%
+        endif
+        %}
+        {%
+        if
+        has_error
+        %}aria-invalid="true"
+        aria-describedby="{{ field.name }}-error"
+        {%
+        endif
+        %}
+      >
+{{ value }}</textarea
+      >
 
-        function selectorForName(fieldName) {
-            const escaped = window.CSS && CSS.escape
-                ? CSS.escape(fieldName)
-                : String(fieldName).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-            return `[name="${escaped}"]`;
-        }
+      {% elif field.type == "select" %}
+<select
+    class="{% if has_error %}has-error{% endif %}"
+    id="{{ field.name }}"
+    name="{{ field.name }}"
+    data-field-name="{{ field.name }}"
+    data-field-type="{{ field.type }}"
+    {% if field.required %}required aria-required="true"{% endif %}
+    {% if field.readonly %}disabled{% endif %}
+    {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+>
+    <option value="">-- wybierz --</option>
 
-        function matchesAlias(fieldName, aliases) {
-            const normalized = normalizeName(fieldName);
-            return aliases.map(normalizeName).includes(normalized);
-        }
+    {% for option in field.options %}
+    <option
+        value="{{ option|option_value }}"
+        {% if value == (option|option_value) %}selected{% endif %}
+    >
+        {{ option|option_label }}
+    </option>
+    {% endfor %}
+</select>
 
-        function fieldNames() {
-            return Array.from(document.querySelectorAll("[name]"))
-                .map(el => el.name)
-                .filter((name, index, names) => name && names.indexOf(name) === index);
-        }
+{% elif field.type == "radio" %}
+{% if field.description %}
+<div class="field-description">
+    {{ field.description|trusted_html }}
+</div>
+{% endif %}
 
-        function findFieldName(aliases, preferredType) {
-            const names = fieldNames();
-            const byAlias = names.find(name => {
-                const field = document.querySelector(selectorForName(name));
-                return matchesAlias(name, aliases) && (!preferredType || field?.dataset.fieldType === preferredType);
-            });
-            if (byAlias) return byAlias;
-            if (preferredType) {
-                const byType = names.find(name => document.querySelector(selectorForName(name))?.dataset.fieldType === preferredType);
-                if (byType) return byType;
-            }
-            return names.find(name => matchesAlias(name, aliases));
-        }
+<div class="option-list">
+    {% for option in field.options %}
+    <label class="option-item">
+        <input
+            class="{% if has_error %}has-error{% endif %}"
+            type="radio"
+            name="{{ field.name }}"
+            data-field-name="{{ field.name }}"
+            data-field-type="{{ field.type }}"
+            value="{{ option|option_value }}"
+            {% if value == (option|option_value) %}checked{% endif %}
+            {% if field.required %}required aria-required="true"{% endif %}
+            {% if field.readonly %}disabled{% endif %}
+            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+        >
+        <span>{{ option|option_label|trusted_html }}</span>
+    </label>
+    {% endfor %}
+</div>
 
-        function currentValue(fieldName) {
-            const checked = document.querySelector(`${selectorForName(fieldName)}:checked`);
-            if (checked) return checked.value;
-            const field = document.querySelector(selectorForName(fieldName));
-            return field ? field.value : "";
-        }
+{% elif field.type == "checkbox" %}
+<div class="option-list">
+    {% for option in field.options %}
+    <label class="checkbox-item">
+        <input
+            class="{% if has_error %}has-error{% endif %}"
+            type="checkbox"
+            id="{{ field.name }}_{{ loop.index }}"
+            name="{{ field.name }}"
+            data-field-name="{{ field.name }}"
+            data-field-type="{{ field.type }}"
+            value="{{ option|option_value }}"
+            {% if value == (option|option_value) %}checked{% endif %}
+            {% if field.required %}required aria-required="true"{% endif %}
+            {% if field.readonly %}disabled{% endif %}
+            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+        >
+          <span>
+            {% if form_definition.regulation_url and "regulamin" in
+            (field.name|string|lower) %} Akceptuję
+            <a
+              href="{{ form_definition.regulation_url }}"
+              target="_blank"
+              rel="noopener noreferrer"
+              >regulamin</a
+            >
+            {% else %} {{ option|option_label|trusted_html }} {% endif %} {% if
+            field.required %}
+            <span class="required required-marker" aria-hidden="true">*</span>
+            {% endif %}
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      {% endif %} {% if field.help_text %}
+      <div class="help-text">{{ field.help_text|trusted_html }}</div>
+      {% endif %} {% if has_error %}
+      <div class="error-text" id="{{ field.name }}-error" role="alert">
+        {{ has_error }}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %} {% endfor %}
 
-        function canAutoFill(fieldName) {
-            return Boolean(fieldName);
-        }
+    <div class="submit-row">
+      {% if draft_enabled and not correction_mode and not draft_mode %}
+      <button
+        type="submit"
+        class="btn-secondary"
+        formaction="{{ url_for('public_forms.create_form_draft', slug=slug, access=share_access_token) }}"
+        formnovalidate
+      >
+        Zapisz i dokończ później
+      </button>
+      {% endif %} {% if draft_mode %}<span
+        class="draft-autosave-status"
+        data-draft-autosave-status
+        aria-live="polite"
+        >Wersja robocza jest aktywna.</span
+      >{% endif %}
+      <button type="submit" class="btn-primary">
+        {{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}
+      </button>
+    </div>
+    {% if draft_mode %}
+    <p class="form-hint">
+      Załączniki nie są zapisywane automatycznie. Wybierz je przed ostatecznym
+      wysłaniem formularza.
+    </p>
+    {% endif %}
+  </form>
+  {% if draft_enabled and not correction_mode and not draft_mode %}
+  <details class="draft-resend-panel">
+    <summary>Mam zapisaną wersję roboczą</summary>
+    <form
+      method="post"
+      action="{{ url_for('public_forms.resend_form_draft', slug=slug) }}"
+      class="draft-resend-form"
+    >
+      <input
+        type="hidden"
+        name="csrf_token"
+        value="{{ public_csrf_token() }}"
+      />
+      <label for="draft_email_{{ slug }}">Adres e-mail</label>
+      <input
+        type="email"
+        id="draft_email_{{ slug }}"
+        name="draft_email"
+        required
+        autocomplete="email"
+      />
+      <button type="submit" class="btn-secondary">Wyślij nowy link</button>
+    </form>
+  </details>
+  {% endif %}
+</div>
 
-        function rememberAutoValue(fieldName, value) {
-            autoFillState.set(fieldName, { value: String(value), userEdited: false });
-        }
+<script>
+      document.addEventListener("DOMContentLoaded", function () {
+          {% if draft_mode and autosave_url %}
+          (() => {
+              const form = document.querySelector(".dynamic-form");
+              const status = document.querySelector("[data-draft-autosave-status]");
+              let dirty = false;
+              let saving = false;
+              const csrfToken = () => form.querySelector('[name="csrf_token"]').value;
+              const serialize = () => {
+                  const payload = { csrf_token: csrfToken() };
+                  form.querySelectorAll("[name]").forEach((field) => {
+                      if (
+      field.dataset.repeatableControl === "true"
+  ) {
+      return;
+  }
+                      if (field.type === "file" || ["csrf_token", "form_version_token", "form_version_id"].includes(field.name)) return;
+                      if (field.type === "checkbox" || field.type === "radio") {
+                          if (field.checked) payload[field.name] = field.value;
+                      } else if (!field.disabled) payload[field.name] = field.value;
+                  });
+                  return payload;
+              };
+              const autosave = async () => {
+                  if (!dirty || saving) return;
+                  saving = true;
+                  status.textContent = "Zapisywanie...";
+                  try {
+                      const response = await fetch({{ autosave_url|tojson }}, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
+                          body: JSON.stringify(serialize()),
+                          credentials: "same-origin",
+                      });
+                      if (!response.ok) throw new Error("autosave_failed");
+                      dirty = false;
+                      status.textContent = `Zapisano ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+                  } catch (_error) {
+                      status.textContent = "Nie udało się zapisać.";
+                  } finally {
+                      saving = false;
+                  }
+              };
+              form.addEventListener("input", () => { dirty = true; });
+              form.addEventListener("change", () => { dirty = true; });
+              window.setInterval(autosave, 20000);
+          })();
+          {% endif %}
+          document.querySelectorAll("[data-attachment-dropzone]").forEach((zone) => {
+              const input = zone.querySelector("input[type=file]");
+              const list = zone.parentElement.querySelector("[data-attachment-list]");
+              const formatSize = (bytes) => bytes < 1024 * 1024
+                  ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+                  : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+              const render = () => {
+                  list.replaceChildren(...Array.from(input.files).map((file, index) => {
+                      const item = document.createElement("li");
+                      const text = document.createElement("span");
+                      text.textContent = `${file.name} (${formatSize(file.size)})`;
+                      const remove = document.createElement("button");
+                      remove.type = "button";
+                      remove.textContent = "Usuń";
+                      remove.addEventListener("click", () => {
+                          const transfer = new DataTransfer();
+                          Array.from(input.files).forEach((candidate, candidateIndex) => {
+                              if (candidateIndex !== index) transfer.items.add(candidate);
+                          });
+                          input.files = transfer.files;
+                          render();
+                      });
+                      item.append(text, remove);
+                      return item;
+                  }));
+              };
+              zone.querySelector("[data-attachment-select]").addEventListener("click", () => input.click());
+              input.addEventListener("change", render);
+              ["dragenter", "dragover"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
+                  event.preventDefault(); zone.classList.add("is-dragging");
+              }));
+              ["dragleave", "drop"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
+                  event.preventDefault(); zone.classList.remove("is-dragging");
+              }));
+              zone.addEventListener("drop", (event) => {
+                  const transfer = new DataTransfer();
+                  Array.from(event.dataTransfer.files).forEach((file) => transfer.items.add(file));
+                  input.files = transfer.files;
+                  render();
+              });
+          });
+          const dynamicRows = document.querySelectorAll("[data-visible-field]");
 
-        function mirrorId(fieldName) {
-            return `pesel-autofill-${normalizeName(fieldName)}`;
-        }
+          function getFieldValue(fieldName) {
+              const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
+              if (radioChecked) return radioChecked.value;
 
-        function ensureSubmitMirror(fieldName, value) {
-            let mirror = document.getElementById(mirrorId(fieldName));
-            if (!mirror) {
-                mirror = document.createElement("input");
-                mirror.type = "hidden";
-                mirror.id = mirrorId(fieldName);
-                mirror.name = fieldName;
-                mirror.dataset.peselAutofillMirror = "true";
-                document.querySelector(".dynamic-form")?.appendChild(mirror);
-            }
-            mirror.value = value;
-        }
+              const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
+              if (checkbox) return checkbox.checked ? "Tak" : "Nie";
 
-        function removeSubmitMirror(fieldName) {
-            document.getElementById(mirrorId(fieldName))?.remove();
-        }
+              const input = document.querySelector(`[name="${fieldName}"]`);
+              return input ? input.value : "";
+          }
 
-        function lockAutoField(fieldName, value) {
-            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
-                .filter(field => field.dataset.peselAutofillMirror !== "true");
-            if (!fields.length) return;
-            const requiresMirror = fields.some(field => (
-                field.tagName === "SELECT" ||
-                field.type === "radio" ||
-                field.type === "checkbox"
-            ));
-            fields.forEach(field => {
-                if (!field.dataset.peselAutoLocked) {
-                    field.dataset.peselWasReadonly = field.readOnly ? "true" : "false";
-                    field.dataset.peselWasDisabled = field.disabled ? "true" : "false";
-                }
-                field.dataset.peselAutoLocked = "true";
-                if (field.tagName === "SELECT" || field.type === "radio" || field.type === "checkbox") {
-                    field.disabled = true;
-                } else {
-                    field.readOnly = true;
-                }
-            });
-            if (requiresMirror) {
-                ensureSubmitMirror(fieldName, value);
-            } else {
-                removeSubmitMirror(fieldName);
-            }
-        }
+          function updateVisibility() {
+              dynamicRows.forEach(row => {
+                  const watchedField = row.dataset.visibleField;
+                  const operator = row.dataset.visibleOperator || "equals";
+                  const expectedValue = row.dataset.visibleValue || "";
+                  const currentValue = getFieldValue(watchedField);
 
-        function unlockAutoField(fieldName) {
-            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
-                .filter(field => field.dataset.peselAutofillMirror !== "true");
-            fields.forEach(field => {
-                if (field.dataset.peselAutoLocked !== "true") return;
-                field.readOnly = field.dataset.peselWasReadonly === "true";
-                field.disabled = field.dataset.peselWasDisabled === "true";
-                delete field.dataset.peselAutoLocked;
-                delete field.dataset.peselWasReadonly;
-                delete field.dataset.peselWasDisabled;
-            });
-            removeSubmitMirror(fieldName);
-        }
+                  let visible = true;
 
-        function emitFieldChange(fieldName) {
-            document.querySelectorAll(selectorForName(fieldName)).forEach(el => {
-                el.dispatchEvent(new Event("change", { bubbles: true }));
-                el.dispatchEvent(new Event("input", { bubbles: true }));
-            });
-        }
+                  if (operator === "equals") visible = currentValue === expectedValue;
+                  if (operator === "not_equals") visible = currentValue !== expectedValue;
 
-        function setSimpleField(fieldName, value) {
-            if (!fieldName || !canAutoFill(fieldName)) return;
-            const field = document.querySelector(selectorForName(fieldName));
-            if (!field) return;
-            autoFilling = true;
-            unlockAutoField(fieldName);
-            field.value = value;
-            rememberAutoValue(fieldName, value);
-            emitFieldChange(fieldName);
-            lockAutoField(fieldName, value);
-            autoFilling = false;
-        }
+                  row.style.display = visible ? "" : "none";
 
-        function normalizedGender(value) {
-            const normalized = normalizeName(value);
-            if (["kobieta", "k", "female", "woman"].includes(normalized)) return "kobieta";
-            if (["mezczyzna", "m", "male", "man"].includes(normalized)) return "mezczyzna";
-            return normalized;
-        }
+                  row.querySelectorAll("input, select, textarea").forEach(el => {
+                      if (!visible) {
+                          if (el.type === "checkbox" || el.type === "radio") {
+                              el.checked = false;
+                          } else {
+                              el.value = "";
+                          }
+                      }
+                  });
+              });
+          }
 
-        function setGenderField(fieldName, gender) {
-            if (!fieldName || !canAutoFill(fieldName)) return;
-            const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
-            if (!fields.length) return;
-            const expected = normalizedGender(gender);
-            let submittedValue = gender;
-            autoFilling = true;
-            unlockAutoField(fieldName);
-            if (fields[0].type === "radio" || fields[0].type === "checkbox") {
-                fields.forEach(field => {
-                    field.checked = normalizedGender(field.value) === expected;
-                    if (field.checked) submittedValue = field.value;
-                });
-                rememberAutoValue(fieldName, submittedValue);
-            } else if (fields[0].tagName === "SELECT") {
-                const option = Array.from(fields[0].options).find(item => normalizedGender(item.value) === expected);
-                if (option) {
-                    fields[0].value = option.value;
-                    submittedValue = option.value;
-                    rememberAutoValue(fieldName, submittedValue);
-                }
-            } else {
-                fields[0].value = gender;
-                rememberAutoValue(fieldName, submittedValue);
-            }
-            emitFieldChange(fieldName);
-            lockAutoField(fieldName, submittedValue);
-            autoFilling = false;
-        }
+          document.querySelectorAll("input, select, textarea").forEach(el => {
+              el.addEventListener("change", updateVisibility);
+              el.addEventListener("input", updateVisibility);
+          });
 
-        function clearAutoFields() {
-            autoFillState.forEach((state, fieldName) => {
-                const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
-                autoFilling = true;
-                unlockAutoField(fieldName);
-                fields.forEach(field => {
-                    if (field.dataset.peselAutofillMirror === "true") return;
-                    if (field.type === "radio" || field.type === "checkbox") {
-                        field.checked = false;
-                    } else {
-                        field.value = "";
-                    }
-                });
-                rememberAutoValue(fieldName, "");
-                emitFieldChange(fieldName);
-                autoFilling = false;
-            });
-        }
+          const peselAliases = ["pesel"];
+          const birthDateAliases = ["data_urodzenia", "birth_date", "date_of_birth"];
+          const genderAliases = ["plec", "płeć", "gender"];
+          const ageAliases = ["wiek", "age"];
+          const projectJoinDateAliases = [
+              "data_przystapienia",
+              "data_przystąpienia",
+              "project_join_date",
+              "joining_date",
+              "start_date",
+              "data_rozpoczecia",
+          ];
+          const autoFillState = new Map();
+          let autoFilling = false;
 
-        function validatePeselChecksum(pesel) {
-            if (!/^\d{11}$/.test(pesel)) return false;
-            const weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
-            const sum = weights.reduce((total, weight, index) => total + Number(pesel[index]) * weight, 0);
-            return ((10 - (sum % 10)) % 10) === Number(pesel[10]);
-        }
+          function normalizeName(value) {
+              return String(value || "")
+                  .normalize("NFD")
+                  .replace(/[\u0300-\u036f]/g, "")
+                  .toLowerCase()
+                  .replace(/[^a-z0-9]+/g, "_")
+                  .replace(/^_+|_+$/g, "");
+          }
 
-        function parseDateValue(value) {
-            const text = String(value || "").trim();
-            let match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-            if (match) {
-                return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
-            }
-            match = text.match(/^(\d{2})[.-](\d{2})[.-](\d{4})$/);
-            if (match) {
-                return validDate(Number(match[3]), Number(match[2]), Number(match[1]));
-            }
-            return null;
-        }
+          function selectorForName(fieldName) {
+              const escaped = window.CSS && CSS.escape
+                  ? CSS.escape(fieldName)
+                  : String(fieldName).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+              return `[name="${escaped}"]`;
+          }
 
-        function validDate(year, month, day) {
-            const parsed = new Date(year, month - 1, day);
-            if (
-                parsed.getFullYear() !== year ||
-                parsed.getMonth() !== month - 1 ||
-                parsed.getDate() !== day
-            ) {
-                return null;
-            }
-            return parsed;
-        }
+          function matchesAlias(fieldName, aliases) {
+              const normalized = normalizeName(fieldName);
+              return aliases.map(normalizeName).includes(normalized);
+          }
 
-        function ageReferenceDate() {
-            const joinDateName = findFieldName(projectJoinDateAliases);
-            if (!joinDateName) return new Date();
-            const parsed = parseDateValue(currentValue(joinDateName));
-            return parsed || new Date();
-        }
+          function fieldNames() {
+              return Array.from(document.querySelectorAll("[name]"))
+                  .map(el => el.name)
+                  .filter((name, index, names) => name && names.indexOf(name) === index);
+          }
 
-        function parsePesel(pesel, referenceDate) {
-            if (!validatePeselChecksum(pesel)) return null;
-            const encodedMonth = Number(pesel.slice(2, 4));
-            const day = Number(pesel.slice(4, 6));
-            const year = Number(pesel.slice(0, 2));
-            const ranges = [
-                { start: 1, end: 12, century: 1900, offset: 0 },
-                { start: 21, end: 32, century: 2000, offset: 20 },
-                { start: 41, end: 52, century: 2100, offset: 40 },
-                { start: 61, end: 72, century: 2200, offset: 60 },
-                { start: 81, end: 92, century: 1800, offset: 80 },
-            ];
-            const range = ranges.find(item => encodedMonth >= item.start && encodedMonth <= item.end);
-            if (!range) return null;
-            const month = encodedMonth - range.offset;
-            const birthDate = new Date(range.century + year, month - 1, day);
-            if (
-                birthDate.getFullYear() !== range.century + year ||
-                birthDate.getMonth() !== month - 1 ||
-                birthDate.getDate() !== day
-            ) {
-                return null;
-            }
-            const today = referenceDate || new Date();
-            let age = today.getFullYear() - birthDate.getFullYear();
-            if (
-                today.getMonth() < birthDate.getMonth() ||
-                (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
-            ) {
-                age -= 1;
-            }
-            const yyyy = String(birthDate.getFullYear()).padStart(4, "0");
-            const mm = String(birthDate.getMonth() + 1).padStart(2, "0");
-            const dd = String(birthDate.getDate()).padStart(2, "0");
-            return {
-                dateIso: `${yyyy}-${mm}-${dd}`,
-                dateText: `${dd}.${mm}.${yyyy}`,
-                gender: Number(pesel[9]) % 2 ? "Mężczyzna" : "Kobieta",
-                age: String(age),
-            };
-        }
+          function findFieldName(aliases, preferredType) {
+              const names = fieldNames();
+              const byAlias = names.find(name => {
+                  const field = document.querySelector(selectorForName(name));
+                  return matchesAlias(name, aliases) && (!preferredType || field?.dataset.fieldType === preferredType);
+              });
+              if (byAlias) return byAlias;
+              if (preferredType) {
+                  const byType = names.find(name => document.querySelector(selectorForName(name))?.dataset.fieldType === preferredType);
+                  if (byType) return byType;
+              }
+              return names.find(name => matchesAlias(name, aliases));
+          }
 
-        function ensurePeselError(peselField) {
-            const row = peselField.closest(".form-row");
-            if (!row) return null;
-            let error = row.querySelector(".pesel-client-error");
-            if (!error) {
-                error = document.createElement("div");
-                error.className = "error-text pesel-client-error";
-                error.hidden = true;
-                row.appendChild(error);
-            }
-            return error;
-        }
+          function currentValue(fieldName) {
+              const checked = document.querySelector(`${selectorForName(fieldName)}:checked`);
+              if (checked) return checked.value;
+              const field = document.querySelector(selectorForName(fieldName));
+              return field ? field.value : "";
+          }
 
-        function showPeselError(peselField, visible) {
-            const message = "Podany numer PESEL jest nieprawidłowy.";
-            const error = ensurePeselError(peselField);
-            if (error) {
-                error.textContent = visible ? message : "";
-                error.hidden = !visible;
-            }
-            peselField.setCustomValidity(visible ? message : "");
-        }
+          function canAutoFill(fieldName) {
+              return Boolean(fieldName);
+          }
 
-        function updateFromPesel() {
-            const peselName = findFieldName(peselAliases, "pesel");
-            if (!peselName) return;
-            const peselField = document.querySelector(selectorForName(peselName));
-            const value = peselField.value.trim();
-            if (!value) {
-                showPeselError(peselField, true);
-                clearAutoFields();
-                return;
-            }
-            const peselData = parsePesel(value, ageReferenceDate());
-            if (!peselData) {
-                showPeselError(peselField, true);
-                clearAutoFields();
-                return;
-            }
-            showPeselError(peselField, false);
+          function rememberAutoValue(fieldName, value) {
+              autoFillState.set(fieldName, { value: String(value), userEdited: false });
+          }
 
-            const birthDateName = findFieldName(birthDateAliases);
-            const genderName = findFieldName(genderAliases);
-            const ageName = findFieldName(ageAliases);
-            const birthDateField = birthDateName ? document.querySelector(selectorForName(birthDateName)) : null;
-            if (birthDateField) {
-                setSimpleField(
-                    birthDateName,
-                    birthDateField.type === "date" ? peselData.dateIso : peselData.dateText
-                );
-            }
-            setGenderField(genderName, peselData.gender);
-            setSimpleField(ageName, peselData.age);
-        }
+          function mirrorId(fieldName) {
+              return `pesel-autofill-${normalizeName(fieldName)}`;
+          }
 
-        const peselName = findFieldName(peselAliases, "pesel");
-        if (peselName) {
-            document.querySelectorAll(selectorForName(peselName)).forEach(el => {
-                el.addEventListener("input", updateFromPesel);
-                el.addEventListener("change", updateFromPesel);
-                el.addEventListener("blur", updateFromPesel);
-            });
-            updateFromPesel();
-        }
+          function ensureSubmitMirror(fieldName, value) {
+              let mirror = document.getElementById(mirrorId(fieldName));
+              if (!mirror) {
+                  mirror = document.createElement("input");
+                  mirror.type = "hidden";
+                  mirror.id = mirrorId(fieldName);
+                  mirror.name = fieldName;
+                  mirror.dataset.peselAutofillMirror = "true";
+                  document.querySelector(".dynamic-form")?.appendChild(mirror);
+              }
+              mirror.value = value;
+          }
 
-        const dynamicForm = document.querySelector("form.dynamic-form");
-        const phoneFields = Array.from(document.querySelectorAll('input[type="tel"]'));
-        const polishPhonePattern = /^(?:\+48\s?)?\d{3}\s?\d{3}\s?\d{3}$/;
-        phoneFields.forEach(field => field.addEventListener("input", () => field.setCustomValidity("")));
-        if (dynamicForm && phoneFields.length) {
-            dynamicForm.addEventListener("submit", event => {
-                const invalidPhone = phoneFields.find(field => {
-                    const value = field.value.trim();
-                    const invalid = Boolean(value) && !polishPhonePattern.test(value);
-                    field.setCustomValidity(invalid ? "Podaj poprawny numer telefonu." : "");
-                    return invalid;
-                });
-                if (invalidPhone) {
-                    event.preventDefault();
-                    invalidPhone.reportValidity();
-                    invalidPhone.focus();
-                }
-            });
-        }
+          function removeSubmitMirror(fieldName) {
+              document.getElementById(mirrorId(fieldName))?.remove();
+          }
 
-        updateVisibility();
-    });
-    </script>
+          function lockAutoField(fieldName, value) {
+              const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
+                  .filter(field => field.dataset.peselAutofillMirror !== "true");
+              if (!fields.length) return;
+              const requiresMirror = fields.some(field => (
+                  field.tagName === "SELECT" ||
+                  field.type === "radio" ||
+                  field.type === "checkbox"
+              ));
+              fields.forEach(field => {
+                  if (!field.dataset.peselAutoLocked) {
+                      field.dataset.peselWasReadonly = field.readOnly ? "true" : "false";
+                      field.dataset.peselWasDisabled = field.disabled ? "true" : "false";
+                  }
+                  field.dataset.peselAutoLocked = "true";
+                  if (field.tagName === "SELECT" || field.type === "radio" || field.type === "checkbox") {
+                      field.disabled = true;
+                  } else {
+                      field.readOnly = true;
+                  }
+              });
+              if (requiresMirror) {
+                  ensureSubmitMirror(fieldName, value);
+              } else {
+                  removeSubmitMirror(fieldName);
+              }
+          }
+
+          function unlockAutoField(fieldName) {
+              const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)))
+                  .filter(field => field.dataset.peselAutofillMirror !== "true");
+              fields.forEach(field => {
+                  if (field.dataset.peselAutoLocked !== "true") return;
+                  field.readOnly = field.dataset.peselWasReadonly === "true";
+                  field.disabled = field.dataset.peselWasDisabled === "true";
+                  delete field.dataset.peselAutoLocked;
+                  delete field.dataset.peselWasReadonly;
+                  delete field.dataset.peselWasDisabled;
+              });
+              removeSubmitMirror(fieldName);
+          }
+
+          function emitFieldChange(fieldName) {
+              document.querySelectorAll(selectorForName(fieldName)).forEach(el => {
+                  el.dispatchEvent(new Event("change", { bubbles: true }));
+                  el.dispatchEvent(new Event("input", { bubbles: true }));
+              });
+          }
+
+          function setSimpleField(fieldName, value) {
+              if (!fieldName || !canAutoFill(fieldName)) return;
+              const field = document.querySelector(selectorForName(fieldName));
+              if (!field) return;
+              autoFilling = true;
+              unlockAutoField(fieldName);
+              field.value = value;
+              rememberAutoValue(fieldName, value);
+              emitFieldChange(fieldName);
+              lockAutoField(fieldName, value);
+              autoFilling = false;
+          }
+
+          function normalizedGender(value) {
+              const normalized = normalizeName(value);
+              if (["kobieta", "k", "female", "woman"].includes(normalized)) return "kobieta";
+              if (["mezczyzna", "m", "male", "man"].includes(normalized)) return "mezczyzna";
+              return normalized;
+          }
+
+          function setGenderField(fieldName, gender) {
+              if (!fieldName || !canAutoFill(fieldName)) return;
+              const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
+              if (!fields.length) return;
+              const expected = normalizedGender(gender);
+              let submittedValue = gender;
+              autoFilling = true;
+              unlockAutoField(fieldName);
+              if (fields[0].type === "radio" || fields[0].type === "checkbox") {
+                  fields.forEach(field => {
+                      field.checked = normalizedGender(field.value) === expected;
+                      if (field.checked) submittedValue = field.value;
+                  });
+                  rememberAutoValue(fieldName, submittedValue);
+              } else if (fields[0].tagName === "SELECT") {
+                  const option = Array.from(fields[0].options).find(item => normalizedGender(item.value) === expected);
+                  if (option) {
+                      fields[0].value = option.value;
+                      submittedValue = option.value;
+                      rememberAutoValue(fieldName, submittedValue);
+                  }
+              } else {
+                  fields[0].value = gender;
+                  rememberAutoValue(fieldName, submittedValue);
+              }
+              emitFieldChange(fieldName);
+              lockAutoField(fieldName, submittedValue);
+              autoFilling = false;
+          }
+
+          function clearAutoFields() {
+              autoFillState.forEach((state, fieldName) => {
+                  const fields = Array.from(document.querySelectorAll(selectorForName(fieldName)));
+                  autoFilling = true;
+                  unlockAutoField(fieldName);
+                  fields.forEach(field => {
+                      if (field.dataset.peselAutofillMirror === "true") return;
+                      if (field.type === "radio" || field.type === "checkbox") {
+                          field.checked = false;
+                      } else {
+                          field.value = "";
+                      }
+                  });
+                  rememberAutoValue(fieldName, "");
+                  emitFieldChange(fieldName);
+                  autoFilling = false;
+              });
+          }
+
+          function validatePeselChecksum(pesel) {
+              if (!/^\d{11}$/.test(pesel)) return false;
+              const weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
+              const sum = weights.reduce((total, weight, index) => total + Number(pesel[index]) * weight, 0);
+              return ((10 - (sum % 10)) % 10) === Number(pesel[10]);
+          }
+
+          function parseDateValue(value) {
+              const text = String(value || "").trim();
+              let match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+              if (match) {
+                  return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
+              }
+              match = text.match(/^(\d{2})[.-](\d{2})[.-](\d{4})$/);
+              if (match) {
+                  return validDate(Number(match[3]), Number(match[2]), Number(match[1]));
+              }
+              return null;
+          }
+
+          function validDate(year, month, day) {
+              const parsed = new Date(year, month - 1, day);
+              if (
+                  parsed.getFullYear() !== year ||
+                  parsed.getMonth() !== month - 1 ||
+                  parsed.getDate() !== day
+              ) {
+                  return null;
+              }
+              return parsed;
+          }
+
+          function ageReferenceDate() {
+              const joinDateName = findFieldName(projectJoinDateAliases);
+              if (!joinDateName) return new Date();
+              const parsed = parseDateValue(currentValue(joinDateName));
+              return parsed || new Date();
+          }
+
+          function parsePesel(pesel, referenceDate) {
+              if (!validatePeselChecksum(pesel)) return null;
+              const encodedMonth = Number(pesel.slice(2, 4));
+              const day = Number(pesel.slice(4, 6));
+              const year = Number(pesel.slice(0, 2));
+              const ranges = [
+                  { start: 1, end: 12, century: 1900, offset: 0 },
+                  { start: 21, end: 32, century: 2000, offset: 20 },
+                  { start: 41, end: 52, century: 2100, offset: 40 },
+                  { start: 61, end: 72, century: 2200, offset: 60 },
+                  { start: 81, end: 92, century: 1800, offset: 80 },
+              ];
+              const range = ranges.find(item => encodedMonth >= item.start && encodedMonth <= item.end);
+              if (!range) return null;
+              const month = encodedMonth - range.offset;
+              const birthDate = new Date(range.century + year, month - 1, day);
+              if (
+                  birthDate.getFullYear() !== range.century + year ||
+                  birthDate.getMonth() !== month - 1 ||
+                  birthDate.getDate() !== day
+              ) {
+                  return null;
+              }
+              const today = referenceDate || new Date();
+              let age = today.getFullYear() - birthDate.getFullYear();
+              if (
+                  today.getMonth() < birthDate.getMonth() ||
+                  (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+              ) {
+                  age -= 1;
+              }
+              const yyyy = String(birthDate.getFullYear()).padStart(4, "0");
+              const mm = String(birthDate.getMonth() + 1).padStart(2, "0");
+              const dd = String(birthDate.getDate()).padStart(2, "0");
+              return {
+                  dateIso: `${yyyy}-${mm}-${dd}`,
+                  dateText: `${dd}.${mm}.${yyyy}`,
+                  gender: Number(pesel[9]) % 2 ? "Mężczyzna" : "Kobieta",
+                  age: String(age),
+              };
+          }
+
+          function ensurePeselError(peselField) {
+              const row = peselField.closest(".form-row");
+              if (!row) return null;
+              let error = row.querySelector(".pesel-client-error");
+              if (!error) {
+                  error = document.createElement("div");
+                  error.className = "error-text pesel-client-error";
+                  error.hidden = true;
+                  row.appendChild(error);
+              }
+              return error;
+          }
+
+          function showPeselError(peselField, visible) {
+              const message = "Podany numer PESEL jest nieprawidłowy.";
+              const error = ensurePeselError(peselField);
+              if (error) {
+                  error.textContent = visible ? message : "";
+                  error.hidden = !visible;
+              }
+              peselField.setCustomValidity(visible ? message : "");
+          }
+
+          function updateFromPesel() {
+              const peselName = findFieldName(peselAliases, "pesel");
+              if (!peselName) return;
+              const peselField = document.querySelector(selectorForName(peselName));
+              const value = peselField.value.trim();
+              if (!value) {
+                  showPeselError(peselField, true);
+                  clearAutoFields();
+                  return;
+              }
+              const peselData = parsePesel(value, ageReferenceDate());
+              if (!peselData) {
+                  showPeselError(peselField, true);
+                  clearAutoFields();
+                  return;
+              }
+              showPeselError(peselField, false);
+
+              const birthDateName = findFieldName(birthDateAliases);
+              const genderName = findFieldName(genderAliases);
+              const ageName = findFieldName(ageAliases);
+              const birthDateField = birthDateName ? document.querySelector(selectorForName(birthDateName)) : null;
+              if (birthDateField) {
+                  setSimpleField(
+                      birthDateName,
+                      birthDateField.type === "date" ? peselData.dateIso : peselData.dateText
+                  );
+              }
+              setGenderField(genderName, peselData.gender);
+              setSimpleField(ageName, peselData.age);
+          }
+
+          const peselName = findFieldName(peselAliases, "pesel");
+          if (peselName) {
+              document.querySelectorAll(selectorForName(peselName)).forEach(el => {
+                  el.addEventListener("input", updateFromPesel);
+                  el.addEventListener("change", updateFromPesel);
+                  el.addEventListener("blur", updateFromPesel);
+              });
+              updateFromPesel();
+          }
+
+          const dynamicForm = document.querySelector("form.dynamic-form");
+          const phoneFields = Array.from(document.querySelectorAll('input[type="tel"]'));
+          const polishPhonePattern = /^(?:\+48\s?)?\d{3}\s?\d{3}\s?\d{3}$/;
+          phoneFields.forEach(field => field.addEventListener("input", () => field.setCustomValidity("")));
+          if (dynamicForm && phoneFields.length) {
+              dynamicForm.addEventListener("submit", event => {
+                  const invalidPhone = phoneFields.find(field => {
+                      const value = field.value.trim();
+                      const invalid = Boolean(value) && !polishPhonePattern.test(value);
+                      field.setCustomValidity(invalid ? "Podaj poprawny numer telefonu." : "");
+                      return invalid;
+                  });
+                  if (invalidPhone) {
+                      event.preventDefault();
+                      invalidPhone.reportValidity();
+                      invalidPhone.focus();
+                  }
+              });
+          }
+
+          updateVisibility();
+      });
+      function createRepeatableUuid() {
+      if (globalThis.crypto?.randomUUID) {
+          return globalThis.crypto.randomUUID();
+      }
+
+      return (
+          Date.now().toString(16) +
+          "-" +
+          Math.random().toString(16).slice(2) +
+          "-" +
+          Math.random().toString(16).slice(2)
+      );
+  }
+
+
+  function repeatableOptionValue(option) {
+      if (
+          option &&
+          typeof option === "object"
+      ) {
+          return String(
+              option.value ??
+              option.label ??
+              ""
+          );
+      }
+
+      return String(option ?? "");
+  }
+
+
+  function repeatableOptionLabel(option) {
+      if (
+          option &&
+          typeof option === "object"
+      ) {
+          return String(
+              option.label ??
+              option.value ??
+              ""
+          );
+      }
+
+      return String(option ?? "");
+  }
+
+
+  function createRepeatableControl(
+      groupName,
+      recordId,
+      field,
+      value
+  ) {
+      const wrapper =
+          document.createElement("div");
+
+      wrapper.className =
+          `form-row width-${field.width || "full"}`;
+
+      wrapper.dataset.repeatableChild =
+          field.name;
+
+      const label =
+          document.createElement("label");
+
+      const controlId =
+          `${groupName}-${recordId}-${field.name}`;
+
+      label.htmlFor = controlId;
+      label.textContent =
+          field.label || field.name;
+
+      if (field.required) {
+          const marker =
+              document.createElement("span");
+
+          marker.className =
+              "required required-marker";
+
+          marker.textContent = " *";
+
+          label.append(marker);
+      }
+
+      wrapper.append(label);
+
+      let control;
+
+      if (field.type === "textarea") {
+          control =
+              document.createElement("textarea");
+
+          control.value =
+              value ?? "";
+      }
+
+      else if (field.type === "select") {
+          control =
+              document.createElement("select");
+
+          const empty =
+              document.createElement("option");
+
+          empty.value = "";
+          empty.textContent =
+              "-- wybierz --";
+
+          control.append(empty);
+
+          (field.options || []).forEach(
+              (option) => {
+                  const element =
+                      document.createElement(
+                          "option"
+                      );
+
+                  element.value =
+                      repeatableOptionValue(
+                          option
+                      );
+
+                  element.textContent =
+                      repeatableOptionLabel(
+                          option
+                      );
+
+                  if (
+                      String(value ?? "") ===
+                      element.value
+                  ) {
+                      element.selected = true;
+                  }
+
+                  control.append(element);
+              }
+          );
+      }
+
+      else if (field.type === "radio") {
+          const list =
+              document.createElement("div");
+
+          list.className = "option-list";
+
+          const radioName =
+              `__repeatable_${groupName}_${recordId}_${field.name}`;
+
+          (field.options || []).forEach(
+              (option, index) => {
+                  const optionLabel =
+                      document.createElement(
+                          "label"
+                      );
+
+                  optionLabel.className =
+                      "option-item";
+
+                  const radio =
+                      document.createElement(
+                          "input"
+                      );
+
+                  radio.type = "radio";
+                  radio.name = radioName;
+
+                  radio.dataset.repeatableControl =
+                      "true";
+
+                  radio.dataset.repeatableChildName =
+                      field.name;
+
+                  radio.value =
+                      repeatableOptionValue(
+                          option
+                      );
+
+                  radio.id =
+                      `${controlId}-${index}`;
+
+                  radio.checked =
+                      String(value ?? "") ===
+                      radio.value;
+
+                  if (field.required) {
+                      radio.required = true;
+                  }
+
+                  const text =
+                      document.createElement(
+                          "span"
+                      );
+
+                  text.textContent =
+                      repeatableOptionLabel(
+                          option
+                      );
+
+                  optionLabel.append(
+                      radio,
+                      text
+                  );
+
+                  list.append(optionLabel);
+              }
+          );
+
+          wrapper.append(list);
+
+          return wrapper;
+      }
+
+      else if (field.type === "checkbox") {
+          const list =
+              document.createElement("div");
+
+          list.className = "option-list";
+
+          const selectedValues =
+              Array.isArray(value)
+                  ? value.map(String)
+                  : value
+                      ? [String(value)]
+                      : [];
+
+          (field.options || []).forEach(
+              (option, index) => {
+                  const optionLabel =
+                      document.createElement(
+                          "label"
+                      );
+
+                  optionLabel.className =
+                      "checkbox-item";
+
+                  const checkbox =
+                      document.createElement(
+                          "input"
+                      );
+
+                  checkbox.type =
+                      "checkbox";
+
+                  checkbox.dataset.repeatableControl =
+                      "true";
+
+                  checkbox.dataset.repeatableChildName =
+                      field.name;
+
+                  checkbox.value =
+                      repeatableOptionValue(
+                          option
+                      );
+
+                  checkbox.id =
+                      `${controlId}-${index}`;
+
+                  checkbox.checked =
+                      selectedValues.includes(
+                          checkbox.value
+                      );
+
+                  const text =
+                      document.createElement(
+                          "span"
+                      );
+
+                  text.textContent =
+                      repeatableOptionLabel(
+                          option
+                      );
+
+                  optionLabel.append(
+                      checkbox,
+                      text
+                  );
+
+                  list.append(optionLabel);
+              }
+          );
+
+          wrapper.append(list);
+
+          return wrapper;
+      }
+
+      else {
+          control =
+              document.createElement("input");
+
+          const supportedTypes = new Set([
+              "text",
+              "email",
+              "number",
+              "date",
+              "time",
+              "tel",
+          ]);
+
+          control.type =
+              supportedTypes.has(field.type)
+                  ? field.type
+                  : "text";
+
+          control.value =
+              value ?? "";
+      }
+
+      control.id = controlId;
+
+      control.dataset.repeatableControl =
+          "true";
+
+      control.dataset.repeatableChildName =
+          field.name;
+
+      control.placeholder =
+          field.placeholder || "";
+
+      if (field.required) {
+          control.required = true;
+      }
+
+      if (field.readonly) {
+          control.readOnly = true;
+      }
+
+      wrapper.append(control);
+
+      return wrapper;
+  }
+    function initializeRepeatableGroup(groupElement) {
+      const definitionElement =
+          groupElement.querySelector(
+              "[data-repeatable-definition]"
+          );
+
+      const initialElement =
+          groupElement.querySelector(
+              "[data-repeatable-initial]"
+          );
+
+      const itemsContainer =
+          groupElement.querySelector(
+              "[data-repeatable-items]"
+          );
+
+      const hiddenInput =
+          groupElement.querySelector(
+              "[data-repeatable-value]"
+          );
+
+      const addButton =
+          groupElement.querySelector(
+              "[data-repeatable-add]"
+          );
+
+      const definition =
+          JSON.parse(
+              definitionElement.textContent || "{}"
+          );
+
+      let initialValue;
+
+      try {
+          initialValue = JSON.parse(
+              initialElement.textContent || "[]"
+          );
+      } catch (_error) {
+          initialValue = [];
+      }
+
+      if (!Array.isArray(initialValue)) {
+          initialValue = [];
+      }
+
+      const minItems =
+          Number.parseInt(
+              groupElement.dataset.minItems,
+              10
+          ) || 0;
+
+      const maxItems =
+          Number.parseInt(
+              groupElement.dataset.maxItems,
+              10
+          ) || 20;
+
+      const itemLabel =
+          groupElement.dataset.itemLabel ||
+          "Element";
+
+      let records =
+          initialValue.map((record) => ({
+              ...record,
+              id:
+                  record?.id ||
+                  createRepeatableUuid(),
+          }));
+
+
+      function readRecord(recordElement) {
+          const record = {
+              id: recordElement.dataset.recordId,
+          };
+
+          const fieldDefinitions =
+              definition.fields || [];
+
+          fieldDefinitions.forEach((field) => {
+              const controls =
+                  Array.from(
+                      recordElement.querySelectorAll(
+                          `[data-repeatable-child-name="${CSS.escape(field.name)}"]`
+                      )
+                  );
+
+              if (
+                  field.type === "checkbox"
+              ) {
+                  record[field.name] =
+                      controls
+                          .filter(
+                              (control) =>
+                                  control.checked
+                          )
+                          .map(
+                              (control) =>
+                                  control.value
+                          );
+
+                  return;
+              }
+
+              if (field.type === "radio") {
+                  const checked =
+                      controls.find(
+                          (control) =>
+                              control.checked
+                      );
+
+                  record[field.name] =
+                      checked?.value || "";
+
+                  return;
+              }
+
+              record[field.name] =
+                  controls[0]?.value || "";
+          });
+
+          return record;
+      }
+
+
+      function syncValue() {
+          records =
+              Array.from(
+                  itemsContainer.querySelectorAll(
+                      "[data-repeatable-record]"
+                  )
+              ).map(readRecord);
+
+          hiddenInput.value =
+              JSON.stringify(records);
+
+          addButton.disabled =
+              records.length >= maxItems;
+
+          itemsContainer
+              .querySelectorAll(
+                  "[data-repeatable-remove]"
+              )
+              .forEach((button) => {
+                  button.disabled =
+                      records.length <= minItems;
+              });
+      }
+
+
+      function render() {
+          itemsContainer.replaceChildren();
+
+          records.forEach(
+              (record, index) => {
+                  const recordElement =
+                      document.createElement(
+                          "section"
+                      );
+
+                  recordElement.className =
+                      "repeatable-group__record";
+
+                  recordElement.dataset.repeatableRecord =
+                      "true";
+
+                  recordElement.dataset.recordId =
+                      record.id;
+
+                  const heading =
+                      document.createElement(
+                          "div"
+                      );
+
+                  heading.className =
+                      "repeatable-group__record-heading";
+
+                  const title =
+                      document.createElement(
+                          "strong"
+                      );
+
+                  title.textContent =
+                      `${itemLabel} ${index + 1}`;
+
+                  const remove =
+                      document.createElement(
+                          "button"
+                      );
+
+                  remove.type = "button";
+
+                  remove.className =
+                      "btn-secondary";
+
+                  remove.dataset.repeatableRemove =
+                      "true";
+
+                  remove.textContent = "Usuń";
+
+                  remove.addEventListener(
+                      "click",
+                      () => {
+                          if (
+                              records.length <=
+                              minItems
+                          ) {
+                              return;
+                          }
+
+                          records =
+                              records.filter(
+                                  (item) =>
+                                      item.id !==
+                                      record.id
+                              );
+
+                          render();
+                      }
+                  );
+
+                  heading.append(
+                      title,
+                      remove
+                  );
+
+                  recordElement.append(
+                      heading
+                  );
+
+                  const fields =
+                      document.createElement(
+                          "div"
+                      );
+
+                  fields.className =
+                      "repeatable-group__record-fields";
+
+                  (
+                      definition.fields || []
+                  ).forEach((field) => {
+                      /*
+                       * Plików nie zapisujemy
+                       * obecnie wewnątrz JSON
+                       * repeatable_group.
+                       */
+                      if (
+                          field.type === "file"
+                      ) {
+                          return;
+                      }
+
+                      fields.append(
+                          createRepeatableControl(
+                              definition.name,
+                              record.id,
+                              field,
+                              record[field.name]
+                          )
+                      );
+                  });
+
+                  recordElement.append(
+                      fields
+                  );
+
+                  itemsContainer.append(
+                      recordElement
+                  );
+              }
+          );
+
+          syncValue();
+      }
+
+
+      addButton.addEventListener(
+          "click",
+          () => {
+              syncValue();
+
+              if (
+                  records.length >= maxItems
+              ) {
+                  return;
+              }
+
+              records.push({
+                  id: createRepeatableUuid(),
+              });
+
+              render();
+          }
+      );
+
+
+      groupElement.addEventListener(
+          "input",
+          syncValue
+      );
+
+      groupElement.addEventListener(
+          "change",
+          syncValue
+      );
+
+
+      while (
+          records.length < minItems
+      ) {
+          records.push({
+              id: createRepeatableUuid(),
+          });
+      }
+
+      render();
+  }
+
+
+  document
+      .querySelectorAll(
+          "[data-repeatable-group]"
+      )
+      .forEach(
+          initializeRepeatableGroup
+      );
+</script>
 
 {% endblock %}

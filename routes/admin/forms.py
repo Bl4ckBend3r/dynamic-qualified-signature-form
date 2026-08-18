@@ -15,6 +15,7 @@ from services.form_access_service import generate_share_token
 
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
 from models import (
+    AccessRole,
     Form,
     FormField,
     FormPermission,
@@ -90,7 +91,6 @@ from services.workflow_config_service import (
 from pdf_generator import render_document_html
 
 from . import (
-    ROLE_ADMIN,
     ROLE_SUPER_ADMIN,
     active_fields_for_form,
     bp,
@@ -106,7 +106,7 @@ from . import (
     parse_field_options,
     parse_int,
     parse_optional_int,
-    role_required,
+    permission_required,
 )
 FORM_ACCESS_MODES = {
     "public",
@@ -138,7 +138,21 @@ def apply_form_access_mode(form: Form, raw_mode: str | None) -> str:
 
     return mode
 
-FIELD_TYPES = ["text", "textarea", "email", "tel", "number", "date", "select", "radio", "checkbox", "pesel", "file"]
+FIELD_TYPES = [
+    "text",
+    "textarea",
+    "email",
+    "tel",
+    "number",
+    "date",
+    "time",
+    "select",
+    "radio",
+    "checkbox",
+    "pesel",
+    "file",
+    "repeatable_group",
+]
 FORM_EDITOR_TABS = {
     "basic",
     "fields",
@@ -293,6 +307,11 @@ def forms_list():
         pagination = {"page": page, "pages": pages, "total": total, "has_previous": page > 1, "has_next": page < pages}
         pagination_urls = _form_pagination_urls(pagination)
         sort_urls = _form_sort_urls(sort_field, direction)
+        sla_view_form_ids = set(
+            current_app.extensions["services"].permission_service.form_ids_with_permission(
+                db, user, "can_view_submissions"
+            )
+        )
         return render_template(
             "admin/forms/list.html",
             forms=forms,
@@ -302,6 +321,7 @@ def forms_list():
             pagination=pagination,
             pagination_urls=pagination_urls,
             sort_urls=sort_urls,
+            sla_view_form_ids=sla_view_form_ids,
         )
 
 
@@ -558,7 +578,7 @@ def _form_sort_urls(current_sort: str, current_direction: str) -> dict[str, str]
 
 @bp.post("/forms/<int:form_id>/delete")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def form_delete(form_id: int):
     with db_session_factory()() as db:
         form = db.get(Form, form_id) or abort(404)
@@ -584,7 +604,7 @@ def form_delete(form_id: int):
 
 @bp.route("/forms/upload", methods=["GET", "POST"])
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def forms_upload():
     if request.method == "GET":
         with db_session_factory()() as db:
@@ -678,6 +698,15 @@ def forms_upload():
             status=FORM_VERSION_DRAFT,
         )
         db.add(FormPermission(user_id=g.admin_user.id, form_id=form.id, can_manage=True))
+        if g.admin_user.role != ROLE_SUPER_ADMIN:
+            administrator_role = db.execute(select(AccessRole).where(
+                AccessRole.key == "form_administrator", AccessRole.scope == "form", AccessRole.is_active.is_(True)
+            )).scalar_one_or_none()
+            if not administrator_role:
+                raise RuntimeError("Brak systemowej roli administratora formularza. Uruchom migracje bazy.")
+            current_app.extensions["services"].permission_service.replace_form_roles(
+                db, target=g.admin_user, form=form, role_ids=[administrator_role.id], actor=g.admin_user
+            )
         db.commit()
         form_id = form.id
     flash("Formularz został wgrany, a pola zostały wykryte.", "success")
@@ -698,7 +727,10 @@ def _render_forms_upload_error(active_tab: str):
 @login_required
 def form_edit(form_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, manage=True)
+        requested_tab = request.form.get("active_tab") if request.method == "POST" else request.args.get("tab")
+        active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
+        required_permission = "can_edit_workflow" if active_tab in {"workflow", "instructions"} else "can_edit_form"
+        form = ensure_form_access(db, form_id, permission=required_permission)
         version_service = current_app.extensions["services"].form_version_service
         editable_version = version_service.editable_draft(db, form.id)
         if version_service.has_versions(db, form.id) and not editable_version:
@@ -711,8 +743,6 @@ def form_edit(form_id: int):
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
         instruction_statuses = instruction_status_options()
-        requested_tab = request.form.get("active_tab") if request.method == "POST" else request.args.get("tab")
-        active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
         if request.method == "POST":
             _editable_form_version(db, form)
             training_catalog_actions: list[dict] = []
@@ -919,14 +949,6 @@ def form_edit(form_id: int):
                     regulation,
                     actor_id=g.admin_user.id,
                 )
-            if g.admin_user.role == ROLE_SUPER_ADMIN:
-                selected_user_ids = {int(item) for item in request.form.getlist("user_ids") if item.isdigit()}
-                existing = {permission.user_id: permission for permission in form.permissions}
-                for user in users:
-                    if user.id in selected_user_ids and user.id not in existing:
-                        db.add(FormPermission(user_id=user.id, form_id=form.id, can_manage=True))
-                    if user.id not in selected_user_ids and user.id in existing:
-                        db.delete(existing[user.id])
             _sync_editable_form_version(db, form)
             db.commit()
             _audit_training_catalog_actions(
@@ -2115,7 +2137,6 @@ def form_public_toggle(form_id: int):
 
 @bp.post("/forms/<int:form_id>/training-selection/toggle")
 @login_required
-@role_required(ROLE_ADMIN, ROLE_SUPER_ADMIN)
 def form_training_selection_toggle(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)

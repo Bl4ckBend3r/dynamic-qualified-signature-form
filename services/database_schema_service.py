@@ -67,7 +67,13 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
     "submission_checklist_item_results": frozenset({"submission_id", "checklist_item_definition_id", "result", "comment", "officer_user_id", "reviewed_at"}),
     "submission_checklist_evidence": frozenset({"result_id", "submission_file_id", "position"}),
     "submission_checklist_result_history": frozenset({"result_id", "previous_result", "new_result", "officer_user_id", "changed_at"}),
-    "form_fields": frozenset({"availability_json"}),
+    "form_fields": frozenset({"availability_json", "data_classification"}),
+    "permissions": frozenset({"key", "name", "category", "scope", "is_active"}),
+    "access_roles": frozenset({"key", "name", "scope", "is_system", "is_active"}),
+    "access_role_permissions": frozenset({"role_id", "permission_id"}),
+    "form_user_roles": frozenset({"user_id", "form_id", "role_id", "granted_by_user_id"}),
+    "user_global_roles": frozenset({"user_id", "role_id", "granted_by_user_id"}),
+    "role_assignment_audits": frozenset({"actor_user_id", "target_user_id", "role_id", "form_id", "action", "metadata_json"}),
     "form_drafts": frozenset(
         {"public_id", "form_id", "form_version_id", "email", "data_json", "status", "token_hash", "expires_at", "completed_at", "last_autosave_at", "submission_public_id"}
     ),
@@ -80,6 +86,7 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
             "workflow_step_at_upload",
             "antivirus_status",
             "rejection_reason",
+            "data_classification",
         }
     ),
     "email_logs": frozenset({"event_type", "error_type", "administrator_message", "html_body", "text_body"}),

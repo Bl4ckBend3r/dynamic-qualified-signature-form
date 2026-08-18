@@ -9,7 +9,6 @@ from sqlalchemy.orm import selectinload
 
 from models import (
     Form,
-    FormPermission,
     FormSubmission,
     FormVersion,
     SubmissionChecklistEvidence,
@@ -20,6 +19,7 @@ from models import (
     VerificationChecklistDefinition,
     VerificationChecklistItemDefinition,
 )
+from services.permission_service import PermissionService
 
 
 RESULTS = {"yes", "no", "not_applicable", "pending"}
@@ -42,30 +42,14 @@ class ChecklistValidation:
 class VerificationChecklistService:
     """Owns versioned checklist definitions, officer results and decision gates."""
 
-    def _permission(self, db, user: User, form: Form) -> FormPermission | None:
-        if user.role == "super_admin":
-            return None
-        return db.execute(select(FormPermission).where(
-            FormPermission.user_id == user.id, FormPermission.form_id == form.id
-        )).scalar_one_or_none()
-
     def can_review(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(user.is_active and not user.is_blocked and permission and permission.can_review)
+        return PermissionService().has_permission(db, user, "can_review", form=form)
 
     def can_make_decision(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(user.role == "admin" and permission and permission.can_make_decision)
+        return PermissionService().has_permission(db, user, "can_make_decision", form=form)
 
     def can_view_sensitive_data(self, db, user: User, form: Form) -> bool:
-        if user.role == "super_admin":
-            return True
-        permission = self._permission(db, user, form)
-        return bool(permission and permission.can_view_sensitive_data)
+        return PermissionService().has_permission(db, user, "can_view_sensitive_data", form=form)
 
     def list_for_version(self, db, form_version_id: int, *, active_only: bool = False):
         query = select(VerificationChecklistDefinition).options(
@@ -176,6 +160,9 @@ class VerificationChecklistService:
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one()
         if not self.can_review(db, officer, form):
             raise VerificationChecklistPermissionError("Brak uprawnienia do weryfikacji checklisty.")
+        can_view_sensitive = self.can_view_sensitive_data(db, officer, form)
+        if item.sensitive and not can_view_sensitive:
+            raise VerificationChecklistPermissionError("Brak uprawnienia do weryfikacji wrażliwego kryterium.")
         if item.checklist.form_version_id != submission.form_version_id:
             raise VerificationChecklistError("Kryterium nie należy do wersji formularza tego zgłoszenia.")
         result = str(result or "pending").strip()
@@ -189,6 +176,10 @@ class VerificationChecklistService:
             evidence = db.execute(select(SubmissionFile).where(SubmissionFile.id.in_(evidence_ids))).scalars().all()
             if len(evidence) != len(evidence_ids) or any(file.submission_id != submission.id for file in evidence):
                 raise VerificationChecklistError("Dokument będący podstawą musi należeć do tego zgłoszenia.")
+            if not can_view_sensitive and any(
+                str(file.data_classification or "normal") != "normal" for file in evidence
+            ):
+                raise VerificationChecklistPermissionError("Brak uprawnienia do użycia chronionego dokumentu.")
         record = db.execute(select(SubmissionChecklistItemResult).where(
             SubmissionChecklistItemResult.submission_id == submission.id,
             SubmissionChecklistItemResult.checklist_item_definition_id == item.id,

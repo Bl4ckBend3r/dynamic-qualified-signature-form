@@ -9,19 +9,18 @@ from services.mail_settings_service import diagnose_smtp_error
 from services.mail_template_service import sanitize_content_html
 
 from . import (
-    ROLE_SUPER_ADMIN,
     bp,
     db_session_factory,
     ensure_form_access,
     list_active_logos,
     login_required,
-    role_required,
+    permission_required,
 )
 
 
 @bp.route("/mail-settings", methods=["GET", "POST"])
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def system_mail_settings():
     service = current_app.extensions["services"].mail_settings_service
     with db_session_factory()() as db:
@@ -69,7 +68,7 @@ def system_mail_settings():
 
 @bp.post("/mail-settings/test")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def system_mail_settings_test():
     service = current_app.extensions["services"].mail_settings_service
     with db_session_factory()() as db:
@@ -100,7 +99,7 @@ def system_mail_settings_test():
 
 @bp.post("/mail-settings/test-email")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def system_mail_settings_test_email():
     settings_service = current_app.extensions["services"].mail_settings_service
     dispatch_service = current_app.extensions["services"].mail_dispatch_service

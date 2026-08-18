@@ -11,7 +11,7 @@ from services.logo_service import (
 )
 from services.upload_validation import UploadValidationError
 
-from . import ROLE_SUPER_ADMIN, bp, db_session_factory, login_required, role_required
+from . import bp, db_session_factory, has_permission, login_required, permission_required
 
 
 @bp.route("/logos", methods=["GET", "POST"])
@@ -19,7 +19,7 @@ from . import ROLE_SUPER_ADMIN, bp, db_session_factory, login_required, role_req
 def logos_list():
     with db_session_factory()() as db:
         if request.method == "POST":
-            if g.admin_user.role != ROLE_SUPER_ADMIN:
+            if not has_permission(db, "can_manage_site"):
                 abort(403)
             uploaded_file = request.files.get("logo_file")
             if not uploaded_file or not uploaded_file.filename:
@@ -43,7 +43,7 @@ def logos_list():
             flash("Logo zostalo dodane.", "success")
             return redirect(url_for("admin.logos_list"))
 
-        logos = list_logos_for_admin(db, g.admin_user)
+        logos = list_logos_for_admin(db, g.admin_user, manage_all=has_permission(db, "can_manage_site"))
         logo_usage = {
             logo.id: db.query(Form).filter(Form.logo_id == logo.id).count()
             for logo in logos
@@ -53,7 +53,7 @@ def logos_list():
 
 @bp.post("/logos/<int:logo_id>/toggle")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def logo_toggle(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id) or abort(404)
@@ -66,7 +66,7 @@ def logo_toggle(logo_id: int):
 
 @bp.route("/logos/<int:logo_id>/edit", methods=["GET", "POST"])
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def logo_edit(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id)
@@ -89,7 +89,7 @@ def logo_edit(logo_id: int):
 def logo_asset(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id)
-        logo_path = logo_asset_path_for_user(logo, g.admin_user)
+        logo_path = logo_asset_path_for_user(logo, g.admin_user, manage_all=has_permission(db, "can_manage_site"))
         if not logo_path:
             abort(404)
         return send_file(logo_path, mimetype=logo.mime_type or None)
@@ -97,7 +97,7 @@ def logo_asset(logo_id: int):
 
 @bp.post("/logos/<int:logo_id>/delete")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def logo_delete(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id) or abort(404)

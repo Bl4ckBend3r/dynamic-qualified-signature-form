@@ -280,7 +280,10 @@ def test_round_robin_is_serialized_on_real_database(environment_name):
             db.add_all([form, *users])
             db.flush()
             db.add_all([
-                FormPermission(user_id=user.id, form_id=form.id, can_manage=False, can_review=True)
+                FormPermission(
+                    user_id=user.id, form_id=form.id, can_manage=False,
+                    can_assign_submissions=True,
+                )
                 for user in users
             ])
             submissions = [

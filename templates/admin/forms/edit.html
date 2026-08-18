@@ -841,11 +841,8 @@
         <section class="admin-form-tab-panel" id="form-tab-permissions" role="tabpanel" data-form-tab-panel="permissions" {% if active_tab != 'permissions' %}hidden{% endif %}>
         <div class="admin-section">
             <h2>Uprawnienia</h2>
-            <div class="admin-check-grid">
-                {% for user in users %}
-                    <label class="admin-check"><input type="checkbox" name="user_ids" value="{{ user.id }}" {% if user.id in assigned_user_ids %}checked{% endif %}><span>{{ user.email }} ({{ user.role }})</span></label>
-                {% endfor %}
-            </div>
+            <p>Dostęp jest nadawany przez role formularza. Jedna osoba może mieć inny zestaw ról w każdym formularzu.</p>
+            <div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.users_list') }}">Przypisz role użytkownikom</a><a class="admin-button-secondary" href="{{ url_for('admin.roles_list') }}">Zarządzaj rolami</a></div>
         </div>
         </section>
     {% endif %}

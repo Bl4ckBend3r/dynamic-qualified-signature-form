@@ -182,6 +182,11 @@ class FormSubmission(Base):
     internal_notes: Mapped[list["SubmissionInternalNote"]] = relationship(
         back_populates="submission", cascade="all, delete-orphan"
     )
+    step_deadlines: Mapped[list["SubmissionStepDeadline"]] = relationship(
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        order_by="SubmissionStepDeadline.entered_at.desc(), SubmissionStepDeadline.id.desc()",
+    )
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_user_id])
     assigned_by: Mapped["User | None"] = relationship(foreign_keys=[assigned_by_user_id])
     assignment_history: Mapped[list["SubmissionAssignmentHistory"]] = relationship(
@@ -680,6 +685,116 @@ class FormVersion(Base):
         cascade="all, delete-orphan",
         order_by="VerificationChecklistDefinition.position, VerificationChecklistDefinition.id",
     )
+    sla_definitions: Mapped[list["WorkflowStepSlaDefinition"]] = relationship(
+        back_populates="form_version",
+        cascade="all, delete-orphan",
+        order_by="WorkflowStepSlaDefinition.step_key, WorkflowStepSlaDefinition.id",
+    )
+
+
+class BusinessCalendar(Base):
+    __tablename__ = "business_calendars"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    timezone_name: Mapped[str] = mapped_column(String(64), default="Europe/Warsaw", nullable=False)
+    weekend_days: Mapped[list] = mapped_column(JsonDict, default=lambda: [5, 6], nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    holidays: Mapped[list["BusinessCalendarHoliday"]] = relationship(
+        back_populates="calendar", cascade="all, delete-orphan", order_by="BusinessCalendarHoliday.holiday_date"
+    )
+
+
+class BusinessCalendarHoliday(Base):
+    __tablename__ = "business_calendar_holidays"
+    __table_args__ = (UniqueConstraint("business_calendar_id", "holiday_date", name="uq_business_calendar_holiday"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    business_calendar_id: Mapped[int] = mapped_column(ForeignKey("business_calendars.id", ondelete="CASCADE"), nullable=False)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+
+    calendar: Mapped[BusinessCalendar] = relationship(back_populates="holidays")
+
+
+class WorkflowStepSlaDefinition(Base):
+    __tablename__ = "workflow_step_sla_definitions"
+    __table_args__ = (
+        UniqueConstraint("form_version_id", "step_key", name="uq_workflow_step_sla_version_step"),
+        CheckConstraint("deadline_unit IN ('hours', 'calendar_days', 'business_days')", name="ck_workflow_step_sla_unit"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_version_id: Mapped[int] = mapped_column(ForeignKey("form_versions.id", ondelete="CASCADE"), nullable=False)
+    step_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    deadline_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    deadline_unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    business_calendar_id: Mapped[int | None] = mapped_column(ForeignKey("business_calendars.id", ondelete="SET NULL"), nullable=True)
+    actor_type: Mapped[str] = mapped_column(String(32), default="office", nullable=False)
+    reminders_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
+    escalation_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    form_version: Mapped[FormVersion] = relationship(back_populates="sla_definitions")
+    business_calendar: Mapped[BusinessCalendar | None] = relationship()
+    deadlines: Mapped[list["SubmissionStepDeadline"]] = relationship(back_populates="sla_definition")
+
+
+class SubmissionStepDeadline(Base):
+    __tablename__ = "submission_step_deadlines"
+    __table_args__ = (
+        Index("ix_submission_step_deadlines_submission_status", "submission_id", "status"),
+        Index("ix_submission_step_deadlines_due_status", "due_at", "status"),
+        CheckConstraint("status IN ('active', 'completed', 'cancelled')", name="ck_submission_step_deadline_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), nullable=False)
+    sla_definition_id: Mapped[int | None] = mapped_column(ForeignKey("workflow_step_sla_definitions.id", ondelete="SET NULL"), nullable=True)
+    workflow_step: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(32), default="office", nullable=False)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    sla_definition_snapshot: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+
+    submission: Mapped[FormSubmission] = relationship(back_populates="step_deadlines")
+    sla_definition: Mapped[WorkflowStepSlaDefinition | None] = relationship(back_populates="deadlines")
+    notifications: Mapped[list["SubmissionDeadlineNotification"]] = relationship(
+        back_populates="deadline", cascade="all, delete-orphan"
+    )
+
+
+class SubmissionDeadlineNotification(Base):
+    __tablename__ = "submission_deadline_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "submission_step_deadline_id", "reminder_key", "recipient_email", "notification_type",
+            name="uq_submission_deadline_notification_delivery",
+        ),
+        Index("ix_submission_deadline_notifications_status_scheduled", "status", "scheduled_for"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_step_deadline_id: Mapped[int] = mapped_column(ForeignKey("submission_step_deadlines.id", ondelete="CASCADE"), nullable=False)
+    reminder_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    recipient_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    notification_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="claimed", nullable=False)
+    email_log_id: Mapped[int | None] = mapped_column(ForeignKey("email_logs.id", ondelete="SET NULL"), nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    deadline: Mapped[SubmissionStepDeadline] = relationship(back_populates="notifications")
+    recipient_user: Mapped[User | None] = relationship()
 
 
 class VerificationChecklistDefinition(Base):

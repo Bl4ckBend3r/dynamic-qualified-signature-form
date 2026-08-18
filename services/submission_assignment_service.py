@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, func, or_, select
 
@@ -11,6 +12,7 @@ from models import (
     FormPermission,
     FormSubmission,
     SubmissionAssignmentHistory,
+    SubmissionStepDeadline,
     User,
 )
 
@@ -161,6 +163,21 @@ class SubmissionAssignmentService:
             query = query.where(FormSubmission.assigned_to_user_id == int(assignee))
         if queue == "overdue" or str(filters.get("overdue") or "") in {"1", "true", "on"}:
             query = query.where(FormSubmission.due_at.is_not(None), FormSubmission.due_at < now)
+        if queue in {"sla_overdue", "sla_today", "sla_24h", "sla_48h"}:
+            deadline_query = select(SubmissionStepDeadline.submission_id).where(SubmissionStepDeadline.status == "active")
+            if queue == "sla_overdue":
+                deadline_query = deadline_query.where(SubmissionStepDeadline.due_at < now)
+            elif queue == "sla_today":
+                local_now = now.astimezone(ZoneInfo("Europe/Warsaw"))
+                tomorrow = (local_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+                deadline_query = deadline_query.where(SubmissionStepDeadline.due_at >= now, SubmissionStepDeadline.due_at < tomorrow)
+            else:
+                hours = 24 if queue == "sla_24h" else 48
+                deadline_query = deadline_query.where(
+                    SubmissionStepDeadline.due_at >= now,
+                    SubmissionStepDeadline.due_at <= now + timedelta(hours=hours),
+                )
+            query = query.where(FormSubmission.id.in_(deadline_query))
         if queue == "requiring_decision":
             query = query.where(FormSubmission.process_status.in_(REVIEW_STATUSES))
         if queue == "waiting_office_signature":

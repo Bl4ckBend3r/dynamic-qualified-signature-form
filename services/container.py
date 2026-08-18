@@ -44,6 +44,7 @@ from services.submission_workflow_history_service import SubmissionWorkflowHisto
 from services.workflow_service import WorkflowService
 from services.verification_checklist_service import VerificationChecklistService
 from services.submission_internal_note_service import SubmissionInternalNoteService
+from services.workflow_sla_service import WorkflowSlaService
 
 
 @dataclass
@@ -88,6 +89,7 @@ class ServiceContainer:
     blocked_agreement_admin_service: BlockedAgreementAdminService
     verification_checklist_service: VerificationChecklistService
     submission_internal_note_service: SubmissionInternalNoteService
+    workflow_sla_service: WorkflowSlaService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -125,7 +127,6 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
     submission_internal_note_service = SubmissionInternalNoteService(audit_log_service=audit_log_service)
-    workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)
     beneficiary_agreement_service = BeneficiaryAgreementService()
     office_signed_agreement_service = OfficeSignedAgreementService(storage)
     notification_service = NotificationService(
@@ -187,6 +188,12 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_document_service=submission_document_service,
         strict_document_metadata_read=bool(app.config.get("STRICT_DOCUMENT_METADATA_READ")),
     )
+    workflow_sla_service = WorkflowSlaService(mail_dispatch_service=mail_dispatch_service)
+    workflow_service = WorkflowService(
+        submission_repository,
+        audit_log_service=audit_log_service,
+        workflow_sla_service=workflow_sla_service,
+    )
     compliance_service = ComplianceService(submission_repository)
     submission_attachment_service = SubmissionAttachmentService(submission_repository, storage)
     submission_service = SubmissionService(
@@ -203,6 +210,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         compliance_service=compliance_service,
         submission_attachment_service=submission_attachment_service,
         submission_assignment_service=submission_assignment_service,
+        workflow_sla_service=workflow_sla_service,
     )
     submission_training_service = SubmissionTrainingService()
     document_signing_service = DocumentSigningService(
@@ -255,4 +263,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         blocked_agreement_admin_service=blocked_agreement_admin_service,
         verification_checklist_service=verification_checklist_service,
         submission_internal_note_service=submission_internal_note_service,
+        workflow_sla_service=workflow_sla_service,
     )

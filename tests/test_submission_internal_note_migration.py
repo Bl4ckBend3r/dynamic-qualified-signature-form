@@ -12,6 +12,8 @@ def test_internal_note_migration_schema_and_permission_backfill(tmp_path):
     Table("forms", metadata, Column("id", Integer, primary_key=True))
     Table("users", metadata, Column("id", Integer, primary_key=True))
     Table("form_submissions", metadata, Column("id", Integer, primary_key=True))
+    Table("form_versions", metadata, Column("id", Integer, primary_key=True))
+    Table("email_logs", metadata, Column("id", Integer, primary_key=True))
     permissions = Table(
         "form_permissions", metadata, Column("id", Integer, primary_key=True),
         Column("can_review", Boolean, nullable=False), Column("can_manage", Boolean, nullable=False),

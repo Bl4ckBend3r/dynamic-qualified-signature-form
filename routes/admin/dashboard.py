@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 from flask import current_app, g, render_template
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from models import EmailLog, FormSubmission, SubmissionFile
+from models import EmailLog, FormSubmission, SubmissionFile, SubmissionStepDeadline
 
 from . import (
     ROLE_SUPER_ADMIN,
@@ -34,6 +37,21 @@ def dashboard():
         assignment_queues = current_app.extensions["services"].submission_assignment_service.queue_counts(
             db, user_id=user.id, form_slugs=slugs
         )
+        now = datetime.now(timezone.utc)
+        local_now = now.astimezone(ZoneInfo(current_app.config.get("APP_TIMEZONE", "Europe/Warsaw")))
+        tomorrow = (local_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        sla_scope = [SubmissionStepDeadline.status == "active"]
+        if user.role != ROLE_SUPER_ADMIN:
+            sla_scope.append(FormSubmission.form_slug.in_(slugs or [""]))
+        sla_values = db.execute(
+            select(
+                func.count(func.distinct(case((SubmissionStepDeadline.due_at < now, SubmissionStepDeadline.submission_id)))),
+                func.count(func.distinct(case(((SubmissionStepDeadline.due_at >= now) & (SubmissionStepDeadline.due_at < tomorrow), SubmissionStepDeadline.submission_id)))),
+                func.count(func.distinct(case(((SubmissionStepDeadline.due_at >= now) & (SubmissionStepDeadline.due_at <= now + timedelta(hours=24)), SubmissionStepDeadline.submission_id)))),
+                func.count(func.distinct(case(((SubmissionStepDeadline.due_at >= now) & (SubmissionStepDeadline.due_at <= now + timedelta(hours=48)), SubmissionStepDeadline.submission_id)))),
+            ).select_from(SubmissionStepDeadline).join(FormSubmission).where(*sla_scope)
+        ).one()
+        sla_queues = dict(zip(("overdue", "today", "within_24h", "within_48h"), (int(value or 0) for value in sla_values)))
         pending_query = select(func.count(FormSubmission.id)).where(
             FormSubmission.process_status.in_(["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION"])
         )
@@ -117,4 +135,5 @@ def dashboard():
         last_smtp_attempt_at=last_smtp_attempt_at,
         last_smtp_error=last_smtp_error,
         assignment_queues=assignment_queues,
+        sla_queues=sla_queues,
     )

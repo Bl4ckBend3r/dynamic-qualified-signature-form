@@ -14,6 +14,7 @@ def test_verification_checklist_migration_is_portable_schema(tmp_path):
     Table("form_versions", metadata, Column("id", Integer, primary_key=True), Column("form_id", Integer))
     Table("form_submissions", metadata, Column("id", Integer, primary_key=True))
     Table("submission_files", metadata, Column("id", Integer, primary_key=True))
+    Table("email_logs", metadata, Column("id", Integer, primary_key=True))
     Table(
         "form_permissions", metadata, Column("id", Integer, primary_key=True),
         Column("can_manage", Boolean, nullable=False), Column("can_review", Boolean, nullable=False),

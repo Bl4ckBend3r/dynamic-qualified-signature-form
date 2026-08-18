@@ -21,6 +21,7 @@ from models import (
     SubmissionChecklistEvidence,
     SubmissionChecklistItemResult,
     SubmissionInternalNote,
+    SubmissionStepDeadline,
     SubmissionAssignmentHistory,
     SubmissionFile,
     SubmissionWorkflowEvent,
@@ -454,6 +455,20 @@ def submission_detail(form_id: int, submission_pk: int):
         internal_notes = note_service.list_notes(
             db, submission, search=notes_search, form=form, viewer=g.admin_user
         ) if can_view_internal_notes else []
+        deadline_rows = db.execute(
+            select(SubmissionStepDeadline)
+            .where(SubmissionStepDeadline.submission_id == submission.id)
+            .order_by(SubmissionStepDeadline.entered_at.desc(), SubmissionStepDeadline.id.desc())
+        ).scalars().all()
+        workflow_sla_service = services.workflow_sla_service
+        deadline_history = [
+            {
+                "row": row,
+                "view": workflow_sla_service.state(row),
+                "duration_hours": round(((row.completed_at or datetime.now(timezone.utc)).replace(tzinfo=row.entered_at.tzinfo) - row.entered_at).total_seconds() / 3600, 2),
+            }
+            for row in deadline_rows
+        ]
         return render_template(
             "admin/submissions/detail.html",
             form=form,
@@ -489,6 +504,7 @@ def submission_detail(form_id: int, submission_pk: int):
             can_view_internal_notes=can_view_internal_notes,
             can_add_internal_notes=can_add_internal_notes,
             can_manage_internal_notes=can_manage_internal_notes,
+            deadline_history=deadline_history,
         )
 
 
@@ -760,6 +776,7 @@ def submission_stage_rollback(submission_id: str):
         send_notification = request.form.get("send_notification") == "on"
         service = current_app.extensions["services"].submission_stage_rollback_service
         submission_form_config = _submission_form_config(db, form, submission)
+        previous_step = str(submission.workflow_step or submission.workflow_stage or "")
         try:
             result = service.rollback(
                 db,
@@ -767,6 +784,13 @@ def submission_stage_rollback(submission_id: str):
                 target_status=target_status,
                 reason=reason,
                 actor=g.admin_user,
+                form_config=submission_form_config,
+            )
+            current_app.extensions["services"].workflow_sla_service.transition(
+                db,
+                submission,
+                previous_step=previous_step,
+                new_step=str(submission.workflow_step or submission.workflow_stage or ""),
                 form_config=submission_form_config,
             )
             db.commit()
@@ -975,6 +999,7 @@ def submission_return_for_correction(submission_id: str):
         if not str(submission.access_token or "").strip():
             submission.access_token = current_app.extensions["services"].access_token_service.generate_token()
         submission_form_config = _submission_form_config(db, form, submission)
+        previous_step = str(submission.workflow_step or submission.workflow_stage or "")
         try:
             result = current_app.extensions["services"].submission_correction_service.return_for_correction(
                 db,
@@ -984,6 +1009,13 @@ def submission_return_for_correction(submission_id: str):
                 message_to_user=message_to_user,
                 clear_submission=clear_submission,
                 actor=g.admin_user,
+            )
+            current_app.extensions["services"].workflow_sla_service.transition(
+                db,
+                submission,
+                previous_step=previous_step,
+                new_step=str(submission.workflow_step or submission.workflow_stage or ""),
+                form_config=submission_form_config,
             )
             db.commit()
         except (SubmissionCorrectionError, PermissionError) as exc:
@@ -1871,17 +1903,27 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         submission.correction_required = "Tak"
         submission.correction_message = reason
         submission.correction_requested_at = datetime.now(timezone.utc)
-        submission.workflow_step = "waiting_for_correction"
     else:
         target_status = submission.process_status
 
     if decision != "correction":
         submission.correction_required = "Nie"
-    current_app.extensions["services"].workflow_service.transition_submission(
+    workflow_service = current_app.extensions["services"].workflow_service
+    historical_definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
+    previous_step = str(submission.workflow_stage or submission.workflow_step or "")
+    target_step = workflow_service.resolve_next_step(
+        historical_definition, previous_step, decision
+    )
+    if decision == "correction":
+        target_step = "waiting_for_correction"
+    elif decision == "rejected" and not target_step:
+        target_step = "end_rejected"
+    workflow_service.transition_submission(
         submission,
         target_status,
         actor="officer",
         reason="officer_decision",
+        target_step=target_step,
     )
     submission.updated_at = datetime.now(timezone.utc)
     db.commit()

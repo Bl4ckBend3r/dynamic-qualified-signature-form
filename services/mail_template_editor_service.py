@@ -51,6 +51,13 @@ VARIABLE_GROUPS = (
             ("acceptance_required", "Czy akceptacja jest wymagana", "Tak"),
             ("declaration_required", "Czy deklaracja jest wymagana", "Tak"),
             ("agreement_required", "Czy umowa jest wymagana", "Nie"),
+            ("participant_name", "Imię i nazwisko uczestnika dla SLA", "Jan Kowalski"),
+            ("step_label", "Nazwa etapu objętego SLA", "Weryfikacja urzędnika"),
+            ("due_at", "Termin etapu SLA", "2026-08-20 14:30"),
+            ("overdue_by", "Czas przekroczenia terminu", "1 day, 2:00:00"),
+            ("overdue_hours", "Liczba godzin po terminie", "26"),
+            ("assigned_officer", "E-mail przypisanego urzędnika", "anna.kowalska@example.org"),
+            ("sla_actor_type", "Strona odpowiedzialna za etap", "office"),
         ),
     ),
     (

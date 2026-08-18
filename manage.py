@@ -96,6 +96,18 @@ def expire_form_drafts(database_url: str | None = None) -> int:
     return 0
 
 
+def process_workflow_deadlines() -> int:
+    from scripts.process_deadlines import process_deadlines
+
+    try:
+        result = process_deadlines()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print("SLA deadlines: " + ", ".join(f"{key}={value}" for key, value in result.items()))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -109,6 +121,7 @@ def main() -> int:
     upgrade_parser.add_argument("--database-url")
     expire_parser = subparsers.add_parser("drafts-expire")
     expire_parser.add_argument("--database-url")
+    subparsers.add_parser("process-deadlines")
     args = parser.parse_args()
     if args.command == "validate-form":
         return validate_form(
@@ -122,6 +135,8 @@ def main() -> int:
         return db_upgrade(args.database_url)
     if args.command == "drafts-expire":
         return expire_form_drafts(args.database_url)
+    if args.command == "process-deadlines":
+        return process_workflow_deadlines()
     return 1
 
 

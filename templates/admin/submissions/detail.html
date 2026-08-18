@@ -14,6 +14,20 @@
     </form>{% endif %}
     {% if can_claim_submission and submission.assigned_to_user_id != g.admin_user.id and (not submission.assigned_to_user_id or can_assign_submissions) %}<form method="post" action="{{ url_for('admin.submission_assignment_claim', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary" type="submit">Przejmij sprawę</button></form>{% endif %}
 </section>
+<section class="admin-card admin-section" id="workflow-sla" aria-labelledby="workflow-sla-title">
+    <div class="admin-section-heading"><div><h2 id="workflow-sla-title">Terminy etapów i SLA</h2><p>Terminy liczone od wejścia do etapu; zakończone rekordy pozostają w historii.</p></div></div>
+    {% if deadline_history %}
+    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Etap</th><th>Odpowiedzialność</th><th>Wejście</th><th>Termin</th><th>Zakończenie</th><th>Stan</th><th>Czas</th></tr></thead><tbody>
+    {% for item in deadline_history %}{% set deadline = item.row %}<tr>
+        <td>{{ deadline.workflow_step }}</td><td>{{ 'Uczestnik' if deadline.actor_type == 'participant' else 'Urząd' }}</td>
+        <td>{{ deadline.entered_at.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ deadline.due_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ deadline.completed_at.strftime('%d.%m.%Y %H:%M') if deadline.completed_at else '—' }}</td>
+        <td><span class="admin-badge">{{ {'active':'Aktywny','due_soon':'Termin blisko','overdue':'Po terminie','completed':'Zakończony','cancelled':'Anulowany'}.get(item.view.state, item.view.state) }}</span>{% if item.view.overdue_seconds %}<br><small>{{ (item.view.overdue_seconds / 3600)|round(1) }} h po terminie</small>{% endif %}</td>
+        <td>{{ item.duration_hours }} h</td>
+    </tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p>Ten etap nie ma zapisanej instancji SLA.</p>{% endif %}
+</section>
 {% if can_view_internal_notes %}
 <section class="admin-card admin-section" id="internal-notes" aria-labelledby="internal-notes-title">
     <div class="admin-section-heading">

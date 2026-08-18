@@ -93,6 +93,11 @@ KNOWN_STEP_FIELDS = {
     "stage_type",
     "instruction",
     "side_effects",
+    "sla",
+    "deadline",
+    "reminders",
+    "escalation",
+    "business_calendar_id",
 }
 
 
@@ -604,6 +609,20 @@ class WorkflowConfigValidator:
             if step["id"] in ids:
                 errors.append(f"Identyfikator etapu „{step['id']}” występuje więcej niż raz.")
             ids.add(step["id"])
+            sla = step.get("sla") if isinstance(step.get("sla"), Mapping) else {}
+            deadline = sla.get("deadline") if isinstance(sla.get("deadline"), Mapping) else step.get("deadline")
+            if deadline is not None:
+                if not isinstance(deadline, Mapping):
+                    errors.append(f"SLA etapu „{step['admin_label']}” musi zawierać obiekt deadline.")
+                else:
+                    try:
+                        deadline_value = int(deadline.get("value"))
+                    except (TypeError, ValueError):
+                        deadline_value = -1
+                    if deadline_value < 0:
+                        errors.append(f"SLA etapu „{step['admin_label']}” ma nieprawidłową wartość terminu.")
+                    if str(deadline.get("unit") or "") not in {"hours", "calendar_days", "business_days"}:
+                        errors.append(f"SLA etapu „{step['admin_label']}” ma nieobsługiwaną jednostkę terminu.")
         all_ids = {step["id"] for step in all_steps}
         if config["initial_step"] and config["initial_step"] not in all_ids:
             errors.append("Status początkowy wskazuje nieistniejący etap.")

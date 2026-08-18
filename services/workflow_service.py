@@ -41,10 +41,11 @@ def workflow_status_label(status_id: str, form_config: dict | None = None) -> st
 
 
 class WorkflowService:
-    def __init__(self, submission_repository=None, audit_log_service=None, *, side_effect_handlers=None) -> None:
+    def __init__(self, submission_repository=None, audit_log_service=None, *, side_effect_handlers=None, workflow_sla_service=None) -> None:
         self.submission_repository = submission_repository
         self.audit_log_service = audit_log_service
         self.side_effect_handlers = dict(side_effect_handlers or {})
+        self.workflow_sla_service = workflow_sla_service
 
     def get_current_step(self, submission: dict, form_config: dict) -> str:
         explicit = str(submission.get("workflow_stage") or submission.get("workflow_step") or "").strip()
@@ -110,6 +111,19 @@ class WorkflowService:
                 actor=actor,
                 metadata=metadata or {},
             )
+        if updated and self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
+            from models import FormSubmission
+            from sqlalchemy import select
+
+            with self.submission_repository.session_factory() as db:
+                model = db.execute(
+                    select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+                ).scalar_one_or_none()
+                if model is not None:
+                    self.workflow_sla_service.transition(
+                        db, model, previous_step=old_step, new_step=target_step
+                    )
+                    db.commit()
         return updated
 
     def transition_submission(
@@ -123,7 +137,7 @@ class WorkflowService:
         strict: bool = False,
     ):
         old_status = getattr(submission, "process_status", None)
-        old_step = getattr(submission, "workflow_step", None)
+        old_step = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
         transition_allowed = can_transition(old_status, target_status)
         if strict and not transition_allowed:
             raise ValueError(f"Niedozwolone przejście statusu: {old_status} -> {target_status}")
@@ -136,12 +150,24 @@ class WorkflowService:
             submission.legacy_process_status = str(old_status or "")
         if hasattr(submission, "final_outcome"):
             submission.final_outcome = final_outcome_for_status(target_status).value
+        new_step = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
+        if self.workflow_sla_service and old_step != new_step:
+            from sqlalchemy.orm import object_session
+
+            db = object_session(submission)
+            if db is not None:
+                self.workflow_sla_service.transition(
+                    db,
+                    submission,
+                    previous_step=old_step,
+                    new_step=new_step,
+                )
         self._record_workflow_event(
             getattr(submission, "submission_id", ""),
             previous_status=old_status,
             new_status=target_status,
             previous_step=old_step,
-            new_step=getattr(submission, "workflow_step", None),
+            new_step=new_step,
             actor=actor,
             reason=reason,
             decision_code="",

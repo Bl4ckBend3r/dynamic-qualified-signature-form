@@ -25,6 +25,10 @@
         <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='mine') }}"><span>Moje sprawy</span><strong>{{ assignment_queues.mine }}</strong></a>
         <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='unassigned') }}"><span>Nieprzydzielone</span><strong>{{ assignment_queues.unassigned }}</strong></a>
         <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='overdue') }}"><span>Po terminie</span><strong>{{ assignment_queues.overdue }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_overdue') }}"><span>SLA po terminie</span><strong>{{ sla_queues.overdue }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_today') }}"><span>SLA dzisiaj</span><strong>{{ sla_queues.today }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_24h') }}"><span>SLA ≤ 24h</span><strong>{{ sla_queues.within_24h }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_48h') }}"><span>SLA ≤ 48h</span><strong>{{ sla_queues.within_48h }}</strong></a>
         <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='requiring_decision') }}"><span>Wymagające decyzji</span><strong>{{ assignment_queues.requiring_decision }}</strong></a>
         <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='waiting_office_signature') }}"><span>Oczekujące na podpis urzędu</span><strong>{{ assignment_queues.waiting_office_signature }}</strong></a>
     </div>

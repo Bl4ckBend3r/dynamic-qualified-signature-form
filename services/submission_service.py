@@ -44,6 +44,7 @@ class SubmissionService:
         compliance_service: ComplianceService | None = None,
         submission_attachment_service: SubmissionAttachmentService | None = None,
         submission_assignment_service=None,
+        workflow_sla_service=None,
         validator=validate_submission,
     ) -> None:
         self.submission_repository = submission_repository
@@ -64,6 +65,7 @@ class SubmissionService:
             submission_repository, storage
         )
         self.submission_assignment_service = submission_assignment_service
+        self.workflow_sla_service = workflow_sla_service
         self.validator = validator
 
     def submit_form(
@@ -253,6 +255,12 @@ class SubmissionService:
             **build_legacy_process_fields(),
         }
         self.submission_repository.create(submission)
+        if self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
+            self.workflow_sla_service.initialize_submission(
+                self.submission_repository.session_factory,
+                public_submission_id=submission_id,
+                form_config=form_config,
+            )
         if self.submission_assignment_service and hasattr(self.submission_repository, "session_factory"):
             try:
                 self.submission_assignment_service.auto_assign_created(

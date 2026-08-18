@@ -30,6 +30,10 @@ EVENT_LABELS = {
     "agreement_signed_by_office": "Umowa podpisana przez urząd",
     "stage_rollback": "Etap procesu został cofnięty",
     "email_requested": "Workflow wymaga wysłania wiadomości",
+    "sla_before_deadline": "Przypomnienie przed terminem SLA",
+    "sla_deadline": "Termin SLA przypada teraz",
+    "sla_overdue": "Termin SLA został przekroczony",
+    "sla_escalation": "Eskalacja przekroczonego SLA",
 }
 
 SAFE_SYSTEM_EVENTS = ("manual", "manual_bulk", "application_submitted", "submission_received")
@@ -83,6 +87,11 @@ class WorkflowMailTriggerService:
         decisions: list[dict[str, str]] = []
         if workflow.get("allow_correction"):
             events.append(self._event("correction_accepted", source="workflow"))
+        if any(step.get("sla") or step.get("deadline") for step in steps):
+            events.extend(
+                self._event(value, source="workflow")
+                for value in ("sla_before_deadline", "sla_deadline", "sla_overdue", "sla_escalation")
+            )
 
         for step in steps:
             stage_id = str(step.get("id") or "").strip()

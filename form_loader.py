@@ -229,10 +229,16 @@ def _validate_field_definition(
                 f"Grupa '{group_name}' zawiera zduplikowaną "
                 f"nazwę pola: '{nested_name}'."
             )
-
         nested_names.add(nested_name)
-        
-        
+
+    contact_field = str(field.get("decision_contact_email_field") or "").strip()
+    if contact_field:
+        matching = next((item for item in nested_fields if str(item.get("name") or "") == contact_field), None)
+        if not matching or matching.get("type") != "email":
+            raise ValueError(
+                f"Grupa '{group_name}' wskazuje pole kontaktowe '{contact_field}', które nie istnieje albo nie jest typu email."
+            )
+
 def validate_form_definition(form_definition: Dict[str, Any]) -> None:
     if "title" not in form_definition:
         raise ValueError("Brak pola 'title' w definicji formularza.")

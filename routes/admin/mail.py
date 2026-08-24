@@ -56,6 +56,7 @@ MAIL_TEMPLATE_LABELS = {
     "agreement_signed_by_user": "Umowa podpisana przez beneficjenta",
     "agreement_signed_by_office": "Umowa podpisana przez urząd",
     "stage_rollback": "Cofnięcie etapu",
+    "repeatable_item_decision": "Decyzja dla elementu listy",
     "custom": "Wiadomość własna",
 }
 MAIL_PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)")

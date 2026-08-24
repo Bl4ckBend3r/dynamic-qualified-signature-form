@@ -16,6 +16,7 @@ from services.form_access_service import generate_share_token
 from form_loader import FIELD_STAGE_AFTER_ACCEPTANCE, FIELD_STAGE_INITIAL
 from models import (
     AccessRole,
+    DecisionTypeDefinition,
     Form,
     FormField,
     FormPermission,
@@ -88,6 +89,7 @@ from services.workflow_config_service import (
     repair_agreement_confirmation_path,
     workflow_status_options,
 )
+from services.decision_definition_service import DecisionDefinitionError
 from pdf_generator import render_document_html
 
 from . import (
@@ -323,6 +325,72 @@ def forms_list():
             sort_urls=sort_urls,
             sla_view_form_ids=sla_view_form_ids,
         )
+
+
+@bp.route("/decision-types", methods=["GET", "POST"])
+@login_required
+def decision_types():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+    service = current_app.extensions["services"].decision_definition_service
+    with db_session_factory()() as db:
+        if request.method == "POST":
+            record_id = parse_optional_int(request.form.get("decision_type_id"))
+            record = db.get(DecisionTypeDefinition, record_id) if record_id else None
+            if record_id and not record:
+                abort(404)
+            try:
+                service.save_definition(
+                    db,
+                    definition=record,
+                    code=request.form.get("code", ""),
+                    label=request.form.get("label", ""),
+                    description=request.form.get("description", ""),
+                    category=request.form.get("semantic_category", ""),
+                    sort_order=parse_int(request.form.get("sort_order"), 0),
+                    active=request.form.get("is_active") == "on",
+                    actor_id=g.admin_user.id,
+                )
+                db.commit()
+                flash("Zapisano typ decyzji.", "success")
+            except DecisionDefinitionError as exc:
+                db.rollback()
+                flash(str(exc), "error")
+            return redirect(url_for("admin.decision_types"))
+        catalog = service.list_catalog(db)
+        forms = db.execute(select(Form).order_by(Form.name, Form.id)).scalars().all()
+        form_rows = []
+        version_service = current_app.extensions["services"].form_version_service
+        for form in forms:
+            draft = version_service.editable_draft(db, form.id)
+            workflow = (draft.definition_json or {}).get("workflow") if draft else {}
+            form_rows.append({"form": form, "draft": draft, "steps": [item for item in (workflow or {}).get("steps", []) if isinstance(item, dict)]})
+        return render_template("admin/forms/decision_types.html", catalog=catalog, form_rows=form_rows)
+
+
+@bp.post("/decision-types/<int:decision_type_id>/assign")
+@login_required
+def decision_type_assign(decision_type_id: int):
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+    with db_session_factory()() as db:
+        definition = db.get(DecisionTypeDefinition, decision_type_id) or abort(404)
+        form = db.get(Form, parse_int(request.form.get("form_id"))) or abort(404)
+        draft = current_app.extensions["services"].form_version_service.editable_draft(db, form.id)
+        if not draft:
+            flash("Formularz nie ma wersji roboczej. Najpierw utwórz draft.", "error")
+            return redirect(url_for("admin.decision_types"))
+        try:
+            current_app.extensions["services"].decision_definition_service.assign_to_draft(
+                draft, definition, step_id=request.form.get("step_id", ""), target_step=request.form.get("target_step", "")
+            )
+            current_app.extensions["services"].form_version_service.apply_to_legacy_editor(db, form, draft.definition_json)
+            db.commit()
+            flash("Przypisano decyzję do wersji roboczej formularza.", "success")
+        except DecisionDefinitionError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.decision_types"))
 
 
 @bp.get("/forms/<int:form_id>/versions")
@@ -742,6 +810,10 @@ def form_edit(form_id: int):
         )
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
+        if form.project_logo_id and all(item.id != form.project_logo_id for item in logos):
+            project_logo = db.get(Logo, form.project_logo_id)
+            if project_logo:
+                logos.append(project_logo)
         instruction_statuses = instruction_status_options()
         if request.method == "POST":
             _editable_form_version(db, form)
@@ -909,6 +981,10 @@ def form_edit(form_id: int):
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
                 abort(403)
             form.logo_id = selected_logo_id
+            selected_project_logo_id = parse_optional_int(request.form.get("project_logo_id"))
+            if selected_project_logo_id and not can_select_logo(db, g.admin_user, selected_project_logo_id):
+                abort(403)
+            form.project_logo_id = selected_project_logo_id
             uploaded_regulation = request.files.get("regulation_file")
             if uploaded_regulation and uploaded_regulation.filename:
                 try:

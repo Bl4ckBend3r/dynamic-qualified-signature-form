@@ -240,6 +240,13 @@ class SubmissionService:
     ) -> dict:
         submission_id = submission_id or str(uuid4())
         document_ids = self._enabled_document_ids(form_config)
+        workflow = form_config.get("workflow") or {}
+        initial_step = str(workflow.get("initial_step") or "submission")
+        initial_step_config = next(
+            (item for item in workflow.get("steps") or [] if isinstance(item, dict) and str(item.get("id") or "") == initial_step),
+            {},
+        )
+        initial_status = str(initial_step_config.get("status") or ProcessStatus.FORM_SUBMITTED.value)
         submission = {
             "submission_id": submission_id,
             "form_slug": form_slug,
@@ -253,6 +260,9 @@ class SubmissionService:
                 agreement_required=bool({"agreement", "training_agreement"} & document_ids),
             ),
             **build_legacy_process_fields(),
+            "process_status": initial_status,
+            "workflow_step": initial_step,
+            "workflow_stage": initial_step,
         }
         self.submission_repository.create(submission)
         if self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):

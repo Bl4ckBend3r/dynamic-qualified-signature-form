@@ -8,6 +8,7 @@ from collections import Counter
 from models import SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.nextcloud_storage import NextcloudStorageError
 from services.process_service import ProcessStatus
+from signature_verifier import verify_signed_pdf_bytes
 
 
 SIGNED_BY_BENEFICIARY_TYPES = {"signed_agreement", "signed_training_agreement"}
@@ -51,8 +52,9 @@ class OfficeSignedAgreementResult:
 class OfficeSignedAgreementService:
     """Registers exact, per-training office-signed files already placed in Nextcloud."""
 
-    def __init__(self, storage) -> None:
+    def __init__(self, storage, verifier=verify_signed_pdf_bytes) -> None:
         self._storage = storage
+        self.verifier = verifier
 
     @property
     def storage(self):
@@ -135,6 +137,15 @@ class OfficeSignedAgreementService:
             if not file_exists:
                 missing.append(filename)
                 continue
+            try:
+                verification = dict(self.verifier(self.storage.read_bytes(path)))
+            except Exception as exc:
+                errors.append(f"{filename}: walidacja podpisu ({exc.__class__.__name__})")
+                continue
+            validation_status = str(verification.get("validation_status") or "INDETERMINATE").upper()
+            if validation_status in {"INVALID", "UNSIGNED"}:
+                errors.append(f"{filename}: {validation_status} — {verification.get('reason') or 'nieprawidłowy podpis'}")
+                continue
             db.add(SubmissionFile(
                 submission_id=submission.id,
                 public_submission_id=submission.submission_id,
@@ -149,7 +160,8 @@ class OfficeSignedAgreementService:
                 mime_type="application/pdf",
                 signed=True,
                 status="signed",
-                signature_status="office_signed",
+                signature_status=validation_status.lower(),
+                signature_validation_result=verification,
                 training_key=key,
                 signed_at=now,
             ))

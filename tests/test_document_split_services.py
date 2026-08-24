@@ -254,7 +254,13 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
         submission_service=SimpleNamespace(
             build_signed_pdf_filename=lambda slug, submission_id: f"{slug}-{submission_id}-signed.pdf"
         ),
-        verifier=lambda path: {"is_signed": True, "is_szafir_signature": True},
+        verifier=lambda path: {
+            "is_signed": True,
+            "is_szafir_signature": True,
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "validation_status": "INDETERMINATE",
+        },
     )
     uploaded_file = SimpleNamespace(
         filename="signed.pdf",

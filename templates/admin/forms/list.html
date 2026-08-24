@@ -63,6 +63,7 @@
                         <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
                             {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
+                            {% if form.is_public %}<button class="admin-link-button" type="button" role="menuitem" data-copy-public-link="{{ url_for('public_forms.form_page', slug=form.slug) }}">Kopiuj link</button>{% endif %}
                             {% if form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.form_sla', form_id=form.id) }}">Terminy i SLA</a>{% endif %}
                             {% if g.admin_user.role in ["super_admin", "admin"] %}
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
@@ -106,5 +107,21 @@
 {% else %}
 <div class="admin-empty-state"><h2>Nie znaleziono formularzy.</h2><p>Zmień filtry lub wyczyść je, aby zobaczyć inne wyniki.</p></div>
 {% endif %}
-<script>document.querySelectorAll("[data-submit-delete]").forEach(button => button.addEventListener("click", () => { const form = document.getElementById(button.dataset.submitDelete); if (form) form.submit(); }));</script>
+<div class="admin-toast" role="status" aria-live="polite" data-copy-link-status hidden>Link skopiowany</div>
+<script>
+document.querySelectorAll("[data-submit-delete]").forEach(button => button.addEventListener("click", () => { const form = document.getElementById(button.dataset.submitDelete); if (form) form.submit(); }));
+document.querySelectorAll("[data-copy-public-link]").forEach((button) => button.addEventListener("click", async () => {
+    const absoluteUrl = new URL(button.dataset.copyPublicLink, document.baseURI).href;
+    const status = document.querySelector("[data-copy-link-status]");
+    try {
+        await navigator.clipboard.writeText(absoluteUrl);
+    } catch (_error) {
+        const input = document.createElement("textarea"); input.value = absoluteUrl; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0";
+        document.body.appendChild(input); input.select(); document.execCommand("copy"); input.remove();
+    }
+    button.textContent = "Link skopiowany";
+    if (status) { status.hidden = false; window.setTimeout(() => { status.hidden = true; }, 2500); }
+    window.setTimeout(() => { button.textContent = "Kopiuj link"; }, 2500);
+}));
+</script>
 {% endblock %}

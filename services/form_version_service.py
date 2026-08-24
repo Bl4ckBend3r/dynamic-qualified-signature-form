@@ -123,6 +123,7 @@ class FormVersionService:
         definition["label_color"] = form.label_color
         definition["label_background"] = form.label_background
         definition["logo_alignment"] = form.logo_alignment
+        definition["project_logo_id"] = form.project_logo_id
         definition["_form_metadata"] = {
             "name": form.name,
             "title": form.title,
@@ -134,6 +135,7 @@ class FormVersionService:
             "label_color": form.label_color,
             "label_background": form.label_background,
             "logo_id": form.logo_id,
+            "project_logo_id": form.project_logo_id,
             "logo_alignment": form.logo_alignment,
         }
         return definition
@@ -158,6 +160,7 @@ class FormVersionService:
         form.label_color = str(snapshot_value("label_color", "#b38d45") or "#b38d45")
         form.label_background = str(snapshot_value("label_background", "#f7f3ec") or "#f7f3ec")
         form.logo_id = metadata.get("logo_id")
+        form.project_logo_id = metadata.get("project_logo_id")
         form.logo_alignment = str(snapshot_value("logo_alignment", "left") or "left")
         form.definition_json = snapshot
         sync_form_fields(db, form, snapshot)

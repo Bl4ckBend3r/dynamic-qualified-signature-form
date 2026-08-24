@@ -21,6 +21,7 @@ TRIGGER_DESCRIPTIONS = {
     "email_requested": "Uruchamiany, gdy workflow wymaga wysłania wiadomości e-mail.",
     "additional_fields_completed": "Uruchamiany po uzupełnieniu przez użytkownika dodatkowych pól wymaganych po akceptacji wniosku.",
     "form_draft_resume": "Wysyłany po zapisaniu wersji roboczej formularza lub ponowieniu bezpiecznego linku.",
+    "repeatable_item_decision": "Wysyłany ręcznie do adresu przypisanego do konkretnego elementu grupy powtarzalnej.",
 }
 
 

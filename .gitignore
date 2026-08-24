@@ -58,6 +58,9 @@ tmp/*
 !tmp/archive/
 tmp/archive/*
 !tmp/archive/.gitkeep
+.test-tmp*
+tmp*/
+.pytest-*
 *.log
 *.bak
 *.old

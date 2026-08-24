@@ -19,6 +19,22 @@ class FakeStorage:
     def office_signed_agreement_directory(self, slug):
         return f"output/{slug}/pdf/umowy/podpisane_przez_urzad"
 
+    def read_bytes(self, path):
+        return b"%PDF-1.7 test fixture"
+
+
+def _verified_service(storage):
+    return OfficeSignedAgreementService(
+        storage,
+        verifier=lambda payload: {
+            "validation_status": "VALID",
+            "cryptographically_valid": True,
+            "integrity_valid": True,
+            "trusted": True,
+            "revocation_status": "good",
+        },
+    )
+
 
 def test_office_signed_files_are_registered_per_training_with_partial_result():
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -82,7 +98,7 @@ def test_office_signed_files_are_registered_per_training_with_partial_result():
         db.add_all([python, excel, future])
         db.flush()
 
-        result = OfficeSignedAgreementService(storage).check(
+        result = _verified_service(storage).check(
             db, form, submission, actor=SimpleNamespace(id=1, email="admin@example.com", role="admin")
         )
 
@@ -98,7 +114,7 @@ def test_office_signed_files_are_registered_per_training_with_partial_result():
         event = db.query(SubmissionWorkflowEvent).filter_by(source="agreement_signed_by_office").one()
         assert event.side_effects["training_ids"] == ["python"]
 
-        repeated = OfficeSignedAgreementService(storage).check(
+        repeated = _verified_service(storage).check(
             db, form, submission, actor=SimpleNamespace(id=1, email="admin@example.com", role="admin")
         )
         assert repeated.found_count == 0
@@ -132,7 +148,7 @@ def test_office_signed_check_can_target_one_training_only():
         db.add(training)
         db.flush()
 
-        result = OfficeSignedAgreementService(storage).check(
+        result = _verified_service(storage).check(
             db, form, submission, actor=SimpleNamespace(role="admin"), training_key="python"
         )
 
@@ -181,7 +197,7 @@ def test_office_signed_check_rejects_filename_conflict_between_trainings():
             ))
         db.flush()
 
-        result = OfficeSignedAgreementService(storage).check(
+        result = _verified_service(storage).check(
             db, form, submission, actor=SimpleNamespace(role="admin")
         )
 

@@ -133,7 +133,7 @@
                     <td>{{ (((submission.imiona or submission_value(submission, 'imie') or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
                     <td class="column-secondary">{{ (submission.email or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
                     <td class="column-secondary">{{ (submission.telefon or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
-                    <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
+                    <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
                     <td>{{ form.name }}</td>
                     <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
                     <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>

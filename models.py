@@ -124,7 +124,7 @@ class FormSubmission(Base):
     final_outcome: Mapped[str | None] = mapped_column(String(100), default=None, nullable=True)
     document_states: Mapped[dict | None] = mapped_column(JsonDict, default=None, nullable=True)
     legacy_process_status: Mapped[str | None] = mapped_column(String(100), default=None, nullable=True)
-    officer_decision: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    officer_decision: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     officer_decision_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     officer_decision_email_requested: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     officer_decision_email_sent: Mapped[str] = mapped_column(String(16), default="", nullable=False)
@@ -326,7 +326,11 @@ class SubmissionDecision(Base):
     submission_id: Mapped[int | None] = mapped_column(ForeignKey("form_submissions.id", ondelete="SET NULL"), index=True, nullable=True)
     public_submission_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
     form_slug: Mapped[str] = mapped_column(String(255), default="", nullable=False)
-    decision: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    decision: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    decision_label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    semantic_category: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    workflow_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    target_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     justification: Mapped[str] = mapped_column(Text, default="", nullable=False)
     officer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     officer_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
@@ -347,6 +351,30 @@ class SubmissionDecision(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class RepeatableGroupItemDecision(Base):
+    __tablename__ = "repeatable_group_item_decisions"
+    __table_args__ = (
+        Index("ix_repeatable_item_decision_lookup", "submission_id", "group_key", "item_id", "decided_at"),
+        Index("ix_repeatable_item_decision_code", "decision_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("form_submissions.id", ondelete="CASCADE"), nullable=False)
+    group_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    decision_type_id: Mapped[int | None] = mapped_column(ForeignKey("decision_type_definitions.id", ondelete="SET NULL"), nullable=True)
+    decision_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    semantic_category: Mapped[str] = mapped_column(String(32), nullable=False)
+    workflow_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    target_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    decided_by: Mapped["User | None"] = relationship(foreign_keys=[decided_by_user_id])
 
 
 class SubmissionAssignmentHistory(Base):
@@ -516,6 +544,24 @@ def _require_internal_note_revision(session, _flush_context, _instances) -> None
             raise ValueError("Submission internal note content cannot change without a revision.")
 
 
+class DecisionTypeDefinition(Base):
+    __tablename__ = "decision_type_definitions"
+    __table_args__ = (
+        CheckConstraint("semantic_category IN ('positive', 'negative', 'correction', 'neutral')", name="ck_decision_type_semantic_category"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    semantic_category: Mapped[str] = mapped_column(String(32), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Logo(Base):
     __tablename__ = "logos"
 
@@ -542,7 +588,8 @@ class Logo(Base):
         nullable=False,
     )
 
-    forms: Mapped[list["Form"]] = relationship(back_populates="logo")
+    forms: Mapped[list["Form"]] = relationship(back_populates="logo", foreign_keys="Form.logo_id")
+    project_forms: Mapped[list["Form"]] = relationship(back_populates="project_logo", foreign_keys="Form.project_logo_id")
     mail_footers: Mapped[list["MailFooter"]] = relationship(back_populates="logo")
     site_footers: Mapped[list["SiteFooter"]] = relationship(back_populates="logo")
 
@@ -569,6 +616,7 @@ class Form(Base):
     label_background: Mapped[str] = mapped_column(String(64), default="#f7f3ec", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), nullable=True)
+    project_logo_id: Mapped[int | None] = mapped_column(ForeignKey("logos.id", ondelete="SET NULL"), nullable=True)
     logo_alignment: Mapped[str] = mapped_column(String(16), default="left", nullable=False)
     mail_mode: Mapped[str] = mapped_column(String(32), default="system", nullable=False)
     smtp_config: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
@@ -589,7 +637,8 @@ class Form(Base):
     )
 
     creator: Mapped[User | None] = relationship(back_populates="forms_created")
-    logo: Mapped[Logo | None] = relationship(back_populates="forms")
+    logo: Mapped[Logo | None] = relationship(back_populates="forms", foreign_keys=[logo_id])
+    project_logo: Mapped[Logo | None] = relationship(back_populates="project_forms", foreign_keys=[project_logo_id])
     fields: Mapped[list["FormField"]] = relationship(back_populates="form", cascade="all, delete-orphan")
     versions: Mapped[list["FormVersion"]] = relationship(
         back_populates="form",
@@ -1531,6 +1580,9 @@ class EmailLog(Base):
     administrator_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     sent_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    repeatable_group_key: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    repeatable_item_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    item_decision_id: Mapped[int | None] = mapped_column(ForeignKey("repeatable_group_item_decisions.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

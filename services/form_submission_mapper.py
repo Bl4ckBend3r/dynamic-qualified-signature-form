@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import json
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -277,7 +277,7 @@ def build_submission_from_form(
             mapped[column_name] = False
 
     if "created_at" not in mapped or mapped["created_at"] in {"", None}:
-        mapped["created_at"] = datetime.now()
+        mapped["created_at"] = datetime.now(timezone.utc)
 
     if include_metadata:
         return mapped, {

@@ -23,6 +23,11 @@ endblock %} {% block content %}
     >
       <img class="form-logo" src="{{ form_definition.logo_url }}" alt="" />
     </div>
+    {% endif %}
+    {% if form_definition.project_logo_url %}
+    <div class="form-project-logo-row">
+      <img class="form-project-logo" src="{{ form_definition.project_logo_url }}" alt="Logo projektu" />
+    </div>
     {% endif %} {% if form_definition.description %}
     <p class="form-description">{{ form_definition.description }}</p>
     {% endif %}
@@ -58,11 +63,7 @@ endblock %} {% block content %}
     <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}" />
     {% if form_version_token %}
     <input type="hidden" name="form_version_id" value="{{ form_version_id }}" />
-    <input
-      type="hidden"
-      name="form_version_token"
-      value="{{ form_version_token }}"
-    />
+    <input type="hidden" name="form_version_token" value="{{ form_version_token }}" />
     {% endif %} {% if correction_mode %}<input
       type="hidden"
       name="token"

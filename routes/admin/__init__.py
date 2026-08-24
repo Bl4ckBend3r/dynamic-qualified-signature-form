@@ -100,6 +100,7 @@ MAIL_TEMPLATE_TYPES = [
     "custom",
     "correction_accepted",
     "form_draft_resume",
+    "repeatable_item_decision",
 ]
 
 

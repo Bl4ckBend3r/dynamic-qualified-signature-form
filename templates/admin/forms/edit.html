@@ -677,6 +677,16 @@
             </select>
         </label>
         <label>
+            <span>Logo projektu (opcjonalne)</span>
+            <select name="project_logo_id" data-project-logo-select>
+                <option value="">Bez logo projektu</option>
+                {% for logo in logos %}
+                    <option value="{{ logo.id }}" data-logo-url="{{ url_for('admin.logo_asset', logo_id=logo.id) }}" {% if form.project_logo_id == logo.id %}selected{% endif %}>{{ logo.name }}{% if not logo.active %} (nieaktywne){% endif %}</option>
+                {% endfor %}
+            </select>
+            <small>Logo pochodzi z istniejącej biblioteki i zostanie zamrożone w wersji formularza.</small>
+        </label>
+        <label>
             <span>Wyrównanie logo</span>
             <select name="logo_alignment" data-header-logo-alignment>
                 <option value="left" {% if form.logo_alignment == "left" or not form.logo_alignment %}selected{% endif %}>Do lewej</option>
@@ -687,6 +697,7 @@
         </div>
         <div class="admin-form-header-preview" data-form-header-preview>
             <div class="admin-form-header-logo admin-align-{{ form.logo_alignment or 'left' }}" data-header-logo-wrap>{% if form.logo_id %}<img class="admin-form-header-logo__image" src="{{ url_for('admin.logo_asset', logo_id=form.logo_id) }}" alt="Podgląd logo" data-header-logo>{% else %}<img class="admin-form-header-logo__image" alt="Podgląd logo" data-header-logo hidden>{% endif %}</div>
+            <div class="admin-form-header-logo admin-align-center" data-project-logo-wrap>{% if form.project_logo_id %}<img class="admin-form-header-logo__image" src="{{ url_for('admin.logo_asset', logo_id=form.project_logo_id) }}" alt="Podgląd logo projektu" data-project-logo>{% else %}<img class="admin-form-header-logo__image" alt="Podgląd logo projektu" data-project-logo hidden>{% endif %}</div>
             <span class="admin-form-header-preview__label" data-header-label style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
             <h3 data-header-title>{{ form.title or form.name }}</h3>
             <p>Podgląd nagłówka formularza publicznego</p>
@@ -1549,6 +1560,8 @@ function refreshHeaderPreview() {
     const logo = headerPreview.querySelector("[data-header-logo]");
     const logoWrap = headerPreview.querySelector("[data-header-logo-wrap]");
     const logoSelect = document.querySelector('[name="logo_id"]');
+    const projectLogoSelect = document.querySelector('[name="project_logo_id"]');
+    const projectLogo = headerPreview.querySelector("[data-project-logo]");
     if (label) {
         label.textContent = document.querySelector("[data-header-label-input]")?.value || "Etykieta formularza";
         label.style.color = document.querySelector("[data-header-label-color]")?.value || "#b38d45";
@@ -1557,13 +1570,16 @@ function refreshHeaderPreview() {
     if (title) title.textContent = document.querySelector("[data-header-title-input]")?.value || document.querySelector('[name="name"]')?.value || "Tytuł formularza";
     const logoUrl = logoSelect?.selectedOptions[0]?.dataset.logoUrl || "";
     if (logo) { logo.src = logoUrl; logo.hidden = !logoUrl; }
+    const projectLogoUrl = projectLogoSelect?.selectedOptions[0]?.dataset.logoUrl || "";
+    if (projectLogo) { projectLogo.src = projectLogoUrl; projectLogo.hidden = !projectLogoUrl; }
     if (logoWrap) logoWrap.style.textAlign = document.querySelector("[data-header-logo-alignment]")?.value || "left";
 }
 [
     "[data-header-label-input]", "[data-header-label-color]", "[data-header-label-background]",
-    "[data-header-title-input]", '[name="name"]', '[name="logo_id"]', "[data-header-logo-alignment]",
+    "[data-header-title-input]", '[name="name"]', '[name="logo_id"]', '[name="project_logo_id"]', "[data-header-logo-alignment]",
 ].forEach((selector) => document.querySelector(selector)?.addEventListener("input", refreshHeaderPreview));
 document.querySelector('[name="logo_id"]')?.addEventListener("change", refreshHeaderPreview);
+document.querySelector('[name="project_logo_id"]')?.addEventListener("change", refreshHeaderPreview);
 document.querySelector("[data-header-logo-alignment]")?.addEventListener("change", refreshHeaderPreview);
 refreshHeaderPreview();
 

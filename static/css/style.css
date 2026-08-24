@@ -1245,6 +1245,20 @@ textarea:focus {
     align-items: center;
     background: #fafafa;
 }
+
+.form-project-logo-row {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.form-project-logo {
+  display: block;
+  width: auto;
+  max-width: min(100%, 320px);
+  max-height: 140px;
+  object-fit: contain;
+}
 .attachment-dropzone.is-dragging { border-color: #8a6a2f; background: #f7f3ec; }
 .attachment-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .attachment-dropzone small { flex-basis: 100%; }

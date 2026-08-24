@@ -1,0 +1,43 @@
+{% extends "admin/base.html" %}
+{% block title %}Typy decyzji{% endblock %}
+{% block content %}
+<div class="admin-page-header"><div><h1>Typy decyzji</h1><p>Globalny katalog i wersjonowane przypisania do formularzy.</p></div></div>
+<section class="admin-card">
+  <h2>Dodaj typ decyzji</h2>
+  <form method="post" class="admin-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <label><span>Kod techniczny</span><input name="code" pattern="[a-z][a-z0-9_]+" required></label>
+    <label><span>Nazwa</span><input name="label" required></label>
+    <label><span>Kategoria</span><select name="semantic_category" required><option value="positive">Pozytywna</option><option value="negative">Negatywna</option><option value="correction">Do poprawy</option><option value="neutral">Neutralna / inna</option></select></label>
+    <label><span>Kolejność</span><input type="number" name="sort_order" value="0"></label>
+    <label class="admin-check"><input type="checkbox" name="is_active" checked><span>Aktywna</span></label>
+    <label class="admin-form-grid-full"><span>Opis</span><textarea name="description" rows="2"></textarea></label>
+    <button class="admin-button" type="submit">Dodaj</button>
+  </form>
+</section>
+{% for decision in catalog %}
+<section class="admin-card">
+  <form method="post" class="admin-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="decision_type_id" value="{{ decision.id }}">
+    <label><span>Kod</span><input name="code" value="{{ decision.code }}" required></label>
+    <label><span>Nazwa</span><input name="label" value="{{ decision.label }}" required></label>
+    <label><span>Kategoria</span><select name="semantic_category">{% for value, label in [('positive','Pozytywna'),('negative','Negatywna'),('correction','Do poprawy'),('neutral','Neutralna / inna')] %}<option value="{{ value }}" {% if decision.semantic_category == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label><span>Kolejność</span><input type="number" name="sort_order" value="{{ decision.sort_order }}"></label>
+    <label class="admin-check"><input type="checkbox" name="is_active" {% if decision.is_active %}checked{% endif %}><span>Aktywna</span></label>
+    <label class="admin-form-grid-full"><span>Opis</span><textarea name="description" rows="2">{{ decision.description }}</textarea></label>
+    <button class="admin-button-secondary" type="submit">Zapisz definicję</button>
+  </form>
+  <details><summary>Przypisz do wersji roboczej formularza</summary>
+    {% for row in form_rows if row.draft %}
+    <form method="post" action="{{ url_for('admin.decision_type_assign', decision_type_id=decision.id) }}" class="admin-form-grid">
+      <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="form_id" value="{{ row.form.id }}">
+      <strong>{{ row.form.name }} — draft {{ row.draft.version_label }}</strong>
+      <label><span>Etap decyzji</span><select name="step_id" required>{% for step in row.steps %}<option value="{{ step.id }}">{{ step.admin_label or step.label or step.id }}</option>{% endfor %}</select></label>
+      <label><span>Etap docelowy</span><select name="target_step" required>{% for step in row.steps %}<option value="{{ step.id }}">{{ step.admin_label or step.label or step.id }}</option>{% endfor %}</select></label>
+      <button class="admin-button-secondary compact" type="submit">Przypisz</button>
+    </form>
+    {% else %}<p>Brak formularzy z wersją roboczą.</p>{% endfor %}
+  </details>
+</section>
+{% else %}<div class="admin-empty-state">Brak typów decyzji.</div>{% endfor %}
+{% endblock %}

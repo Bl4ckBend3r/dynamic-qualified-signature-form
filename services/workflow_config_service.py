@@ -404,9 +404,22 @@ class WorkflowConfigNormalizer:
         source["electronic_signature_required"] = bool(source.get("electronic_signature_required", True))
         source["signed_document_uploader"] = str(source.get("signed_document_uploader") or "beneficiary")
         raw_decisions = self._mapping_list(source.get("decision_settings"))
+        raw_decision_types = self._mapping_list(source.get("decision_types"))
         source["email_notifications"] = self._mapping_list(source.get("email_notifications"))
         source["steps"] = [self.normalize_step(step, index) for index, step in enumerate(raw_steps) if isinstance(step, Mapping)]
         source["decision_settings"] = normalize_decision_assignments(raw_decisions, source["steps"])
+        source["decision_types"] = [
+            {
+                **item,
+                "code": str(item.get("code") or "").strip(),
+                "label": str(item.get("label") or item.get("code") or "").strip(),
+                "semantic_category": str(item.get("semantic_category") or "neutral").strip(),
+                "step_id": str(item.get("step_id") or "").strip(),
+                "target_step": str(item.get("target_step") or "").strip(),
+                "active": bool(item.get("active", True)),
+            }
+            for item in raw_decision_types if item.get("code")
+        ]
         if "diagram_layout" in source:
             source["diagram_layout"] = self._normalize_diagram_layout(source.get("diagram_layout"))
         for decision in source["decision_settings"]:
@@ -734,6 +747,13 @@ class WorkflowConfigValidator:
                 for outcome in decision.get("outcomes") or []
                 if isinstance(outcome, Mapping)
             )
+        for decision in config.get("decision_types") or []:
+            if decision.get("semantic_category") not in {"positive", "negative", "correction", "neutral"}:
+                errors.append(f"Decyzja „{decision.get('code')}” ma nieprawidłową kategorię semantyczną.")
+            if decision.get("step_id") not in all_ids:
+                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap decyzji.")
+            if decision.get("target_step") not in all_ids:
+                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap docelowy.")
             if (
                 not has_real_transition
                 and decision_id in AGREEMENT_DECISION_IDS

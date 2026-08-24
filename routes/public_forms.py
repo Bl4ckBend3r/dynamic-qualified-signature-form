@@ -837,7 +837,10 @@ def version_to_public_form(db, form: Form, version: FormVersion) -> tuple[dict, 
     metadata = definition.get("_form_metadata") if isinstance(definition.get("_form_metadata"), dict) else {}
     logo_id = metadata.get("logo_id", form.logo_id)
     logo = db.get(Logo, logo_id) if logo_id else None
+    project_logo_id = metadata.get("project_logo_id")
+    project_logo = db.get(Logo, project_logo_id) if project_logo_id else None
     definition["logo_url"] = logo_url(logo)
+    definition["project_logo_url"] = logo_url(project_logo)
     definition["regulation_url"] = (
         url_for(
             "public_forms.form_regulation_version_file",
@@ -866,6 +869,7 @@ def form_to_public_meta(form: Form, *, definition: dict | None = None, logo: Log
         "label_color": definition.get("label_color", form.label_color),
         "label_background": definition.get("label_background", form.label_background),
         "logo_url": logo_url(logo if definition else form.logo),
+        "project_logo_url": definition.get("project_logo_url") if definition else logo_url(form.project_logo),
         "logo_alignment": logo_alignment,
         "regulation_url": url_for("public_forms.form_regulation_file", slug=form.slug) if form.regulation else "",
     }
@@ -883,6 +887,7 @@ def form_to_definition(form: Form, fields: list[FormField]) -> dict:
     definition["description"] = form.description
     definition["fields"] = form_fields_to_definition(fields, original_fields)
     definition["logo_url"] = logo_url(form.logo)
+    definition["project_logo_url"] = logo_url(form.project_logo)
     definition["label_text"] = form.label_text
     definition["label_color"] = form.label_color
     definition["label_background"] = form.label_background

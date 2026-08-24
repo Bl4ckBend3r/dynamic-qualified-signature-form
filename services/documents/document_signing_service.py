@@ -66,6 +66,8 @@ class DocumentSigningService:
         verification = self._verify_pdf(uploaded_bytes, temp_dir)
         if not verification.get("is_signed"):
             raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
+        if not verification.get("cryptographically_valid") or not verification.get("integrity_ok"):
+            raise ValueError("Podpis PDF jest nieprawidłowy albo dokument został zmieniony po podpisaniu.")
         if not verification.get("is_szafir_signature"):
             raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
 
@@ -87,7 +89,7 @@ class DocumentSigningService:
             document_id="form_submission",
             document_type=SubmissionDocumentType.SIGNED_FORM_PDF,
             original_filename=str(uploaded_file.filename or ""),
-            signature_status="valid",
+            signature_status=str(verification.get("validation_status") or "INDETERMINATE").lower(),
             signature_validation_result=verification,
             storage_path=storage_path,
             storage=self.storage,

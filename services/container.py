@@ -46,6 +46,7 @@ from services.workflow_service import WorkflowService
 from services.verification_checklist_service import VerificationChecklistService
 from services.submission_internal_note_service import SubmissionInternalNoteService
 from services.workflow_sla_service import WorkflowSlaService
+from services.decision_definition_service import DecisionDefinitionService
 
 
 @dataclass
@@ -92,6 +93,7 @@ class ServiceContainer:
     submission_internal_note_service: SubmissionInternalNoteService
     workflow_sla_service: WorkflowSlaService
     permission_service: PermissionService
+    decision_definition_service: DecisionDefinitionService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -110,6 +112,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     blocked_agreement_admin_service = BlockedAgreementAdminService()
     verification_checklist_service = VerificationChecklistService()
     permission_service = PermissionService()
+    decision_definition_service = DecisionDefinitionService()
 
     form_slugs = []
     try:
@@ -268,4 +271,5 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_internal_note_service=submission_internal_note_service,
         workflow_sla_service=workflow_sla_service,
         permission_service=permission_service,
+        decision_definition_service=decision_definition_service,
     )

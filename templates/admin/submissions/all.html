@@ -66,7 +66,7 @@
                 <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
                 <td>{{ (((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
                 <td class="column-secondary">{{ (submission.email or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td><td class="column-secondary">{{ (submission.telefon or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
-                <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
+                <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
                 <td>{{ form.name if form else submission.form_slug }}</td>
                 <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
                 <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>

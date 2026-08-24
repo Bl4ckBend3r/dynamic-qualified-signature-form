@@ -40,6 +40,7 @@ def build_admin_workflow_view(
     *,
     decisions: Iterable[Mapping[str, Any]] = (),
     can_review_agreement: bool = False,
+    form_config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     status = str(getattr(submission, "process_status", "") or "")
     decisions = list(decisions)
@@ -97,11 +98,18 @@ def build_admin_workflow_view(
     ]
     return {
         "sections": sections,
-        "can_edit_application_decision": can_edit_application_decision(submission),
+        "can_edit_application_decision": can_edit_application_decision(submission) or _workflow_allows_decision(submission, form_config or {}),
         "can_review_agreement": can_review_agreement,
         "application_decision": application_decision,
         "agreement_decision": agreement_decision,
     }
+
+
+def _workflow_allows_decision(submission, form_config: Mapping[str, Any]) -> bool:
+    workflow = form_config.get("workflow") or {}
+    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or workflow.get("initial_step") or "")
+    step = next((item for item in workflow.get("steps") or [] if str(item.get("id") or "") == current), None)
+    return bool(step and (step.get("requires_officer_action") or step.get("type") == "manual_decision" or step.get("decisions")))
 
 
 def _latest_for_targets(decisions: list[Mapping[str, Any]], targets: set[str]) -> Mapping[str, Any] | None:

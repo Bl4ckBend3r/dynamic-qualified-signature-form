@@ -257,6 +257,7 @@ def build_submission_detail_sections(
     form_config: dict | None = None,
     *,
     include_sensitive: bool = True,
+    timezone_name: str = "Europe/Warsaw",
 ) -> dict:
     form_config = normalize_admin_form_definition(form_config if form_config is not None else form.definition_json or {})
     labels = build_field_labels(form_config)
@@ -277,7 +278,12 @@ def build_submission_detail_sections(
             value = row.get(field_name)
             if is_empty_admin_value(value):
                 continue
-            display_value = "Dane ukryte — brak uprawnienia" if not include_sensitive and field_name in sensitive_fields else (option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value))
+            if not include_sensitive and field_name in sensitive_fields:
+                display_value = "Dane ukryte — brak uprawnienia"
+            elif field_name == "created_at":
+                display_value = format_business_datetime(value, "%d.%m.%Y %H:%M", timezone_name=timezone_name)
+            else:
+                display_value = option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value)
             items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": display_value})
             used_fields.add(field_name)
         if items:
@@ -460,6 +466,27 @@ def matches_created_at_range(raw_value, date_from, date_to, *, timezone_name: st
         if local_value > end:
             return False
     return True
+
+
+def format_business_datetime(raw_value, format_string: str = "%Y-%m-%d %H:%M", *, timezone_name: str = "Europe/Warsaw") -> str:
+    """Format a stored UTC timestamp in the configured business timezone."""
+    if not raw_value:
+        return ""
+    try:
+        local_zone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        local_zone = timezone.utc
+    value = raw_value
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return str(raw_value)
+    if not isinstance(value, datetime):
+        return str(raw_value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(local_zone).strftime(format_string)
 
 
 def matches_field_filter(raw_value: Any, operator: str, expected: str, expected_to: str = "") -> bool:

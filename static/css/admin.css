@@ -3523,3 +3523,10 @@ html:has(body.agreement-builder-window), body.agreement-builder-window { width: 
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+.admin-repeatable-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+}
+
+.admin-repeatable-decision-item { min-width: 0; }

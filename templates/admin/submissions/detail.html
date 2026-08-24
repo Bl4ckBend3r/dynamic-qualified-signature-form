@@ -251,9 +251,7 @@
                     <label><span>Decyzja o zaakceptowaniu wniosku</span>
                         <select name="officer_decision" required>
                             <option value="">Wybierz decyzję</option>
-                            <option value="accepted">Tak</option>
-                            <option value="rejected">Nie</option>
-                            <option value="correction">Do poprawy</option>
+                            {% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}
                         </select>
                     </label>
                     <label><span>Uzasadnienie decyzji negatywnej</span>
@@ -517,6 +515,33 @@
     </div>
 </section>
 {% endif %}
+{% if repeatable_groups %}
+<section id="repeatable-decisions">
+  <h2>Decyzje dla elementów grup powtarzalnych</h2>
+  {% for group in repeatable_groups %}
+    <section class="admin-card"><h3>{{ group.label }}</h3><div class="admin-repeatable-decision-grid">
+    {% for item in group.items %}
+      {% set history = repeatable_item_decisions|selectattr('group_key', 'equalto', group.key)|selectattr('item_id', 'equalto', item.id)|list %}
+      {% set latest = history|first %}
+      <article class="admin-card admin-repeatable-decision-item">
+        <h4>{{ item.summary }}</h4>
+        <p><strong>Aktualna decyzja:</strong> {{ latest.decision_label if latest else 'Brak' }}</p>
+        {% if latest %}<p><small>{{ latest.decided_by.email if latest.decided_by else 'System' }} · {{ latest.decided_at|business_datetime }}</small></p>{% endif %}
+        {% if can_make_decision %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_update', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}" class="admin-form">
+          <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+          <label><span>Decyzja</span><select name="decision_code" required><option value="">Wybierz</option>{% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}</select></label>
+          <label><span>Komentarz</span><textarea name="comment" rows="2"></textarea></label><button class="admin-button" type="submit">Zapisz</button>
+        </form>{% endif %}
+        {% if latest and item.contact_email and can_send_email and can_view_sensitive_data %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_email', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="decision_id" value="{{ latest.id }}"><button class="admin-button-secondary" type="submit">Wyślij decyzję tej osobie</button>
+        </form>{% endif %}
+        {% if history %}<details><summary>Historia ({{ history|length }})</summary><ul>{% for entry in history %}<li>{{ entry.decision_label }} · {{ entry.decided_at|business_datetime }}{% if entry.decided_by %} · {{ entry.decided_by.email }}{% endif %}</li>{% endfor %}</ul></details>{% endif %}
+      </article>
+    {% else %}<p>Brak elementów.</p>{% endfor %}
+    </div></section>
+  {% endfor %}
+</section>
+{% endif %}
 <h2>Historia workflow</h2>
 <p><small>Źródło: {{ workflow_history.source }}</small></p>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
@@ -570,9 +595,9 @@
 </table></div>
 <h2>Dokumenty Nextcloud</h2>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
-    <thead><tr><th>Nazwa</th><th>Sciezka</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th></tr></thead>
+    <thead><tr><th>Nazwa</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th><th>Walidacja</th></tr></thead>
     <tbody>{% for file in files %}
-        <tr><td>{{ file.filename }}</td><td>{{ file.storage_path }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td></tr>
+        <tr><td>{{ file.filename }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td><td>{{ (file.signature_validation_result or {}).get('validation_status') or file.signature_status or '—' }}{% if (file.signature_validation_result or {}).get('reason') %}<br><small>{{ file.signature_validation_result.get('reason') }}</small>{% endif %}</td></tr>
     {% else %}
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>

@@ -52,6 +52,7 @@
 <script type="application/json" data-builder-initial-state>{{ builder_fields|tojson }}</script>
 <script type="application/json" data-builder-widths>{{ layout_widths|tojson }}</script>
 <script type="application/json" data-builder-types>{{ field_types|tojson }}</script>
+<script type="application/json" data-builder-workflow-steps>{{ workflow_steps|tojson }}</script>
 <script type="module" src="{{ url_for('static', filename='js/form_builder/form-builder.js') }}"></script>
 <script>
 const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id)|tojson }};

@@ -93,6 +93,71 @@ def test_step_update_merges_only_editable_values_and_keeps_other_data():
     assert "PL00" not in str(repository.events[0][1])
 
 
+def test_later_step_records_compliance_only_after_valid_stage_data():
+    definition = workflow_definition()
+    definition["fields"] = [{
+        "name": "image_consent",
+        "label": "Zgoda na wizerunek",
+        "type": "checkbox",
+        "options": [{"value": "Tak", "label": "Wyrażam zgodę"}],
+        "availability": [
+            {"step": "submission", "visible": False, "editable": False, "required": False},
+            {"step": "declaration", "visible": True, "editable": True, "required": True},
+        ],
+    }]
+
+    class Repository:
+        def __init__(self):
+            self.updates = []
+
+        def update(self, submission_id, updates):
+            self.updates.append(updates)
+
+        def record_workflow_event(self, *_args, **_kwargs):
+            return True
+
+    class Compliance:
+        def __init__(self):
+            self.calls = []
+
+        def record_submission_acceptances(self, **kwargs):
+            self.calls.append(kwargs)
+
+    repository = Repository()
+    compliance = Compliance()
+    submission = {"row": {
+        "data_json": {"imie": "Jan"},
+        "workflow_stage": "declaration",
+        "form_version_id": 7,
+    }}
+
+    missing = DeclarationFlowService().save_additional_fields(
+        submission_id="sub-1",
+        submission=submission,
+        form_config=definition,
+        form_data={},
+        submission_repository=repository,
+        compliance_service=compliance,
+    )
+    assert not missing.success
+    assert missing.error_code == "validation_error"
+    assert compliance.calls == []
+    assert repository.updates == []
+
+    accepted = DeclarationFlowService().save_additional_fields(
+        submission_id="sub-1",
+        submission=submission,
+        form_config=definition,
+        form_data={"image_consent": "Tak"},
+        submission_repository=repository,
+        compliance_service=compliance,
+    )
+    assert accepted.success
+    assert compliance.calls[0]["step"] == "declaration"
+    assert compliance.calls[0]["form_version_id"] == 7
+    assert repository.updates[0]["data_json"] == {"imie": "Jan", "image_consent": "Tak"}
+
+
 def test_required_if_and_file_are_scoped_to_the_active_step():
     definition = workflow_definition()
     definition["fields"] = [
@@ -136,3 +201,12 @@ def test_version_snapshot_availability_is_independent():
     archived_snapshot = deepcopy(original)
     original["fields"][0]["availability"][0]["step"] = "agreement"
     assert archived_snapshot["fields"][0]["availability"][0]["step"] == "declaration"
+
+
+def test_required_readonly_is_valid_when_value_was_required_earlier():
+    definition = workflow_definition()
+    definition["fields"] = [field("identity", [
+        {"step": "submission", "visible": True, "editable": True, "required": True},
+        {"step": "declaration", "visible": True, "editable": False, "required": True},
+    ])]
+    assert FieldAvailabilityService().validate_config(definition) == []

@@ -2150,6 +2150,103 @@ body.admin-modal-open {
 .training-badge.is-error { color: #8f1d14; background: #fee4e2; }
 .admin-training-card__body { padding: 1rem; border-top: 1px solid var(--admin-border, #d9dce3); }
 
+/* Training administration: catalog accordion and operational detail. */
+.training-page-title { align-items: flex-start; }
+.training-page-title .admin-help { max-width: 760px; margin: .55rem 0 0; font-size: 1rem; line-height: 1.55; }
+.training-page-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--admin-space-3); }
+.training-create-panel { margin-bottom: var(--admin-space-5); padding: var(--admin-space-5); border: 1px solid var(--admin-border, #d9dce3); border-radius: 12px; background: #fff; box-shadow: var(--admin-shadow-sm, 0 4px 14px rgba(20, 35, 60, .06)); }
+.training-list, .training-detail-page, .training-stack { display: grid; gap: var(--admin-space-5); }
+.training-row, .training-section {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--admin-border, #d9dce3);
+    border-radius: var(--admin-radius, 12px);
+    background: var(--admin-surface, #fff);
+    box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, .07));
+}
+.training-row.is-open { border-color: #aeb9ca; box-shadow: 0 8px 24px rgba(29, 46, 91, .09); }
+.training-row__header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--admin-space-3); padding: var(--admin-space-4) var(--admin-space-5) var(--admin-space-3); }
+.training-row__toggle { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--admin-space-4); padding: .35rem 0; border: 0; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.training-row__toggle:focus-visible { outline: 3px solid rgba(36, 55, 91, .24); outline-offset: 4px; border-radius: 6px; }
+.training-row__identity { display: grid; min-width: 0; gap: .35rem; }
+.training-row__identity strong { color: var(--navy); font-size: 1.15rem; line-height: 1.3; }
+.training-row__identity > span { color: var(--muted); font-size: .95rem; line-height: 1.45; }
+.training-row__chevron { flex: 0 0 auto; color: var(--navy); font-size: 1.35rem; font-weight: 800; transition: transform .18s ease; }
+.training-row.is-open .training-row__chevron { transform: rotate(180deg); }
+.training-row__metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; margin: 0; border-top: 1px solid var(--admin-border, #d9dce3); background: var(--admin-surface-soft, #f8f9fb); }
+.training-row__metrics > div { min-width: 0; padding: .8rem var(--admin-space-4); border-right: 1px solid var(--admin-border, #d9dce3); }
+.training-row__metrics > div:last-child { border-right: 0; }
+.training-row__metrics dt { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.training-row__metrics dd { margin: .25rem 0 0; color: var(--navy); font-size: 1rem; font-weight: 800; }
+.training-details { padding: var(--admin-space-5); border-top: 1px solid var(--admin-border, #d9dce3); }
+.training-details[hidden] { display: none !important; }
+.training-section { padding: var(--admin-space-5); }
+.training-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--admin-space-4); margin-bottom: var(--admin-space-4); }
+.training-section-heading :is(h2, h3, h4), .training-subcard__heading h3, .training-question-card__heading h3 { margin: 0; color: var(--navy); }
+.training-section-heading h2 { font-size: 1.35rem; }
+.training-section-heading h3 { font-size: 1.12rem; }
+.training-section-heading p, .training-subcard__heading p { margin: .35rem 0 0; color: var(--muted); font-size: .94rem; line-height: 1.5; }
+.training-edit-form, .training-message-form, .training-attendance-form, .training-survey-form { display: grid; gap: var(--admin-space-5); }
+.training-edit-grid, .training-message-form, .training-survey-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--admin-space-4); }
+.training-date-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--admin-space-4); }
+.training-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--admin-space-4); margin-bottom: var(--admin-space-5); padding: var(--admin-space-4); border-radius: 10px; background: var(--admin-surface-soft, #f8f9fb); }
+.training-attendance-form { grid-template-columns: 2fr 1.2fr 1fr 1fr auto; align-items: end; margin-bottom: var(--admin-space-5); padding: var(--admin-space-4); border: 1px solid var(--admin-border, #d9dce3); border-radius: 10px; background: var(--admin-surface-soft, #f8f9fb); }
+.training-edit-form label:not(.training-check), .training-message-form label:not(.training-check), .training-attendance-form label, .training-survey-form label:not(.training-check), .training-filter-grid label { display: grid; min-width: 0; gap: var(--admin-space-2); color: var(--text); }
+.training-edit-form label > span, .training-message-form label > span, .training-attendance-form label > span, .training-survey-form label > span, .training-filter-grid label > span { color: var(--navy); font-size: .92rem; font-weight: 800; }
+.training-edit-form :is(input, select, textarea), .training-message-form :is(input, select, textarea), .training-attendance-form :is(input, select, textarea), .training-survey-form :is(input, select, textarea), .training-filter-grid :is(input, select) { width: 100%; min-width: 0; max-width: 100%; padding: .7rem .75rem; border: 1px solid var(--admin-border, #cfd5df); border-radius: 8px; color: var(--text); background: #fff; font: inherit; }
+.training-edit-form textarea, .training-message-form textarea, .training-survey-form textarea { resize: vertical; line-height: 1.5; }
+.training-edit-form :is(input, select, textarea):focus-visible, .training-message-form :is(input, select, textarea):focus-visible, .training-attendance-form :is(input, select):focus-visible, .training-survey-form :is(input, select, textarea):focus-visible, .training-filter-grid :is(input, select):focus-visible { outline: 3px solid rgba(36, 55, 91, .16); border-color: var(--navy); }
+.training-field-wide { grid-column: 1 / -1; }
+.training-check { display: flex; min-width: 0; align-items: center; gap: .65rem; color: var(--navy); font-weight: 750; }
+.training-check input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: var(--gold-dark); }
+.training-dates-editor, .training-question-fieldset { display: grid; gap: var(--admin-space-4); margin: 0; padding: var(--admin-space-5); border: 1px solid var(--admin-border, #d9dce3); border-radius: 10px; background: var(--admin-surface-soft, #f8f9fb); }
+.training-question-fieldset legend { padding: 0 .4rem; color: var(--navy); font-size: 1.1rem; font-weight: 800; }
+.training-date-list, .training-question-list { display: grid; gap: var(--admin-space-4); }
+.training-date-card, .training-question-card, .training-subcard { padding: var(--admin-space-4); border: 1px solid var(--admin-border, #d9dce3); border-radius: 10px; background: #fff; }
+.training-date-card__heading, .training-question-card__heading, .training-subcard__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--admin-space-4); margin-bottom: var(--admin-space-4); }
+.training-question-card { display: grid; grid-template-columns: 2fr 1fr; gap: var(--admin-space-4); }
+.training-question-card__heading { grid-column: 1 / -1; }
+.training-form-actions, .training-filter-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--admin-space-3); }
+.training-filter-actions { align-self: end; }
+.training-readonly-state, .training-empty-state { padding: var(--admin-space-4); border-radius: 8px; color: var(--muted); background: var(--admin-surface-soft, #f8f9fb); line-height: 1.55; }
+.training-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--admin-space-4); }
+.training-kpi { display: grid; gap: .45rem; min-height: 104px; align-content: center; padding: var(--admin-space-4) var(--admin-space-5); border: 1px solid var(--admin-border, #d9dce3); border-radius: var(--admin-radius, 12px); background: #fff; box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, .07)); }
+.training-kpi strong { color: var(--navy); font-size: 2rem; line-height: 1; }
+.training-kpi span { color: var(--muted); font-size: .95rem; font-weight: 750; }
+.training-participants-table { border: 1px solid var(--admin-border, #d9dce3); border-radius: 10px; }
+.training-participants-table .admin-table { min-width: 1180px; }
+.training-participants-table th { white-space: nowrap; }
+.training-participants-table td { line-height: 1.45; }
+.training-participants-table .admin-badge { white-space: nowrap; }
+.admin-table .training-cancel-form { display: grid; min-width: 150px; gap: .45rem; }
+.training-cancel-form input { min-width: 140px; }
+.training-subcard__heading .admin-actions { justify-content: flex-end; }
+
+@media (max-width: 1100px) {
+    .training-row__metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .training-row__metrics > div:nth-child(3n) { border-right: 0; }
+    .training-edit-grid, .training-message-form, .training-survey-meta, .training-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .training-date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .training-attendance-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .training-attendance-form .training-form-actions { grid-column: 1 / -1; }
+}
+
+@media (max-width: 768px) {
+    .training-row__header { grid-template-columns: minmax(0, 1fr) auto; padding: var(--admin-space-4); }
+    .training-row__toggle { grid-column: 1 / -1; }
+    .training-row__manage { justify-self: end; }
+    .training-row__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .training-row__metrics > div:nth-child(3n) { border-right: 1px solid var(--admin-border, #d9dce3); }
+    .training-row__metrics > div:nth-child(2n) { border-right: 0; }
+    .training-details, .training-section { padding: var(--admin-space-4); }
+    .training-section-heading, .training-date-card__heading, .training-question-card__heading, .training-subcard__heading { align-items: stretch; flex-direction: column; }
+    .training-edit-grid, .training-message-form, .training-survey-meta, .training-filter-grid, .training-date-grid, .training-attendance-form, .training-question-card, .training-kpi-grid { grid-template-columns: minmax(0, 1fr); }
+    .training-field-wide, .training-question-card__heading, .training-attendance-form .training-form-actions { grid-column: auto; }
+    .training-form-actions, .training-filter-actions { justify-content: stretch; }
+    .training-form-actions > *, .training-filter-actions > * { flex: 1 1 150px; }
+    .training-subcard__heading .admin-actions { justify-content: flex-start; }
+}
+
 @media (max-width: 760px) {
     .workflow-preview-step__heading,
     .workflow-linked-instruction__heading { align-items: flex-start; flex-direction: column; }

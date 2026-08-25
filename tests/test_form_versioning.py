@@ -5,6 +5,8 @@ import importlib
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from flask import Blueprint, Flask
@@ -21,7 +23,9 @@ from services.form_version_service import (
     FORM_VERSION_PUBLISHED,
     FormVersionError,
     FormVersionService,
+    FormVersionValidationError,
 )
+from services.training_catalog_service import TrainingCatalogService
 
 
 def _definition(field_name: str = "email", title: str = "Formularz") -> dict:
@@ -108,6 +112,102 @@ def test_publish_archives_previous_and_clone_preserves_snapshot(tmp_path):
         assert service.resolve_published(db, first.form_id).id == second.id
 
 
+def test_training_catalog_changes_only_draft_until_publish_and_keeps_stable_id(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    catalog_service = TrainingCatalogService()
+    initial_definition = _definition()
+    initial_definition["documents"] = [
+        {
+            "id": "declaration",
+            "kind": "generated_pdf",
+            "template_html": "<p>Deklaracja</p>",
+            "enabled": True,
+            "fields": [
+                {
+                    "type": "training_selection",
+                    "name": "selected_trainings",
+                    "label": "Wybierz szkolenia",
+                    "enabled": True,
+                    "required": True,
+                    "currency": "PLN",
+                    "max_total_amount": "5000.00",
+                    "catalog": [
+                        {
+                            "id": "excel-stable",
+                            "name": "Excel",
+                            "price": "500.00",
+                            "currency": "PLN",
+                            "capacity": 20,
+                            "active": True,
+                            "sort_order": 1,
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="training-versions")
+        form.definition_json = deepcopy(initial_definition)
+        published = service.create_initial_version(
+            db, form, actor_id=None, status=FORM_VERSION_PUBLISHED
+        )
+        published_id = published.id
+        draft = service.clone_to_draft(db, form, published, actor_id=None)
+        changed_definition = deepcopy(draft.definition_json)
+        changed_field = catalog_service.get_training_field(changed_definition)
+        changed_field["catalog"] = [
+            {
+                **changed_field["catalog"][0],
+                "name": "Excel zaawansowany",
+                "price": "700.00",
+                "capacity": 15,
+            },
+            {
+                "id": "power-bi",
+                "name": "Power BI",
+                "price": "650.00",
+                "currency": "PLN",
+                "capacity": 10,
+                "active": True,
+                "sort_order": 2,
+            },
+        ]
+        catalog_service._replace_training_field(changed_definition, changed_field)
+        changed_definition, _ = catalog_service.reconcile_definition(
+            draft.definition_json,
+            changed_definition,
+            used_training_ids={"excel-stable"},
+        )
+        service.update_definition(draft, changed_definition)
+        draft_id = draft.id
+
+        historical = db.get(FormVersion, published_id)
+        historical_training = catalog_service.get_training_field(historical.definition_json)["catalog"][0]
+        draft_training = catalog_service.get_training_field(draft.definition_json)["catalog"][0]
+        assert historical_training["name"] == "Excel"
+        assert historical_training["price"] == "500.00"
+        assert draft_training["id"] == "excel-stable"
+        assert draft_training["name"] == "Excel zaawansowany"
+        assert draft_training["price"] == "700.00"
+        assert draft_training["capacity"] == 15
+
+        service.publish(db, form, draft, actor_id=None)
+
+    with Session() as db:
+        historical = db.get(FormVersion, published_id)
+        current = db.get(FormVersion, draft_id)
+        historical_catalog = catalog_service.get_training_field(historical.definition_json)["catalog"]
+        current_catalog = catalog_service.get_training_field(current.definition_json)["catalog"]
+        assert historical.status == FORM_VERSION_ARCHIVED
+        assert historical_catalog[0]["name"] == "Excel"
+        assert historical_catalog[0]["price"] == "500.00"
+        assert current.status == FORM_VERSION_PUBLISHED
+        assert [item["id"] for item in current_catalog] == ["excel-stable", "power-bi"]
+
+
 def test_archived_and_published_versions_are_immutable(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
@@ -156,6 +256,25 @@ def test_publish_rejects_label_inconsistent_with_numeric_version(tmp_path):
             assert "major/minor" in str(exc)
         else:
             raise AssertionError("Opublikowano wersję z niespójną etykietą")
+
+
+def test_publish_rejects_field_availability_for_removed_workflow_step(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db)
+        draft = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_DRAFT)
+        definition = deepcopy(draft.definition_json)
+        definition["fields"][0]["availability"] = [{
+            "step": "removed_step",
+            "visible": True,
+            "editable": True,
+            "required": True,
+        }]
+        service.update_definition(draft, definition)
+        with pytest.raises(FormVersionValidationError) as exc_info:
+            service.publish(db, form, draft, actor_id=None)
+        assert any("nieistniejącego etapu" in error for error in exc_info.value.errors)
 
 
 def test_submission_relationship_points_to_exact_version(tmp_path):
@@ -313,6 +432,17 @@ def test_document_context_uses_submission_version_after_new_publication(tmp_path
         second = service.clone_to_draft(db, form, first, actor_id=None, bump="major")
         updated = deepcopy(second.definition_json)
         updated["title"] = "Nowy dokument"
+        updated["fields"].append({
+            "name": "late_required",
+            "label": "Późniejsze pole",
+            "type": "text",
+            "availability": [{
+                "step": "submission",
+                "visible": True,
+                "editable": True,
+                "required": True,
+            }],
+        })
         service.update_definition(second, updated)
         service.publish(db, form, second, actor_id=None, change_summary="Nowa treść dokumentów")
 
@@ -329,6 +459,8 @@ def test_document_context_uses_submission_version_after_new_publication(tmp_path
 
     assert historical_config["title"] == "Formularz"
     assert current_config["title"] == "Nowy dokument"
+    assert "late_required" not in {field.get("name") for field in historical_config["fields"]}
+    assert "late_required" in {field.get("name") for field in current_config["fields"]}
 
 
 def test_migration_creates_technical_version_and_backfills_submissions(monkeypatch):

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import zipfile
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,7 @@ from models import (
     FormUserRole,
     FormRegulation,
     FormSubmission,
+    FormVersion,
     Logo,
     MailFooter,
     MailTemplate,
@@ -41,6 +43,7 @@ from models import (
     SubmissionFile,
     SubmissionInternalNote,
     SubmissionTraining,
+    TrainingAttendanceRecord,
     SubmissionWorkflowEvent,
     SystemMailSettings,
     User,
@@ -147,6 +150,430 @@ def grant_rbac(app, user_id, permission_keys, *, form_id=None, global_scope=Fals
             db.add(FormUserRole(user_id=user_id, form_id=form_id, role_id=role.id))
         db.commit()
         return role.id
+
+
+def _training_management_definition():
+    return {
+        "title": "Training",
+        "fields": [],
+        "documents": [{
+            "id": "declaration",
+            "fields": [{
+                "type": "training_selection", "enabled": True,
+                "name": "selected_trainings", "label": "Szkolenia", "required": True,
+                "currency": "PLN", "max_total_amount": "5000.00",
+                "catalog": [{"id": "excel", "name": "Excel", "price": "1000.00", "capacity": 20, "active": True, "dates": [{"start_date": "2026-10-12"}]}],
+            }],
+        }],
+    }
+
+
+def test_forms_list_shows_standalone_training_action_only_for_training_forms(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    training_form_id = create_form(admin_app, slug="with_training", user_id=user_id, definition_json=_training_management_definition())
+    ordinary_form_id = create_form(admin_app, slug="without_training", user_id=user_id)
+    login(admin_client)
+    html = admin_client.get("/admin/forms").get_data(as_text=True)
+    assert f'/admin/forms/{training_form_id}/training-management' in html
+    assert f'/admin/forms/{ordinary_form_id}/training-management' not in html
+    assert f'/admin/forms/{training_form_id}/edit?tab=trainings' not in html
+
+
+def _inline_training_payload(**overrides):
+    payload = {
+        "training_active_present": "1",
+        "training_item_active": "0",
+        "training_item_id": "excel",
+        "training_item_name": "Excel zaawansowany",
+        "training_item_price": "1250.50",
+        "training_item_currency": "PLN",
+        "training_item_capacity": "24",
+        "training_item_sort_order": "2",
+        "training_item_description": "Praktyczne warsztaty.",
+        "training_item_admin_comment": "Sala komputerowa",
+        "training_item_low_seats_comment": "Ostatnie miejsca",
+        "training_date_training_index": "0",
+        "training_date_start_date": "2026-10-13",
+        "training_date_end_date": "2026-10-14",
+        "training_date_start_time": "09:00",
+        "training_date_end_time": "16:00",
+        "training_date_location": "Warszawa",
+        "training_date_description": "Budynek A",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_training_management_renders_accordion_and_inline_editor(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="training_inline_view", user_id=user_id, definition_json=_training_management_definition())
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/training-management")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-training-toggle' in html
+    assert 'aria-controls="training-panel-1"' in html
+    assert f'/admin/forms/{form_id}/training-management/excel/catalog' in html
+    assert f'/admin/forms/{form_id}/training-management/excel' in html
+    assert "+ Dodaj szkolenie" in html
+    assert f'/admin/forms/{form_id}/training-management/catalog' in html
+
+
+def test_training_catalog_can_be_created_without_changing_form_version(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    definition = _training_management_definition()
+    form_id = create_form(
+        admin_app,
+        slug="training_inline_create",
+        user_id=user_id,
+        definition_json=definition,
+    )
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        version = FormVersion(
+            form_id=form_id,
+            version_major=1,
+            version_minor=0,
+            version_label="1.0",
+            status="published",
+            definition_json=definition,
+        )
+        db.add(version)
+        db.flush()
+        db.add(FormSubmission(
+            submission_id="TR-CREATE-VERSION",
+            form_slug="training_inline_create",
+            form_name="Training",
+            form_version_id=version.id,
+            officer_decision="accepted",
+            declaration_generated="Tak",
+            declaration_signed="Tak",
+            declaration_signature_valid="Tak",
+            access_token="training-create-token",
+        ))
+        db.commit()
+        version_id = version.id
+        version_definition = json.loads(json.dumps(version.definition_json))
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(
+            csrf_token=admin_csrf(admin_client),
+            training_item_id="",
+            training_item_name="Nowe szkolenie",
+        ),
+    )
+
+    assert response.status_code == 302
+    match = re.search(r"[?&]open=(trn_[0-9a-f]+)", response.headers["Location"])
+    assert match
+    stable_id = match.group(1)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        catalog = form.definition_json["documents"][0]["fields"][0]["catalog"]
+        created = next(item for item in catalog if item["id"] == stable_id)
+        assert created["name"] == "Nowe szkolenie"
+        assert db.get(FormVersion, version_id).definition_json == version_definition
+        assert db.execute(select(FormVersion).where(FormVersion.form_id == form_id)).scalars().all() == [db.get(FormVersion, version_id)]
+
+    page = admin_client.get(f"/admin/forms/{form_id}/training-management")
+    assert "Nowe szkolenie" in page.get_data(as_text=True)
+    public_page = admin_client.get(
+        "/submissions/TR-CREATE-VERSION/trainings?token=training-create-token"
+    )
+    assert public_page.status_code == 200
+    assert "Nowe szkolenie" in public_page.get_data(as_text=True)
+    public_save = admin_client.post(
+        "/submissions/TR-CREATE-VERSION/trainings?token=training-create-token",
+        data={"selected_trainings": stable_id},
+    )
+    assert public_save.status_code == 302
+    with factory() as db:
+        saved = db.execute(
+            select(SubmissionTraining).where(SubmissionTraining.training_id == stable_id)
+        ).scalar_one()
+        assert saved.training_name_snapshot == "Nowe szkolenie"
+
+
+def test_training_catalog_can_be_updated_inline_with_stable_id(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="training_inline_edit", user_id=user_id, definition_json=_training_management_definition())
+    login(admin_client)
+    payload = _inline_training_payload(csrf_token=admin_csrf(admin_client))
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/excel/catalog",
+        data=payload,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"?open=excel#training-excel")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        catalog = form.definition_json["documents"][0]["fields"][0]["catalog"]
+        assert len(catalog) == 1
+        saved = catalog[0]
+        assert saved["id"] == "excel"
+        assert saved["name"] == "Excel zaawansowany"
+        assert saved["price"] == "1250.50"
+        assert saved["currency"] == "PLN"
+        assert saved["capacity"] == 24
+        assert saved["description"] == "Praktyczne warsztaty."
+        assert saved["low_seats_comment"] == "Ostatnie miejsca"
+        assert saved["active"] is True
+        assert saved["sort_order"] == 2
+        assert saved["admin_comment"] == "Sala komputerowa"
+        assert saved["dates"] == [{
+            "start_date": "2026-10-13", "end_date": "2026-10-14",
+            "start_time": "09:00", "end_time": "16:00",
+            "location": "Warszawa", "description": "Budynek A",
+        }]
+        assert saved["version"] == 2
+
+
+def test_training_catalog_inline_validation_preserves_previous_definition(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    definition = _training_management_definition()
+    form_id = create_form(admin_app, slug="training_inline_invalid", user_id=user_id, definition_json=definition)
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/excel/catalog",
+        data=_inline_training_payload(
+            csrf_token=admin_csrf(admin_client),
+            training_item_price="nie-liczba",
+        ),
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Cena szkolenia" in response.get_data(as_text=True)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        assert db.get(Form, form_id).definition_json == definition
+
+
+def test_training_catalog_inline_update_requires_edit_permission(admin_app, admin_client):
+    user_id = create_user(admin_app, email="training-readonly@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="training_inline_rbac", definition_json=_training_management_definition())
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="training-readonly@example.com")
+
+    page = admin_client.get(f"/admin/forms/{form_id}/training-management")
+    assert page.status_code == 200
+    page_html = page.get_data(as_text=True)
+    assert f'/admin/forms/{form_id}/training-management/excel/catalog' not in page_html
+    assert "+ Dodaj szkolenie" not in page_html
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/excel/catalog",
+        data=_inline_training_payload(csrf_token=admin_csrf(admin_client)),
+    )
+    assert response.status_code == 403
+    create_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(
+            csrf_token=admin_csrf(admin_client),
+            training_item_id="",
+        ),
+    )
+    assert create_response.status_code == 403
+
+
+def test_training_catalog_inline_update_rejects_cross_form_training_id(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_a_id = create_form(admin_app, slug="training_idor_a", user_id=user_id, definition_json=_training_management_definition())
+    other_definition = _training_management_definition()
+    other_definition["documents"][0]["fields"][0]["catalog"][0]["id"] = "word"
+    form_b_id = create_form(admin_app, slug="training_idor_b", user_id=user_id, definition_json=other_definition)
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_b_id}/training-management/excel/catalog",
+        data=_inline_training_payload(csrf_token=admin_csrf(admin_client)),
+    )
+
+    assert response.status_code == 404
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        assert db.get(Form, form_a_id).definition_json == _training_management_definition()
+
+
+def test_training_participants_backend_omits_pii_without_permission(admin_app, admin_client):
+    user_id = create_user(admin_app, email="training-view@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="training_pii", definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(submission_id="TR-PII-1", form_slug="training_pii", form_name="Training", imiona="Jan", nazwisko="Kowalski", email="jan.secret@example.org", telefon="123456789")
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected"))
+        db.commit()
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="training-view@example.com")
+    response = admin_client.get(f"/admin/forms/{form_id}/training-management/excel")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "TR-PII-1" in html
+    assert "Dane zastrzeżone" in html
+    assert "Kowalski" not in html
+    assert "jan.secret@example.org" not in html
+    assert "123456789" not in html
+
+
+def test_public_attendance_link_is_idempotent_and_not_authorized_by_participant_id(admin_app, admin_client):
+    form_id = create_form(admin_app, slug="training_attendance", definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = FormSubmission(submission_id="TR-ATT-1", form_slug=form.slug, form_name=form.name, email="att@example.org")
+        db.add(submission)
+        db.flush()
+        participant = SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected")
+        db.add(participant)
+        db.flush()
+        service = admin_app.extensions["services"].training_management_service
+        attendance_session = service.create_attendance_session(db, form, "excel", name="Excel 12.10", session_date=date(2026, 10, 12), actor_id=None)
+        attendance_session.status = "active"
+        db.flush()
+        record, _submission, raw_token = service.attendance_links(db, attendance_session)[0]
+        record_id = record.id
+        db.commit()
+    assert admin_client.get(f"/training-attendance/{record_id}").status_code == 400
+    assert admin_client.get(f"/training-attendance/{raw_token}").status_code == 200
+    assert admin_client.post(f"/training-attendance/{raw_token}").status_code == 200
+    assert admin_client.post(f"/training-attendance/{raw_token}").status_code == 200
+    with factory() as db:
+        records = db.execute(select(TrainingAttendanceRecord).where(TrainingAttendanceRecord.id == record_id)).scalars().all()
+        assert len(records) == 1
+        assert records[0].status == "present"
+        assert records[0].confirmation_method == "email_link"
+
+
+def test_training_bulk_message_creates_one_email_log_per_recipient_without_form_version_change(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    definition = _training_management_definition()
+    form_id = create_form(admin_app, slug="training_bulk", user_id=user_id, definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        version = FormVersion(form_id=form_id, version_major=2, version_minor=1, version_label="2.1", status="published", definition_json=definition)
+        db.add(version)
+        db.flush()
+        version_id = version.id
+        for index in range(10):
+            submission = FormSubmission(submission_id=f"TR-BULK-{index}", form_slug="training_bulk", form_name="Training", form_version_id=version.id, email=f"person{index}@example.org")
+            db.add(submission)
+            db.flush()
+            db.add(SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected"))
+        db.commit()
+    delivered = []
+    admin_app.extensions["services"].mail_dispatch_service.smtp_sender = lambda **kwargs: delivered.append(tuple(kwargs["to_emails"]))
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/excel/messages",
+        data={"csrf_token": admin_csrf(admin_client), "all_active": "1", "subject": "Informacja", "body": "Treść"},
+    )
+    assert response.status_code == 302
+    assert len(delivered) == 10
+    assert all(len(addresses) == 1 for addresses in delivered)
+    with factory() as db:
+        logs = db.execute(select(EmailLog).where(EmailLog.form_id == form_id, EmailLog.event_type == "training_bulk_message")).scalars().all()
+        assert len(logs) == 10
+        assert len({log.to_email for log in logs}) == 10
+        version = db.get(FormVersion, version_id)
+        assert version.version_label == "2.1"
+        assert version.definition_json == definition
+
+
+def test_attendance_invitation_token_is_sent_but_redacted_from_email_log(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    form_id = create_form(admin_app, slug="training_link_mail", user_id=user_id, definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = FormSubmission(submission_id="TR-LINK-1", form_slug=form.slug, form_name=form.name, email="link@example.org")
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected"))
+        db.flush()
+        attendance_session = admin_app.extensions["services"].training_management_service.create_attendance_session(db, form, "excel", name="Excel", session_date=date(2026, 10, 12), actor_id=user_id)
+        attendance_session.status = "active"
+        db.commit()
+        session_id = attendance_session.id
+    delivered = []
+    admin_app.extensions["services"].mail_dispatch_service.smtp_sender = lambda **kwargs: delivered.append(kwargs["html_body"])
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/excel/attendance/{session_id}/send",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    assert response.status_code == 302
+    assert len(delivered) == 1
+    assert "/training-attendance/" in delivered[0]
+    with factory() as db:
+        log = db.execute(select(EmailLog).where(EmailLog.event_type == "training_attendance_invitation")).scalar_one()
+        assert log.html_body == "[Indywidualny link obecności zredagowany]"
+        assert "/training-attendance/" not in log.html_body
+
+
+def test_attendance_export_requires_permission_masks_pii_and_prevents_csv_injection(admin_app, admin_client):
+    user_id = create_user(admin_app, email="training-export@example.com", role="form_manager")
+    form_id = create_form(admin_app, slug="training_export", definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = FormSubmission(submission_id="=TR-EXPORT", form_slug=form.slug, form_name=form.name, imiona="Anna", nazwisko="Sekretna", email="anna.secret@example.org")
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected"))
+        db.flush()
+        attendance_session = admin_app.extensions["services"].training_management_service.create_attendance_session(db, form, "excel", name="Excel", session_date=date(2026, 10, 12), actor_id=None)
+        db.commit()
+        session_id = attendance_session.id
+    grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="training-export@example.com")
+    url = f"/admin/forms/{form_id}/training-management/excel/attendance/{session_id}.csv"
+    assert admin_client.get(url).status_code == 403
+    grant_rbac(admin_app, user_id, ["can_export_data"], form_id=form_id)
+    response = admin_client.get(url)
+    assert response.status_code == 200
+    csv_text = response.data.decode("utf-8-sig")
+    assert "Anna" not in csv_text
+    assert "Sekretna" not in csv_text
+    assert "anna.secret@example.org" not in csv_text
+    assert "'=TR-EXPORT" in csv_text
+
+
+def test_public_training_survey_uses_invitation_token_and_does_not_expose_participant_pii(admin_app, admin_client):
+    form_id = create_form(admin_app, slug="training_survey_public", definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = FormSubmission(submission_id="TR-SURVEY-1", form_slug=form.slug, form_name=form.name, imiona="Piotr", nazwisko="Prywatny", email="piotr.secret@example.org")
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionTraining(submission_id=submission.id, training_id="excel", training_name_snapshot="Excel", training_price_snapshot="1000.00", training_snapshot={"id": "excel", "name": "Excel"}, status="selected"))
+        db.flush()
+        service = admin_app.extensions["services"].training_management_service
+        survey = service.create_survey(db, form, "excel", name="Ocena szkolenia", description="Jak oceniasz szkolenie?", anonymous=True, questions=[{"text": "Ocena", "type": "scale"}], actor_id=None)
+        survey.status = "active"
+        db.flush()
+        invitation, _submission, raw_token = service.survey_links(db, form, survey)[0]
+        db.flush()
+        invitation_id = invitation.id
+        question_id = db.execute(text("SELECT id FROM training_survey_questions WHERE survey_id = :id"), {"id": survey.id}).scalar_one()
+        db.commit()
+    assert admin_client.get(f"/training-survey/{invitation_id}").status_code == 400
+    page = admin_client.get(f"/training-survey/{raw_token}")
+    assert page.status_code == 200
+    assert b"Prywatny" not in page.data
+    assert b"piotr.secret@example.org" not in page.data
+    response = admin_client.post(f"/training-survey/{raw_token}", data={f"question_{question_id}": "5"})
+    assert response.status_code == 200
+    assert "Dziękujemy" in response.get_data(as_text=True)
 
 
 def test_rbac_backend_separates_view_decision_and_mail(admin_app, admin_client):
@@ -1807,6 +2234,9 @@ def test_visual_form_builder_saves_layout_and_reopens_it(admin_app, admin_client
     html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
     assert "Wizualny układ formularza" in html
     assert "data-form-canvas" in html
+    assert "Dostępność w etapach" in html
+    assert "Użyj w deklaracji" in html
+    assert "data-builder-workflow-steps" in html
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     response = admin_client.post(
         f"/admin/forms/{form_id}/fields",
@@ -3853,7 +4283,7 @@ def test_super_admin_can_delete_user(admin_app, admin_client):
         assert db.get(Form, form_id).created_by_id is None
 
 
-def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
+def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone(admin_app, admin_client):
     create_user(admin_app)
     definition = {
         "title": "Training Form",
@@ -3906,6 +4336,7 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
             "training_item_id": ["s1", "s2"],
             "training_item_name": ["Excel zaawansowany", "Kadry i płace"],
             "training_item_price": ["6200", "12"],
+            "training_item_currency": ["PLN", "PLN"],
             "training_item_capacity": ["10", "5"],
             "training_item_active": ["0", "1"],
             "training_item_sort_order": ["1", "2"],
@@ -3923,6 +4354,48 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     )
 
     assert response.status_code == 302
+    first_create = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data={
+            "csrf_token": token,
+            "training_active_present": "1",
+            "training_item_active": "0",
+            "training_item_id": "s1",
+            "training_item_name": "Excel zaawansowany",
+            "training_item_price": "6200",
+            "training_item_currency": "PLN",
+            "training_item_capacity": "10",
+            "training_item_sort_order": "1",
+            "training_item_description": "Arkusze i raporty",
+            "training_item_admin_comment": "Przynieś własny laptop.",
+            "training_item_low_seats_comment": "Tego komentarza nie pokazuj.",
+            "training_date_training_index": "0",
+            "training_date_start_date": "2026-09-01",
+            "training_date_end_date": "",
+            "training_date_start_time": "09:00",
+            "training_date_end_time": "12:00",
+            "training_date_location": "Zielona Góra",
+            "training_date_description": "Warsztat stacjonarny",
+        },
+    )
+    second_create = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data={
+            "csrf_token": token,
+            "training_active_present": "1",
+            "training_item_active": "0",
+            "training_item_id": "s2",
+            "training_item_name": "Kadry i płace",
+            "training_item_price": "12",
+            "training_item_currency": "PLN",
+            "training_item_capacity": "5",
+            "training_item_sort_order": "2",
+            "training_item_description": "Prawo pracy w praktyce",
+            "training_item_low_seats_comment": "Zostało niewiele miejsc.",
+        },
+    )
+    assert first_create.status_code == 302
+    assert second_create.status_code == 302
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         form = db.get(Form, form_id)
         declaration = next(document for document in form.definition_json["documents"] if document["id"] == "declaration")
@@ -3935,11 +4408,19 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
         ]
         assert training_field["max_total_amount"] == "7000.00"
         assert training_field["currency"] == "PLN"
-        assert training_field["catalog"] == [
+        assert [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in {"created_at", "version"}
+            }
+            for item in training_field["catalog"]
+        ] == [
             {
                 "id": "s1",
                 "name": "Excel zaawansowany",
                 "price": "6200.00",
+                "currency": "PLN",
                 "capacity": 10,
                 "description": "Arkusze i raporty",
                 "admin_comment": "Przynieś własny laptop.",
@@ -3961,6 +4442,7 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
                 "id": "s2",
                 "name": "Kadry i płace",
                 "price": "12.00",
+                "currency": "PLN",
                 "capacity": 5,
                 "description": "Prawo pracy w praktyce",
                 "low_seats_comment": "Zostało niewiele miejsc.",
@@ -3988,14 +4470,17 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
     assert 'name="training_item_code"' not in edit_html
     assert "RRRR-MM-DD|" not in edit_html
-    assert 'type="date" name="training_date_start_date" value="2026-09-01"' in edit_html
-    assert "Dodaj termin" in edit_html
-    assert '<details class="admin-training-item admin-training-card"' in edit_html
-    assert "Rozwiń wszystkie" in edit_html
-    assert "Zwiń wszystkie" in edit_html
-    assert "Mało miejsc" in edit_html
-    assert "Brak terminów" in edit_html
-    assert "data-training-summary-name" in edit_html
+    assert 'name="training_selection_enabled"' in edit_html
+    assert 'name="training_selection_name"' in edit_html
+    assert 'name="training_selection_label"' in edit_html
+    assert 'name="training_selection_max_total"' in edit_html
+    assert 'name="training_selection_currency"' in edit_html
+    assert 'name="training_selection_required"' in edit_html
+    assert 'name="training_date_start_date"' not in edit_html
+    assert 'name="training_item_name"' not in edit_html
+    assert 'name="training_item_currency"' not in edit_html
+    assert "Dostępne szkolenia" not in edit_html
+    assert "Przejdź do zarządzania szkoleniami" in edit_html
 
     declaration_response = admin_client.get("/declaration/training_form/training-declaration-1")
     declaration_html = declaration_response.get_data(as_text=True)
@@ -4033,6 +4518,33 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         selected = db.query(SubmissionTraining).order_by(SubmissionTraining.training_id).all()
         assert [item.training_id for item in selected] == ["s1", "s2"]
+        for item in selected:
+            item.is_locked = True
+        db.commit()
+
+    management_html = admin_client.get(f"/admin/forms/{form_id}/training-management").get_data(as_text=True)
+    token = management_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    lower_limit_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/s1/catalog",
+        data=_inline_training_payload(
+            csrf_token=token,
+            training_item_id="s1",
+            training_item_name="Excel zaawansowany",
+            training_item_price="6200",
+            training_item_capacity="0",
+            training_item_sort_order="1",
+            training_item_description="Arkusze i raporty",
+        ),
+        follow_redirects=True,
+    )
+    lower_limit_html = lower_limit_response.get_data(as_text=True)
+    assert lower_limit_response.status_code == 200
+    assert "Limit miejsc jest niższy od liczby istniejących rezerwacji" in lower_limit_html
+    assert "Istniejący uczestnicy pozostali bez zmian" in lower_limit_html
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        selected = db.query(SubmissionTraining).order_by(SubmissionTraining.training_id).all()
+        assert [item.training_id for item in selected] == ["s1", "s2"]
+        assert all(item.is_locked for item in selected)
 
     edit_html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=trainings").get_data(as_text=True)
     token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
@@ -4051,6 +4563,128 @@ def test_form_training_catalog_can_be_edited_in_admin(admin_app, admin_client):
         assert form.training_selection_open is False
         selected = db.query(SubmissionTraining).all()
         assert {item.training_id for item in selected} == {"s1", "s2"}
+
+
+def test_training_catalog_edit_requires_can_edit_form_even_via_workflow_tab(admin_app, admin_client):
+    user_id = create_user(
+        admin_app,
+        email="training-catalog-viewer@example.com",
+        role="form_manager",
+    )
+    form_id = create_form(admin_app, slug="training-catalog-rbac")
+    grant_rbac(
+        admin_app,
+        user_id,
+        ["can_edit_workflow"],
+        form_id=form_id,
+    )
+    login(admin_client, email="training-catalog-viewer@example.com")
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "active_tab": "workflow",
+            "training_selection_enabled": "on",
+            "training_selection_name": "selected_trainings",
+            "training_selection_label": "Wybierz szkolenia",
+            "training_selection_max_total": "1000",
+            "training_selection_currency": "PLN",
+            "training_catalog_present": "1",
+            "training_active_present": "1",
+            "training_item_active": "0",
+            "training_item_name": "Nowe szkolenie",
+            "training_item_price": "100",
+            "training_item_currency": "PLN",
+            "training_item_capacity": "10",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_workflow_editor_can_preserve_catalog_without_can_edit_form(admin_app, admin_client):
+    user_id = create_user(
+        admin_app,
+        email="training-workflow-editor@example.com",
+        role="form_manager",
+    )
+    definition = readable_workflow_definition()
+    definition["documents"] = [
+        {
+            "id": "declaration",
+            "kind": "generated_pdf",
+            "template_html": "<p>Deklaracja</p>",
+            "enabled": True,
+            "fields": [
+                {
+                    "type": "training_selection",
+                    "name": "selected_trainings",
+                    "label": "Wybierz szkolenia",
+                    "enabled": True,
+                    "required": True,
+                    "currency": "PLN",
+                    "max_total_amount": "1000.00",
+                    "catalog": [
+                        {
+                            "id": "stable-training",
+                            "name": "Excel",
+                            "price": "100.00",
+                            "currency": "PLN",
+                            "capacity": 10,
+                            "description": "",
+                            "low_seats_comment": "",
+                            "dates": [],
+                            "active": True,
+                            "sort_order": 1,
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+    form_id = create_form(
+        admin_app,
+        slug="training-workflow-preserve",
+        definition_json=definition,
+    )
+    grant_rbac(
+        admin_app,
+        user_id,
+        ["can_edit_workflow"],
+        form_id=form_id,
+    )
+    login(admin_client, email="training-workflow-editor@example.com")
+    page = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow")
+    token = page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "active_tab": "workflow",
+            "workflow_json": json.dumps(definition["workflow"]),
+            "training_selection_enabled": "on",
+            "training_selection_name": "selected_trainings",
+            "training_selection_label": "Wybierz szkolenia",
+            "training_selection_max_total": "1000",
+            "training_selection_currency": "PLN",
+            "training_selection_required": "on",
+            "training_catalog_present": "1",
+            "training_active_present": "1",
+            "training_item_id": "stable-training",
+            "training_item_name": "Excel",
+            "training_item_price": "100",
+            "training_item_currency": "PLN",
+            "training_item_capacity": "10",
+            "training_item_active": "0",
+            "training_item_sort_order": "1",
+            "training_item_description": "",
+            "training_item_low_seats_comment": "",
+        },
+    )
+
+    assert response.status_code == 302
 
 
 def test_declaration_download_disabled_before_declaration_form_is_completed(admin_app, admin_client):

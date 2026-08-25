@@ -155,6 +155,21 @@ def test_submit_invalid_email_returns_validation_error(client, valid_form_data):
     assert "adres e-mail" in html
 
 
+def test_predictable_compliance_error_returns_validation_response(client, app, valid_form_data, monkeypatch):
+    from services.compliance_service import ComplianceError
+
+    def reject(*_args, **_kwargs):
+        raise ComplianceError("Wymagana zgoda etapowa nie została zaakceptowana.")
+
+    monkeypatch.setattr(app.extensions["services"].submission_service, "submit_form", reject)
+    response = client.post("/submit/formularz_zgloszeniowy", data=valid_form_data)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert "Wymagana zgoda etapowa" in html
+    assert response.status_code != 500
+
+
 def test_submit_valid_form_generates_pdf_and_csv_row(client, app, valid_form_data, monkeypatch):
     import app as app_module
 
@@ -649,9 +664,11 @@ def test_additional_fields_unlock_declaration_download(client, app):
         }
     ]
 
+    form_html = client.get("/do-podpisania?submission_id=abc").get_data(as_text=True)
+    csrf_token = form_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     save_response = client.post(
         "/additional-fields/formularz_zgloszeniowy/abc",
-        data={"post_acceptance_note": "Uzupełniono"},
+        data={"post_acceptance_note": "Uzupełniono", "csrf_token": csrf_token},
     )
     assert save_response.status_code == 302
     assert app.testing_storage.csv_rows[0]["process_status"] == "additional_fields_completed"

@@ -139,9 +139,12 @@ def _register_legacy_extension_aliases(app: Flask, container) -> None:
 
 
 def register_blueprints(app: Flask) -> None:
+    from routes.training_public import bp as training_public_bp
+
     app.register_blueprint(public_forms_bp)
     app.register_blueprint(documents_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(training_public_bp)
     try:
         from routes.admin import bp as admin_bp
     except ModuleNotFoundError as exc:

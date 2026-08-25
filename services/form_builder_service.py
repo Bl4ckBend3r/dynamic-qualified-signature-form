@@ -154,6 +154,15 @@ def serialize_builder_fields(
             ),
             "type": field.type or "text",
             "required": bool(field.required),
+            "availability": deepcopy(
+                field.availability_json
+                or config.get("availability")
+                or []
+            ),
+            "document_usage": deepcopy(
+                config.get("document_usage")
+                or {}
+            ),
             "width": width_name(
                 config.get("width")
             ),
@@ -224,6 +233,7 @@ def apply_builder_state(
     }
     availability_service = FieldAvailabilityService()
     initial_step = availability_service.initial_step(availability_definition)
+    workflow_step_ids = availability_service.step_ids(availability_definition)
     seen_ids: set[int] = set()
     seen_names: set[str] = set()
     saved_fields: list[FormField] = []
@@ -276,17 +286,68 @@ def apply_builder_state(
         field.sort_order = order
         field.options = _normalize_options(field_type, item.get("options"))
 
-        availability = deepcopy(field.availability_json or [])
-        if not availability:
+        raw_availability = item.get("availability")
+        if isinstance(raw_availability, list):
+            supplied_steps = {
+                str(entry.get("step") or "").strip()
+                for entry in raw_availability
+                if isinstance(entry, dict)
+            }
+            unknown_steps = supplied_steps - set(workflow_step_ids)
+            if unknown_steps:
+                raise FormBuilderError(
+                    "Dostępność pola odwołuje się do nieistniejącego etapu: "
+                    + ", ".join(sorted(unknown_steps))
+                    + "."
+                )
+            normalized_by_step = {
+                str(entry.get("step")): entry
+                for entry in availability_service.normalize_field(
+                    {"availability": raw_availability}, availability_definition
+                )["availability"]
+            }
             availability = [
-                {"step": initial_step, "visible": True, "editable": True, "required": False}
+                {
+                    "step": step_id,
+                    "visible": bool(normalized_by_step.get(step_id, {}).get("visible")),
+                    "editable": bool(normalized_by_step.get(step_id, {}).get("editable")),
+                    "required": bool(normalized_by_step.get(step_id, {}).get("required")),
+                }
+                for step_id in workflow_step_ids
             ]
-        initial_permission = next((entry for entry in availability if entry.get("step") == initial_step), None)
-        if initial_permission is None:
-            initial_permission = {"step": initial_step, "visible": True, "editable": True, "required": False}
-            availability.insert(0, initial_permission)
-        initial_permission["required"] = bool(
-            item.get("required") and initial_permission.get("visible") and initial_permission.get("editable")
+        else:
+            availability = deepcopy(field.availability_json or [])
+            if not availability:
+                availability = [
+                    {"step": initial_step, "visible": True, "editable": True, "required": bool(item.get("required"))}
+                ]
+            initial_permission = next(
+                (entry for entry in availability if entry.get("step") == initial_step),
+                None,
+            )
+            if initial_permission is None:
+                initial_permission = {
+                    "step": initial_step,
+                    "visible": True,
+                    "editable": True,
+                    "required": False,
+                }
+                availability.insert(0, initial_permission)
+            initial_permission["required"] = bool(
+                item.get("required")
+                and initial_permission.get("visible")
+                and initial_permission.get("editable")
+            )
+        validation_definition = {
+            **availability_definition,
+            "fields": [{"name": name, "availability": availability}],
+        }
+        availability_errors = availability_service.validate_config(validation_definition)
+        if availability_errors:
+            raise FormBuilderError(" ".join(availability_errors))
+        initial_permission = next(
+            (entry for entry in availability if entry.get("step") == initial_step),
+            {"required": False},
         )
         field.availability_json = availability
         field.required = bool(initial_permission["required"])
@@ -306,6 +367,11 @@ def apply_builder_state(
                 "placeholder": str(item.get("placeholder") or "").strip(),
                 "stage": field.stage,
                 "availability": deepcopy(availability),
+                "document_usage": {
+                    "declaration": bool(
+                        (item.get("document_usage") or {}).get("declaration")
+                    )
+                },
                 "data_classification": classification,
             }
         )

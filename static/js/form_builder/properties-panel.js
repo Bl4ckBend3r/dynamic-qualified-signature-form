@@ -33,6 +33,8 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     typeSelect.append(option);
   });
   const widthHolder = panel.querySelector("[data-width-options]");
+  const availabilityHolder = panel.querySelector("[data-availability-settings]");
+  const declarationUsage = panel.querySelector('[data-document-usage="declaration"]');
   Object.keys(config.widths).forEach((width) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -75,10 +77,77 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     .querySelector("[data-close-properties]")
     .addEventListener("click", callbacks.close);
 
+  const updateAvailability = (field, stepId, permission, checked) => {
+    const current = new Map(
+      (field.availability || []).map((entry) => [entry.step, { ...entry }]),
+    );
+    const entry = current.get(stepId) || {
+      step: stepId,
+      visible: false,
+      editable: false,
+      required: false,
+    };
+    entry[permission] = checked;
+    if (!entry.visible) {
+      entry.editable = false;
+      entry.required = false;
+    }
+    if (!entry.editable) entry.required = false;
+    current.set(stepId, entry);
+    callbacks.update({
+      availability: config.workflowSteps.map((step) =>
+        current.get(step.id) || {
+          step: step.id,
+          visible: false,
+          editable: false,
+          required: false,
+        },
+      ),
+      required: Boolean(
+        current.get(config.workflowSteps[0]?.id)?.required,
+      ),
+    });
+  };
+
+  declarationUsage.addEventListener("change", () => {
+    callbacks.update({
+      document_usage: { declaration: declarationUsage.checked },
+    });
+  });
+
   return (field) => {
     empty.hidden = Boolean(field);
     content.hidden = !field;
     if (!field) return;
+    availabilityHolder.replaceChildren();
+    const permissions = [
+      ["visible", "Widoczne"],
+      ["editable", "Edytowalne"],
+      ["required", "Wymagane"],
+    ];
+    config.workflowSteps.forEach((step) => {
+      const entry = (field.availability || []).find(
+        (candidate) => candidate.step === step.id,
+      ) || { visible: false, editable: false, required: false };
+      const row = document.createElement("div");
+      row.className = "form-builder__availability-row";
+      const label = document.createElement("strong");
+      label.textContent = step.admin_label || step.user_label || step.label || step.id;
+      row.append(label);
+      permissions.forEach(([permission, permissionLabel]) => {
+        const wrapper = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = Boolean(entry[permission]);
+        checkbox.addEventListener("change", () =>
+          updateAvailability(field, step.id, permission, checkbox.checked),
+        );
+        wrapper.append(checkbox, document.createTextNode(permissionLabel));
+        row.append(wrapper);
+      });
+      availabilityHolder.append(row);
+    });
+    declarationUsage.checked = Boolean(field.document_usage?.declaration);
     panel.querySelectorAll("[data-property]").forEach((control) => {
       const property = control.dataset.property;
       let value = field[property] ?? "";

@@ -13,6 +13,7 @@ from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
 from models import ContactPage, Form, FormDraft, FormField, FormRegulationVersion, FormSubmission, FormVersion, Logo, ServiceDocument
 from services.form_draft_service import FormDraftError
+from services.compliance_service import ComplianceError
 from services.process_service import ProcessStatus
 from services.contact_page_service import ensure_contact_defaults, normalized_phones
 from services.site_document_service import SERVICE_DOCUMENT_TYPES
@@ -488,6 +489,22 @@ def submit(slug: str):
 
         return render_template("result.html", result=submission_result["result"], form_action=form_action, share_access_token=share_access_token,)
 
+    except ComplianceError as exc:
+        logger.warning("public_form_rejected slug=%s reason=compliance", slug)
+        flash(str(exc), "error")
+        return render_template(
+            "form_page.html",
+            slug=slug,
+            form_meta=form_meta,
+            form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
+            errors={"compliance": str(exc)},
+            values=request_data or request.form,
+            form_version_id=form_version.id if form_version else None,
+            form_version_token=form_version_token,
+            form_error=str(exc),
+            form_action=form_action,
+            share_access_token=share_access_token,
+        ), 400
     except Exception as exc:
         logger.exception("Błąd przetwarzania formularza: %s", exc)
         flash("Wystąpił błąd podczas przetwarzania formularza.", "error")

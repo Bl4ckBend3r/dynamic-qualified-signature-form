@@ -133,6 +133,36 @@ def test_two_fields_can_share_row_and_reopen_after_save(tmp_path):
         assert [item["width_span"] for item in reopened if item["id"]] == [6, 6]
 
 
+def test_builder_persists_workflow_availability_and_declaration_assignment(tmp_path):
+    factory, form_id = builder_form(tmp_path)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        fields = sorted(form.fields, key=lambda item: item.sort_order)
+        state = serialize_builder_fields(form, fields)
+        target = next(item for item in state if item["name"] == "imie")
+        target["availability"] = [
+            {"step": "submission", "visible": False, "editable": False, "required": False},
+            {"step": "review", "visible": True, "editable": True, "required": True},
+        ]
+        target["document_usage"] = {"declaration": True}
+
+        apply_builder_state(
+            db,
+            form,
+            state,
+            field_types=FIELD_TYPES,
+            availability_definition=form.definition_json,
+        )
+        db.commit()
+        db.refresh(form)
+
+        saved = next(item for item in form.definition_json["fields"] if item.get("name") == "imie")
+        assert saved["availability"] == target["availability"]
+        assert saved["document_usage"] == {"declaration": True}
+        field = next(item for item in form.fields if item.name == "imie")
+        assert field.required is False
+
+
 def test_omitting_field_marks_it_inactive_without_deleting_history(tmp_path):
     factory, form_id = builder_form(tmp_path)
     with factory() as db:

@@ -39,6 +39,29 @@ _DECLARATION_VARIABLES = (
 )
 
 
+def declaration_document_fields(
+    fields: Iterable[Any] = (),
+    *,
+    form_definition: Mapping[str, Any] | None = None,
+) -> tuple[Any, ...]:
+    """Return fields assigned to declarations, with an all-fields legacy fallback."""
+    definition_fields = tuple((form_definition or {}).get("fields") or ())
+    candidates = definition_fields or tuple(fields)
+    explicit_assignment = any(
+        isinstance(_field_raw(field, "document_usage"), Mapping)
+        and "declaration" in _field_raw(field, "document_usage")
+        for field in candidates
+    )
+    if not explicit_assignment:
+        return candidates
+    return tuple(
+        field
+        for field in candidates
+        if isinstance(_field_raw(field, "document_usage"), Mapping)
+        and _field_raw(field, "document_usage").get("declaration") is True
+    )
+
+
 class DeclarationVariableCatalog:
     """Variables shared by declaration builder, previews and production PDFs."""
 
@@ -52,11 +75,10 @@ class DeclarationVariableCatalog:
     ) -> list[dict[str, Any]]:
         fields = tuple(fields)
 
-        definition_fields = tuple(
-            (form_definition or {}).get("fields") or ()
+        catalog_fields = declaration_document_fields(
+            fields,
+            form_definition=form_definition,
         )
-
-        catalog_fields = definition_fields or fields
 
         variables = [
             dict(item)
@@ -276,7 +298,7 @@ def build_declaration_render_context(
     form_definition: Mapping[str, Any] | None = None,
     fields: Iterable[Any] = (),
 ) -> dict[str, Any]:
-    fields = tuple(fields) or tuple((form_definition or {}).get("fields") or ())
+    fields = declaration_document_fields(fields, form_definition=form_definition)
     result = build_agreement_template_context(
         context,
         form_definition=form_definition,

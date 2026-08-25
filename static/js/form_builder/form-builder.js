@@ -213,6 +213,13 @@ if (builder) {
       placeholder: "",
       section: "",
       document_label: "",
+      availability: config.workflowSteps.map((step, index) => ({
+        step: step.id,
+        visible: index === 0,
+        editable: index === 0,
+        required: false,
+      })),
+      document_usage: { declaration: false },
       options: OPTION_FIELD_TYPES.has(type) ? ["Opcja 1", "Opcja 2"] : [],
     };
 

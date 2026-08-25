@@ -40,7 +40,8 @@ PARTICIPANT_STATUS_LABELS = {
     "agreement_waiting_for_office_signature": "Umowa oczekuje na podpis urzędu",
     "agreement_signed_by_office": "Umowa podpisana przez urząd",
     "locked": "Zablokowane",
-    "cancelled": "Dostępne",
+    "cancelled": "Anulowane",
+    "removed": "Usunięte operacyjnie",
     "unselected": "Odznaczone przed podpisaniem umowy",
     "cancelled_before_signed_agreement": "Odznaczone przed podpisaniem umowy",
 }

@@ -1,0 +1,110 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ training.name }} — Szkolenia{% endblock %}
+{% block content %}
+<div class="training-detail-page">
+    <div class="admin-page-title training-page-title">
+        <div><p class="admin-eyebrow">Szkolenia · {{ form.name }}</p><h1>{{ training.name }}</h1><p class="admin-help">Operacyjne zarządzanie uczestnikami, korespondencją, obecnością i ankietami.</p></div>
+        <a class="admin-button-secondary" href="{{ url_for('admin.training_management', form_id=form.id) }}">Wszystkie szkolenia</a>
+    </div>
+
+    <div class="training-kpi-grid" aria-label="Podsumowanie szkolenia">
+        <div class="training-kpi"><strong>{{ training.active_count }}</strong><span>Aktywnych</span></div>
+        <div class="training-kpi"><strong>{{ training.cancelled_count }}</strong><span>Anulowanych</span></div>
+        <div class="training-kpi"><strong>{{ training.signed_agreement_count }}</strong><span>Podpisanych umów</span></div>
+        <div class="training-kpi"><strong>{{ training.present_count }}</strong><span>Potwierdzonych obecności</span></div>
+    </div>
+
+    <section class="training-section" id="participants">
+        <div class="training-section-heading"><div><h2>Uczestnicy</h2><p>Filtruj listę i wykonuj operacje na konkretnych zapisach.</p></div></div>
+        <form method="get" class="training-filter-grid">
+            <label><span>Status</span><select name="status"><option value="">Wszystkie</option>{% for value in ['selected','agreement_generated','agreement_downloaded','agreement_waiting_for_beneficiary_signature','agreement_uploaded_by_beneficiary','agreement_waiting_for_office_signature','agreement_signed_by_office','locked','cancelled','removed','unselected'] %}<option value="{{ value }}" {% if request.args.get('status') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+            <label><span>Umowa</span><select name="agreement"><option value="">Wszystkie</option><option value="pending" {% if request.args.get('agreement') == 'pending' %}selected{% endif %}>W toku</option><option value="signed" {% if request.args.get('agreement') == 'signed' %}selected{% endif %}>Podpisana</option><option value="cancelled" {% if request.args.get('agreement') == 'cancelled' %}selected{% endif %}>Anulowana</option></select></label>
+            <label><span>Obecność</span><select name="attendance"><option value="">Wszystkie</option><option value="present" {% if request.args.get('attendance') == 'present' %}selected{% endif %}>Obecny</option><option value="absent" {% if request.args.get('attendance') == 'absent' %}selected{% endif %}>Nieobecny</option><option value="excused" {% if request.args.get('attendance') == 'excused' %}selected{% endif %}>Usprawiedliwiony</option><option value="pending" {% if request.args.get('attendance') == 'pending' %}selected{% endif %}>Brak</option></select></label>
+            <label><span>Ankieta</span><select name="survey_sent"><option value="">Wszystkie</option><option value="yes" {% if request.args.get('survey_sent') == 'yes' %}selected{% endif %}>Wysłana</option><option value="no" {% if request.args.get('survey_sent') == 'no' %}selected{% endif %}>Niewysłana</option></select></label>
+            {% if permissions.can_view_sensitive_data %}<label><span>Nazwisko / e-mail</span><input name="query" value="{{ request.args.get('query','') }}"></label>{% endif %}
+            <div class="training-filter-actions"><a class="admin-button-secondary" href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}">Wyczyść</a><button class="admin-button" type="submit">Filtruj</button></div>
+        </form>
+
+        <div class="training-participants-table admin-table-wrap">
+            <table class="admin-table admin-table--responsive">
+                <thead><tr>{% if permissions.can_send_email and permissions.can_view_sensitive_data %}<th>Wybór</th>{% endif %}<th>Uczestnik</th><th>ID zgłoszenia</th>{% if permissions.can_view_sensitive_data %}<th>E-mail</th><th>Telefon</th>{% endif %}<th>Status</th><th>Umowa</th><th>Zapis</th><th>Obecność</th><th>Ankieta</th><th>Akcje</th></tr></thead>
+                <tbody>
+                {% for participant in participants %}
+                    <tr>
+                        {% if permissions.can_send_email and permissions.can_view_sensitive_data %}<td><input form="training-message-form" type="checkbox" name="participant_id" value="{{ participant.id }}" aria-label="Wybierz uczestnika {{ participant.submission_id }}"></td>{% endif %}
+                        <td><strong>{{ participant.name }}</strong></td><td>{{ participant.submission_id }}</td>
+                        {% if permissions.can_view_sensitive_data %}<td>{{ participant.email }}</td><td>{{ participant.phone }}</td>{% endif %}
+                        <td><span class="admin-badge {{ 'admin-badge-danger' if participant.status in ['cancelled','removed','unselected'] else 'admin-badge-success' }}">{{ participant.status_label }}</span></td>
+                        <td><span class="admin-badge {{ 'admin-badge-success' if participant.agreement_status == 'signed' else ('admin-badge-danger' if participant.agreement_status == 'cancelled' else 'admin-badge-muted') }}">{{ {'signed':'Podpisana','cancelled':'Anulowana','pending':'Oczekuje'}.get(participant.agreement_status, participant.agreement_status) }}</span></td>
+                        <td>{{ participant.selected_at.strftime('%Y-%m-%d') if participant.selected_at else '—' }}</td>
+                        <td><span class="admin-badge {{ 'admin-badge-success' if participant.attendance == 'present' else ('admin-badge-danger' if participant.attendance == 'absent' else 'admin-badge-muted') }}">{{ {'present':'Obecny','absent':'Nieobecny','excused':'Usprawiedliwiony','pending':'Oczekuje'}.get(participant.attendance, participant.attendance) }}</span></td>
+                        <td>{{ {'answered':'Odpowiedź','sent':'Wysłana','not_sent':'—'}.get(participant.survey_status, '—') }}</td>
+                        <td>{% if permissions.can_manage_documents and participant.is_active %}<form class="training-cancel-form" method="post" action="{{ url_for('admin.training_participant_cancel', form_id=form.id, training_id=training.id, participant_id=participant.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input name="reason" required aria-label="Powód unieważnienia" placeholder="Powód"><button class="admin-link-button admin-link-danger" type="submit">Unieważnij</button></form>{% else %}—{% endif %}</td>
+                    </tr>
+                {% else %}<tr><td colspan="11"><div class="training-empty-state">Brak uczestników spełniających wybrane kryteria.</div></td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {% if permissions.can_send_email and permissions.can_view_sensitive_data %}
+    <section class="training-section" id="messages">
+        <div class="training-section-heading"><div><h2>Wyślij wiadomość</h2><p>Wybierz uczestników w tabeli albo zaznacz wszystkich aktywnych.</p></div></div>
+        <form id="training-message-form" class="training-message-form" method="post" action="{{ url_for('admin.training_message_send', form_id=form.id, training_id=training.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <label class="training-check training-field-wide"><input type="checkbox" name="all_active" value="1"><span>Wszyscy aktywni uczestnicy</span></label>
+            <label><span>Szablon</span><select name="template_id"><option value="">Własna treść</option>{% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}</select></label>
+            <label><span>Temat</span><input name="subject"></label>
+            <label class="training-field-wide"><span>Treść</span><textarea name="body" rows="6"></textarea></label>
+            <div class="training-form-actions"><button class="admin-button" type="submit">Wyślij wiadomość</button></div>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="training-section" id="attendance">
+        <div class="training-section-heading"><div><h2>Obecność</h2><p>Twórz sesje i rejestruj obecność uczestników.</p></div></div>
+        {% if permissions.can_manage_documents %}<form class="training-attendance-form" method="post" action="{{ url_for('admin.training_attendance_create', form_id=form.id, training_id=training.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><label><span>Nazwa *</span><input name="name" required></label><label><span>Data *</span><input type="date" name="session_date" required></label><label><span>Od</span><input type="time" name="start_time"></label><label><span>Do</span><input type="time" name="end_time"></label><div class="training-form-actions"><button class="admin-button" type="submit">Utwórz sesję</button></div></form>{% endif %}
+        <div class="training-stack">
+        {% for session in sessions %}<article class="training-subcard"><div class="training-subcard__heading"><div><h3>{{ session.name }}</h3><p>{{ session.session_date }} · <span class="admin-badge">{{ session.status }}</span></p></div><div class="admin-actions">{% if permissions.can_manage_documents %}<form method="post" action="{{ url_for('admin.training_attendance_status', form_id=form.id, training_id=training.id, session_id=session.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><select name="status" aria-label="Status sesji"><option>draft</option><option>active</option><option>closed</option></select><button class="admin-button-secondary compact">Zmień status</button></form>{% endif %}{% if permissions.can_send_email %}<form method="post" action="{{ url_for('admin.training_attendance_send', form_id=form.id, training_id=training.id, session_id=session.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary compact">Wyślij linki</button></form>{% endif %}{% if permissions.can_export_data %}<a class="admin-button-secondary compact" href="{{ url_for('admin.training_attendance_export', form_id=form.id, training_id=training.id, session_id=session.id) }}">Pobierz CSV</a>{% endif %}</div></div>
+        {% if permissions.can_manage_documents %}<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Uczestnik</th><th>Status</th><th>Zmień</th></tr></thead><tbody>{% for participant in participants %}{% set record = attendance_records.get((session.id, participant.id)) %}{% if record %}<tr><td>{{ participant.name }} ({{ participant.submission_id }})</td><td>{{ record.status }}</td><td><form method="post" action="{{ url_for('admin.training_attendance_update', form_id=form.id, training_id=training.id, session_id=session.id, participant_id=participant.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><select name="status" aria-label="Obecność uczestnika"><option value="present">obecny</option><option value="absent">nieobecny</option><option value="excused">usprawiedliwiony</option></select><button class="admin-button-secondary compact">Zapisz</button></form></td></tr>{% endif %}{% endfor %}</tbody></table></div>{% endif %}</article>{% else %}<div class="training-empty-state">Brak sesji obecności.</div>{% endfor %}
+        </div>
+    </section>
+
+    <section class="training-section" id="surveys">
+        <div class="training-section-heading"><div><h2>Ankiety satysfakcji</h2><p>Utwórz jedno pytanie, a kolejne dodawaj w razie potrzeby.</p></div></div>
+        {% if permissions.can_manage_documents %}<form class="training-survey-form" method="post" action="{{ url_for('admin.training_survey_create', form_id=form.id, training_id=training.id) }}" data-training-survey-form><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><div class="training-survey-meta"><label><span>Nazwa *</span><input name="name" required></label><label class="training-field-wide"><span>Opis</span><textarea name="description" rows="3"></textarea></label><label class="training-check training-field-wide"><input type="checkbox" name="anonymous"><span>Ankieta anonimowa</span></label></div><fieldset class="training-question-fieldset"><legend>Pytania</legend><div class="training-question-list" data-training-question-list><div class="training-question-card" data-training-question><div class="training-question-card__heading"><h3>Pytanie <span data-question-number>1</span></h3><button class="admin-link-button admin-link-danger" type="button" data-remove-question>Usuń pytanie</button></div><label><span>Treść *</span><input name="question_text" required></label><label><span>Typ</span><select name="question_type"><option value="scale">Skala 1–5</option><option value="single_choice">Jednokrotny wybór</option><option value="multiple_choice">Wielokrotny wybór</option><option value="text">Tekst</option></select></label><label class="training-field-wide"><span>Opcje, po jednej w wierszu</span><textarea name="question_options" rows="3"></textarea></label></div></div><button class="admin-button-secondary compact" type="button" data-add-question>+ Dodaj pytanie</button></fieldset><div class="training-form-actions"><button class="admin-button-secondary" type="reset">Anuluj</button><button class="admin-button" type="submit">Utwórz ankietę</button></div></form>{% endif %}
+        <div class="training-stack">{% for survey in surveys %}<article class="training-subcard"><div class="training-subcard__heading"><div><h3>{{ survey.name }}</h3><p>{{ survey.description }}</p><p><span class="admin-badge">{{ survey.status }}</span> · {{ 'Anonimowa' if survey.anonymous else 'Identyfikowana operacyjnie' }}</p></div><div class="admin-actions"><a class="admin-button-secondary compact" href="{{ url_for('admin.training_survey_results', form_id=form.id, training_id=training.id, survey_id=survey.id) }}">Wyniki</a>{% if permissions.can_manage_documents %}<form method="post" action="{{ url_for('admin.training_survey_status', form_id=form.id, training_id=training.id, survey_id=survey.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><select name="status" aria-label="Status ankiety"><option>draft</option><option>active</option><option>closed</option></select><button class="admin-button-secondary compact">Zmień status</button></form>{% endif %}{% if permissions.can_send_email %}<form method="post" action="{{ url_for('admin.training_survey_send', form_id=form.id, training_id=training.id, survey_id=survey.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary compact">Wyślij zaproszenia</button></form>{% endif %}</div></div></article>{% else %}<div class="training-empty-state">Brak ankiet.</div>{% endfor %}</div>
+    </section>
+
+    <section class="training-section" id="history">
+        <div class="training-section-heading"><div><h2>Historia operacji</h2><p>Ostatnie zmiany dotyczące tego szkolenia.</p></div></div>
+        <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Operacja</th><th>Poprzednia wartość</th><th>Nowa wartość</th><th>Powód</th><th>Użytkownik</th></tr></thead><tbody>{% for item in history %}<tr><td>{{ item.created_at }}</td><td>{{ item.action }}</td><td>{{ item.previous_value }}</td><td>{{ item.new_value }}</td><td>{{ item.reason }}</td><td>{{ item.actor_user_id or 'system' }}</td></tr>{% else %}<tr><td colspan="6"><div class="training-empty-state">Brak historii operacji.</div></td></tr>{% endfor %}</tbody></table></div>
+    </section>
+</div>
+
+<template data-training-question-template><div class="training-question-card" data-training-question><div class="training-question-card__heading"><h3>Pytanie <span data-question-number></span></h3><button class="admin-link-button admin-link-danger" type="button" data-remove-question>Usuń pytanie</button></div><label><span>Treść *</span><input name="question_text" required></label><label><span>Typ</span><select name="question_type"><option value="scale">Skala 1–5</option><option value="single_choice">Jednokrotny wybór</option><option value="multiple_choice">Wielokrotny wybór</option><option value="text">Tekst</option></select></label><label class="training-field-wide"><span>Opcje, po jednej w wierszu</span><textarea name="question_options" rows="3"></textarea></label></div></template>
+<script>
+(() => {
+    const form = document.querySelector("[data-training-survey-form]");
+    const list = form?.querySelector("[data-training-question-list]");
+    const template = document.querySelector("[data-training-question-template]");
+    const renumber = () => list?.querySelectorAll("[data-training-question]").forEach((row, index) => {
+        const number = row.querySelector("[data-question-number]");
+        if (number) number.textContent = String(index + 1);
+        const remove = row.querySelector("[data-remove-question]");
+        if (remove) remove.disabled = list.children.length <= 1;
+    });
+    form?.addEventListener("click", (event) => {
+        if (event.target.closest("[data-add-question]") && template) list?.append(template.content.cloneNode(true));
+        const remove = event.target.closest("[data-remove-question]");
+        if (remove && list && list.children.length > 1) remove.closest("[data-training-question]")?.remove();
+        renumber();
+    });
+    form?.addEventListener("reset", () => setTimeout(() => {
+        Array.from(list?.querySelectorAll("[data-training-question]") || []).slice(1).forEach((row) => row.remove());
+        renumber();
+    }, 0));
+    renumber();
+})();
+</script>
+{% endblock %}

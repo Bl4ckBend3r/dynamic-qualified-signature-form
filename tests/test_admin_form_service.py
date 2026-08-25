@@ -11,6 +11,7 @@ from database import create_engine, create_session_factory
 from form_loader import FIELD_STAGE_INITIAL
 from models import Base, Form
 from services.admin_form_service import (
+    apply_training_selection_from_admin_form,
     build_definition_from_docx,
     build_definition_from_html,
     build_form_definition_from_admin_form,
@@ -19,12 +20,14 @@ from services.admin_form_service import (
     normalize_admin_form_definition,
     normalize_field_stage,
     parse_training_dates_from_form,
+    parse_training_catalog,
     parse_workflow_json,
     parse_training_dates_text,
     parse_uploaded_form_definition,
     sync_form_fields,
     validate_admin_form_config,
 )
+from services.training_catalog_service import TrainingCatalogService
 
 
 def test_build_definition_from_html_detects_basic_fields():
@@ -82,6 +85,81 @@ def test_parse_workflow_json_requires_object():
     assert parse_workflow_json("", {"initial_step": "submission"}) == {"initial_step": "submission"}
     with pytest.raises(ValueError):
         parse_workflow_json("[]", {})
+
+
+def test_form_editor_preserves_catalog_even_when_legacy_marker_is_posted():
+    definition = {
+        "title": "Form",
+        "fields": [],
+        "documents": [
+            {
+                "id": "declaration",
+                "fields": [
+                    {
+                        "type": "training_selection",
+                        "name": "selected_trainings",
+                        "enabled": True,
+                        "currency": "PLN",
+                        "catalog": [
+                            {
+                                "id": "old-training",
+                                "name": "Stare szkolenie",
+                                "price": "100.00",
+                                "capacity": 10,
+                                "active": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    updated = apply_training_selection_from_admin_form(
+        definition,
+        MultiDict(
+            [
+                ("training_selection_enabled", "on"),
+                ("training_selection_currency", "PLN"),
+                ("training_catalog_present", "1"),
+            ]
+        ),
+    )
+
+    training_field = next(
+        field
+        for field in updated["documents"][0]["fields"]
+        if field.get("type") == "training_selection"
+    )
+    assert training_field["catalog"] == definition["documents"][0]["fields"][0]["catalog"]
+
+
+def test_training_catalog_rejects_invalid_currency_on_backend():
+    with pytest.raises(ValueError, match="trzyliterowym kodem"):
+        parse_training_catalog(
+            MultiDict(
+                [
+                    ("training_item_name", "Excel"),
+                    ("training_item_price", "100"),
+                    ("training_item_currency", "PL12"),
+                    ("training_item_capacity", "10"),
+                    ("training_item_active", "0"),
+                    ("training_active_present", "1"),
+                ]
+            )
+        )
+
+
+def test_legacy_form_without_training_module_remains_without_training_field():
+    definition = {"title": "Legacy", "fields": [{"name": "email", "type": "email"}]}
+
+    updated = build_form_definition_from_admin_form(
+        definition,
+        MultiDict([("training_catalog_present", "1")]),
+    )
+
+    assert [field["name"] for field in updated["fields"]] == ["email"]
+    assert TrainingCatalogService.get_training_field(updated) is None
 
 
 def test_detect_form_fields_includes_document_fields():

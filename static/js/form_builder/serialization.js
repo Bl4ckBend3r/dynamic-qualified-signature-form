@@ -7,6 +7,7 @@ export function readBuilderConfig(root) {
         fields: readJson("[data-builder-initial-state]", []).map(withKey),
         widths: readJson("[data-builder-widths]", {full: 12}),
         types: readJson("[data-builder-types]", ["text"]),
+        workflowSteps: readJson("[data-builder-workflow-steps]", []),
     };
 }
 

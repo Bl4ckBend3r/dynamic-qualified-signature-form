@@ -38,10 +38,18 @@
     <label data-placeholder-setting
       ><span>Placeholder</span><input data-property="placeholder"
     /></label>
-    <label class="form-builder__checkbox"
-      ><input type="checkbox" data-property="required" />
-      <span>Pole wymagane</span></label
-    >
+    <fieldset class="form-builder__availability">
+      <legend>Dostępność w etapach</legend>
+      <p>Określ osobno, kiedy pole jest widoczne, możliwe do edycji i wymagane.</p>
+      <div class="form-builder__availability-table" data-availability-settings></div>
+    </fieldset>
+    <fieldset class="form-builder__documents">
+      <legend>Dokumenty</legend>
+      <label class="form-builder__checkbox">
+        <input type="checkbox" data-document-usage="declaration" />
+        <span>Użyj w deklaracji</span>
+      </label>
+    </fieldset>
     <label data-options-setting hidden
       ><span>Opcje (jedna w wierszu)</span
       ><textarea rows="6" data-property="options"></textarea>

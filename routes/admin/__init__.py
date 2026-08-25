@@ -328,5 +328,6 @@ from . import mail  # noqa: E402,F401
 from . import mail_settings  # noqa: E402,F401
 from . import site  # noqa: E402,F401
 from . import submissions  # noqa: E402,F401
+from . import training_management  # noqa: E402,F401
 from . import sla  # noqa: E402,F401
 from . import users  # noqa: E402,F401

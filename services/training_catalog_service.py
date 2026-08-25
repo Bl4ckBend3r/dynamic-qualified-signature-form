@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
+import re
 from typing import Any, Mapping
 
 from services.training_service import (
@@ -148,9 +149,13 @@ class TrainingCatalogService:
             errors.append(
                 "Limit finansowania szkoleń musi być liczbą większą od zera."
             )
+        catalog_items = list(field.get("catalog") or [])
         has_active_training = False
         training_ids: set[str] = set()
-        for index, training in enumerate(field.get("catalog") or [], start=1):
+        field_currency = str(field.get("currency") or "PLN").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", field_currency):
+            errors.append("Waluta etapu szkoleń musi być trzyliterowym kodem, np. PLN.")
+        for index, training in enumerate(catalog_items, start=1):
             if not isinstance(training, Mapping):
                 errors.append(f"Szkolenie {index} ma niepoprawną konfigurację.")
                 continue
@@ -186,7 +191,25 @@ class TrainingCatalogService:
                 errors.append(
                     f"Cena szkolenia „{name or index}” nie może być ujemna."
                 )
-        if not has_active_training:
+            currency = str(training.get("currency") or field_currency).strip().upper()
+            if not re.fullmatch(r"[A-Z]{3}", currency):
+                errors.append(
+                    f"Waluta szkolenia „{name or index}” musi być trzyliterowym kodem, np. PLN."
+                )
+            capacity = training.get("capacity")
+            if capacity not in (None, ""):
+                try:
+                    parsed_capacity = int(str(capacity).strip())
+                except (TypeError, ValueError):
+                    errors.append(
+                        f"Limit miejsc szkolenia „{name or index}” musi być liczbą całkowitą."
+                    )
+                else:
+                    if parsed_capacity < 0:
+                        errors.append(
+                            f"Limit miejsc szkolenia „{name or index}” nie może być ujemny."
+                        )
+        if catalog_items and not has_active_training:
             errors.append(
                 "Skonfiguruj co najmniej jedno aktywne szkolenie dla publicznego etapu wyboru."
             )

@@ -10,6 +10,7 @@ from pathlib import Path
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
 from jinja2 import TemplateSyntaxError, UndefinedError, meta
 from sqlalchemy import func, select
+from werkzeug.exceptions import HTTPException
 
 from services.form_access_service import generate_share_token
 
@@ -51,6 +52,7 @@ from services.form_version_service import (
     FormVersionError,
     FormVersionValidationError,
 )
+from services.training_availability_service import TrainingAvailabilityService
 from services.documents.agreement_builder_service import (
     default_agreement_builder_document,
     normalize_agreement_builder_document,
@@ -314,6 +316,11 @@ def forms_list():
                 db, user, "can_view_submissions"
             )
         )
+        training_form_ids = {
+            form.id
+            for form in available_forms
+            if TrainingCatalogService.get_training_field(form) is not None
+        }
         return render_template(
             "admin/forms/list.html",
             forms=forms,
@@ -324,6 +331,7 @@ def forms_list():
             pagination_urls=pagination_urls,
             sort_urls=sort_urls,
             sla_view_form_ids=sla_view_form_ids,
+            training_form_ids=training_form_ids,
         )
 
 
@@ -830,6 +838,24 @@ def form_edit(form_id: int):
                     request.form,
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
+                current_training_field = TrainingCatalogService.get_training_field(
+                    form.definition_json or {}
+                )
+                updated_training_settings = TrainingCatalogService.get_training_field(
+                    updated_definition
+                )
+                if current_training_field is not None and updated_training_settings is not None:
+                    updated_training_settings["catalog"] = deepcopy(
+                        current_training_field.get("catalog") or []
+                    )
+                    TrainingCatalogService._replace_training_field(
+                        updated_definition,
+                        updated_training_settings,
+                    )
+                training_catalog_changed = (
+                    get_declaration_training_field(form.definition_json or {})
+                    != get_declaration_training_field(updated_definition)
+                )
                 updated_workflow = updated_definition.get("workflow") or {}
                 if updated_workflow.get("requires_declaration") and updated_workflow.get("declaration_template_source") == "builder":
                     declaration_builder_errors = validate_document_builder_document(
@@ -879,8 +905,20 @@ def form_edit(form_id: int):
                     removal_reasons=reason_by_id,
                     actor_id=g.admin_user.id,
                 )
+                if (
+                    training_catalog_changed
+                    and not current_app.extensions["services"].permission_service.has_permission(
+                        db,
+                        g.admin_user,
+                        "can_edit_form",
+                        form=form,
+                    )
+                ):
+                    abort(403)
                 updated_definition.pop("user_instruction", None)
                 updated_definition.pop("user_instruction_config", None)
+            except HTTPException:
+                raise
             except Exception as exc:
                 updated_definition = normalize_admin_form_definition(form.definition_json or {})
                 validation_errors = [str(exc) or "Niepoprawne dane formularza."]
@@ -975,6 +1013,18 @@ def form_edit(form_id: int):
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
             current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
             form.definition_json = updated_definition
+            occupied_counts = TrainingAvailabilityService(
+                current_app.extensions["services"].submission_repository
+            ).occupied_counts(form_slug=form.slug)
+            overbooked = []
+            updated_training_field = TrainingCatalogService.get_training_field(updated_definition)
+            for training in (updated_training_field or {}).get("catalog") or []:
+                capacity = training.get("capacity")
+                occupied = int(occupied_counts.get(str(training.get("id") or ""), 0))
+                if capacity is not None and int(capacity) < occupied:
+                    overbooked.append(
+                        f"{training.get('name') or training.get('id')}: limit {capacity}, zajęte {occupied}"
+                    )
             if g.admin_user.role == ROLE_SUPER_ADMIN and request.form.get("use_form_definition_json") == "on":
                 sync_form_fields(db, form, updated_definition)
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
@@ -1032,6 +1082,13 @@ def form_edit(form_id: int):
                 training_catalog_actions,
             )
             flash("Formularz został zapisany.", "success")
+            if overbooked:
+                flash(
+                    "Limit miejsc jest niższy od liczby istniejących rezerwacji (nowe zapisy są zablokowane): "
+                    + "; ".join(overbooked)
+                    + ". Istniejący uczestnicy pozostali bez zmian.",
+                    "warning",
+                )
             return redirect(url_for("admin.form_edit", form_id=form.id, tab=active_tab))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
@@ -1044,6 +1101,9 @@ def form_edit(form_id: int):
             assigned_user_ids=assigned_user_ids,
             logos=logos,
             training_field=get_declaration_training_field(form.definition_json or {}),
+            training_occupancy=TrainingAvailabilityService(
+                current_app.extensions["services"].submission_repository
+            ).occupied_counts(form_slug=form.slug),
             trigger_descriptions=TRIGGER_DESCRIPTIONS,
             instruction_statuses=instruction_statuses,
             validation_errors=[],

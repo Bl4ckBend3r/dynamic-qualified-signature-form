@@ -18,6 +18,7 @@ from form_loader import (
 from pdf_generator import generate_pdf
 from services.access_token_service import AccessTokenService
 from services.compliance_service import ComplianceService
+from services.field_availability_service import FieldAvailabilityService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
 from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_from_form, validate_required_submission_fields
 from services.process_service import OfficerDecision, ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
@@ -142,6 +143,7 @@ class SubmissionService:
                 submission_id=submission_id,
                 form_version_id=form_version_id,
                 submission_data=submission_data,
+                step=FieldAvailabilityService().initial_step(form_config),
             )
         except Exception:
             self.compliance_service.remove_incomplete_submission(submission_id)

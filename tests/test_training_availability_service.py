@@ -58,6 +58,44 @@ def test_training_selection_rejects_training_without_available_seats():
     assert error == "Brak wolnych miejsc dla szkolenia: Python."
 
 
+def test_capacity_below_existing_occupancy_keeps_rows_and_blocks_new_selection():
+    rows = [
+        {
+            "submission_id": f"participant-{index}",
+            "_submission_trainings": [
+                {
+                    "training_id": "excel",
+                    "status": "agreement_uploaded_by_beneficiary",
+                    "is_locked": True,
+                }
+            ],
+        }
+        for index in range(20)
+    ]
+    field = {
+        "name": "selected_trainings",
+        "required": True,
+        "catalog": [
+            {"id": "excel", "name": "Excel", "price": "500.00", "capacity": 15}
+        ],
+    }
+    service = TrainingAvailabilityService(FakeRepository(rows))
+
+    availability = service.availability_for_field(form_slug="sample", field=field)
+    selected, error = extract_training_selection(
+        field,
+        MultiDict([("selected_trainings", "excel")]),
+        availability=availability,
+    )
+
+    assert len(rows) == 20
+    assert availability["excel"]["occupied_seats"] == 20
+    assert availability["excel"]["available_seats"] == 0
+    assert availability["excel"]["is_available"] is False
+    assert selected == []
+    assert error == "Brak wolnych miejsc dla szkolenia: Excel."
+
+
 def test_low_seats_comment_is_visible_only_for_one_to_five_available_seats():
     catalog = [
         {"id": "low", "name": "Low", "capacity": 5, "low_seats_comment": "Zostało niewiele miejsc."},

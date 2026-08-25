@@ -274,6 +274,30 @@ def test_declaration_context_has_boolean_representations_and_no_training_catalog
     assert "Zgłoszenie" in categories
 
 
+def test_declaration_catalog_uses_assigned_fields_and_legacy_keeps_all_fields():
+    legacy_fields = [
+        {"name": "imie", "label": "Imię", "type": "text"},
+        {"name": "numer_legitymacji", "label": "Numer legitymacji", "type": "text"},
+    ]
+    assert {"imie", "numer_legitymacji"}.issubset({
+        item["name"] for item in declaration_variable_catalog(
+            legacy_fields, form_definition={"fields": legacy_fields}
+        )
+    })
+
+    assigned_fields = [
+        {**legacy_fields[0], "document_usage": {"declaration": False}},
+        {**legacy_fields[1], "document_usage": {"declaration": True}},
+    ]
+    names = {
+        item["name"] for item in declaration_variable_catalog(
+            assigned_fields, form_definition={"fields": assigned_fields}
+        )
+    }
+    assert "numer_legitymacji" in names
+    assert "imie" not in names
+
+
 def test_docx_import_preserves_inline_styles_and_whole_split_jinja_token():
     document = Document()
     paragraph = document.add_paragraph()

@@ -77,6 +77,7 @@ def validate_admin_form_config(form_definition: dict, *, validate_visual_workflo
     errors = validator.validate(form_definition)
     training_field = TrainingCatalogService.get_training_field(form_definition)
     errors.extend(TrainingCatalogService().validate_field(training_field))
+    errors.extend(FieldAvailabilityService().validate_config(form_definition))
     if validate_visual_workflow:
         errors.extend(
             WorkflowConfigValidator().validate(
@@ -375,20 +376,29 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
         (index for index, field in enumerate(current_fields) if field.get("type") == "training_selection"),
         None,
     )
+    existing_training = current_fields[existing_training_index] if existing_training_index is not None else None
     fields = [field for field in current_fields if field.get("type") != "training_selection"]
 
-    if enabled:
+    if enabled or existing_training is not None:
         training_field = {
+            **(existing_training or {}),
             "type": "training_selection",
+            "enabled": enabled,
             "name": form_data.get("training_selection_name", "selected_trainings").strip() or "selected_trainings",
             "label": form_data.get("training_selection_label", "Wybierz szkolenia").strip() or "Wybierz szkolenia",
             "required": form_data.get("training_selection_required") == "on",
-            "currency": form_data.get("training_selection_currency", "PLN").strip() or "PLN",
-            "catalog": parse_training_catalog(form_data),
+            "currency": parse_training_currency(
+                form_data.get("training_selection_currency", "PLN")
+            ),
+            # The form editor owns only the versioned selection-stage settings.
+            # Concrete trainings are managed by the standalone training module.
+            "catalog": list((existing_training or {}).get("catalog") or []),
         }
         max_total = decimal_price_to_storage(form_data.get("training_selection_max_total"))
         if max_total is not None:
             training_field["max_total_amount"] = max_total
+        else:
+            training_field.pop("max_total_amount", None)
         insert_at = training_section_insert_index(fields)
         if insert_at is None:
             insert_at = min(existing_training_index, len(fields)) if existing_training_index is not None else len(fields)
@@ -404,6 +414,7 @@ def parse_training_catalog(form_data) -> list[dict]:
     item_ids = form_data.getlist("training_item_id")
     names = form_data.getlist("training_item_name")
     prices = form_data.getlist("training_item_price")
+    currencies = form_data.getlist("training_item_currency")
     capacities = form_data.getlist("training_item_capacity")
     descriptions = form_data.getlist("training_item_description")
     admin_comments = form_data.getlist("training_item_admin_comment")
@@ -429,6 +440,9 @@ def parse_training_catalog(form_data) -> list[dict]:
             "name": clean_name,
             "price": decimal_price_to_storage(
                 prices[index] if index < len(prices) else ""
+            ),
+            "currency": parse_training_currency(
+                currencies[index] if index < len(currencies) else "PLN"
             ),
             "capacity": capacity,
             "description": str(
@@ -464,6 +478,13 @@ def parse_optional_int_value(value: Any, fallback: int) -> int:
     if parsed < 0:
         raise ValueError("Kolejność szkolenia nie może być mniejsza niż 0.")
     return parsed
+
+
+def parse_training_currency(value: Any) -> str:
+    currency = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("Waluta szkolenia musi być trzyliterowym kodem, np. PLN.")
+    return currency
 
 
 def parse_training_dates_from_form(form_data, training_count: int) -> list[list[dict]]:

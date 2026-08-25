@@ -133,7 +133,10 @@ class FieldAvailabilityService:
 
     def validate_config(self, form_definition: Mapping[str, Any]) -> list[str]:
         errors: list[str] = []
-        ids = set(self.step_ids(form_definition))
+        ordered_ids = self.step_ids(form_definition)
+        ids = set(ordered_ids)
+        if not ids:
+            return errors
         for field in form_definition.get("fields") or []:
             if not isinstance(field, Mapping):
                 continue
@@ -143,6 +146,25 @@ class FieldAvailabilityService:
                 step = str(item.get("step") or "")
                 if step not in ids:
                     errors.append(f'Pole "{name}" odwołuje się do nieistniejącego etapu "{step}".')
-                if item.get("required") and (not item.get("visible") or not item.get("editable")):
-                    errors.append(f'Pole "{name}" nie może być wymagane i jednocześnie ukryte lub tylko do odczytu w etapie "{step}".')
+                if item.get("required") and not item.get("visible"):
+                    errors.append(f'Pole "{name}" nie może być wymagane i jednocześnie ukryte w etapie "{step}".')
+                if item.get("required") and not item.get("editable"):
+                    step_index = ordered_ids.index(step) if step in ids else 0
+                    earlier_permissions = [
+                        candidate
+                        for candidate in normalized["availability"]
+                        if candidate.get("step") in ids
+                        and ordered_ids.index(str(candidate.get("step"))) < step_index
+                    ]
+                    obtainable_earlier = any(
+                        candidate.get("visible")
+                        and candidate.get("editable")
+                        and candidate.get("required")
+                        for candidate in earlier_permissions
+                    )
+                    if not obtainable_earlier:
+                        errors.append(
+                            f'Pole "{name}" jest wymagane i tylko do odczytu w etapie "{step}", '
+                            "ale nie jest wymagane i edytowalne na wcześniejszym etapie."
+                        )
         return errors

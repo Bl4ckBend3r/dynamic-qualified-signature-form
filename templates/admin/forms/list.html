@@ -62,6 +62,7 @@
                         <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>
                         <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
+                            {% if form.id in training_form_ids and form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.training_management', form_id=form.id) }}">Szkolenia</a>{% endif %}
                             {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
                             {% if form.is_public %}<button class="admin-link-button" type="button" role="menuitem" data-copy-public-link="{{ url_for('public_forms.form_page', slug=form.slug) }}">Kopiuj link</button>{% endif %}
                             {% if form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.form_sla', form_id=form.id) }}">Terminy i SLA</a>{% endif %}
@@ -70,7 +71,6 @@
                                 <a role="menuitem" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wersje i publikacja</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}">Workflow</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='trainings') }}">Szkolenia</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='documents') }}">Dokumenty</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='emails') }}">E-mail</a>
                                 <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='instructions') }}">Instrukcje</a>

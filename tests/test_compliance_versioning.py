@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from models import Base, ConsentVersion, Form, FormField, FormRegulation, FormSubmission, SubmissionConsent
 from repositories.submission_repository import PostgresSubmissionRepository
-from services.compliance_service import ComplianceService, consent_sha256, file_sha256, normalize_consent_text
+from services.compliance_service import ComplianceError, ComplianceService, consent_sha256, file_sha256, normalize_consent_text
 from services.form_version_service import FORM_VERSION_DRAFT, FormVersionService
 
 
@@ -137,6 +137,74 @@ def test_required_consent_blocks_submit_but_optional_may_be_false():
     service = ComplianceService()
     assert "accept_terms" in service.validate_acceptances(_definition(), {"accept_terms": False, "marketing": False})
     assert service.validate_acceptances(_definition(), {"accept_terms": True, "marketing": False}) == {}
+
+
+def test_later_stage_consent_is_not_required_or_recorded_on_submission(tmp_path):
+    url, Session = _database(tmp_path)
+    definition = {
+        "title": "Etapowe zgody",
+        "workflow": {
+            "initial_step": "submission",
+            "steps": [
+                {"id": "submission", "admin_label": "Złożenie", "next": "officer_review", "requires_user_action": True},
+                {"id": "officer_review", "admin_label": "Weryfikacja", "next": "declaration", "requires_officer_action": True},
+                {"id": "declaration", "admin_label": "Deklaracja", "requires_user_action": True, "final": True},
+            ],
+        },
+        "fields": [{
+            "name": "image_consent",
+            "label": "Zgoda na wykorzystanie wizerunku",
+            "type": "checkbox",
+            "consent_type": "other",
+            "options": [{"value": "Tak", "label": "Wyrażam zgodę."}],
+            "availability": [
+                {"step": "submission", "visible": False, "editable": False, "required": False},
+                {"step": "declaration", "visible": True, "editable": True, "required": True},
+            ],
+        }],
+    }
+    with Session.begin() as db:
+        form = Form(slug="later-consent", name="Later", title="Later", definition_json=definition)
+        db.add(form)
+        db.flush()
+        db.add(FormField(
+            form_id=form.id,
+            name="image_consent",
+            label="Zgoda na wykorzystanie wizerunku",
+            type="checkbox",
+            required=False,
+            availability_json=definition["fields"][0]["availability"],
+        ))
+        version = FormVersionService().create_initial_version(
+            db, form, actor_id=None, status=FORM_VERSION_DRAFT,
+        )
+        FormVersionService().publish(db, form, version, actor_id=None)
+        _submission(db, form, version, "later-consent-submission")
+        version_id = version.id
+
+    compliance = ComplianceService(PostgresSubmissionRepository(url, session_factory=Session))
+    assert compliance.record_submission_acceptances(
+        submission_id="later-consent-submission",
+        form_version_id=version_id,
+        submission_data={},
+        step="submission",
+    ) == []
+    with pytest.raises(ComplianceError, match="Zgoda na wykorzystanie wizerunku"):
+        compliance.record_submission_acceptances(
+            submission_id="later-consent-submission",
+            form_version_id=version_id,
+            submission_data={},
+            step="declaration",
+        )
+    records = compliance.record_submission_acceptances(
+        submission_id="later-consent-submission",
+        form_version_id=version_id,
+        submission_data={"image_consent": "Tak"},
+        step="declaration",
+    )
+    assert len(records) == 1
+    assert records[0].accepted is True
+    assert records[0].metadata_json["workflow_step"] == "declaration"
 
 
 def test_published_content_and_submission_snapshot_are_immutable(tmp_path):

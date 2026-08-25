@@ -39,6 +39,7 @@ from services.submission_service import SubmissionService
 from services.submission_attachment_service import SubmissionAttachmentService
 from services.submission_assignment_service import SubmissionAssignmentService
 from services.submission_training_service import SubmissionTrainingService
+from services.training_management_service import TrainingManagementService
 from services.submission_correction_service import SubmissionCorrectionService
 from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
@@ -58,6 +59,7 @@ class ServiceContainer:
     submission_attachment_service: SubmissionAttachmentService
     submission_assignment_service: SubmissionAssignmentService
     submission_training_service: SubmissionTrainingService
+    training_management_service: TrainingManagementService
     workflow_service: WorkflowService
     beneficiary_agreement_service: BeneficiaryAgreementService
     office_signed_agreement_service: OfficeSignedAgreementService
@@ -219,6 +221,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         workflow_sla_service=workflow_sla_service,
     )
     submission_training_service = SubmissionTrainingService()
+    training_management_service = TrainingManagementService()
     document_signing_service = DocumentSigningService(
         storage=storage,
         submission_repository=submission_repository,
@@ -236,6 +239,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_attachment_service=submission_attachment_service,
         submission_assignment_service=submission_assignment_service,
         submission_training_service=submission_training_service,
+        training_management_service=training_management_service,
         workflow_service=workflow_service,
         beneficiary_agreement_service=beneficiary_agreement_service,
         office_signed_agreement_service=office_signed_agreement_service,

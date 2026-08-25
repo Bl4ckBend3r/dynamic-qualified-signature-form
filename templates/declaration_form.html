@@ -17,6 +17,8 @@
         </div>
 
         <form method="post" action="{{ action_url }}" novalidate class="dynamic-form">
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            {% if errors.get('compliance') %}<div class="form-errors" role="alert"><p>{{ errors.get('compliance') }}</p></div>{% endif %}
             {% if form_definition.fields|selectattr('required')|list %}
                 <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
             {% endif %}

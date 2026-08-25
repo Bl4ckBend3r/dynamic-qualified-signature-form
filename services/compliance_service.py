@@ -17,6 +17,7 @@ from models import (
     FormVersionConsent,
     SubmissionConsent,
 )
+from services.field_availability_service import FieldAvailabilityService
 
 
 CONSENT_TYPES = {
@@ -73,15 +74,37 @@ def _consent_text(field: dict) -> str:
     return normalize_consent_text(field.get("pdf_text") or option_label or field.get("label") or "")
 
 
+def _consent_required(field: dict) -> bool:
+    availability = field.get("availability")
+    if isinstance(availability, list) and availability:
+        return any(
+            isinstance(item, dict) and bool(item.get("required"))
+            for item in availability
+        )
+    return bool(field.get("required"))
+
+
 class ComplianceService:
     """Freezes consent/regulation versions and records immutable acceptance evidence."""
 
     def __init__(self, submission_repository=None) -> None:
         self.submission_repository = submission_repository
 
-    def validate_acceptances(self, form_config: dict, submission_data: dict) -> dict[str, str]:
+    def validate_acceptances(
+        self,
+        form_config: dict,
+        submission_data: dict,
+        *,
+        step: str | None = None,
+    ) -> dict[str, str]:
         errors: dict[str, str] = {}
-        for field in _consent_fields(form_config):
+        effective_config = form_config
+        if step:
+            effective_config = {
+                **form_config,
+                "fields": FieldAvailabilityService().visible_fields(form_config, step),
+            }
+        for field in _consent_fields(effective_config):
             key = str(field["name"])
             if field.get("required") and not _is_accepted(submission_data.get(key)):
                 errors[key] = f"Zgoda „{field.get('label') or key}” jest wymagana."
@@ -125,7 +148,7 @@ class ComplianceService:
             text = _consent_text(field)
             digest = consent_sha256(text)
             title = str(field.get("label") or key)
-            required = bool(field.get("required"))
+            required = _consent_required(field)
             published = db.execute(select(ConsentVersion).where(ConsentVersion.consent_definition_id == definition.id, ConsentVersion.status == "published")).scalars().first()
             draft = db.execute(select(ConsentVersion).where(ConsentVersion.consent_definition_id == definition.id, ConsentVersion.status == "draft")).scalars().first()
             if published and (published.sha256, published.title, published.required, published.consent_type) == (digest, title, required, consent_type):
@@ -207,7 +230,7 @@ class ComplianceService:
             text = _consent_text(field)
             digest = consent_sha256(text)
             title = str(field.get("label") or key)
-            required = bool(field.get("required"))
+            required = _consent_required(field)
             current = db.execute(
                 select(ConsentVersion)
                 .where(ConsentVersion.consent_definition_id == definition.id, ConsentVersion.status == "published")
@@ -325,6 +348,7 @@ class ComplianceService:
         submission_id: str,
         form_version_id: int | None,
         submission_data: dict,
+        step: str | None = None,
     ) -> list[SubmissionConsent]:
         session_factory = getattr(self.submission_repository, "session_factory", None)
         if not session_factory or not form_version_id:
@@ -337,25 +361,47 @@ class ComplianceService:
             form_version = db.get(FormVersion, form_version_id)
             if not form_version or form_version.form_id != submission.form_version.form_id:
                 raise ComplianceError("Nie można rozwiązać wersji compliance dla zgłoszenia.")
-            if submission.consents:
-                return list(submission.consents)
-            records = []
+            definition = form_version.definition_json or {}
+            fields_by_name = {
+                str(field.get("name")): field
+                for field in _consent_fields(definition)
+            }
+            availability_service = FieldAvailabilityService()
+            existing_by_key = {record.consent_key: record for record in submission.consents}
+            records = list(submission.consents)
             for link in form_version.consent_links:
                 version = link.consent_version
-                definition = version.definition
-                accepted = _is_accepted(submission_data.get(definition.consent_key))
-                if version.required and not accepted:
+                consent_definition = version.definition
+                key = str(consent_definition.consent_key)
+                field = fields_by_name.get(key)
+                permission = (
+                    availability_service.permission(field, definition, step)
+                    if step and field
+                    else None
+                )
+                if permission is not None and not permission.get("visible"):
+                    continue
+                accepted = _is_accepted(submission_data.get(key))
+                required = bool(permission.get("required")) if permission is not None else bool(version.required)
+                if required and not accepted:
                     raise ComplianceError(f"Wymagana zgoda „{version.title}” nie została zaakceptowana.")
+                existing = existing_by_key.get(key)
+                if existing and (existing.accepted or not accepted):
+                    continue
+                if existing:
+                    db.delete(existing)
+                    db.flush()
+                    records.remove(existing)
                 regulation_version = (
                     form_version.regulation_version
-                    if version.consent_type == "regulation" or "regulamin" in definition.consent_key.casefold()
+                    if version.consent_type == "regulation" or "regulamin" in key.casefold()
                     else None
                 )
                 record = SubmissionConsent(
                     submission_id=submission.id,
                     consent_version_id=version.id,
                     regulation_version_id=regulation_version.id if regulation_version else None,
-                    consent_key=definition.consent_key,
+                    consent_key=key,
                     consent_version=version.version_label,
                     consent_title_snapshot=version.title,
                     consent_text_snapshot=version.text_snapshot,
@@ -364,10 +410,14 @@ class ComplianceService:
                     regulation_sha256=regulation_version.sha256 if regulation_version else "",
                     accepted=accepted,
                     accepted_at=now if accepted else None,
-                    metadata_json={"consent_type": version.consent_type},
+                    metadata_json={
+                        "consent_type": version.consent_type,
+                        **({"workflow_step": step} if step else {}),
+                    },
                 )
                 db.add(record)
                 records.append(record)
+                existing_by_key[key] = record
             db.commit()
             for record in records:
                 db.refresh(record)

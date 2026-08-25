@@ -10,6 +10,7 @@ import re
 import secrets
 import tempfile
 import unicodedata
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 
@@ -384,6 +385,12 @@ def training_selection(submission_id: str):
         field = get_training_selection_field(version_definition or {})
         if field is None or not field.get("enabled", True):
             abort(404)
+        # Selection-stage settings come from the submission's FormVersion, while
+        # the concrete operational catalog is managed independently on Form.
+        current_catalog_field = get_training_selection_field(form.definition_json or {})
+        if current_catalog_field is not None:
+            field = deepcopy(field)
+            field["catalog"] = deepcopy(current_catalog_field.get("catalog") or [])
         decision = str(
             submission.officer_decision or submission.acceptance_required or ""
         ).strip().lower()
@@ -566,6 +573,18 @@ def declaration_form(slug: str, submission_id: str):
     )
 
     if request.method == "POST":
+        from routes.public_forms import _valid_public_csrf
+        csrf_valid, _csrf_missing = _valid_public_csrf(request.form)
+        if not csrf_valid:
+            flow_result.errors = {"compliance": "Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie."}
+            flow_result.values = dict(request.form)
+            return render_template(
+                "declaration_form.html",
+                form_definition=flow_result.declaration_definition,
+                action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id),
+                errors=flow_result.errors,
+                values=flow_result.values,
+            ), 400
         try:
             flow_result = services.declaration_flow_service.handle_declaration_post(
                 submission_id=submission_id,
@@ -577,6 +596,7 @@ def declaration_form(slug: str, submission_id: str):
                 submission_repository=services.submission_repository,
                 document_service=services.document_service,
                 refresh_submission=get_submission_context,
+                compliance_service=services.compliance_service,
             )
         except Exception as exc:
             logger.exception("Nie udało się wygenerować deklaracji: %s", exc)
@@ -615,12 +635,29 @@ def save_additional_fields(slug: str, submission_id: str):
         flash("Ten formularz nie wymaga dodatkowych informacji.", "info")
         return redirect(documents_to_sign_url(submission_id))
 
+    from routes.public_forms import _valid_public_csrf
+    csrf_valid, _csrf_missing = _valid_public_csrf(request.form)
+    if not csrf_valid:
+        return render_template(
+            "documents_to_sign.html",
+            submission_id=submission_id,
+            acceptance_value="Tak",
+            errors={},
+            result=build_documents_to_sign_result(
+                submission_id,
+                submission,
+                additional_errors={"compliance": "Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie."},
+                additional_values=dict(request.form),
+            ),
+        ), 400
+
     flow_result = services.declaration_flow_service.save_additional_fields(
         submission_id=submission_id,
         submission=submission,
         form_config=form_config,
         form_data=request.form,
         submission_repository=services.submission_repository,
+        compliance_service=services.compliance_service,
     )
     if not flow_result.success:
         flash(flow_result.message or "Dodatkowe informacje zawierają błędy. Popraw wskazane pola.", "error")

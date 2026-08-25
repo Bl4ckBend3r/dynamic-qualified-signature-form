@@ -228,6 +228,141 @@ class SubmissionTraining(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class TrainingParticipantActionHistory(Base):
+    __tablename__ = "training_participant_action_history"
+    __table_args__ = (
+        Index("ix_training_participant_history_training", "submission_training_id", "created_at"),
+        Index("ix_training_action_history_scope", "form_id", "training_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    training_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    submission_training_id: Mapped[int | None] = mapped_column(ForeignKey("submission_trainings.id", ondelete="SET NULL"), nullable=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_value: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    new_value: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class TrainingAttendanceSession(Base):
+    __tablename__ = "training_attendance_sessions"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'active', 'closed')", name="ck_training_attendance_sessions_status"),
+        Index("ix_training_attendance_sessions_training", "form_id", "training_id", "session_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    training_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[str] = mapped_column(String(8), default="", nullable=False)
+    end_time: Mapped[str] = mapped_column(String(8), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TrainingAttendanceRecord(Base):
+    __tablename__ = "training_attendance_records"
+    __table_args__ = (
+        UniqueConstraint("session_id", "submission_training_id", name="uq_training_attendance_session_participant"),
+        UniqueConstraint("token_hash", name="uq_training_attendance_records_token_hash"),
+        CheckConstraint("status IN ('pending', 'present', 'absent', 'excused')", name="ck_training_attendance_records_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("training_attendance_sessions.id", ondelete="CASCADE"), index=True, nullable=False)
+    submission_training_id: Mapped[int] = mapped_column(ForeignKey("submission_trainings.id", ondelete="CASCADE"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    confirmation_method: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class TrainingSurvey(Base):
+    __tablename__ = "training_surveys"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'active', 'closed')", name="ck_training_surveys_status"),
+        Index("ix_training_surveys_training", "form_id", "training_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
+    training_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    anonymous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TrainingSurveyQuestion(Base):
+    __tablename__ = "training_survey_questions"
+    __table_args__ = (
+        CheckConstraint("question_type IN ('scale', 'single_choice', 'multiple_choice', 'text')", name="ck_training_survey_questions_type"),
+        Index("ix_training_survey_questions_order", "survey_id", "sort_order"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    survey_id: Mapped[int] = mapped_column(ForeignKey("training_surveys.id", ondelete="CASCADE"), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    options_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class TrainingSurveyInvitation(Base):
+    __tablename__ = "training_survey_invitations"
+    __table_args__ = (
+        UniqueConstraint("survey_id", "submission_training_id", name="uq_training_survey_invitation_participant"),
+        UniqueConstraint("token_hash", name="uq_training_survey_invitations_token_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    survey_id: Mapped[int] = mapped_column(ForeignKey("training_surveys.id", ondelete="CASCADE"), index=True, nullable=False)
+    submission_training_id: Mapped[int] = mapped_column(ForeignKey("submission_trainings.id", ondelete="CASCADE"), index=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class TrainingSurveyResponse(Base):
+    __tablename__ = "training_survey_responses"
+    __table_args__ = (UniqueConstraint("invitation_id", name="uq_training_survey_response_invitation"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invitation_id: Mapped[int] = mapped_column(ForeignKey("training_survey_invitations.id", ondelete="CASCADE"), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class TrainingSurveyAnswer(Base):
+    __tablename__ = "training_survey_answers"
+    __table_args__ = (UniqueConstraint("response_id", "question_id", name="uq_training_survey_answer_question"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    response_id: Mapped[int] = mapped_column(ForeignKey("training_survey_responses.id", ondelete="CASCADE"), nullable=False)
+    question_id: Mapped[int] = mapped_column(ForeignKey("training_survey_questions.id", ondelete="CASCADE"), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+
+
 class SubmissionFile(Base):
     __tablename__ = "submission_files"
     __table_args__ = (

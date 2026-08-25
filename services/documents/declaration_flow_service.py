@@ -13,6 +13,7 @@ from form_loader import (
     validate_submission,
 )
 from services.document_service import DocumentType, serialize_json_list
+from services.compliance_service import ComplianceError
 from services.field_availability_service import FieldAvailabilityService
 from services.process_service import ProcessStatus
 from services.training_agreement_service import get_training_selection_field
@@ -122,6 +123,7 @@ class DeclarationFlowService:
         submission_repository,
         document_service,
         refresh_submission: Callable[[str], dict | None],
+        compliance_service=None,
     ) -> DeclarationFlowResult:
         step = self._row_availability_step(form_config, submission["row"])
         declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
@@ -139,6 +141,24 @@ class DeclarationFlowService:
                 declaration_definition=declaration_definition,
                 error_code="validation_error",
             )
+
+        if compliance_service is not None:
+            try:
+                compliance_service.record_submission_acceptances(
+                    submission_id=submission_id,
+                    form_version_id=submission["row"].get("form_version_id"),
+                    submission_data=declaration_data,
+                    step=step,
+                )
+            except ComplianceError as exc:
+                return DeclarationFlowResult(
+                    success=False,
+                    message=str(exc),
+                    errors={"compliance": str(exc)},
+                    values=values,
+                    declaration_definition=declaration_definition,
+                    error_code="compliance_error",
+                )
 
         rule_updates = rules_service.apply_rules(submission["row"], form_config, declaration_data)
         updates = {**declaration_data, **rule_updates}
@@ -185,6 +205,7 @@ class DeclarationFlowService:
         form_config: dict,
         form_data,
         submission_repository,
+        compliance_service=None,
     ) -> DeclarationFlowResult:
         step = self._row_availability_step(form_config, submission["row"])
         additional_definition = self.build_additional_fields_definition(form_config, step)
@@ -201,6 +222,24 @@ class DeclarationFlowService:
                 declaration_definition=additional_definition,
                 error_code="validation_error",
             )
+
+        if compliance_service is not None:
+            try:
+                compliance_service.record_submission_acceptances(
+                    submission_id=submission_id,
+                    form_version_id=submission["row"].get("form_version_id"),
+                    submission_data=additional_data,
+                    step=step,
+                )
+            except ComplianceError as exc:
+                return DeclarationFlowResult(
+                    success=False,
+                    message=str(exc),
+                    errors={"compliance": str(exc)},
+                    values=values,
+                    declaration_definition=additional_definition,
+                    error_code="compliance_error",
+                )
 
         data_json = submission["row"].get("data_json") or {}
         if isinstance(data_json, str):

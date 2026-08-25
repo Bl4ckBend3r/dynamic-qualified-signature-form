@@ -150,6 +150,8 @@
                         <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
                     </div>
                     <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                        {% if result.additional_errors.get('compliance') %}<div class="form-errors" role="alert"><p>{{ result.additional_errors.get('compliance') }}</p></div>{% endif %}
                         {% if result.additional_form_definition.fields|selectattr('required')|list %}
                             <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
                         {% endif %}

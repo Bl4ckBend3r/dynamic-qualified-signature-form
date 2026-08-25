@@ -34,7 +34,7 @@ def test_public_agreement_cards_render_actions_from_per_training_state():
 
     assert "{{ agreement.state_title }}" in template
     assert "{{ agreement.state_description }}" in template
-    assert "{% if agreement.can_upload %}" in template
+    assert "result.uploadable_training_agreements" in template
     assert "agreement.beneficiary_uploaded" in template
     assert "Pobierz wygenerowaną umowę PDF" in template
     assert "Pobierz wgraną podpisaną umowę" in template
@@ -70,26 +70,80 @@ def test_training_picker_script_updates_and_enforces_limit():
     assert "Excel" not in template
 
 
-def test_admin_training_ui_uses_sections_and_readable_date_fields():
+def test_admin_training_editor_contains_only_selection_stage_settings():
     template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
     stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
 
     assert 'name="training_item_code"' not in template
     assert "RRRR-MM-DD|" not in template
-    assert 'data-training-card' in template
-    assert 'type="date" name="training_date_start_date"' in template
-    assert 'type="time" name="training_date_start_time"' in template
-    assert "Dodaj termin" in template
-    assert "Usuń termin" in template
-    assert "Te szkolenia nie są częścią deklaracji." in template
-    assert "Te szkolenia są źródłem danych dla publicznego etapu wyboru szkoleń" in template
+    assert "Konfiguracja etapu wyboru szkoleń" in template
+    assert "Dostępne szkolenia" not in template
+    assert "+ Dodaj szkolenie" not in template
+    assert "wersjonowany katalog formularza" not in template
+    assert "Przejdź do zarządzania szkoleniami" in template
     assert "Dotyczy osobnego etapu wyboru szkoleń" in template
-    assert 'name="training_item_admin_comment"' in template
-    assert "data-training-removals" in template
-    assert "training_removed_reason" in template
-    assert 'name="training_item_change_reason"' in template
-    assert "Powód dezaktywacji" in template
-    assert "Powód usunięcia lub archiwizacji jest wymagany" in template
-    assert "Archiwalne" in template
+    for name in (
+        "training_selection_enabled", "training_selection_name", "training_selection_label",
+        "training_selection_max_total", "training_selection_currency", "training_selection_required",
+    ):
+        assert f'name="{name}"' in template
+    for name in (
+        "training_item_id", "training_item_name", "training_item_price",
+        "training_item_currency", "training_item_capacity", "training_item_active",
+        "training_item_sort_order",
+    ):
+        assert f'name="{name}"' not in template
     assert ".admin-training-fields" in stylesheet
-    assert ".admin-training-table" not in stylesheet
+
+
+def test_admin_training_list_is_an_accessible_inline_editor():
+    template = Path("templates/admin/trainings/index.html").read_text(encoding="utf-8")
+
+    assert "data-training-toggle" in template
+    assert 'aria-expanded="' in template
+    assert 'aria-controls="{{ panel_id }}"' in template
+    assert "data-training-panel" in template
+    assert "admin.training_catalog_update_inline" in template
+    assert "admin.training_catalog_create_inline" in template
+    assert "admin.training_management_detail" in template
+    assert "+ Dodaj szkolenie" in template
+    assert 'name="form_version_id"' not in template
+    assert 'name="training_item_id"' in template
+    assert "data-add-inline-training-date" in template
+    assert "data-remove-inline-training-date" in template
+    assert "onclick=" not in template
+    assert 'closest("[data-training-toggle]")' in template
+
+
+def test_admin_training_detail_has_operational_cards_and_one_initial_survey_question():
+    template = Path("templates/admin/trainings/detail.html").read_text(encoding="utf-8")
+
+    for hook in (
+        "training-kpi-grid",
+        "training-filter-grid",
+        "training-participants-table",
+        'id="messages"',
+        'id="attendance"',
+        'id="surveys"',
+        'id="history"',
+    ):
+        assert hook in template
+    assert "data-add-question" in template
+    assert "data-training-question-template" in template
+    assert "range(4)" not in template
+
+
+def test_admin_training_module_styles_cover_desktop_and_mobile_layouts():
+    stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
+
+    for selector in (
+        ".training-list",
+        ".training-row",
+        ".training-edit-form",
+        ".training-kpi-grid",
+        ".training-filter-grid",
+        ".training-question-card",
+    ):
+        assert selector in stylesheet
+    assert "@media (max-width: 1100px)" in stylesheet
+    assert "@media (max-width: 768px)" in stylesheet

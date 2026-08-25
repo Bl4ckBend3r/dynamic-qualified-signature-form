@@ -4,6 +4,7 @@ import json
 import re
 import unicodedata
 import zipfile
+from copy import deepcopy
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -28,6 +29,59 @@ from services.training_catalog_service import TrainingCatalogService
 from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
 from services.training_service import decimal_price_to_storage
 from validators.form_config_validator import FormConfigValidator
+
+
+_DOCUMENT_BUILDER_WORKFLOW_KEYS = {
+    "declaration": (
+        "declaration_builder_document",
+        "declaration_builder_active_document",
+        "declaration_builder_status",
+        "declaration_builder_updated_at",
+        "declaration_builder_updated_by",
+        "declaration_template_updated_at",
+        "declaration_template_updated_by",
+        "declaration_template_updated_source",
+    ),
+    "contract": (
+        "contract_builder_document",
+        "contract_builder_active_document",
+        "contract_builder_status",
+        "contract_builder_updated_at",
+        "contract_builder_updated_by",
+        "contract_template_updated_at",
+        "contract_template_updated_by",
+        "contract_template_updated_source",
+    ),
+}
+
+
+def _merge_document_builder_state(candidate: dict, current: dict) -> tuple[dict, dict[str, bool]]:
+    """Keep builder-owned state from the current draft during an ordinary form save.
+
+    ``workflow_builder_json`` is a page-open snapshot.  It owns the visual
+    workflow fields, but not the document edited in the separate builder.
+    """
+    merged = dict(candidate or {})
+    stale: dict[str, bool] = {}
+    for document_type, keys in _DOCUMENT_BUILDER_WORKFLOW_KEYS.items():
+        revision_key = f"{document_type}_builder_updated_at"
+        if revision_key in merged or revision_key in current:
+            stale[document_type] = (
+                (revision_key in merged) != (revision_key in current)
+                or merged.get(revision_key) != current.get(revision_key)
+            )
+        else:
+            # Compatibility with older payloads/documents without revision metadata.
+            stale[document_type] = any(
+                key in merged and merged.get(key) != current.get(key)
+                for key in keys
+            )
+        for key in keys:
+            if key in current:
+                merged[key] = deepcopy(current[key])
+            else:
+                merged.pop(key, None)
+    return merged, stale
 
 
 def get_declaration_training_field(form_definition: dict) -> dict:
@@ -95,6 +149,7 @@ def build_form_definition_from_admin_form(
     allow_advanced_json: bool = False,
 ) -> dict:
     definition = normalize_admin_form_definition(current_definition or {})
+    current_workflow = dict(definition.get("workflow") or {})
     full_definition_value = str(form_data.get("form_definition_json", "") or "").strip()
     use_full_definition = allow_advanced_json and form_data.get("use_form_definition_json") == "on"
     if use_full_definition:
@@ -115,6 +170,9 @@ def build_form_definition_from_admin_form(
         workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
     else:
         workflow = dict(definition.get("workflow") or {})
+    builder_state_stale = {"declaration": False, "contract": False}
+    if not use_full_definition and not use_advanced_json:
+        workflow, builder_state_stale = _merge_document_builder_state(workflow, current_workflow)
     workflow = normalizer.normalize(workflow)
     previous_declaration_template_source = str(workflow.get("declaration_template_source") or "")
     previous_contract_template_source = str(workflow.get("contract_template_source") or "")
@@ -130,6 +188,9 @@ def build_form_definition_from_admin_form(
     workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
     requested_declaration_source = str(form_data.get("declaration_template_source") or "").strip().casefold()
+    declaration_builder_json = str(form_data.get("declaration_builder_json") or "").strip()
+    if builder_state_stale["declaration"] and not declaration_builder_json:
+        requested_declaration_source = str(current_workflow.get("declaration_template_source") or "").strip().casefold()
     if not requested_declaration_source and workflow["declaration_template_html"]:
         requested_declaration_source = "html"
     declaration_source = requested_declaration_source or str(workflow.get("declaration_template_source") or "builder").strip().casefold()
@@ -139,7 +200,6 @@ def build_form_definition_from_admin_form(
         from services.documents.document_builder_service import default_document_builder_document
 
         workflow["declaration_builder_document"] = default_document_builder_document("declaration")
-    declaration_builder_json = str(form_data.get("declaration_builder_json") or "").strip()
     if declaration_builder_json:
         from services.documents.document_builder_service import normalize_document_builder_document
 
@@ -164,6 +224,9 @@ def build_form_definition_from_admin_form(
     workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     requested_template_source = str(form_data.get("contract_template_source") or "").strip().casefold()
+    builder_json = str(form_data.get("contract_builder_json") or "").strip()
+    if builder_state_stale["contract"] and not builder_json:
+        requested_template_source = str(current_workflow.get("contract_template_source") or "").strip().casefold()
     # Starsze formularze administracyjne i integracje przesyłały sam HTML,
     # zanim wybór źródła stał się jawnym polem.
     if not requested_template_source and workflow["contract_template_html"]:
@@ -175,7 +238,6 @@ def build_form_definition_from_admin_form(
         from services.documents.agreement_builder_service import default_agreement_builder_document
 
         workflow["contract_builder_document"] = default_agreement_builder_document()
-    builder_json = str(form_data.get("contract_builder_json") or "").strip()
     if builder_json:
         from services.documents.agreement_builder_service import normalize_agreement_builder_document
 

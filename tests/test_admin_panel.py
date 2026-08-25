@@ -6890,6 +6890,110 @@ def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_a
         assert workflow["contract_builder_active_document"]["blocks"][0]["content"] == "Aktywna treść"
 
 
+def test_main_form_save_merges_stale_workflow_without_replacing_newer_builder_document(
+    admin_app, admin_client, monkeypatch
+):
+    user_id = create_user(admin_app)
+    stale_definition = readable_workflow_definition()
+    stale_workflow = stale_definition["workflow"]
+    stale_document = {"version": 1, "blocks": [{"type": "paragraph", "content": "Wersja A"}]}
+    stale_workflow.update({
+        "requires_contract": False,
+        "contract_template_source": "html",
+        "contract_template_html": "<p>Stary HTML</p>",
+        "contract_builder_document": stale_document,
+        "contract_builder_status": "draft",
+        "contract_builder_updated_at": "2026-08-25T08:00:00+02:00",
+    })
+    form_id = create_form(
+        admin_app,
+        slug="builder_stale_main_save",
+        definition_json=stale_definition,
+    )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormVersion(
+            form_id=form_id,
+            version_major=1,
+            version_minor=0,
+            version_label="1.0",
+            status="draft",
+            definition_json=json.loads(json.dumps(stale_definition)),
+            created_by_id=user_id,
+        ))
+        db.commit()
+    login(admin_client)
+    edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    assert '"contract_builder_document"' in edit_html
+    assert ".forEach((key) => delete workflow[key])" in edit_html
+    edit_csrf = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    newer_document = {
+        "version": 1,
+        "blocks": [{"type": "paragraph", "content": "Wersja B {{ participant_name }}"}],
+    }
+
+    builder_response = admin_client.post(
+        f"/admin/forms/{form_id}/agreement-template/builder",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "builder_json": json.dumps(newer_document),
+            "action": "activate",
+        },
+    )
+    stale_workflow["name"] = "Workflow zapisany z głównego formularza"
+    main_response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": edit_csrf,
+            "name": "Formularz po scaleniu",
+            "slug": "builder_stale_main_save",
+            "title": "Formularz po scaleniu",
+            "workflow_name": stale_workflow["name"],
+            "workflow_initial_step": stale_workflow["initial_step"],
+            "workflow_builder_json": json.dumps(stale_workflow, ensure_ascii=False),
+            # This is the stale source selected when the page was opened.
+            "contract_template_source": "html",
+            "contract_template_html": "<p>Stary HTML</p>",
+            "is_active": "on",
+            "is_public": "on",
+        },
+    )
+
+    assert builder_response.status_code == 200
+    assert main_response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        workflow = form.definition_json["workflow"]
+        draft = admin_app.extensions["services"].form_version_service.editable_draft(db, form_id)
+        assert workflow["name"] == "Workflow zapisany z głównego formularza"
+        assert workflow["contract_template_source"] == "builder"
+        assert workflow["contract_builder_status"] == "active"
+        assert workflow["contract_builder_document"]["blocks"][0]["content"] == "Wersja B {{ participant_name }}"
+        assert workflow["contract_builder_active_document"] == workflow["contract_builder_document"]
+        assert draft.definition_json["workflow"]["contract_builder_document"] == workflow["contract_builder_document"]
+    reopened = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
+    assert "Wersja B {{ participant_name }}" in reopened
+    assert "Wersja A" not in reopened
+    preview = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview")
+    assert preview.status_code == 200
+    assert "Wersja B" in preview.get_json()["html"]
+    assert "Wersja A" not in preview.get_json()["html"]
+    rendered_pdf = {}
+
+    def fake_render_pdf(**kwargs):
+        rendered_pdf["template_html"] = kwargs["template_html"]
+        return b"%PDF-1.4\n"
+
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        fake_render_pdf,
+    )
+    pdf = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/example.pdf")
+    assert pdf.status_code == 200
+    assert "Wersja B {{ participant_name }}" in rendered_pdf["template_html"]
+    assert "Wersja A" not in rendered_pdf["template_html"]
+
+
 def test_agreement_builder_live_preview_and_pdf_are_stateless(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     definition = {"title": "Umowa", "slug": "builder_preview", "fields": [{"name": "stanowisko", "label": "Stanowisko", "type": "text"}], "workflow": {"requires_contract": True, "contract_template_source": "builder"}}
@@ -7059,6 +7163,7 @@ def test_agreement_builder_browser_inserts_blocks_variables_and_debounces_previe
         saved_runs = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs")
         assert saved_format == {"alignment": "justify"}
         assert saved_runs == [{"text": "A{{ email }}B", "bold": True, "italic": True, "underline": True}]
+        assert not ({"\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff"} & set(saved_runs[0]["text"]))
         messages = page.evaluate("window.openerMessages")
         assert messages[-1][0]["type"] == "agreement-builder-saved"
         assert messages[-1][0]["formId"] == form_id
@@ -8173,6 +8278,17 @@ def test_document_builder_browser_preserves_selection_and_toggles_inline_runs(ad
             assert page.evaluate(f"JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].{mark}") is False
             button.click()
             assert page.evaluate(f"JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs[1].{mark}") is True
+        for _ in range(5):
+            page.locator('[data-builder-format="underline"]').click()
+            page.locator('[data-builder-format="underline"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs.map(run => run.text).join('')") == text
+        for mark in ("underline", "italic", "bold"):
+            page.locator(f'[data-builder-format="{mark}"]').click()
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).runs") == [
+            {"text": text, "bold": False, "italic": False, "underline": False}
+        ]
+        for mark in ("bold", "italic", "underline"):
+            page.locator(f'[data-builder-format="{mark}"]').click()
         assert page.evaluate("window.getSelection().toString()") == phrase
         assert page.locator("[data-agreement-builder-status]").inner_text() == "Niezapisane zmiany"
 
@@ -8205,13 +8321,24 @@ def test_document_builder_browser_preserves_selection_and_toggles_inline_runs(ad
         second_item.focus()
         page.keyboard.press("Tab")
         assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).items[1].level") == 1
+        list_block.locator("[data-builder-add-item]").click()
+        third_item = list_block.locator("[data-builder-list-item]").nth(2)
+        third_item.fill("Przykładowa treść")
+        third_item.focus()
+        page.keyboard.press("Tab")
+        page.keyboard.press("Tab")
+        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).items[2].level") == 2
         page.keyboard.press("Shift+Tab")
-        assert page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1).items[1].level") == 0
+        page.keyboard.press("Shift+Tab")
+        list_after_levels = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1)")
+        assert list_after_levels["items"][2]["level"] == 0
+        assert "".join(run["text"] for run in list_after_levels["items"][2]["runs"]) == "Przykładowa treść"
         page.locator('[data-builder-list-level="increase"]').click()
+        list_block.locator(".agreement-builder-list-config-collapse summary").click()
         list_block.locator('[data-builder-list-marker][data-level="1"]').select_option("alpha-dot")
         list_block.locator('[data-builder-list-indent][data-level="1"]').fill("12")
         list_model = page.evaluate("JSON.parse(document.querySelector('[data-agreement-builder-json]').value).blocks.at(-1)")
-        assert list_model["items"][1]["level"] == 1
+        assert list_model["items"][2]["level"] == 1
         assert list_model["list_styles"][1]["marker"] == "alpha-dot"
         assert list_model["list_styles"][1]["indent_mm"] == 12
         browser.close()

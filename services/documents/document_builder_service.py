@@ -626,7 +626,9 @@ def normalize_inline_runs(value: Any) -> list[dict[str, Any]]:
     for raw in value:
         if not isinstance(raw, Mapping):
             continue
-        text = str(raw.get("text") or "").replace("\x00", "")
+        # Strip only editor/caret control markers. Significant spaces, NBSP and
+        # explicit newlines are document content and must survive round trips.
+        text = re.sub(r"[\x00\u200b\u200c\u200d\u2060\ufeff]", "", str(raw.get("text") or ""))
         if not text:
             continue
         run = {

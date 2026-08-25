@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from services.documents.declaration_template_context_service import (
     declaration_variable_catalog,
 )
 from services.documents.document_builder_service import (
+    normalize_inline_runs,
     normalize_document_builder_document,
     render_document_builder_template,
     validate_document_builder_document,
@@ -47,6 +49,33 @@ def test_inline_runs_are_merged_persisted_and_rendered_without_breaking_jinja():
     assert validate_document_builder_document(normalized, document_type="agreement") == []
     rendered = SandboxedEnvironment(autoescape=True).from_string(template).render(participant_name="Jan Kowalski")
     assert "Jan Kowalski" in rendered
+
+
+def test_inline_run_normalization_removes_only_editor_markers_across_repeated_round_trips():
+    significant_text = "  Początek\n\u00a0środek końca  "
+    runs = [
+        {
+            "text": "\u200b\ufeff" + significant_text + "\u200c\u200d\u2060\x00",
+            "bold": True,
+        }
+    ]
+
+    for _ in range(5):
+        runs = json.loads(json.dumps(normalize_inline_runs(runs), ensure_ascii=False))
+
+    assert runs == [
+        {
+            "text": significant_text,
+            "bold": True,
+            "italic": False,
+            "underline": False,
+        }
+    ]
+    template = render_document_builder_template(
+        {"version": 1, "blocks": [{"type": "paragraph", "runs": runs}]},
+        "agreement",
+    )
+    assert "  Początek<br>\u00a0środek końca  " in template
 
 
 def test_inline_renderer_formats_only_requested_legal_phrase_in_stable_wrapper_order():

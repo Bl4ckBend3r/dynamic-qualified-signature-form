@@ -74,6 +74,8 @@ tmp*/
 .codex_qa_*.py
 .codex
 .agents
+agent.py
+
 # Operating-system metadata
 .DS_Store
 Thumbs.db

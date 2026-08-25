@@ -1983,6 +1983,15 @@ function collectWorkflow() {
         steps,
         decision_settings: allDecisionSettings(),
     };
+    // The separate DocumentBuilder endpoint owns these potentially large JSON
+    // values. The general form posts only its revision metadata; the backend
+    // merges the current draft instead of accepting a page-open document copy.
+    [
+        "contract_builder_document",
+        "contract_builder_active_document",
+        "declaration_builder_document",
+        "declaration_builder_active_document",
+    ].forEach((key) => delete workflow[key]);
     const activeSteps = steps.filter((step) => step.active !== false);
     const activeNodeIds = new Set(activeSteps.map((step) => step.id));
     buildWorkflowDiagramDecisions(activeSteps, currentDecisionSettings(), {warnOnDuplicate: false}).forEach((decision, index) => {

@@ -583,7 +583,9 @@
       source.forEach((item) => {
         if (!item || typeof item !== "object") return;
         const run = {
-          text: String(item.text ?? ""),
+          // Browser editing engines may leave caret markers in rich text.
+          // They are technical nodes, unlike ordinary spaces, NBSP and line breaks.
+          text: String(item.text ?? "").replace(/[\u0000\u200B\u200C\u200D\u2060\uFEFF]/g, ""),
           bold: item.bold === true,
           italic: item.italic === true,
           underline: item.underline === true,
@@ -979,16 +981,7 @@ function runsMarkup(holder) {
           )}"`
         : "";
 
-      return `
-        <span
-          class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}${repeatableClass}"
-          data-builder-run="${runIndex}"
-          data-bold="${run.bold}"
-          data-italic="${run.italic}"
-          data-underline="${run.underline}"
-          ${repeatableAttribute}
-        >${escapeHtml(run.text)}</span>
-      `;
+      return `<span class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}${repeatableClass}" data-builder-run="${runIndex}" data-bold="${run.bold}" data-italic="${run.italic}" data-underline="${run.underline}"${repeatableAttribute}>${escapeHtml(run.text)}</span>`;
     })
     .join("");
 }
@@ -1298,6 +1291,16 @@ function runsMarkup(holder) {
       };
       const walk = (node, style) => {
         if (node.nodeType === Node.TEXT_NODE) {
+          // Older renders placed indented template whitespace between run spans.
+          // Ignore only that recognizable layout node; keep user spaces/newlines.
+          if (
+            node.parentNode === target &&
+            /\n/.test(node.nodeValue || "") &&
+            /^\s*$/.test(node.nodeValue || "") &&
+            (node.previousElementSibling?.matches?.("[data-builder-run]") ||
+              node.nextElementSibling?.matches?.("[data-builder-run]"))
+          )
+            return;
           append(node.nodeValue || "", style);
           return;
         }

@@ -1,3 +1,6 @@
+import re
+
+
 FORM_URL = "/submit/formularz_zgloszeniowy"
 
 
@@ -41,9 +44,10 @@ def _simple_form_data():
 
 def test_public_form_renders_csrf_inside_form(client):
     html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
-    form_html = html.split('<form method="post"', 1)[1].split("</form>", 1)[0]
+    form_match = re.search(r'<form\b[^>]*\bmethod="post"[^>]*>(.*?)</form>', html, re.DOTALL)
 
-    assert 'type="hidden" name="csrf_token"' in form_html
+    assert form_match is not None
+    assert 'type="hidden" name="csrf_token"' in form_match.group(1)
     assert _public_csrf(client)
 
 

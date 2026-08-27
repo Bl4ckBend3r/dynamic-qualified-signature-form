@@ -747,13 +747,6 @@ class WorkflowConfigValidator:
                 for outcome in decision.get("outcomes") or []
                 if isinstance(outcome, Mapping)
             )
-        for decision in config.get("decision_types") or []:
-            if decision.get("semantic_category") not in {"positive", "negative", "correction", "neutral"}:
-                errors.append(f"Decyzja „{decision.get('code')}” ma nieprawidłową kategorię semantyczną.")
-            if decision.get("step_id") not in all_ids:
-                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap decyzji.")
-            if decision.get("target_step") not in all_ids:
-                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap docelowy.")
             if (
                 not has_real_transition
                 and decision_id in AGREEMENT_DECISION_IDS
@@ -800,6 +793,13 @@ class WorkflowConfigValidator:
                         f"Wynik „{outcome.get('label') or outcome.get('code')}” decyzji "
                         f"„{decision.get('display_name') or decision.get('id')}” nie ma zdefiniowanego celu."
                     )
+        for decision in config.get("decision_types") or []:
+            if decision.get("semantic_category") not in {"positive", "negative", "correction", "neutral"}:
+                errors.append(f"Decyzja „{decision.get('code')}” ma nieprawidłową kategorię semantyczną.")
+            if decision.get("step_id") not in all_ids:
+                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap decyzji.")
+            if decision.get("target_step") not in all_ids:
+                errors.append(f"Decyzja „{decision.get('code')}” wskazuje nieistniejący etap docelowy.")
         for notification in config.get("email_notifications", []):
             if notification.get("enabled") and not str(notification.get("template_type") or "").strip():
                 errors.append(f"Wybierz szablon dla powiadomienia „{notification.get('label') or notification.get('id')}”.")

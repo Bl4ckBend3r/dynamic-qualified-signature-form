@@ -17,6 +17,7 @@ from database import create_engine, normalize_database_url
 logger = logging.getLogger(__name__)
 
 REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
+    "admin_login_attempts": frozenset({"key_hash", "attempted_at"}),
     "forms": frozenset({"user_instruction", "user_instruction_config", "is_listed", "share_token_hash"}),
     "form_versions": frozenset(
         {
@@ -120,6 +121,49 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, frozenset[str]] = {
 MIGRATION_HINT = "Database schema is behind Alembic head. Run: alembic upgrade head"
 
 
+def database_readiness_status(database_url: str | None) -> dict:
+    """Return a sanitized, side-effect-free database readiness result."""
+    value = str(database_url or "").strip()
+    if not value:
+        return {
+            "status": "not_ready",
+            "database": "not_configured",
+            "schema": "unknown",
+        }
+
+    try:
+        migration_status = database_migration_status(value)
+    except Exception:
+        return {
+            "status": "not_ready",
+            "database": "unavailable",
+            "schema": "unknown",
+        }
+
+    if migration_status.get("state") != "head":
+        return {
+            "status": "not_ready",
+            "database": "ok",
+            "schema": "outdated",
+        }
+
+    try:
+        missing = check_database_schema(value)
+    except Exception:
+        return {
+            "status": "not_ready",
+            "database": "unavailable",
+            "schema": "unknown",
+        }
+    if missing:
+        return {
+            "status": "not_ready",
+            "database": "ok",
+            "schema": "incomplete",
+        }
+    return {"status": "ready", "database": "ok", "schema": "ok"}
+
+
 def database_migration_status(
     database_url: str | None = None,
     *,
@@ -216,19 +260,28 @@ def run_database_upgrade(
 def prepare_database_schema(app) -> dict[str, list[str]]:
     database_url = str(app.config.get("DATABASE_URL") or "").strip()
     auto_migrate = bool(app.config.get("AUTO_DB_MIGRATE"))
+    production_like = str(app.config.get("ENV") or "").strip().lower() == "production"
     app.extensions["database_schema_missing"] = {}
     app.extensions["database_migration_status"] = {}
+    app.extensions["database_readiness"] = {
+        "status": "not_ready",
+        "database": "not_configured",
+        "schema": "unknown",
+    }
+    if auto_migrate:
+        raise RuntimeError(
+            "AUTO_DB_MIGRATE is not supported at application startup. "
+            "Run alembic upgrade head as a separate deployment step."
+        )
     if not database_url:
+        if production_like:
+            raise RuntimeError("Production startup requires a reachable DATABASE_URL.")
         return {}
 
     safe_url = redact_database_url(database_url)
-    if auto_migrate:
-        app.logger.info(
-            "AUTO_DB_MIGRATE=true; uruchamianie alembic upgrade head database_url=%s",
-            safe_url,
-        )
-        run_database_upgrade(database_url)
-    elif app.config.get("AUTO_CREATE_DB_SCHEMA"):
+    if app.config.get("AUTO_CREATE_DB_SCHEMA"):
+        if production_like:
+            raise RuntimeError("AUTO_CREATE_DB_SCHEMA cannot be enabled in production.")
         app.logger.info(
             "Pominięto walidację migracji: AUTO_CREATE_DB_SCHEMA jest włączone."
         )
@@ -247,14 +300,14 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
                 ",".join(migration_status["heads"]) or "-",
                 safe_url,
             )
-            if auto_migrate:
-                raise RuntimeError("Automatyczna migracja nie doprowadziła bazy do Alembic head.")
+            if production_like:
+                raise RuntimeError("Production database is not at the current Alembic head.")
     except RuntimeError:
         raise
     except Exception as exc:
         app.logger.exception("Nie udało się odczytać stanu Alembic. database_url=%s", safe_url)
-        if auto_migrate:
-            raise RuntimeError("Nie udało się potwierdzić Alembic head po automatycznej migracji.") from exc
+        if production_like:
+            raise RuntimeError("Production database readiness check failed.") from exc
 
     try:
         missing = check_database_schema(database_url)
@@ -265,10 +318,8 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
             safe_url,
             auto_migrate,
         )
-        if auto_migrate:
-            raise RuntimeError(
-                "Nie udało się zweryfikować schematu po automatycznej migracji."
-            ) from exc
+        if production_like:
+            raise RuntimeError("Production database schema check failed.") from exc
         return {}
 
     app.extensions["database_schema_missing"] = missing
@@ -283,10 +334,8 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
                 safe_url,
                 auto_migrate,
             )
-        if auto_migrate:
-            raise RuntimeError(
-                f"{MIGRATION_HINT}. Automatyczna migracja nie uzupełniła schematu."
-            )
+        if production_like:
+            raise RuntimeError("Production database schema is incomplete.")
     else:
         app.logger.info(
             "Schemat rozszerzony bazy danych jest aktualny. database_url=%s "
@@ -294,4 +343,11 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
             safe_url,
             auto_migrate,
         )
+    app.extensions["database_readiness"] = {
+        "status": "ready" if migration_status.get("state") == "head" and not missing else "not_ready",
+        "database": "ok",
+        "schema": "ok" if migration_status.get("state") == "head" and not missing else (
+            "outdated" if migration_status.get("state") != "head" else "incomplete"
+        ),
+    }
     return missing

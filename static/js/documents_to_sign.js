@@ -5,7 +5,6 @@ const documentsSection = document.getElementById("documents-section");
 const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
 const signDocumentsForm = document.getElementById("sign-documents-form");
-const processCompletedBox = document.getElementById("process-completed-box");
 const instructionWindow = document.getElementById("user-instruction-window");
 const instructionTitle = document.getElementById("user-instruction-title");
 const formInstructionSection = document.getElementById("form-instruction-section");
@@ -23,6 +22,7 @@ const nextStageLabel = document.getElementById("next-stage-label");
 const instructionMinimizeButton = document.getElementById("user-instruction-minimize");
 const instructionCloseButton = document.getElementById("user-instruction-close");
 const instructionRestoreButton = document.getElementById("user-instruction-restore");
+const participantAccessToken = document.getElementById("participant-access-token");
 
 let timeoutId = null;
 let currentInstruction = null;
@@ -300,10 +300,6 @@ function hideInitialSigningForm() {
     hideElement(signDocumentsForm);
 }
 
-function showProcessCompletedBox() {
-    showElement(processCompletedBox);
-}
-
 function hideDeclarationStage() {
     hideElements('[data-stage="declaration"]');
     hideElements('[data-stage="declaration-upload"]');
@@ -316,32 +312,28 @@ function hideAgreementStage() {
 }
 
 function renderStatusTile({ variant = "neutral", icon = "i", title, description }) {
-    renderStatusTiles([{variant, icon, title, description}]);
-}
-
-function renderStatusTiles(items) {
     if (!statusTiles) {
         return;
     }
     statusTiles.replaceChildren();
-    items.forEach(({variant = "neutral", icon = "i", title, description}) => {
-        const tile = document.createElement("div");
-        tile.className = `status-tile status-tile--${variant}`;
-        const iconBox = document.createElement("span");
-        iconBox.className = "status-tile__icon";
-        iconBox.setAttribute("aria-hidden", "true");
-        iconBox.textContent = icon;
-        const content = document.createElement("div");
-        const heading = document.createElement("p");
-        heading.className = "status-tile__title";
-        heading.textContent = String(title || "");
-        const text = document.createElement("p");
-        text.className = "status-tile__description";
-        text.textContent = String(description || "");
-        content.append(heading, text);
-        tile.append(iconBox, content);
-        statusTiles.appendChild(tile);
-    });
+    const tile = document.createElement("div");
+    tile.className = `status-tile status-tile--${variant}`;
+    tile.dataset.publicCurrentStatus = "";
+    tile.setAttribute("role", variant === "danger" ? "alert" : "status");
+    const iconBox = document.createElement("span");
+    iconBox.className = "status-tile__icon";
+    iconBox.setAttribute("aria-hidden", "true");
+    iconBox.textContent = icon;
+    const content = document.createElement("div");
+    const heading = document.createElement("p");
+    heading.className = "status-tile__title";
+    heading.textContent = String(title || "");
+    const text = document.createElement("p");
+    text.className = "status-tile__description";
+    text.textContent = String(description || "");
+    content.append(heading, text);
+    tile.append(iconBox, content);
+    statusTiles.appendChild(tile);
 }
 
 function clearStatusTile() {
@@ -361,29 +353,18 @@ function renderSubmissionStatus(data) {
         return;
     }
 
-    if (data.status_title) {
-        const variant = ["success", "warning", "danger"].includes(data.status_variant) ? data.status_variant : "neutral";
+    const currentStatus = data.status && typeof data.status === "object" ? data.status : null;
+    const statusTitle = currentStatus?.title || data.status_title;
+    if (statusTitle) {
+        const rawVariant = currentStatus?.variant || data.status_variant;
+        const variant = ["success", "warning", "danger"].includes(rawVariant) ? rawVariant : "neutral";
         const icon = variant === "success" ? "✓" : variant === "danger" ? "!" : variant === "warning" ? "…" : "i";
-        const items = [
-            {
-                variant,
-                icon,
-                title: data.status_title,
-                description: data.status_description || data.message || "",
-            },
-            {title: "Status wniosku", description: data.application_status || "Brak danych"},
-            {title: "Status deklaracji", description: data.declaration_status || "Brak danych"},
-            {title: "Status umowy", description: data.agreement_status || "Brak danych"},
-        ];
-        if (data.blocking_reason) {
-            items.push({variant: "warning", icon: "!", title: "Powód blokady", description: data.blocking_reason});
-        } else if (data.status_reason) {
-            items.push({variant: "warning", icon: "!", title: "Powód", description: data.status_reason});
-        }
-        if (data.next_action) {
-            items.push({title: "Co dalej?", description: data.next_action});
-        }
-        renderStatusTiles(items);
+        const description = [
+            currentStatus?.message || data.status_description || data.message || "",
+            currentStatus?.reason || data.status_reason || "",
+            currentStatus?.next_action || data.next_action || "",
+        ].filter(Boolean).join(" ");
+        renderStatusTile({variant, icon, title: statusTitle, description});
         return;
     }
 
@@ -530,7 +511,6 @@ function applyProcessStageVisibility(data) {
         hideAgreementStage();
         hideInitialSigningForm();
         disableGenerateButton();
-        showProcessCompletedBox();
     }
 }
 
@@ -575,7 +555,9 @@ async function checkAcceptanceStatus() {
     });
 
     try {
-        const response = await fetch(buildAcceptanceStatusUrl(submissionId));
+        const token = String(participantAccessToken?.value || submissionInput?.dataset.accessToken || "").trim();
+        const headers = token ? {Authorization: `Bearer ${token}`} : {};
+        const response = await fetch(buildAcceptanceStatusUrl(submissionId), {headers});
         const data = await response.json();
 
         if (statusBox) {

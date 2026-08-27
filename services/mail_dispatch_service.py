@@ -570,7 +570,12 @@ class MailDispatchService:
                 form,
                 submission,
                 [],
-                status_url=url_for("documents.documents_to_sign", submission_id=submission.submission_id, _external=True),
+                status_url=url_for(
+                    "documents.documents_to_sign",
+                    submission_id=submission.submission_id,
+                    token=submission.access_token,
+                    _external=True,
+                ),
                 platform_url=url_for("public_forms.index", _external=True),
                 submission_date=submission.created_at,
             )

@@ -29,7 +29,7 @@ def test_sla_migration_creates_portable_schema_from_0039(tmp_path):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)
     command.stamp(config, "20260818_0039")
-    command.upgrade(config, "head")
+    command.upgrade(config, "20260818_0040")
     inspector = inspect(engine)
     assert {
         "business_calendars",

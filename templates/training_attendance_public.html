@@ -1,1 +1,54 @@
-{% extends "base.html" %}{% block title %}Potwierdzenie obecności{% endblock %}{% block content %}<main class="form-container"><h1>Potwierdzenie obecności</h1>{% if not valid %}<p>Link jest nieprawidłowy albo nie jest już aktywny.</p>{% elif confirmed %}<p>Obecność została potwierdzona. Dziękujemy.</p>{% else %}<p>{{ session.name }} — {{ session.session_date }}</p><form method="post"><input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><button type="submit">Potwierdź obecność</button></form>{% endif %}</main>{% endblock %}
+{% extends "base.html" %}
+
+{% block title %}Potwierdzenie obecności{% endblock %}
+
+{% block content %}
+<section class="attendance-confirmation" aria-labelledby="attendance-confirmation-title">
+    <div class="attendance-confirmation__card card">
+        <header class="attendance-confirmation__header">
+            <span class="attendance-confirmation__icon{% if confirmed %} attendance-confirmation__icon--success{% elif not valid %} attendance-confirmation__icon--error{% endif %}" aria-hidden="true">
+                {% if confirmed %}✓{% elif not valid %}!{% else %}✓{% endif %}
+            </span>
+            <h1 id="attendance-confirmation-title">Potwierdzenie obecności</h1>
+            {% if valid and not confirmed %}
+                <p>Potwierdź swoją obecność na poniższym szkoleniu.</p>
+            {% endif %}
+        </header>
+
+        {% if not valid %}
+            <div class="attendance-confirmation__status attendance-confirmation__status--error" role="alert">
+                <strong>Link jest nieprawidłowy lub wygasł.</strong>
+                <span>Skontaktuj się z organizatorem szkolenia, aby otrzymać aktualny link.</span>
+            </div>
+        {% else %}
+            <dl class="attendance-confirmation__details">
+                <div class="attendance-confirmation__detail">
+                    <dt>Szkolenie</dt>
+                    <dd>{{ session.name }}</dd>
+                </div>
+                <div class="attendance-confirmation__detail">
+                    <dt>Termin</dt>
+                    <dd>
+                        <time datetime="{{ session.session_date.isoformat() }}">{{ session.session_date.strftime('%d.%m.%Y') }}</time>{% if session.start_time or session.end_time %},
+                        {{ session.start_time or '—' }}{% if session.end_time %}–{{ session.end_time }}{% endif %}{% endif %}
+                    </dd>
+                </div>
+            </dl>
+
+            {% if confirmed %}
+                <div class="attendance-confirmation__status attendance-confirmation__status--success" role="status">
+                    <strong>Obecność została potwierdzona</strong>
+                    {% if record and record.confirmed_at %}
+                        <span>Potwierdzono: {{ record.confirmed_at|business_datetime('%d.%m.%Y, %H:%M') }}</span>
+                    {% endif %}
+                </div>
+            {% else %}
+                <form class="attendance-confirmation__actions" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                    <button class="btn-primary" type="submit">Potwierdź obecność</button>
+                </form>
+            {% endif %}
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

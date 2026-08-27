@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from io import BytesIO
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from werkzeug.datastructures import FileStorage, MultiDict
@@ -61,7 +63,11 @@ def service_with_database():
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     repository = PostgresSubmissionRepository("sqlite://", session_factory=factory)
     storage = MemoryStorage()
-    return SubmissionAttachmentService(repository, storage), factory, storage
+    return SubmissionAttachmentService(
+        repository,
+        storage,
+        allow_unscanned_uploads=True,
+    ), factory, storage
 
 
 def test_required_optional_and_conditional_file_validation():
@@ -163,6 +169,74 @@ def test_antivirus_extension_point_rejects_infected_file():
     assert "certificate" in errors
 
 
+@pytest.mark.parametrize("status", ["infected", "pending", "unavailable", "not_configured", "unexpected"])
+def test_antivirus_fail_closed_blocks_every_non_clean_result(status):
+    service, _, _ = service_with_database()
+    service.allow_unscanned_uploads = False
+    service.antivirus_scanner = type(
+        "Scanner",
+        (),
+        {"scan": lambda self, content, mime: status},
+    )()
+
+    prepared, errors = service.validate_uploads(
+        config(),
+        {},
+        MultiDict([("certificate", upload())]),
+    )
+
+    assert prepared == []
+    assert "certificate" in errors
+
+
+def test_antivirus_clean_is_the_only_production_safe_result():
+    service, _, _ = service_with_database()
+    service.allow_unscanned_uploads = False
+    service.antivirus_scanner = type(
+        "Scanner",
+        (),
+        {"scan": lambda self, content, mime: "clean"},
+    )()
+
+    prepared, errors = service.validate_uploads(
+        config(),
+        {},
+        MultiDict([("certificate", upload())]),
+    )
+
+    assert errors == {}
+    assert prepared[0].antivirus_status == "clean"
+
+
+def test_non_clean_attachment_is_quarantined_if_persist_is_called_defensively():
+    service, factory, _ = service_with_database()
+    with factory() as db:
+        db.add(FormSubmission(submission_id="quarantine-1", form_slug="safe-form"))
+        db.commit()
+
+    prepared, errors = service.validate_uploads(
+        config(),
+        {},
+        MultiDict([("certificate", upload())]),
+    )
+    assert errors == {}
+    fail_closed_service = SubmissionAttachmentService(
+        service.submission_repository,
+        service.storage,
+        allow_unscanned_uploads=False,
+    )
+    fail_closed_service.persist(
+        form_slug="safe-form",
+        submission_id="quarantine-1",
+        attachments=[replace(prepared[0], antivirus_status="pending")],
+    )
+
+    with factory() as db:
+        row = db.execute(select(SubmissionFile)).scalar_one()
+        assert row.status == "quarantined"
+        assert row.antivirus_status == "pending"
+
+
 def test_public_submit_accepts_multipart_attachment(client, app, form_definition, valid_form_data):
     form_definition["fields"].append(
         {
@@ -170,12 +244,18 @@ def test_public_submit_accepts_multipart_attachment(client, app, form_definition
             "required": True, "allowed_extensions": ["pdf"], "max_size_mb": 10,
         }
     )
+    page = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+    csrf_token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     response = client.post(
         "/submit/formularz_zgloszeniowy",
-        data={**valid_form_data, "certificate": (BytesIO(PDF), "certificate.pdf", "application/pdf")},
+        data={
+            **valid_form_data,
+            "csrf_token": csrf_token,
+            "certificate": (BytesIO(PDF), "certificate.pdf", "application/pdf"),
+        },
         content_type="multipart/form-data",
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.get_data(as_text=True)
     attachment_paths = [path for path in app.testing_storage.direct_files if "/attachments/certificate/" in path]
     assert len(attachment_paths) == 1
     assert app.testing_storage.direct_files[attachment_paths[0]] == PDF

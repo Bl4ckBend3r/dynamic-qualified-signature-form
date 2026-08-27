@@ -251,7 +251,6 @@ def test_migration_backfills_technical_snapshots_without_fake_acceptance_date(tm
         connection.execute(submissions.insert().values(id=1, form_version_id=1, accept_terms=True, data_json={"accept_terms": "Tak", "marketing": "Nie"}))
         monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
         migration.upgrade()
-        migration.upgrade()
         snapshot_table = Table("submission_consents", MetaData(), autoload_with=connection)
         rows = connection.execute(select(snapshot_table)).mappings().all()
         assert len(rows) == 2

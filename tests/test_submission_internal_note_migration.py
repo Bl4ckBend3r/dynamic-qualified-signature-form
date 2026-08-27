@@ -24,7 +24,7 @@ def test_internal_note_migration_schema_and_permission_backfill(tmp_path):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)
     command.stamp(config, "20260818_0038")
-    command.upgrade(config, "head")
+    command.upgrade(config, "20260818_0042")
     inspector = inspect(engine)
     assert {"submission_internal_notes", "submission_internal_note_revisions", "submission_internal_note_mentions"} <= set(inspector.get_table_names())
     columns = {column["name"] for column in inspector.get_columns("form_permissions")}
@@ -51,7 +51,7 @@ def test_repair_migration_adds_missing_revision_importance_columns(tmp_path):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)
     command.stamp(config, "20260818_0041")
-    command.upgrade(config, "head")
+    command.upgrade(config, "20260818_0042")
 
     columns = {
         column["name"]

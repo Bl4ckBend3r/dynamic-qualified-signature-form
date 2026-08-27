@@ -1077,6 +1077,7 @@
                     {% set source_description = 'Wybierz źródło dokumentu wykorzystywanego podczas generowania umów dla szkoleń.' %}
                     {% set builder_url = url_for('admin.agreement_builder_view', form_id=form.id) %}
                     {% set last_saved_at = workflow.get('contract_builder_updated_at') %}
+                    <p class="workflow-help">W kreatorze umowy dodaj najpierw numer paragrafu, a pod nim nazwę sekcji. Dzięki temu nagłówki zachowają właściwą kolejność w dokumencie.</p>
                     {% set docx_title = 'Szablon Word umowy' %}
                     {% set docx_description = 'Wpisuj zmienne w składni Jinja. Parser zachowuje akapity, nagłówki, wyrównanie, tabele, listy i wspierane formatowanie.' %}
                     {% set docx_input_name = 'agreement_docx_template' %}

@@ -12,6 +12,7 @@ from models import Base
 from services.database_schema_service import (
     MIGRATION_HINT,
     check_database_schema,
+    database_readiness_status,
     database_migration_status,
     prepare_database_schema,
     redact_database_url,
@@ -112,19 +113,12 @@ def test_prepare_schema_only_runs_upgrade_when_enabled(monkeypatch, caplog):
     assert "secret" not in caplog.text
 
     app.config["AUTO_DB_MIGRATE"] = True
-    monkeypatch.setattr(
-        "services.database_schema_service.database_migration_status",
-        lambda url: {"state": "head", "current": ["head"], "heads": ["head"]},
-    )
-    monkeypatch.setattr(
-        "services.database_schema_service.check_database_schema",
-        lambda url: {},
-    )
-    assert prepare_database_schema(app) == {}
-    assert calls == ["postgresql://user:secret@db.test/forms"]
+    with pytest.raises(RuntimeError, match="separate deployment step"):
+        prepare_database_schema(app)
+    assert calls == []
 
 
-def test_auto_migrate_takes_precedence_over_legacy_auto_create(monkeypatch):
+def test_auto_migrate_is_rejected_even_with_legacy_auto_create(monkeypatch):
     app = Flask(__name__)
     app.config.update(
         DATABASE_URL="sqlite:///auto.db",
@@ -145,11 +139,12 @@ def test_auto_migrate_takes_precedence_over_legacy_auto_create(monkeypatch):
         lambda url: {"state": "head", "current": ["head"], "heads": ["head"]},
     )
 
-    assert prepare_database_schema(app) == {}
-    assert calls == ["sqlite:///auto.db"]
+    with pytest.raises(RuntimeError, match="separate deployment step"):
+        prepare_database_schema(app)
+    assert calls == []
 
 
-def test_prepare_schema_fails_start_when_automatic_upgrade_fails(monkeypatch):
+def test_prepare_schema_rejects_automatic_upgrade_without_calling_alembic(monkeypatch):
     app = Flask(__name__)
     app.config.update(
         DATABASE_URL="sqlite:///broken.db",
@@ -157,15 +152,41 @@ def test_prepare_schema_fails_start_when_automatic_upgrade_fails(monkeypatch):
         AUTO_DB_MIGRATE=True,
     )
 
-    def fail_upgrade(url):
-        raise RuntimeError("migration failed")
+    calls = []
+    monkeypatch.setattr("services.database_schema_service.run_database_upgrade", calls.append)
+    with pytest.raises(RuntimeError, match="separate deployment step"):
+        prepare_database_schema(app)
+    assert calls == []
+
+
+def test_database_readiness_is_fail_closed_for_offline_outdated_and_incomplete(monkeypatch):
+    assert database_readiness_status("") == {
+        "status": "not_ready",
+        "database": "not_configured",
+        "schema": "unknown",
+    }
 
     monkeypatch.setattr(
-        "services.database_schema_service.run_database_upgrade",
-        fail_upgrade,
+        "services.database_schema_service.database_migration_status",
+        lambda _url: (_ for _ in ()).throw(RuntimeError("offline")),
     )
-    with pytest.raises(RuntimeError, match="migration failed"):
-        prepare_database_schema(app)
+    assert database_readiness_status("postgresql://db/forms")["database"] == "unavailable"
+
+    monkeypatch.setattr(
+        "services.database_schema_service.database_migration_status",
+        lambda _url: {"state": "behind", "current": ["old"], "heads": ["head"]},
+    )
+    assert database_readiness_status("postgresql://db/forms")["schema"] == "outdated"
+
+    monkeypatch.setattr(
+        "services.database_schema_service.database_migration_status",
+        lambda _url: {"state": "head", "current": ["head"], "heads": ["head"]},
+    )
+    monkeypatch.setattr(
+        "services.database_schema_service.check_database_schema",
+        lambda _url: {"forms": ["required_column"]},
+    )
+    assert database_readiness_status("postgresql://db/forms")["schema"] == "incomplete"
 
 
 def test_manage_db_check_and_upgrade_exit_codes(monkeypatch, capsys):

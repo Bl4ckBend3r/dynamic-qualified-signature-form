@@ -51,7 +51,7 @@ def accepted_row(**updates):
                 agreement_generated="Tak",
                 agreement_filename="umowa.pdf",
             ),
-            "Umowa oczekuje na podpis beneficjenta",
+            "Umowa jest gotowa do podpisania",
             "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
         ),
         (
@@ -146,7 +146,7 @@ def test_training_agreement_upload_is_available_only_after_download():
     assert build_public_submission_status(row)["can_upload_signed_agreement"] is True
 
 
-def test_status_messages_are_deduplicated_and_follow_business_order():
+def test_public_presenter_exposes_only_one_current_status_message():
     status = build_public_submission_status(
         accepted_row(
             process_status="AGREEMENT_BLOCKED",
@@ -157,12 +157,95 @@ def test_status_messages_are_deduplicated_and_follow_business_order():
     )
     messages = status["status_messages"]
 
-    assert [item["type"] for item in messages] == [
-        "application",
-        "declaration",
-        "agreement",
-        "blocking_reason",
-        "next_action",
-    ]
-    assert len({(item["type"], item["text"]) for item in messages}) == len(messages)
-    assert sum("Etap zakończony poprawnie" in item["text"] for item in messages) == 1
+    assert messages == [{"type": "current", "text": "Umowa nie może zostać wygenerowana"}]
+    assert status["status"]["title"] == "Umowa nie może zostać wygenerowana"
+    assert status["status"]["reason"] == "Brak spełnionych warunków."
+
+
+@pytest.mark.parametrize(
+    ("row", "expected_title", "expected_step"),
+    [
+        (
+            accepted_row(
+                workflow_step="agreement_signature",
+                process_status="OFFICER_ACCEPTED",
+                declaration_signature_valid="Tak",
+                agreement_generated="Tak",
+                agreement_filename="umowa.pdf",
+            ),
+            "Umowa jest gotowa do podpisania",
+            "agreement_signature",
+        ),
+        (
+            {
+                "workflow_step": "officer_review",
+                "process_status": "FORM_SUBMITTED",
+                "officer_decision": "",
+                "acceptance_required": "",
+            },
+            "Wniosek oczekuje na decyzję",
+            "officer_review",
+        ),
+        (
+            accepted_row(
+                workflow_step="declaration_signature",
+                process_status="OFFICER_ACCEPTED",
+                declaration_generated="Tak",
+                declaration_filename="deklaracja.pdf",
+            ),
+            "Deklaracja jest gotowa do podpisania",
+            "declaration_signature",
+        ),
+        (
+            accepted_row(
+                workflow_step="waiting_for_correction",
+                process_status="OFFICER_ACCEPTED",
+                correction_message="Popraw dane kontaktowe.",
+            ),
+            "Wniosek wymaga poprawy",
+            "waiting_for_correction",
+        ),
+        (
+            {
+                "workflow_step": "end_rejected",
+                "process_status": "FORM_SUBMITTED",
+                "officer_decision": "NIE",
+                "officer_decision_reason": "Brak wymaganych danych.",
+            },
+            "Wniosek został odrzucony",
+            "end_rejected",
+        ),
+        (
+            accepted_row(
+                workflow_step="completed",
+                process_status="OFFICER_ACCEPTED",
+                declaration_signature_valid="Tak",
+                agreement_signature_valid="Tak",
+            ),
+            "Proces został zakończony",
+            "completed",
+        ),
+    ],
+)
+def test_current_workflow_step_selects_exactly_one_public_status(row, expected_title, expected_step):
+    status = build_public_submission_status(row)
+
+    assert status["status"]["title"] == expected_title
+    assert status["status"]["step"] == expected_step
+    assert status["status_title"] == expected_title
+    assert len(status["status_messages"]) == 1
+
+
+def test_legacy_submission_without_workflow_step_uses_existing_process_fallback():
+    status = build_public_submission_status(
+        accepted_row(
+            process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+            declaration_signature_valid="Tak",
+            agreement_generated="Tak",
+            agreement_filename="legacy-umowa.pdf",
+        ),
+        current_step="submission",
+    )
+
+    assert status["status"]["title"] == "Umowa jest gotowa do podpisania"
+    assert status["status"]["step"] == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"

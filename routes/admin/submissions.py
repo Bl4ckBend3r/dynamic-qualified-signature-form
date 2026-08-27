@@ -533,11 +533,17 @@ def submission_detail(form_id: int, submission_pk: int):
             for item in submission_form_config.get("fields", [])
             if isinstance(item, dict) and item.get("type") in {"file", "attachment"}
         }
-        participant_attachments = db.execute(
-            select(SubmissionFile)
-            .where(SubmissionFile.submission_id == submission.id, SubmissionFile.field_key != "")
-            .order_by(SubmissionFile.field_key, SubmissionFile.attachment_version.desc(), SubmissionFile.id.desc())
-        ).scalars().all()
+        submission_file_rows = services.submission_repository.list_submission_files(
+            submission.submission_id
+        )
+        participant_attachments = sorted(
+            (item for item in submission_file_rows if str(item.get("field_key") or "")),
+            key=lambda item: (
+                str(item.get("field_key") or ""),
+                -int(item.get("attachment_version") or 0),
+                -int(item.get("id") or 0),
+            ),
+        )
         checklist_service = services.verification_checklist_service
         can_review_checklist = checklist_service.can_review(db, g.admin_user, form)
         can_make_decision = checklist_service.can_make_decision(db, g.admin_user, form)
@@ -549,10 +555,11 @@ def submission_detail(form_id: int, submission_pk: int):
         available_decisions = decision_definition_service.available_for_submission(submission)
         repeatable_groups = decision_definition_service.repeatable_groups(submission)
         repeatable_item_decisions = decision_definition_service.item_history(db, submission.id)
-        evidence_files = db.execute(
-            select(SubmissionFile).where(SubmissionFile.submission_id == submission.id)
-            .order_by(SubmissionFile.created_at.desc(), SubmissionFile.id.desc())
-        ).scalars().all()
+        evidence_files = sorted(
+            submission_file_rows,
+            key=lambda item: int(item.get("id") or 0),
+            reverse=True,
+        )
         note_service = services.submission_internal_note_service
         can_view_internal_notes = note_service.can_view(db, g.admin_user, form)
         can_add_internal_notes = note_service.can_add(db, g.admin_user, form)
@@ -1313,7 +1320,10 @@ def _send_stage_rollback_email(db, form, submission, reason: str, target_status:
         files=files,
         context_builders={
             "documents_to_sign_url_builder": lambda item: url_for(
-                "documents.documents_to_sign", submission_id=item.submission_id, _external=True
+                "documents.documents_to_sign",
+                submission_id=item.submission_id,
+                token=item.access_token,
+                _external=True,
             ),
             "document_url_builder": lambda item, filename: services.document_service.build_download_url(
                 {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},

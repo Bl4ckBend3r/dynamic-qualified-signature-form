@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import abort, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 from sqlalchemy import func, or_, select
 from werkzeug.security import generate_password_hash
 
@@ -105,6 +105,10 @@ def user_change_password(user_id: int):
             if password != password_confirm:
                 flash("Hasla nie sa takie same.", "error")
                 return render_template("admin/users/password.html", user=user), 400
+            policy_result = current_app.extensions["services"].password_policy_service.validate(password)
+            if not policy_result.valid:
+                flash(policy_result.errors[0], "error")
+                return render_template("admin/users/password.html", user=user), 400
             user.password_hash = generate_password_hash(password)
             db.commit()
             flash("Haslo zostalo zmienione.", "success")
@@ -140,6 +144,19 @@ def user_edit(user_id: int | None = None):
                 return redirect(url_for("admin.user_edit", user_id=user.id))
             password = request.form.get("password", "")
             if password:
+                policy_result = current_app.extensions["services"].password_policy_service.validate(password)
+                if not policy_result.valid:
+                    flash(policy_result.errors[0], "error")
+                    return render_template(
+                        "admin/users/edit.html",
+                        user=user,
+                        roles=sorted(ROLES),
+                        forms=forms,
+                        form_roles=form_roles,
+                        global_roles=global_roles,
+                        assigned_role_ids={},
+                        assigned_global_role_ids=set(),
+                    ), 400
                 user.password_hash = generate_password_hash(password)
             if not user.password_hash:
                 flash("Haslo jest wymagane dla nowego uzytkownika.", "error")

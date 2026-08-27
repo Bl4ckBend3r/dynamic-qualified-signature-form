@@ -149,12 +149,15 @@ class DocumentViewService:
         row = submission["row"]
         raw_status = row.get("process_status") or ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
         status_view = build_status_view(raw_status)
+        status_row = {**row, "process_status": raw_status}
+        public_status = build_public_submission_status(status_row, form_config=form_config)
         return {
+            **public_status,
             "submission_id": submission_id,
             "form_slug": submission["form_slug"],
             "form_title": submission["form_title"],
-            "message": "Wniosek zostal zaakceptowany. Uzupelnij dodatkowe informacje, aby pobrac deklaracje.",
-            "process_status": raw_status,
+            "message": public_status["status_description"],
+            "process_status": public_status["effective_process_status"],
             "current_status": status_view["current_status"],
             "process_status_label": status_labeler(raw_status, form_config),
             "is_final": status_view["is_final"],
@@ -203,7 +206,11 @@ class DocumentViewService:
     ) -> dict:
         row = submission["row"]
         status_view = build_status_view(process_state.status.value)
-        public_status = build_public_submission_status(row)
+        public_status = build_public_submission_status(
+            row,
+            form_config=form_config,
+            current_step=current_step,
+        )
         training_agreements = _parse_json_list(row.get("training_agreements"))
         selected_trainings = _parse_json_list(row.get("selected_trainings"))
         def training_key(item: Mapping[str, Any]) -> str:

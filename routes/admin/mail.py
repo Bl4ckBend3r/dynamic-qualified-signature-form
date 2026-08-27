@@ -930,7 +930,12 @@ def send_mail_for_submission(
         sent_by_id=g.admin_user.id,
         files=files,
         context_builders={
-            "documents_to_sign_url_builder": lambda item: url_for("documents.documents_to_sign", submission_id=item.submission_id, _external=True),
+            "documents_to_sign_url_builder": lambda item: url_for(
+                "documents.documents_to_sign",
+                submission_id=item.submission_id,
+                token=item.access_token,
+                _external=True,
+            ),
             "document_url_builder": lambda item, filename: current_app.extensions["services"].document_service.build_download_url(
                 {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},
                 filename,

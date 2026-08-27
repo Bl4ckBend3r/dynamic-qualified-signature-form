@@ -54,6 +54,23 @@ def test_training_picker_styles_are_wide_and_responsive():
     assert "width: 100%" in stylesheet
 
 
+def test_attendance_confirmation_uses_public_design_system_and_mobile_layout():
+    template = Path("templates/training_attendance_public.html").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/style.css").read_text(encoding="utf-8")
+
+    assert 'class="attendance-confirmation__card card"' in template
+    assert '<button class="btn-primary" type="submit">Potwierdź obecność</button>' in template
+    assert "attendance-confirmation__details" in template
+    assert "Obecność została potwierdzona" in template
+    assert "Link jest nieprawidłowy lub wygasł." in template
+    assert "Stopka strony —" not in template
+    assert "<button type=\"submit\">Potwierdź obecność</button>" not in template
+    assert "width: min(100%, 640px)" in stylesheet
+    assert ".attendance-confirmation__actions .btn-primary" in stylesheet
+    assert ".btn-primary:focus-visible" in stylesheet
+    assert "@media (max-width: 640px)" in stylesheet
+
+
 def test_training_picker_script_updates_and_enforces_limit():
     script = Path("static/js/training_selection.js").read_text(encoding="utf-8")
     template = Path("templates/training_selection.html").read_text(encoding="utf-8")

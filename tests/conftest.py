@@ -195,6 +195,7 @@ def app(monkeypatch, tmp_path, form_definition):
     monkeypatch.setenv("NEXTCLOUD_OUTPUT_DIR", "output")
     monkeypatch.setenv("TEMP_DIR", str(tmp_path / "tmp"))
     monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("ALLOW_UNSCANNED_UPLOADS", "true")
 
     import app as app_module
     import legacy_app

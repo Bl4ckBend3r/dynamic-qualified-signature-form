@@ -24,7 +24,7 @@ def test_verification_checklist_migration_is_portable_schema(tmp_path):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)
     command.stamp(config, "20260813_0037")
-    command.upgrade(config, "head")
+    command.upgrade(config, "20260818_0038")
     inspector = inspect(engine)
     assert {
         "verification_checklist_definitions",

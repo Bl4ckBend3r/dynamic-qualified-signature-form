@@ -85,9 +85,13 @@ def get_document(form_config: dict, document_id: str) -> dict:
     return document or {"id": document_id, "enabled": False}
 
 
-def documents_to_sign_url(submission_id: str | None = None) -> str:
+def documents_to_sign_url(submission_id: str | None = None, token: str | None = None) -> str:
     if submission_id:
-        return url_for("documents.documents_to_sign", submission_id=submission_id)
+        return url_for(
+            "documents.documents_to_sign",
+            submission_id=submission_id,
+            token=str(token or request.values.get("access_token") or request.values.get("token") or "").strip() or None,
+        )
     return url_for("documents.documents_to_sign")
 
 
@@ -954,6 +958,7 @@ def show_result(slug: str, submission_id: str):
 
     result = {
         "submission_id": submission_id,
+        "access_token": str((submission.get("row") or {}).get("access_token") or ""),
         "form_slug": slug,
         "pdf_filename": pdf_filename,
         "pdf_url": services.document_service.build_download_url(submission, pdf_filename),
@@ -1106,13 +1111,17 @@ def build_existing_declaration_result(services, submission: dict, form_config: d
 def documents_to_sign():
     if request.method == "GET":
         submission_id = request.args.get("submission_id", "").strip()
+        access_token = str(request.args.get("token") or request.args.get("access_token") or "").strip()
         if submission_id:
             submission = get_submission_context(submission_id)
             errors = {}
             result = None
             status_code = 200
-            if not submission:
-                errors["submission_id"] = "Nie znaleziono wniosku o podanym ID."
+            if not submission or not get_services().access_token_service.verify_required_token(
+                submission.get("row") or submission,
+                access_token,
+            ):
+                errors["submission_id"] = "Nie można udostępnić statusu zgłoszenia. Użyj bezpiecznego linku otrzymanego z systemu."
                 status_code = 404
             elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
                 errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
@@ -1131,6 +1140,7 @@ def documents_to_sign():
                 acceptance_value="Tak" if result else "",
                 errors=errors,
                 result=result,
+                access_token=access_token,
             ), status_code
 
         return render_template(
@@ -1139,10 +1149,12 @@ def documents_to_sign():
             acceptance_value="",
             errors={},
             result=None,
+            access_token="",
         )
 
     services = get_services()
     submission_id = request.form.get("submission_id", "").strip()
+    access_token = str(request.form.get("access_token") or "").strip()
     acceptance_value = request.form.get("akceptacja", "").strip()
     errors = {}
     submission = None
@@ -1151,8 +1163,11 @@ def documents_to_sign():
         errors["submission_id"] = "Podaj ID wniosku."
     else:
         submission = get_submission_context(submission_id)
-        if not submission:
-            errors["submission_id"] = "Nie znaleziono wniosku o podanym ID."
+        if not submission or not services.access_token_service.verify_required_token(
+            submission.get("row") or submission,
+            access_token,
+        ):
+            errors["submission_id"] = "Nie można udostępnić statusu zgłoszenia. Użyj bezpiecznego linku otrzymanego z systemu."
         elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
             errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
     if acceptance_value != "Tak":
@@ -1165,6 +1180,7 @@ def documents_to_sign():
             acceptance_value=acceptance_value,
             errors=errors,
             result=None,
+            access_token=access_token,
         ), 400
 
     try:
@@ -1178,6 +1194,7 @@ def documents_to_sign():
             acceptance_value=acceptance_value,
             errors=errors,
             result=None,
+            access_token=access_token,
         ), 500
 
     return render_template(
@@ -1186,6 +1203,7 @@ def documents_to_sign():
         acceptance_value=acceptance_value,
         errors={},
         result=result,
+        access_token=access_token,
     )
 
 @bp.get("/downloads/pdfs/<slug>/<path:filename>")

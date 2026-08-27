@@ -150,7 +150,10 @@
             </div>
             {% endif %}
 
-            <a href="{{ url_for('admin.logout') }}">Wyloguj</a>
+            <form method="post" action="{{ url_for('admin.logout') }}" class="admin-logout-form">
+              <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+              <button type="submit" class="admin-nav-link">Wyloguj</button>
+            </form>
           </nav>
           {% endif %}
         </div>

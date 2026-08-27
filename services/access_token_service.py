@@ -13,3 +13,8 @@ class AccessTokenService:
         if not expected:
             return True
         return secrets.compare_digest(expected, provided)
+
+    def verify_required_token(self, submission: dict, token: str | None) -> bool:
+        expected = str(submission.get("access_token") or "").strip()
+        provided = str(token or "").strip()
+        return bool(expected and provided and secrets.compare_digest(expected, provided))

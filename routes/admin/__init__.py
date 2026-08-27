@@ -78,6 +78,15 @@ ROLE_FORM_MANAGER = "form_manager"
 ROLES = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_FORM_MANAGER}
 TECHNICAL_SORT_FIELDS = {"created_at", "process_status", "officer_decision", "email", "nazwisko", "submission_id"}
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+
+@bp.errorhandler(403)
+def admin_forbidden(error):
+    return render_template(
+        "admin/error.html",
+        error_title="Brak uprawnień",
+        error_message=str(getattr(error, "description", "") or "Nie masz uprawnień do wykonania tej operacji."),
+    ), 403
 OFFICER_DECISIONS = [
     ("", "Brak decyzji"),
     ("accepted", "Zaakceptowano"),
@@ -279,6 +288,7 @@ def build_mail_context(form: Form, submission: FormSubmission | None, files: lis
         documents_to_sign_url_builder=lambda item: url_for(
             "documents.documents_to_sign",
             submission_id=item.submission_id,
+            token=item.access_token,
             _external=True,
         ),
         document_url_builder=lambda item, filename: current_app.extensions["services"].document_service.build_download_url(
@@ -305,7 +315,12 @@ def preview_mail_context(form: Form, submission: FormSubmission | None = None) -
         {
             **context,
             "podpisz_url": context.get("podpisz_url")
-            or url_for("documents.documents_to_sign", submission_id=context.get("submission_id", ""), _external=True),
+            or url_for(
+                "documents.documents_to_sign",
+                submission_id=context.get("submission_id", ""),
+                token=getattr(submission, "access_token", ""),
+                _external=True,
+            ),
         },
         training_availability_service=TrainingAvailabilityService(
             current_app.extensions["services"].submission_repository

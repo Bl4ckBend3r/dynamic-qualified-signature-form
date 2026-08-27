@@ -205,6 +205,7 @@ class SubmissionService:
 
         result = {
             "submission_id": submission_id,
+            "access_token": submission.get("access_token", ""),
             "form_slug": form_slug,
             "pdf_filename": pdf_filename,
             "pdf_url": self.document_service.build_download_url(submission, pdf_filename) if self.document_service else "",
@@ -453,6 +454,7 @@ class SubmissionService:
             "submission": refreshed,
             "result": {
                 "submission_id": submission_id,
+                "access_token": refreshed.get("access_token", ""),
                 "form_slug": form_slug,
                 "form_title": form_config.get("title", form_slug),
                 "pdf_filename": pdf_filename,

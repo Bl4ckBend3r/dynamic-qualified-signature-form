@@ -50,6 +50,7 @@ from models import (
     UserGlobalRole,
 )
 from services.admin_form_service import build_definition_from_html, sync_form_fields
+from services.admin_submission_service import format_business_datetime
 from form_loader import normalize_form_definition, validate_form_definition
 
 
@@ -436,21 +437,63 @@ def test_public_attendance_link_is_idempotent_and_not_authorized_by_participant_
         db.add(participant)
         db.flush()
         service = admin_app.extensions["services"].training_management_service
-        attendance_session = service.create_attendance_session(db, form, "excel", name="Excel 12.10", session_date=date(2026, 10, 12), actor_id=None)
+        attendance_session = service.create_attendance_session(
+            db,
+            form,
+            "excel",
+            name="Excel zaawansowany",
+            session_date=date(2026, 10, 12),
+            start_time="10:00",
+            end_time="16:00",
+            actor_id=None,
+        )
         attendance_session.status = "active"
         db.flush()
         record, _submission, raw_token = service.attendance_links(db, attendance_session)[0]
         record_id = record.id
         db.commit()
     assert admin_client.get(f"/training-attendance/{record_id}").status_code == 400
-    assert admin_client.get(f"/training-attendance/{raw_token}").status_code == 200
-    assert admin_client.post(f"/training-attendance/{raw_token}").status_code == 200
-    assert admin_client.post(f"/training-attendance/{raw_token}").status_code == 200
+    active_response = admin_client.get(f"/training-attendance/{raw_token}")
+    assert active_response.status_code == 200
+    active_html = active_response.get_data(as_text=True)
+    assert '<h1 id="attendance-confirmation-title">Potwierdzenie obecności</h1>' in active_html
+    assert "Excel zaawansowany" in active_html
+    assert "12.10.2026" in active_html
+    assert "10:00–16:00" in active_html
+    assert '<button class="btn-primary" type="submit">Potwierdź obecność</button>' in active_html
+    assert "Stopka strony —" not in active_html
+
+    confirmed_response = admin_client.post(f"/training-attendance/{raw_token}")
+    assert confirmed_response.status_code == 200
+    confirmed_html = confirmed_response.get_data(as_text=True)
+    assert "Obecność została potwierdzona" in confirmed_html
+    assert "Potwierdź obecność</button>" not in confirmed_html
+
+    repeated_response = admin_client.get(f"/training-attendance/{raw_token}")
+    assert repeated_response.status_code == 200
+    repeated_html = repeated_response.get_data(as_text=True)
+    assert "Obecność została potwierdzona" in repeated_html
+    assert "Potwierdź obecność</button>" not in repeated_html
     with factory() as db:
         records = db.execute(select(TrainingAttendanceRecord).where(TrainingAttendanceRecord.id == record_id)).scalars().all()
         assert len(records) == 1
         assert records[0].status == "present"
         assert records[0].confirmation_method == "email_link"
+        expected_timestamp = format_business_datetime(records[0].confirmed_at, "%d.%m.%Y, %H:%M")
+        assert f"Potwierdzono: {expected_timestamp}" in repeated_html
+
+
+def test_public_attendance_invalid_token_has_safe_styled_message(admin_client):
+    response = admin_client.get("/training-attendance/not-a-valid-attendance-token")
+
+    assert response.status_code == 400
+    html = response.get_data(as_text=True)
+    assert "Link jest nieprawidłowy lub wygasł." in html
+    assert 'class="attendance-confirmation__card card"' in html
+    assert "training_id" not in html
+    assert "submission_training_id" not in html
+    assert "not-a-valid-attendance-token" not in html
+    assert "Stopka strony —" not in html
 
 
 def test_training_bulk_message_creates_one_email_log_per_recipient_without_form_version_change(admin_app, admin_client):
@@ -869,6 +912,7 @@ def create_rollback_submission(app, *, form_slug="rollback_form", email="partici
             agreement_generated="Tak",
             agreement_filename="agreement.pdf",
             training_agreements='[{"id":"one","filename":"agreement.pdf"}]',
+            access_token="rollback-access-token",
         )
         db.add(submission)
         db.commit()
@@ -898,6 +942,7 @@ def create_blocked_agreement_submission(
             agreement_required="Tak",
             agreement_blocked="Tak",
             agreement_block_reason="Warunki deklaracji nie zostały spełnione.",
+            access_token="blocked-access-token",
             data_json={
                 "_agreement_block_source": "Warunki deklaracji",
                 "_agreement_blocked_at": "2026-07-28T09:00:00+00:00",
@@ -1074,7 +1119,9 @@ def test_stage_rollback_endpoint_updates_status_history_instruction_and_sends_ma
         assert event.new_status == "OFFICER_ACCEPTED"
         assert event.source == "stage_rollback"
 
-    status_response = admin_client.get(f"/api/submissions/{submission_id}/workflow-status")
+    status_response = admin_client.get(
+        f"/api/submissions/{submission_id}/workflow-status?token=rollback-access-token"
+    )
     payload = status_response.get_json()
     assert payload["process_status"] == "OFFICER_ACCEPTED"
     assert payload["current_step"] == "declaration"
@@ -1260,7 +1307,7 @@ def test_return_for_correction_requires_reason_and_is_forbidden_for_form_manager
     with session_factory() as db:
         db.add(FormPermission(user_id=manager_id, form_id=form_id, can_manage=True))
         db.commit()
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     login(admin_client, email="correction-manager@example.com")
     forbidden = admin_client.post(
         f"/admin/submissions/{submission_id}/return-for-correction",
@@ -1291,7 +1338,7 @@ def test_blocked_agreement_section_and_actions_follow_admin_permissions(admin_ap
     with session_factory() as db:
         db.add(FormPermission(user_id=admin_id, form_id=form_id, can_manage=True))
         db.commit()
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     login(admin_client, email="blocked-admin@example.com")
     admin_html = admin_client.get(
         f"/admin/forms/{form_id}/submissions/{submission_pk}"
@@ -1320,7 +1367,7 @@ def test_unblock_agreement_requires_csrf_and_super_admin(admin_app, admin_client
     with session_factory() as db:
         db.add(FormPermission(user_id=admin_id, form_id=form_id, can_manage=True))
         db.commit()
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     login(admin_client, email="no-unblock@example.com")
     forbidden = admin_client.post(
         f"/admin/submissions/{submission_id}/agreement/unblock",
@@ -1367,7 +1414,7 @@ def test_super_admin_unblocks_agreement_and_preserves_audit_history(admin_app, a
     assert captured["args"][0] == "AGREEMENT_UNBLOCKED"
 
     public_status = admin_client.get(
-        f"/api/submissions/{submission_id}/acceptance-status"
+        f"/api/submissions/{submission_id}/acceptance-status?token=blocked-access-token"
     ).get_json()
     assert public_status["process_status"] == "AGREEMENT_READY"
     assert public_status["agreement_blocked"] is False
@@ -1437,7 +1484,7 @@ def test_admin_rejects_blocked_agreement_with_reason_and_public_status(admin_app
         assert event.reason == decision.justification
 
     public_status = admin_client.get(
-        f"/api/submissions/{submission_id}/acceptance-status"
+        f"/api/submissions/{submission_id}/acceptance-status?token=blocked-access-token"
     ).get_json()
     assert public_status["process_status"] == "OFFICER_REJECTED"
     assert public_status["status_reason"] == "Warunki udziału nie zostały spełnione."
@@ -1532,6 +1579,69 @@ def test_admin_login(admin_app, admin_client):
 
     assert response.status_code == 302
     assert response.location.endswith("/admin/dashboard")
+
+
+@pytest.mark.parametrize(
+    ("next_target", "expected_suffix"),
+    [
+        ("/admin/forms", "/admin/forms"),
+        ("https://evil.example/steal", "/admin/dashboard"),
+        ("//evil.example/steal", "/admin/dashboard"),
+    ],
+)
+def test_admin_login_allows_only_local_next(admin_app, admin_client, next_target, expected_suffix):
+    create_user(admin_app)
+    login_page = admin_client.get(f"/admin/?next={next_target}")
+    token = login_page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/?next={next_target}",
+        data={"email": "admin@example.com", "password": "secret", "csrf_token": token},
+    )
+
+    assert response.status_code == 302
+    assert response.location.endswith(expected_suffix)
+    assert "evil.example" not in response.location
+
+
+def test_admin_login_clears_anonymous_session_state(admin_app, admin_client):
+    create_user(admin_app)
+    admin_client.get("/admin/")
+    with admin_client.session_transaction() as session:
+        session["untrusted_anonymous_state"] = "must-not-survive"
+
+    response = login(admin_client)
+
+    assert response.status_code == 302
+    with admin_client.session_transaction() as session:
+        assert set(session) == {"admin_user_id", "admin_csrf_token"}
+
+
+def test_admin_login_rate_limit_is_database_backed(admin_app, admin_client):
+    create_user(admin_app)
+
+    responses = [login(admin_client, password="wrong-password") for _ in range(5)]
+
+    assert [response.status_code for response in responses[:4]] == [401, 401, 401, 401]
+    assert responses[4].status_code == 429
+    assert responses[4].headers["Retry-After"] == "60"
+
+
+def test_admin_logout_requires_post_and_csrf(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+
+    assert admin_client.get("/admin/logout").status_code == 405
+    assert admin_client.get("/admin/dashboard").status_code == 200
+    assert admin_client.post("/admin/logout").status_code == 400
+
+    response = admin_client.post(
+        "/admin/logout",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert response.status_code == 302
+    assert admin_client.get("/admin/dashboard").status_code == 302
 
 
 def test_super_admin_sees_all_forms(admin_app, admin_client):
@@ -1959,14 +2069,14 @@ def test_imported_fields_default_to_required_and_preserve_explicit_false():
 def test_html_import_reports_missing_names_duplicates_and_unsupported_types():
     with pytest.raises(ValueError) as exc_info:
         build_definition_from_html(
-            '<form><input type="text"><input name="email"><input name="email"><input name="avatar" type="file"></form>',
+            '<form><input type="text"><input name="email"><input name="email"><input name="theme" type="color"></form>',
             "bledny.html",
         )
 
     message = str(exc_info.value)
     assert "nie ma atrybutu 'name'" in message
     assert "Duplikat pola HTML" in message
-    assert "nieobsługiwany typ HTML 'file'" in message
+    assert "nieobsługiwany typ HTML 'color'" in message
 
 
 def test_json_validation_reports_duplicate_field_names():
@@ -2445,6 +2555,7 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
                 form_name="Instruction form",
                 officer_decision="TAK",
                 process_status="OFFICER_ACCEPTED",
+                access_token="instruction-access-token",
             )
         )
         db.commit()
@@ -2524,7 +2635,9 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
         assert len(saved_form.user_instruction_config["stages"]) == 2
         assert saved_form.user_instruction_config["stages"][1]["status_codes"] == ["OFFICER_ACCEPTED"]
         assert "user_instruction" not in FormSubmission.__table__.columns
-    payload = admin_client.get("/api/submissions/instruction-admin/acceptance-status").get_json()
+    payload = admin_client.get(
+        "/api/submissions/instruction-admin/acceptance-status?token=instruction-access-token"
+    ).get_json()
     assert payload["form_instruction"] == "Pierwszy krok.\nDrugi krok."
     assert payload["has_form_instruction"] is True
     assert payload["instruction"]["title"] == "Moja instrukcja"
@@ -4256,14 +4369,18 @@ def test_super_admin_can_change_user_password(admin_app, admin_client):
 
     response = admin_client.post(
         f"/admin/users/{user_id}/password",
-        data={"csrf_token": token, "password": "new-secret", "password_confirm": "new-secret"},
+        data={
+            "csrf_token": token,
+            "password": "correct horse battery staple",
+            "password_confirm": "correct horse battery staple",
+        },
     )
 
     assert response.status_code == 302
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with session_factory() as db:
         user = db.get(User, user_id)
-        assert check_password_hash(user.password_hash, "new-secret")
+        assert check_password_hash(user.password_hash, "correct horse battery staple")
 
 
 def test_super_admin_can_delete_user(admin_app, admin_client):
@@ -4720,11 +4837,14 @@ def test_declaration_download_disabled_before_declaration_form_is_completed(admi
                 declaration_generated="",
                 declaration_filename="",
                 agreement_required="Nie",
+                access_token="declaration-access-token",
             )
         )
         db.commit()
 
-    response = admin_client.get("/do-podpisania?submission_id=decl-1")
+    response = admin_client.get(
+        "/do-podpisania?submission_id=decl-1&token=declaration-access-token"
+    )
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -4859,7 +4979,11 @@ def test_form_regulation_upload_and_public_link(admin_app, admin_client):
 
     assert response.status_code == 302
     page = admin_client.get("/form/regulated").get_data(as_text=True)
-    assert '<a href="/form/regulated/regulamin" target="_blank" rel="noopener noreferrer">regulamin</a>' in page
+    assert re.search(
+        r'<a\s+[^>]*href="/form/regulated/regulamin"[^>]*>\s*regulamin\s*</a\s*>',
+        page,
+        re.DOTALL,
+    )
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(FormRegulation).one().original_filename == "regulamin.pdf"
 
@@ -4925,7 +5049,7 @@ def test_super_admin_can_edit_contact_page_and_regular_admin_cannot(admin_app, a
         assert db.query(ContactPage).one().email == "kontakt@example.com"
 
     create_user(admin_app, email="regular2@example.com", role="admin")
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     login(admin_client, email="regular2@example.com")
     blocked = admin_client.get("/admin/site/contact")
     assert blocked.status_code == 403
@@ -5309,7 +5433,7 @@ def test_system_mail_settings_are_superadmin_only_and_password_is_hidden(admin_a
         assert "<script" not in template.html_body
 
     assert "system-secret" not in admin_client.get("/admin/mail-settings").get_data(as_text=True)
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     create_user(admin_app, email="regular@example.com", role="admin")
     login(admin_client, email="regular@example.com")
     assert admin_client.get("/admin/mail-settings").status_code == 403
@@ -5350,7 +5474,7 @@ def test_superadmin_deletes_used_logo_with_safe_detach_and_regular_admin_is_bloc
         db.add(blocked_logo)
         db.commit()
         blocked_logo_id = blocked_logo.id
-    admin_client.get("/admin/logout")
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
     create_user(admin_app, email="regular@example.com", role="admin")
     login(admin_client, email="regular@example.com")
     with admin_client.session_transaction() as session:
@@ -6211,9 +6335,17 @@ def test_workflow_instruction_html_is_sanitized_before_save_and_returned_as_safe
         assert step["description"] == "<p><strong>Ważny etap</strong></p>"
         assert step["next_action"] == '<a href="https://example.com" target="_blank" rel="noopener noreferrer">Czytaj dalej</a>'
         assert form.user_instruction == "<p><em>Opis</em></p>"
-        db.add(FormSubmission(submission_id="safe-html-submission", form_slug="safe_instruction", form_name="Safe", process_status="application_submitted"))
+        db.add(FormSubmission(
+            submission_id="safe-html-submission",
+            form_slug="safe_instruction",
+            form_name="Safe",
+            process_status="application_submitted",
+            access_token="safe-instruction-token",
+        ))
         db.commit()
-    payload = admin_client.get("/api/submissions/safe-html-submission/acceptance-status").get_json()
+    payload = admin_client.get(
+        "/api/submissions/safe-html-submission/acceptance-status?token=safe-instruction-token"
+    ).get_json()
     assert payload["instruction"]["description"] == "<p><em>Opis</em></p>"
     assert "onclick" not in payload["instruction"]["current_stage_description"]
     assert "<script" not in payload["instruction"]["current_stage_description"]
@@ -6870,7 +7002,7 @@ def test_agreement_builder_draft_does_not_activate_and_activation_is_explicit(ad
     assert "{{ participant_name }}" in reopened
 
 
-def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_app, admin_client):
+def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     active = {"version": 1, "blocks": [{"type": "paragraph", "content": "Aktywna treść"}]}
     definition = {"title": "Umowa", "fields": [], "workflow": {"requires_contract": True, "contract_template_source": "builder", "contract_builder_document": active, "contract_builder_active_document": active, "contract_builder_status": "active"}}
@@ -6888,6 +7020,22 @@ def test_agreement_builder_draft_does_not_replace_already_active_builder(admin_a
         workflow = db.get(Form, form_id).definition_json["workflow"]
         assert workflow["contract_builder_document"]["blocks"][0]["content"] == "Nowa wersja robocza"
         assert workflow["contract_builder_active_document"]["blocks"][0]["content"] == "Aktywna treść"
+    reopened = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
+    assert "Nowa wersja robocza" in reopened
+    preview = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/preview")
+    assert preview.status_code == 200
+    assert "Nowa wersja robocza" in preview.get_json()["html"]
+    assert "Aktywna treść" not in preview.get_json()["html"]
+    pdf_calls = []
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **kwargs: pdf_calls.append(kwargs) or b"%PDF-1.4\n",
+    )
+    pdf = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/example.pdf")
+    assert pdf.status_code == 200
+    assert "Nowa wersja robocza" in pdf_calls[0]["template_html"]
+    assert "Aktywna treść" not in pdf_calls[0]["template_html"]
 
 
 def test_main_form_save_merges_stale_workflow_without_replacing_newer_builder_document(

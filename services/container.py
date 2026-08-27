@@ -7,6 +7,7 @@ from repositories.audit_log_repository import StorageAuditLogRepository
 from repositories.storage_repository import StorageRepository
 from repositories.submission_repository import CsvSubmissionRepository, PostgresSubmissionRepository
 from services.access_token_service import AccessTokenService
+from services.admin_login_rate_limit_service import AdminLoginRateLimitService, LoginRateLimitPolicy
 from services.audit_log_service import AuditLogService
 from services.beneficiary_agreement_service import BeneficiaryAgreementService
 from services.blocked_agreement_admin_service import BlockedAgreementAdminService
@@ -30,6 +31,7 @@ from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
 from services.office_signed_agreement_service import OfficeSignedAgreementService
 from services.permission_service import PermissionService
+from services.password_policy_service import PasswordPolicyService
 from services.qualification_condition_service import QualificationConditionService
 from services.rules_service import RulesService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
@@ -96,6 +98,8 @@ class ServiceContainer:
     workflow_sla_service: WorkflowSlaService
     permission_service: PermissionService
     decision_definition_service: DecisionDefinitionService
+    admin_login_rate_limit_service: AdminLoginRateLimitService
+    password_policy_service: PasswordPolicyService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
@@ -115,6 +119,16 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     verification_checklist_service = VerificationChecklistService()
     permission_service = PermissionService()
     decision_definition_service = DecisionDefinitionService()
+    password_policy_service = PasswordPolicyService()
+    admin_login_rate_limit_service = AdminLoginRateLimitService(
+        app.config.get("SECRET_KEY", ""),
+        LoginRateLimitPolicy(
+            short_attempts=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS", 5)),
+            short_window_seconds=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS", 60)),
+            long_attempts=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS", 30)),
+            long_window_seconds=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS", 3600)),
+        ),
+    )
 
     form_slugs = []
     try:
@@ -203,7 +217,11 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         workflow_sla_service=workflow_sla_service,
     )
     compliance_service = ComplianceService(submission_repository)
-    submission_attachment_service = SubmissionAttachmentService(submission_repository, storage)
+    submission_attachment_service = SubmissionAttachmentService(
+        submission_repository,
+        storage,
+        allow_unscanned_uploads=bool(app.config.get("ALLOW_UNSCANNED_UPLOADS")),
+    )
     submission_service = SubmissionService(
         submission_repository,
         storage=storage,
@@ -276,4 +294,6 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         workflow_sla_service=workflow_sla_service,
         permission_service=permission_service,
         decision_definition_service=decision_definition_service,
+        admin_login_rate_limit_service=admin_login_rate_limit_service,
+        password_policy_service=password_policy_service,
     )

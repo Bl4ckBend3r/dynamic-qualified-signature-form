@@ -354,6 +354,11 @@ class FormConfigService:
         return normalized
 
     def ensure_required_document_configs(self, documents: list[dict], workflow: Mapping[str, Any]) -> list[dict]:
+        from services.documents.agreement_builder_service import (
+            AGREEMENT_DOCUMENT_CONTEXT_VERSIONED_RUNTIME,
+            resolve_agreement_document_config,
+        )
+
         documents_by_id: dict[str, dict] = {}
         order: list[str] = []
         for index, document in enumerate(documents):
@@ -392,30 +397,43 @@ class FormConfigService:
                     continue
                 template_source = str(workflow.get(f"{prefix}_template_source") or "builder")
                 template_metadata = dict(workflow.get(f"{prefix}_docx_template") or {})
+                agreement_config = None
+                if document_id == "agreement":
+                    agreement_config = resolve_agreement_document_config(
+                        workflow,
+                        context=AGREEMENT_DOCUMENT_CONTEXT_VERSIONED_RUNTIME,
+                    )
+                    template_source = agreement_config.source
+                    template_metadata = dict(agreement_config.template_metadata or {})
+                builder_document = None
                 if template_source == "docx":
                     template_html = str(template_metadata.get("html") or "").strip()
                 elif template_source == "builder":
                     from services.documents.document_builder_service import render_document_builder_template
 
-                    template_html = render_document_builder_template(
-                        workflow.get(f"{prefix}_builder_active_document")
+                    builder_document = (
+                        agreement_config.builder_document
+                        if agreement_config is not None
+                        else workflow.get(f"{prefix}_builder_active_document")
                         or workflow.get(f"{prefix}_builder_document")
-                        or {},
+                    )
+                    template_html = render_document_builder_template(
+                        builder_document or {},
                         document_id,
                     )
                 else:
-                    template_html = str(workflow.get(html_key) or "").strip()
+                    template_html = (
+                        agreement_config.template_html
+                        if agreement_config is not None
+                        else str(workflow.get(html_key) or "").strip()
+                    )
                 if template_html:
                     documents_by_id[document_id]["template_html"] = template_html
                 elif workflow.get("managed_documents"):
                     documents_by_id[document_id].pop("template_html", None)
                 documents_by_id[document_id]["template_source"] = template_source
                 if template_source == "builder":
-                    documents_by_id[document_id]["builder_document"] = dict(
-                        workflow.get(f"{prefix}_builder_active_document")
-                        or workflow.get(f"{prefix}_builder_document")
-                        or {}
-                    )
+                    documents_by_id[document_id]["builder_document"] = dict(builder_document or {})
                 if template_source == "docx":
                     documents_by_id[document_id]["template_metadata"] = template_metadata
                     documents_by_id[document_id]["template_valid"] = bool(template_metadata.get("valid"))

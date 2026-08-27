@@ -72,7 +72,7 @@
 
         {% if result.can_continue|default(true) %}<a
             class="btn-primary"
-            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id) }}"
+            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=result.access_token|default('')) }}"
         >
             Przejdź do dokumentów do podpisania
         </a>{% endif %}

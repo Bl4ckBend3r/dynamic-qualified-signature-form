@@ -145,7 +145,10 @@ def _site_footer_dimension(value: str | None, minimum: int, maximum: int, label:
 
 @bp.route("/site/contact", methods=["GET", "POST"])
 @login_required
-@permission_required("can_manage_site")
+@permission_required(
+    "can_manage_site",
+    message="Nie masz uprawnień do edycji tej strony.",
+)
 def contact_page_edit():
     with db_session_factory()() as db:
         page = db.execute(select(ContactPage).order_by(ContactPage.id)).scalar_one_or_none()

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, current_app, has_request_context, request, url_for
+from flask import Flask, current_app, has_request_context, jsonify, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config, normalize_app_base_path
@@ -15,7 +15,7 @@ from routes.api import bp as api_bp
 from routes.documents import bp as documents_bp
 from routes.public_forms import bp as public_forms_bp
 from services.container import create_services
-from services.database_schema_service import prepare_database_schema
+from services.database_schema_service import database_readiness_status, prepare_database_schema
 
 load_dotenv()
 
@@ -46,6 +46,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
 
     register_context_processors(app)
     register_blueprints(app)
+    register_operational_routes(app)
     register_cli_commands(app)
 
     logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
@@ -84,15 +85,25 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
         "STRICT_WORKFLOW_HISTORY_READ",
         "STRICT_DECISION_AUDIT_READ",
         "REQUIRE_STRICT_READINESS_CHECK",
+        "ALLOW_UNSCANNED_UPLOADS",
     ):
         if name in os.environ:
             app.config[name] = os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "tak", "on"}
 
 
 def _configure_reverse_proxy(app: Flask) -> None:
-    if not app.config.get("PROXY_FIX"):
+    trusted_hops = int(app.config.get("TRUSTED_PROXY_HOPS") or 0)
+    if not trusted_hops and app.config.get("PROXY_FIX"):
+        trusted_hops = 1
+    if not trusted_hops:
         return
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=trusted_hops,
+        x_proto=trusted_hops,
+        x_host=trusted_hops,
+        x_prefix=trusted_hops,
+    )
 
 
 def _validate_config(app: Flask) -> None:
@@ -100,6 +111,48 @@ def _validate_config(app: Flask) -> None:
     secret_key = str(app.config.get("SECRET_KEY") or "").strip()
     if production_like and secret_key in {"", "change-me-in-production"}:
         raise RuntimeError("SECRET_KEY must be configured in production.")
+    if app.config.get("AUTO_DB_MIGRATE"):
+        raise RuntimeError(
+            "AUTO_DB_MIGRATE is disabled. Run alembic upgrade head before starting the application."
+        )
+    if production_like and app.config.get("AUTO_CREATE_DB_SCHEMA"):
+        raise RuntimeError("AUTO_CREATE_DB_SCHEMA cannot be enabled in production.")
+    if production_like and app.config.get("ALLOW_UNSCANNED_UPLOADS"):
+        raise RuntimeError("ALLOW_UNSCANNED_UPLOADS cannot be enabled in production.")
+    if production_like and not app.config.get("SESSION_COOKIE_SECURE"):
+        raise RuntimeError("SESSION_COOKIE_SECURE must be enabled in production.")
+    if production_like and not app.config.get("SESSION_COOKIE_HTTPONLY"):
+        raise RuntimeError("SESSION_COOKIE_HTTPONLY must be enabled in production.")
+    if production_like and not app.config.get("SESSION_COOKIE_SECURE"):
+        raise RuntimeError("SESSION_COOKIE_SECURE must be enabled in production.")
+    if production_like and str(app.config.get("SESSION_COOKIE_SAMESITE") or "").lower() not in {"lax", "strict"}:
+        raise RuntimeError("SESSION_COOKIE_SAMESITE must be Lax or Strict in production.")
+    if production_like and app.config.get("ALLOW_UNSCANNED_UPLOADS"):
+        raise RuntimeError("ALLOW_UNSCANNED_UPLOADS cannot be enabled in production.")
+    if production_like and app.config.get("AUTO_CREATE_DB_SCHEMA"):
+        raise RuntimeError("AUTO_CREATE_DB_SCHEMA cannot be enabled in production.")
+
+
+def register_operational_routes(app: Flask) -> None:
+    @app.get("/live")
+    def live():
+        return jsonify({"status": "alive"}), 200
+
+    @app.get("/health")
+    def health():
+        return jsonify({"status": "alive"}), 200
+
+    @app.get("/ready")
+    def ready():
+        readiness = database_readiness_status(current_app.config.get("DATABASE_URL"))
+        status_code = 200 if readiness["status"] == "ready" else 503
+        if status_code != 200:
+            current_app.logger.error(
+                "readiness_failed database=%s schema=%s",
+                readiness["database"],
+                readiness["schema"],
+            )
+        return jsonify(readiness), status_code
 
 
 def _validate_strict_mode_config(app: Flask) -> None:
@@ -167,6 +220,9 @@ def register_cli_commands(app: Flask) -> None:
         database_url = app.config.get("DATABASE_URL")
         if not database_url:
             raise click.ClickException("DATABASE_URL is required.")
+        policy_result = app.extensions["services"].password_policy_service.validate(password)
+        if not policy_result.valid:
+            raise click.ClickException(policy_result.errors[0])
         session_factory = create_session_factory(database_url)
         normalized_email = email.strip().lower()
         with session_factory() as db:

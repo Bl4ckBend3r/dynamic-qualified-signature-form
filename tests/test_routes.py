@@ -469,7 +469,10 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/excel-umowa.pdf"] = b"%PDF-1.4\n"
     app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/english-umowa.pdf"] = b"%PDF-1.4\n"
 
-    declaration_response = client.post("/do-podpisania", data={"submission_id": "abc", "akceptacja": "Tak"})
+    declaration_response = client.post(
+        "/do-podpisania",
+        data={"submission_id": "abc", "akceptacja": "Tak", "access_token": "secret-token"},
+    )
     declaration_html = declaration_response.get_data(as_text=True)
 
     assert declaration_response.status_code == 200
@@ -477,7 +480,10 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert "token=secret-token" in declaration_html
 
     row["declaration_signature_valid"] = "Tak"
-    agreement_response = client.post("/do-podpisania", data={"submission_id": "abc", "akceptacja": "Tak"})
+    agreement_response = client.post(
+        "/do-podpisania",
+        data={"submission_id": "abc", "akceptacja": "Tak", "access_token": "secret-token"},
+    )
     agreement_html = agreement_response.get_data(as_text=True)
 
     assert agreement_response.status_code == 200
@@ -490,6 +496,9 @@ def test_documents_to_sign_shows_declaration_and_training_agreements(client, app
     assert agreement_html.count("Pobierz ponownie umowę PDF") == 2
     assert "Umowa oczekuje na podpis beneficjenta" in agreement_html
     assert "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”." in agreement_html
+    assert agreement_html.count("data-public-current-status") == 1
+    assert "<strong>Status wniosku:</strong>" not in agreement_html
+    assert "<strong>Status deklaracji:</strong>" not in agreement_html
     assert "Pobierz deklarację, podpisz" not in agreement_html
     assert "signing-document-card--spaced" not in agreement_html
     assert agreement_html.count("data-bulk-agreement-upload") == 1
@@ -562,7 +571,7 @@ def test_documents_to_sign_does_not_render_dead_training_agreement_link(client, 
         }
     ]
 
-    response = client.get("/do-podpisania?submission_id=missing-agreement")
+    response = client.get("/do-podpisania?submission_id=missing-agreement&token=secret-token")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -593,7 +602,7 @@ def test_documents_to_sign_get_with_submission_id_shows_current_submission(clien
     app.testing_storage.csv_rows = [row]
     app.testing_storage.saved_pdfs["output/formularz_zgloszeniowy/pdf/deklaracja.pdf"] = b"%PDF-1.4\n"
 
-    response = client.get("/do-podpisania?submission_id=abc")
+    response = client.get("/do-podpisania?submission_id=abc&token=secret-token")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -628,7 +637,7 @@ def test_documents_to_sign_requires_additional_fields_before_declaration(client,
     }
     app.testing_storage.csv_rows = [row]
 
-    response = client.get("/do-podpisania?submission_id=abc")
+    response = client.get("/do-podpisania?submission_id=abc&token=secret-token")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -664,7 +673,7 @@ def test_additional_fields_unlock_declaration_download(client, app):
         }
     ]
 
-    form_html = client.get("/do-podpisania?submission_id=abc").get_data(as_text=True)
+    form_html = client.get("/do-podpisania?submission_id=abc&token=secret-token").get_data(as_text=True)
     csrf_token = form_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     save_response = client.post(
         "/additional-fields/formularz_zgloszeniowy/abc",
@@ -672,7 +681,7 @@ def test_additional_fields_unlock_declaration_download(client, app):
     )
     assert save_response.status_code == 302
     assert app.testing_storage.csv_rows[0]["process_status"] == "additional_fields_completed"
-    html = client.get("/do-podpisania?submission_id=abc").get_data(as_text=True)
+    html = client.get("/do-podpisania?submission_id=abc&token=secret-token").get_data(as_text=True)
 
     assert app.testing_storage.csv_rows[0]["additional_fields_completed"] == "Tak"
     assert "Pobierz deklarację" in html
@@ -954,15 +963,80 @@ def test_acceptance_status_missing_submission(client):
     response = client.get("/api/submissions/brak-id/acceptance-status")
     payload = response.get_json()
 
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert payload["exists"] is False
+    assert payload["authorized"] is False
     assert payload["can_sign_documents"] is False
+
+
+def test_public_status_requires_token_scoped_to_requested_submission(client, app):
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "case-a",
+            "access_token": "token-a",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz A",
+            "officer_decision": "TAK",
+            "process_status": "OFFICER_ACCEPTED",
+        },
+        {
+            "submission_id": "case-b",
+            "access_token": "token-b",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Formularz B",
+            "officer_decision": "TAK",
+            "process_status": "OFFICER_ACCEPTED",
+        },
+    ]
+
+    missing = client.get("/api/submissions/missing/acceptance-status?token=token-a")
+    no_token = client.get("/api/submissions/case-b/acceptance-status")
+    wrong_case = client.get("/api/submissions/case-b/acceptance-status?token=token-a")
+
+    assert missing.status_code == no_token.status_code == wrong_case.status_code == 404
+    assert missing.get_json() == no_token.get_json() == wrong_case.get_json()
+    assert "form_title" not in wrong_case.get_json()
+
+    authorized = client.get(
+        "/api/submissions/case-b/acceptance-status",
+        headers={"Authorization": "Bearer token-b"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.get_json()["form_title"] == "Formularz B"
+    assert authorized.headers["Cache-Control"] == "no-store"
+
+    workflow_wrong = client.get("/api/submissions/case-b/workflow-status?token=token-a")
+    workflow_ok = client.get("/api/submissions/case-b/workflow-status?token=token-b")
+    assert workflow_wrong.status_code == 404
+    assert workflow_ok.status_code == 200
+    assert workflow_ok.get_json()["submission_id"] == "case-b"
+
+
+def test_documents_to_sign_details_require_matching_access_token(client, app):
+    app.testing_storage.csv_rows = [
+        {
+            "submission_id": "secured-case",
+            "access_token": "secured-token",
+            "form_slug": "formularz_zgloszeniowy",
+            "form_name": "Poufny formularz",
+            "officer_decision": "TAK",
+            "process_status": "OFFICER_ACCEPTED",
+        }
+    ]
+
+    denied = client.get("/do-podpisania?submission_id=secured-case")
+    allowed = client.get("/do-podpisania?submission_id=secured-case&token=secured-token")
+
+    assert denied.status_code == 404
+    assert "Poufny formularz" not in denied.get_data(as_text=True)
+    assert allowed.status_code == 200
 
 
 def test_acceptance_status_refresh_does_not_send_decision_email(client, app):
     sent = []
     row = {
         "submission_id": "abc",
+        "access_token": "status-token",
         "form_slug": "formularz_zgloszeniowy",
         "form_name": "Formularz zgłoszeniowy",
         "email": "jan.kowalski@example.com",
@@ -981,8 +1055,8 @@ def test_acceptance_status_refresh_does_not_send_decision_email(client, app):
 
     service.smtp_sender = fake_sender
     try:
-        first_response = client.get("/api/submissions/abc/acceptance-status")
-        second_response = client.get("/api/submissions/abc/acceptance-status")
+        first_response = client.get("/api/submissions/abc/acceptance-status?token=status-token")
+        second_response = client.get("/api/submissions/abc/acceptance-status?token=status-token")
     finally:
         service.smtp_sender = original_sender
 
@@ -1023,6 +1097,7 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
     app.testing_storage.csv_rows = [
         {
             "submission_id": "instruction-1",
+            "access_token": "instruction-token-1",
             "form_slug": "formularz_zgloszeniowy",
             "form_name": "Formularz zgłoszeniowy",
             "officer_decision": "TAK",
@@ -1031,6 +1106,7 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
         },
         {
             "submission_id": "instruction-empty",
+            "access_token": "instruction-token-2",
             "form_slug": "formularz_zgloszeniowy",
             "form_name": "Formularz zgłoszeniowy",
             "officer_decision": "TAK",
@@ -1040,7 +1116,7 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
     ]
 
     with_instruction = client.get(
-        "/api/submissions/instruction-1/acceptance-status",
+        "/api/submissions/instruction-1/acceptance-status?token=instruction-token-1",
         headers={"X-Forwarded-Prefix": "/aplikacja"},
     ).get_json()
     assert with_instruction["form_instruction"] == instruction
@@ -1057,12 +1133,12 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
     assert with_instruction["instruction"]["current_stage_key"] == "declaration"
 
     app.testing_storage.csv_rows[1]["process_status"] = "DECLARATION_WAITING_FOR_SIGNATURE"
-    changed_status = client.get("/api/submissions/instruction-empty/acceptance-status").get_json()
+    changed_status = client.get("/api/submissions/instruction-empty/acceptance-status?token=instruction-token-2").get_json()
     assert changed_status["instruction_version"] != with_instruction["instruction_version"]
 
     app.testing_storage.form_definition["user_instruction"] = ""
     app.testing_storage.form_definition["user_instruction_config"] = {}
-    without_instruction = client.get("/api/submissions/instruction-empty/acceptance-status").get_json()
+    without_instruction = client.get("/api/submissions/instruction-empty/acceptance-status?token=instruction-token-2").get_json()
     assert without_instruction["form_instruction"] is None
     assert without_instruction["has_form_instruction"] is False
     assert without_instruction["next_action"] == ""
@@ -1091,6 +1167,7 @@ def test_blocked_agreement_status_has_no_positive_signing_message_or_actions(cli
     app.testing_storage.csv_rows = [
         {
             "submission_id": "blocked-agreement",
+            "access_token": "blocked-token",
             "form_slug": "formularz_zgloszeniowy",
             "form_name": "Formularz zgłoszeniowy",
             "officer_decision": "TAK",
@@ -1106,7 +1183,7 @@ def test_blocked_agreement_status_has_no_positive_signing_message_or_actions(cli
         }
     ]
 
-    payload = client.get("/api/submissions/blocked-agreement/acceptance-status").get_json()
+    payload = client.get("/api/submissions/blocked-agreement/acceptance-status?token=blocked-token").get_json()
 
     assert payload["process_status"] == "AGREEMENT_BLOCKED"
     assert payload["status_title"] == "Umowa nie może zostać wygenerowana"
@@ -1118,18 +1195,18 @@ def test_blocked_agreement_status_has_no_positive_signing_message_or_actions(cli
     assert payload["next_action"].startswith("Na tym etapie nie możesz")
     assert payload["instruction"]["next_action"] == payload["next_action"]
     assert "Możesz przejść do podpisywania dokumentów" not in payload["message"]
-    assert sum(
-        "Etap zakończony poprawnie" in item["text"]
-        for item in payload["status_messages"]
-    ) == 1
+    assert payload["status_messages"] == [
+        {"type": "current", "text": "Umowa nie może zostać wygenerowana"}
+    ]
 
-    response = client.get("/do-podpisania?submission_id=blocked-agreement")
+    response = client.get("/do-podpisania?submission_id=blocked-agreement&token=blocked-token")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
     assert "Umowa nie może zostać wygenerowana" in html
     assert "Warunki nie zostały spełnione na podstawie deklaracji uczestnika." in html
-    assert html.count("Etap zakończony poprawnie") == 1
+    assert html.count("data-public-current-status") == 1
+    assert "Etap zakończony poprawnie" not in html
     assert "Pobierz umowę PDF" not in html
     assert "Wyślij podpisaną umowę" not in html
     assert "Wygeneruj umowę" not in html

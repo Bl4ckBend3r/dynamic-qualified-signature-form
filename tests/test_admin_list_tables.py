@@ -43,7 +43,11 @@ def test_admin_action_menu_is_accessible_and_not_clipped_by_table_scroll():
     assert 'aria-haspopup="menu"' in _template("forms/list.html")
     assert "document.body.appendChild(menu)" in base
     assert "menu.replaceWith(placeholder)" in base
-    assert 'window.addEventListener("scroll", () => closeActionMenu(), true)' in base
+    scroll_listener = base.split('window.addEventListener("scroll",', 1)[1].split(
+        'window.addEventListener("pagehide"', 1
+    )[0]
+    assert "closeActionMenu();" in scroll_listener
+    assert "}, true);" in scroll_listener
     assert "navigator.clipboard.writeText" in base
     action_rule = css.split(".admin-action-menu {", 1)[1].split("}", 1)[0]
     assert "position: fixed" in action_rule

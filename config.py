@@ -43,8 +43,15 @@ class Config:
     )
     APPLICATION_ROOT = APP_BASE_PATH or "/"
     PROXY_FIX = _env_bool("PROXY_FIX", "false")
+    TRUSTED_PROXY_HOPS = _env_int("TRUSTED_PROXY_HOPS", 0, minimum=0, maximum=10)
     PUBLIC_CSRF_ENABLED = _env_bool("PUBLIC_CSRF_ENABLED", "true")
     APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Warsaw").strip() or "Europe/Warsaw"
+    SESSION_COOKIE_SECURE = _env_bool(
+        "SESSION_COOKIE_SECURE",
+        "true" if ENV.strip().lower() == "production" else "false",
+    )
+    SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", "true")
+    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax").strip() or "Lax"
 
     BASE_DIR = Path(__file__).resolve().parent
     TEMPLATE_DIR = BASE_DIR / "templates"
@@ -73,6 +80,20 @@ class Config:
     STRICT_WORKFLOW_HISTORY_READ = _env_bool("STRICT_WORKFLOW_HISTORY_READ", "false")
     STRICT_DECISION_AUDIT_READ = _env_bool("STRICT_DECISION_AUDIT_READ", "false")
     REQUIRE_STRICT_READINESS_CHECK = _env_bool("REQUIRE_STRICT_READINESS_CHECK", "false")
+    ALLOW_UNSCANNED_UPLOADS = _env_bool("ALLOW_UNSCANNED_UPLOADS", "false")
+
+    ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS", 5, minimum=1, maximum=100
+    )
+    ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS", 60, minimum=10, maximum=3600
+    )
+    ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS", 30, minimum=2, maximum=1000
+    )
+    ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS", 3600, minimum=60, maximum=86400
+    )
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()

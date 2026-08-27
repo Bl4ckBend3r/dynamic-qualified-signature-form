@@ -4,7 +4,7 @@ import json
 import logging
 from hashlib import sha256
 
-from flask import Blueprint, current_app
+from flask import Blueprint, current_app, jsonify, request
 
 from services.status_catalog import build_status_view
 from services.process_instruction_service import build_process_instruction_view
@@ -26,6 +26,48 @@ def get_submission_context(submission_id: str) -> dict | None:
         form_config_service=services.form_config_service,
         storage=services.storage,
     )
+
+
+def _provided_access_token() -> str:
+    authorization = str(request.headers.get("Authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return str(request.args.get("token") or request.args.get("access_token") or "").strip()
+
+
+def _provided_access_token() -> str:
+    authorization = str(request.headers.get("Authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return str(request.args.get("token") or request.args.get("access_token") or "").strip()
+
+
+def _authorized_submission_context(submission_id: str) -> dict | None:
+    submission = get_submission_context(submission_id)
+    if not submission:
+        return None
+    row = submission.get("row") or submission
+    if not get_services().access_token_service.verify_required_token(
+        row,
+        _provided_access_token(),
+    ):
+        return None
+    return submission
+
+
+def _opaque_status_response(*, include_instruction: bool = False):
+    payload = {
+        "exists": False,
+        "authorized": False,
+        "can_sign_documents": False,
+        "message": "Nie można udostępnić statusu zgłoszenia.",
+    }
+    if include_instruction:
+        payload.update(empty_instruction_payload())
+    response = jsonify(payload)
+    response.status_code = 404
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def status_payload(process_status: str | None) -> dict:
@@ -141,11 +183,22 @@ def empty_instruction_payload() -> dict:
 
 
 def public_status_payload(submission: dict) -> dict:
-    public_status = build_public_submission_status(submission["row"])
+    row = submission["row"]
+    form_context = get_form_instruction_context(
+        submission["form_slug"],
+        submission.get("form_version_id") or row.get("form_version_id"),
+    )
+    form_config = form_context["form_config"]
+    current_step = get_services().workflow_service.get_current_step(row, form_config)
+    public_status = build_public_submission_status(
+        row,
+        form_config=form_config,
+        current_step=current_step,
+    )
     payload = {
         **status_payload(public_status["effective_process_status"]),
         **public_status,
-        "raw_process_status": submission.get("process_status") or "",
+        "raw_process_status": row.get("process_status") or "",
     }
     payload["process_status"] = public_status["effective_process_status"]
     return payload
@@ -178,36 +231,22 @@ def reconcile_blocking_instruction(instruction: dict, public_status: dict) -> di
 def api_acceptance_status(submission_id: str):
     submission_id = submission_id.strip()
     if not submission_id:
-        return {
-            "exists": False,
-            "can_sign_documents": False,
-            "message": "Nie podano ID wniosku.",
-            **empty_instruction_payload(),
-        }, 200
+        return _opaque_status_response(include_instruction=True)
 
     try:
-        submission = get_submission_context(submission_id)
+        submission = _authorized_submission_context(submission_id)
     except Exception as exc:
-        logger.exception("Błąd sprawdzania akceptacji wniosku: %s", exc)
-        return {
-            "exists": False,
-            "can_sign_documents": False,
-            "message": "Nie udało się sprawdzić statusu wniosku.",
-            **empty_instruction_payload(),
-        }, 200
+        logger.exception("Błąd sprawdzania statusu zgłoszenia.")
+        return _opaque_status_response(include_instruction=True)
 
     if not submission:
-        return {
-            "exists": False,
-            "can_sign_documents": False,
-            "message": "Nie znaleziono wniosku o podanym ID.",
-            **empty_instruction_payload(),
-        }, 200
+        return _opaque_status_response(include_instruction=True)
 
     public_status = public_status_payload(submission)
     instructions = reconcile_blocking_instruction(instruction_payload(submission), public_status)
-    return {
+    response = jsonify({
         "exists": True,
+        "authorized": True,
         "can_sign_documents": submission["can_sign_documents"],
         "can_view_status_details": submission.get("can_view_status_details", False),
         "message": public_status["status_description"],
@@ -215,26 +254,33 @@ def api_acceptance_status(submission_id: str):
         "form_slug": submission["form_slug"],
         **public_status,
         **instructions,
-    }, 200
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.get("/api/submissions/<submission_id>/workflow-status")
 def api_workflow_status(submission_id: str):
     submission_id = submission_id.strip()
     if not submission_id:
-        return {"exists": False, "message": "Nie podano ID wniosku."}, 200
+        return _opaque_status_response()
 
-    submission = get_submission_context(submission_id)
+    try:
+        submission = _authorized_submission_context(submission_id)
+    except Exception:
+        logger.exception("Błąd sprawdzania workflow zgłoszenia.")
+        return _opaque_status_response()
     if not submission:
-        return {"exists": False, "message": "Nie znaleziono wniosku o podanym ID."}, 200
+        return _opaque_status_response()
 
     services = get_services()
     form_config = services.form_config_service.get_form_config(services.storage, submission["form_slug"]) or {}
     row = submission["row"]
     public_status = public_status_payload(submission)
     qualification = row.get("data_json", {}).get("_qualification") if isinstance(row.get("data_json"), dict) else None
-    return {
+    response = jsonify({
         "exists": True,
+        "authorized": True,
         "submission_id": submission_id,
         "form_slug": submission["form_slug"],
         "form_title": submission["form_title"],
@@ -246,4 +292,6 @@ def api_workflow_status(submission_id: str):
             else services.workflow_service.get_available_actions(row, form_config)
         ),
         "qualification_evaluation": qualification,
-    }, 200
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response

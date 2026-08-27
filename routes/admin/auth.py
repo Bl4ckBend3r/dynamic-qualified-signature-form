@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import secrets
 from functools import wraps
+from urllib.parse import urlsplit, urlunsplit
 
-from flask import abort, flash, g, redirect, render_template, request, session, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 from werkzeug.security import check_password_hash
 
@@ -53,7 +54,7 @@ def role_required(*roles: str):
     return decorator
 
 
-def permission_required(permission: str):
+def permission_required(permission: str, *, message: str | None = None):
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -61,7 +62,10 @@ def permission_required(permission: str):
             with db_session_factory()() as db:
                 user = db.get(User, g.admin_user.id) if g.admin_user else None
                 if not PermissionService().has_permission(db, user, permission):
-                    abort(403)
+                    abort(
+                        403,
+                        description=message or "Nie masz uprawnień do wykonania tej operacji.",
+                    )
             return view(*args, **kwargs)
         return wrapped
     return decorator
@@ -105,6 +109,16 @@ def admin_is_active(*endpoints: str) -> bool:
     return request.endpoint in endpoints
 
 
+def safe_local_redirect_target(value: str | None) -> str | None:
+    target = str(value or "").strip()
+    if not target or any(ord(char) < 32 for char in target) or "\\" in target:
+        return None
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
+        return None
+    return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+
+
 @bp.get("/")
 def admin_index():
     if session.get("admin_user_id"):
@@ -116,18 +130,45 @@ def admin_index():
 def login():
     email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
+    client_address = str(request.remote_addr or "unknown")
+    limiter = current_app.extensions["services"].admin_login_rate_limit_service
     with db_session_factory()() as db:
+        if limiter.is_limited(db, client_address=client_address, email=email):
+            flash("Nieprawidlowy login lub haslo.", "error")
+            return (
+                render_template("admin/login.html", email=email),
+                429,
+                {"Retry-After": str(limiter.policy.short_window_seconds)},
+            )
         user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if not user or user.is_blocked or not user.is_active or not check_password_hash(user.password_hash, password):
+            limited = limiter.record_failure(
+                db,
+                client_address=client_address,
+                email=email,
+            )
+            db.commit()
             flash("Nieprawidlowy login lub haslo.", "error")
-            return render_template("admin/login.html", email=email), 401
-        session["admin_user_id"] = user.id
-    return redirect(request.args.get("next") or url_for("admin.dashboard"))
+            status_code = 429 if limited else 401
+            if limited:
+                return (
+                    render_template("admin/login.html", email=email),
+                    status_code,
+                    {"Retry-After": str(limiter.policy.short_window_seconds)},
+                )
+            return render_template("admin/login.html", email=email), status_code
+        limiter.clear_failures(db, client_address=client_address, email=email)
+        db.commit()
+        user_id = user.id
+    session.clear()
+    session["admin_user_id"] = user_id
+    csrf_token()
+    return redirect(safe_local_redirect_target(request.args.get("next")) or url_for("admin.dashboard"))
 
 
-@bp.get("/logout")
+@bp.post("/logout")
 @login_required
 def logout():
-    session.pop("admin_user_id", None)
+    session.clear()
     flash("Wylogowano.", "success")
     return redirect(url_for("admin.admin_index"))

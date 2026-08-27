@@ -49,6 +49,23 @@ def test_documents_to_sign_frontend_uses_backend_status_flags():
     assert "finalStatuses" not in script
 
 
+def test_documents_to_sign_renders_only_one_current_status_component():
+    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
+
+    assert template.count("data-public-current-status") == 1
+    assert '{% if not result %}<div class="status-tiles"' in template
+    assert "Status wniosku:</strong>" not in template
+    assert "Status deklaracji:</strong>" not in template
+    assert "Status umowy:</strong>" not in template
+    assert "process-completed-box" not in template
+    assert "data.application_status" not in script
+    assert "data.declaration_status" not in script
+    assert "data.agreement_status" not in script
+    assert "renderStatusTiles" not in script
+    assert 'tile.dataset.publicCurrentStatus = "";' in script
+
+
 def test_documents_to_sign_frontend_receives_acceptance_status_url_template():
     template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
     script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")

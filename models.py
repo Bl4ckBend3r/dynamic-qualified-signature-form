@@ -587,8 +587,41 @@ class User(Base):
         nullable=False,
     )
 
-    permissions: Mapped[list["FormPermission"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    forms_created: Mapped[list["Form"]] = relationship(back_populates="creator")
+    permissions: Mapped[list["FormPermission"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    forms_created: Mapped[list["Form"]] = relationship(
+        back_populates="creator"
+    )
+
+
+class AdminLoginAttempt(Base):
+    __tablename__ = "admin_login_attempts"
+    __table_args__ = (
+        Index(
+            "ix_admin_login_attempts_key_attempted",
+            "key_hash",
+            "attempted_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    key_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class SubmissionInternalNote(Base):

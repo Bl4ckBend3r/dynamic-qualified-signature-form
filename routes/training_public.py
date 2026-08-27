@@ -21,13 +21,25 @@ def attendance(token: str):
         resolved = service.confirm_attendance(db, token) if request.method == "POST" and _valid_public_csrf(request.form)[0] else None
         if request.method == "POST" and resolved:
             db.commit()
-            _record, session = resolved
-            return render_template("training_attendance_public.html", valid=True, confirmed=True, session=session)
+            record, session = resolved
+            return render_template(
+                "training_attendance_public.html",
+                valid=True,
+                confirmed=True,
+                record=record,
+                session=session,
+            )
         token_record = service.resolve_attendance_token(db, token) if request.method == "GET" else None
         if token_record:
             db.rollback()
-            _record, session = token_record
-            return render_template("training_attendance_public.html", valid=True, confirmed=False, session=session)
+            record, session = token_record
+            return render_template(
+                "training_attendance_public.html",
+                valid=True,
+                confirmed=record.status == "present",
+                record=record,
+                session=session,
+            )
         return render_template("training_attendance_public.html", valid=False, confirmed=False), 400
 
 

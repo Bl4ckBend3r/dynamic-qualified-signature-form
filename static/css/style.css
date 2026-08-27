@@ -59,6 +59,7 @@ a {
 
 main{
     padding-top: 32px;
+    padding-bottom: 48px;
 }
 
 main,
@@ -194,19 +195,21 @@ main,
     border: 1px solid rgba(229, 221, 209, 0.95);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
-    padding: 30px;
-    margin-bottom: 32px;
+    padding: 34px;
+    margin-bottom: 36px;
 }
 
 .card-header h2 {
-    margin: 0 0 10px;
+    margin: 0 0 12px;
     font-size: 2rem;
+    line-height: 1.2;
 }
 
 .card-header p {
     margin: 0;
     color: var(--muted);
     font-size: 1.02rem;
+    line-height: 1.55;
 }
 
 /* FORM */
@@ -214,7 +217,7 @@ main,
 .dynamic-form {
     display: grid;
     grid-template-columns: repeat(12, 1fr);
-    gap: 18px;
+    gap: 20px;
 }
 
 .form-section {
@@ -416,6 +419,16 @@ textarea:focus {
     transform: translateY(-1px);
 }
 
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
+    outline: 3px solid rgba(29, 46, 91, 0.28);
+    outline-offset: 3px;
+}
+
 .btn-secondary {
     background: #fff;
     color: var(--navy);
@@ -545,6 +558,135 @@ textarea:focus {
     color: var(--gold-dark);
     font-weight: 700;
     text-decoration: none;
+}
+
+/* ATTENDANCE CONFIRMATION */
+
+.attendance-confirmation {
+    display: grid;
+    place-items: center;
+    min-height: clamp(420px, 62vh, 660px);
+    padding: 24px 0;
+}
+
+.attendance-confirmation__card {
+    width: min(100%, 640px);
+    margin: 0;
+    padding: clamp(28px, 5vw, 46px);
+}
+
+.attendance-confirmation__header {
+    text-align: center;
+}
+
+.attendance-confirmation__header h1 {
+    margin: 18px 0 10px;
+    font-size: clamp(2rem, 5vw, 2.6rem);
+    line-height: 1.15;
+}
+
+.attendance-confirmation__header p {
+    margin: 0 auto;
+    max-width: 460px;
+    color: var(--muted);
+    font-size: 1.02rem;
+}
+
+.attendance-confirmation__icon {
+    display: inline-grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border: 1px solid rgba(200, 163, 93, 0.45);
+    border-radius: 50%;
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+    font-size: 1.5rem;
+    font-weight: 800;
+}
+
+.attendance-confirmation__icon--success {
+    border-color: rgba(31, 122, 77, 0.28);
+    background: #e8f7ee;
+    color: var(--success);
+}
+
+.attendance-confirmation__icon--error {
+    border-color: rgba(180, 35, 24, 0.24);
+    background: #fdecec;
+    color: var(--danger);
+}
+
+.attendance-confirmation__details {
+    display: grid;
+    gap: 0;
+    margin: 30px 0 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    overflow: hidden;
+}
+
+.attendance-confirmation__detail {
+    display: grid;
+    gap: 5px;
+    padding: 16px 18px;
+}
+
+.attendance-confirmation__detail + .attendance-confirmation__detail {
+    border-top: 1px solid var(--border);
+}
+
+.attendance-confirmation__detail dt {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.attendance-confirmation__detail dd {
+    margin: 0;
+    color: var(--navy);
+    font-size: 1.05rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.attendance-confirmation__actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 28px;
+}
+
+.attendance-confirmation__status {
+    display: grid;
+    gap: 5px;
+    margin-top: 30px;
+    padding: 17px 18px;
+    border: 1px solid;
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.attendance-confirmation__status strong {
+    font-size: 1.05rem;
+}
+
+.attendance-confirmation__status span {
+    font-size: 0.94rem;
+}
+
+.attendance-confirmation__status--success {
+    border-color: rgba(31, 122, 77, 0.24);
+    background: #e8f7ee;
+    color: #195f3d;
+}
+
+.attendance-confirmation__status--error {
+    border-color: rgba(180, 35, 24, 0.22);
+    background: #fdecec;
+    color: #8f1d1d;
 }
 /* SIGN DOCUMENTS */
 
@@ -1219,6 +1361,20 @@ textarea:focus {
     .card {
         margin-top: 5vh;
         padding: 22px;
+    }
+
+    .attendance-confirmation {
+        min-height: auto;
+        padding: 12px 0 28px;
+    }
+
+    .attendance-confirmation__card {
+        margin: 0;
+        padding: 26px 20px;
+    }
+
+    .attendance-confirmation__actions .btn-primary {
+        width: 100%;
     }
 
     .form-tile,

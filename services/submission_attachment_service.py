@@ -15,6 +15,7 @@ CURRENT_ATTACHMENT_STATUSES = {"active", "valid"}
 REPLACEMENT_REQUIRED_STATUSES = {"rejected", "requires_correction"}
 ANTIVIRUS_NOT_CONFIGURED = "not_configured"
 ANTIVIRUS_STATUSES = {"pending", "clean", "infected", "unavailable", ANTIVIRUS_NOT_CONFIGURED}
+ANTIVIRUS_SAFE_STATUS = "clean"
 
 
 class AttachmentAntivirusScanner(Protocol):
@@ -42,10 +43,18 @@ class PreparedAttachment:
 class SubmissionAttachmentService:
     """Validates and versions participant uploads through the existing storage layer."""
 
-    def __init__(self, submission_repository, storage, antivirus_scanner: AttachmentAntivirusScanner | None = None) -> None:
+    def __init__(
+        self,
+        submission_repository,
+        storage,
+        antivirus_scanner: AttachmentAntivirusScanner | None = None,
+        *,
+        allow_unscanned_uploads: bool = False,
+    ) -> None:
         self.submission_repository = submission_repository
         self.storage = storage
         self.antivirus_scanner = antivirus_scanner or NotConfiguredAntivirusScanner()
+        self.allow_unscanned_uploads = bool(allow_unscanned_uploads)
 
     def validate_uploads(
         self,
@@ -97,11 +106,21 @@ class SubmissionAttachmentService:
                 except (UploadValidationError, TypeError, ValueError) as exc:
                     errors[key] = str(exc)
                     break
-                antivirus_status = str(self.antivirus_scanner.scan(content, detected_mime) or "unavailable")
+                try:
+                    antivirus_status = str(self.antivirus_scanner.scan(content, detected_mime) or "unavailable")
+                except Exception:
+                    antivirus_status = "unavailable"
                 if antivirus_status not in ANTIVIRUS_STATUSES:
                     antivirus_status = "unavailable"
-                if antivirus_status == "infected":
-                    errors[key] = "Plik został odrzucony przez skaner bezpieczeństwa."
+                if antivirus_status == "infected" or (
+                    antivirus_status != ANTIVIRUS_SAFE_STATUS
+                    and not self.allow_unscanned_uploads
+                ):
+                    errors[key] = (
+                        "Plik został odrzucony przez skaner bezpieczeństwa."
+                        if antivirus_status == "infected"
+                        else "Nie można potwierdzić bezpieczeństwa pliku. Spróbuj ponownie później."
+                    )
                     break
                 prepared.append(
                     PreparedAttachment(
@@ -191,7 +210,15 @@ class SubmissionAttachmentService:
                             mime_type=item.mime_type,
                             size_bytes=len(item.content),
                             checksum_sha256=item.checksum_sha256,
-                            status="active",
+                            status=(
+                                "active"
+                                if item.antivirus_status == ANTIVIRUS_SAFE_STATUS
+                                or (
+                                    self.allow_unscanned_uploads
+                                    and item.antivirus_status != "infected"
+                                )
+                                else "quarantined"
+                            ),
                             field_key=field_key,
                             attachment_version=version,
                             category=item.category,
@@ -238,7 +265,17 @@ class SubmissionAttachmentService:
                 "filename": filename, "original_filename": item.original_filename,
                 "storage_path": path, "mime_type": item.mime_type, "size_bytes": len(item.content),
                 "checksum_sha256": item.checksum_sha256, "document_id": item.field_key,
-                "document_type": item.document_type, "status": "active", "field_key": item.field_key,
+                "document_type": item.document_type,
+                "status": (
+                    "active"
+                    if item.antivirus_status == ANTIVIRUS_SAFE_STATUS
+                    or (
+                        self.allow_unscanned_uploads
+                        and item.antivirus_status != "infected"
+                    )
+                    else "quarantined"
+                ),
+                "field_key": item.field_key,
                 "attachment_version": version, "category": item.category,
                 "uploaded_by_source": source, "workflow_step_at_upload": workflow_step,
                 "antivirus_status": item.antivirus_status,

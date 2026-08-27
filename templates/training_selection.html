@@ -8,7 +8,7 @@
 
 {% block content %}
 <div class="back-link">
-    <a href="{{ url_for('documents.documents_to_sign', submission_id=submission.submission_id) }}">← Powrót do dokumentów</a>
+    <a href="{{ url_for('documents.documents_to_sign', submission_id=submission.submission_id, token=token) }}">← Powrót do dokumentów</a>
 </div>
 
 <section class="card training-picker">

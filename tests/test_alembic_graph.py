@@ -102,6 +102,7 @@ def test_p0_chain_is_linear_and_ordered():
         "20260824_0043",
         "20260824_0044",
         "20260824_0045",
+        "20260826_0046",
     ]
     script = _script_directory()
     for parent, child in zip(expected, expected[1:]):

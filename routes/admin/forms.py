@@ -54,9 +54,11 @@ from services.form_version_service import (
 )
 from services.training_availability_service import TrainingAvailabilityService
 from services.documents.agreement_builder_service import (
+    AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
     default_agreement_builder_document,
     normalize_agreement_builder_document,
     render_agreement_builder_template,
+    resolve_agreement_document_config,
     validate_agreement_builder_document,
 )
 from services.documents.agreement_template_context_service import AgreementVariableCatalog, agreement_preview_context, agreement_variable_catalog
@@ -1793,12 +1795,15 @@ def _undefined_variable_name(exception: UndefinedError) -> str | None:
 
 def _resolve_agreement_preview_template(definition: dict, fields: list[FormField] | tuple = ()) -> tuple[str, AgreementPreviewError | None]:
     workflow = definition.get("workflow") or {}
-    source = str(workflow.get("contract_template_source") or "").casefold()
-    metadata = workflow.get("contract_docx_template") or {}
-    if not source:
-        source = "html" if str(workflow.get("contract_template_html") or "").strip() else ("docx" if metadata else "builder")
-    if source == "builder":
-        document = workflow.get("contract_builder_active_document") or workflow.get("contract_builder_document") or default_agreement_builder_document()
+    try:
+        config = resolve_agreement_document_config(
+            workflow,
+            context=AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
+        )
+    except ValueError as exc:
+        return "", AgreementPreviewError(str(exc), reason="invalid_template")
+    if config.source == "builder":
+        document = config.builder_document
         errors = validate_agreement_builder_document(document, fields)
         if errors:
             return "", AgreementPreviewError(
@@ -1807,7 +1812,8 @@ def _resolve_agreement_preview_template(definition: dict, fields: list[FormField
                 errors=[error.as_dict() for error in errors],
             )
         return render_agreement_builder_template(document), None
-    if source == "docx":
+    if config.source == "docx":
+        metadata = dict(config.template_metadata or {})
         try:
             parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
         except ValueError as exc:
@@ -1826,7 +1832,7 @@ def _resolve_agreement_preview_template(definition: dict, fields: list[FormField
         if docx_html:
             return docx_html, None
         return "", AgreementPreviewError("Nie wgrano szablonu umowy Word lub nie udało się go odczytać.", reason="missing_template")
-    html_template = str(workflow.get("contract_template_html") or "").strip()
+    html_template = config.template_html
     if html_template:
         return html_template, None
     return "", AgreementPreviewError("Nie wgrano szablonu umowy Word ani szablonu HTML.", reason="missing_template")

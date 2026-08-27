@@ -15,6 +15,7 @@ from services.process_service import (
     is_yes,
 )
 from services.status_catalog import get_status_label
+from services.workflow_config_service import DEFAULT_STEP_STATUS
 
 
 REJECTED_STATUSES = {
@@ -53,16 +54,49 @@ COMPLETED_STATUSES = {
     ProcessStatus.PROCESS_COMPLETED,
     ProcessStatus.PARTICIPANT_ACCEPTED,
 }
+ACCEPTED_STATUSES = {
+    ProcessStatus.OFFICER_ACCEPTED,
+    ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS,
+    ProcessStatus.ADDITIONAL_FIELDS_COMPLETED,
+    ProcessStatus.DECLARATION_NOT_REQUIRED,
+    ProcessStatus.DECLARATION_READY,
+    ProcessStatus.DECLARATION_WAITING_FOR_SIGNATURE,
+    ProcessStatus.DECLARATION_SIGNED,
+    ProcessStatus.DECLARATION_SIGNATURE_INVALID,
+    ProcessStatus.TRAINING_SELECTION_OPEN,
+    ProcessStatus.AGREEMENT_NOT_REQUIRED,
+    ProcessStatus.AGREEMENT_BLOCKED,
+    ProcessStatus.AGREEMENT_READY,
+    ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE,
+    ProcessStatus.AGREEMENT_UPLOADED_BY_BENEFICIARY,
+    ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE,
+    ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE,
+    ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE,
+    ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE,
+    ProcessStatus.AGREEMENT_UPLOADED,
+    ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED,
+    ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED,
+    ProcessStatus.AGREEMENT_SIGNED,
+    ProcessStatus.AGREEMENT_SIGNATURE_INVALID,
+    ProcessStatus.PARTICIPANT_ACCEPTED,
+    ProcessStatus.PROCESS_COMPLETED,
+}
 
 
-def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
+def build_public_submission_status(
+    row: Mapping[str, Any],
+    *,
+    form_config: Mapping[str, Any] | None = None,
+    current_step: str | None = None,
+) -> dict[str, Any]:
     state = build_process_state(row)
-    status = state.status
+    workflow_context = _workflow_context(row, form_config=form_config, current_step=current_step)
+    status = _status_for_workflow_context(workflow_context) or state.status
     decision = get_officer_decision(row)
     rejected = status in REJECTED_STATUSES or decision == OfficerDecision.REJECTED
     correction = status in CORRECTION_STATUSES
     blocked = state.agreement_blocked or status == ProcessStatus.AGREEMENT_BLOCKED
-    accepted = decision == OfficerDecision.ACCEPTED
+    accepted = decision == OfficerDecision.ACCEPTED or status in ACCEPTED_STATUSES
     declaration_required = is_declaration_required(row)
     agreement_required = is_agreement_required(row)
     explicit_status = str(row.get("process_status") or "").strip()
@@ -119,6 +153,9 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         declaration_generated=is_yes(row.get("declaration_generated")),
         agreement_generated=is_yes(row.get("agreement_generated")),
     )
+    configured_step = workflow_context.get("config") or {}
+    description = str(configured_step.get("description") or description).strip()
+    next_action = str(configured_step.get("next_action") or next_action).strip()
 
     can_download_declaration = bool(row.get("declaration_filename")) and accepted and not declaration_completed
     can_upload_signed_declaration = (
@@ -155,19 +192,19 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         or (str(row.get("correction_message") or "").strip() if correction else "")
         or (str(row.get("officer_decision_reason") or "").strip() if rejected else "")
     )
-    messages = _deduplicate_messages(
-        [
-            ("application", f"Status wniosku: {application_status}"),
-            ("declaration", f"Status deklaracji: {declaration_status}") if declaration_required else None,
-            ("agreement", f"Status umowy: {agreement_status}") if agreement_required or blocked else None,
-            ("blocking_reason", f"Powód blokady: {blocking_reason}") if blocking_reason else None,
-            ("status_reason", f"Powód: {status_reason}") if status_reason and not blocking_reason else None,
-            ("next_action", f"Co dalej? {next_action}") if next_action else None,
-        ]
-    )
+    current_status = {
+        "variant": variant,
+        "title": headline,
+        "message": description,
+        "next_action": next_action,
+        "reason": status_reason,
+        "step": workflow_context.get("id") or status.value,
+    }
     return {
-        "effective_process_status": status.value,
-        "process_status_label": get_status_label(status.value),
+        "status": current_status,
+        "current_workflow_step": current_status["step"],
+        "effective_process_status": state.status.value,
+        "process_status_label": get_status_label(state.status.value),
         "application_status": application_status,
         "declaration_status": declaration_status,
         "agreement_status": agreement_status,
@@ -177,7 +214,7 @@ def build_public_submission_status(row: Mapping[str, Any]) -> dict[str, Any]:
         "status_title": headline,
         "status_description": description,
         "status_variant": variant,
-        "status_messages": messages,
+        "status_messages": [{"type": "current", "text": headline}],
         "declaration_completed": declaration_completed,
         "agreement_completed": agreement_completed,
         "agreement_blocked": blocked,
@@ -246,6 +283,42 @@ def _agreement_status(
     return "Umowa jeszcze niedostępna"
 
 
+def _workflow_context(
+    row: Mapping[str, Any],
+    *,
+    form_config: Mapping[str, Any] | None,
+    current_step: str | None,
+) -> dict[str, Any]:
+    persisted_step = str(row.get("workflow_stage") or row.get("workflow_step") or "").strip()
+    step_id = str(current_step or persisted_step).strip() if persisted_step else ""
+    workflow = (form_config or {}).get("workflow") or {}
+    configured_step = next(
+        (
+            step
+            for step in workflow.get("steps") or []
+            if isinstance(step, Mapping) and str(step.get("id") or "").strip() == step_id
+        ),
+        None,
+    )
+    status_code = str(
+        (configured_step or {}).get("status")
+        or (configured_step or {}).get("status_code")
+        or DEFAULT_STEP_STATUS.get(step_id)
+        or ""
+    ).strip()
+    return {"id": step_id, "status": status_code, "config": configured_step or {}}
+
+
+def _status_for_workflow_context(context: Mapping[str, Any]) -> ProcessStatus | None:
+    status_code = str(context.get("status") or "").strip()
+    if status_code in {"WAITING_FOR_CORRECTION", "CORRECTION_REQUIRED"}:
+        return ProcessStatus.RETURNED_FOR_CORRECTION
+    try:
+        return ProcessStatus(status_code)
+    except ValueError:
+        return None
+
+
 def _primary_message(**state) -> tuple[str, str, str, str]:
     if state["rejected"]:
         return (
@@ -256,7 +329,7 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
         )
     if state["correction"]:
         return (
-            "Wymagana jest poprawa",
+            "Wniosek wymaga poprawy",
             "Przekazane dane lub dokument wymagają poprawy.",
             "Zapoznaj się z uwagami i wykonaj wskazaną korektę.",
             "warning",
@@ -268,12 +341,47 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
             "Na tym etapie nie możesz wykonać kolejnej czynności. W razie pytań skontaktuj się z administratorem formularza.",
             "warning",
         )
+    if state["status"] == ProcessStatus.FORM_SUBMITTED:
+        return (
+            "Wniosek został złożony",
+            "Wniosek został zapisany i oczekuje na rozpoczęcie weryfikacji.",
+            "Oczekuj na weryfikację przez urzędnika.",
+            "neutral",
+        )
+    if state["status"] == ProcessStatus.WAITING_FOR_OFFICER_DECISION:
+        return (
+            "Wniosek oczekuje na decyzję",
+            "Wniosek jest weryfikowany przez urzędnika.",
+            "Nie musisz teraz wykonywać żadnych działań.",
+            "neutral",
+        )
     if not state["accepted"]:
         return (
             "Wniosek oczekuje na decyzję urzędnika",
             "Dokumenty będą dostępne po zakończeniu weryfikacji.",
             "Poczekaj na decyzję urzędnika.",
             "neutral",
+        )
+    if state["status"] == ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS:
+        return (
+            "Uzupełnij wymagane dane",
+            "Wniosek został zaakceptowany. Uzupełnij dodatkowe informacje, aby kontynuować.",
+            "Uzupełnij i zapisz wymagane pola.",
+            "warning",
+        )
+    if state["status"] == ProcessStatus.DECLARATION_SIGNATURE_INVALID:
+        return (
+            "Podpis deklaracji wymaga poprawy",
+            "Wgrany podpis deklaracji nie przeszedł weryfikacji.",
+            "Podpisz deklarację ponownie i wgraj poprawny plik.",
+            "danger",
+        )
+    if state["status"] == ProcessStatus.AGREEMENT_SIGNATURE_INVALID:
+        return (
+            "Podpis umowy wymaga poprawy",
+            "Wgrany podpis umowy nie przeszedł weryfikacji.",
+            "Podpisz umowę ponownie i wgraj poprawny plik.",
+            "danger",
         )
     if state["agreement_completed"]:
         return (
@@ -289,12 +397,19 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
             "Poczekaj na podpis i potwierdzenie urzędu.",
             "neutral",
         )
+    if state["status"] == ProcessStatus.TRAINING_SELECTION_OPEN:
+        return (
+            "Wybierz szkolenie",
+            "Wybierz dostępne szkolenie, aby kontynuować proces.",
+            "Wybierz szkolenie.",
+            "warning",
+        )
     if state["status"] == ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE:
         return (
-            "Umowa oczekuje na podpis beneficjenta",
-            "Umowa została pobrana. Podpisz dokument i wgraj podpisaną umowę.",
+            "Umowa jest gotowa do podpisania",
+            "Pobierz umowę, podpisz ją elektronicznie i wgraj podpisany plik.",
             "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
-            "success",
+            "warning",
         )
     if state["agreement_required"] and state["declaration_completed"]:
         if state["agreement_generated"]:
@@ -302,13 +417,13 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
                 "Umowa jest gotowa do podpisania",
                 "Pobierz umowę, podpisz ją elektronicznie i wgraj podpisany plik.",
                 "Pobierz umowę, podpisz ją i wgraj podpisany plik w sekcji „Wgraj podpisane umowy”.",
-                "success",
+                "warning",
             )
         return (
             "Umowa jest gotowa do wygenerowania",
             "Deklaracja została zakończona poprawnie. Możesz przejść do wygenerowania umowy.",
             "Wygeneruj umowę.",
-            "success",
+            "warning",
         )
     if state["declaration_required"] and not state["declaration_completed"]:
         if state["declaration_generated"]:
@@ -316,13 +431,13 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
                 "Deklaracja jest gotowa do podpisania",
                 "Pobierz deklarację, podpisz ją elektronicznie i wgraj podpisany plik.",
                 "Podpisz i wgraj deklarację.",
-                "success",
+                "warning",
             )
         return (
-            "Deklaracja oczekuje na wypełnienie",
+            "Uzupełnij deklarację",
             "Wniosek został zaakceptowany. Uzupełnij deklarację, aby wygenerować dokument.",
             "Wypełnij deklarację.",
-            "success",
+            "warning",
         )
     return (
         "Wniosek został zaakceptowany",
@@ -330,21 +445,6 @@ def _primary_message(**state) -> tuple[str, str, str, str]:
         "Nie musisz teraz wykonywać dodatkowych czynności.",
         "success",
     )
-
-
-def _deduplicate_messages(items) -> list[dict[str, str]]:
-    result = []
-    seen = set()
-    for item in items:
-        if not item:
-            continue
-        message_type, text = item
-        key = (str(message_type).strip().casefold(), " ".join(str(text).split()).casefold())
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append({"type": message_type, "text": text})
-    return result
 
 
 def _training_agreements(value) -> list[dict]:

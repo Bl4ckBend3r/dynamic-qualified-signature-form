@@ -132,10 +132,14 @@ export function initializePropertiesPanel(panel, config, callbacks) {
       const row = document.createElement("div");
       row.className = "form-builder__availability-row";
       const label = document.createElement("strong");
+      label.className = "form-builder__availability-stage";
       label.textContent = step.admin_label || step.user_label || step.label || step.id;
       row.append(label);
+      const controls = document.createElement("div");
+      controls.className = "form-builder__availability-controls";
       permissions.forEach(([permission, permissionLabel]) => {
         const wrapper = document.createElement("label");
+        wrapper.className = "form-builder__availability-option";
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = Boolean(entry[permission]);
@@ -143,8 +147,9 @@ export function initializePropertiesPanel(panel, config, callbacks) {
           updateAvailability(field, step.id, permission, checkbox.checked),
         );
         wrapper.append(checkbox, document.createTextNode(permissionLabel));
-        row.append(wrapper);
+        controls.append(wrapper);
       });
+      row.append(controls);
       availabilityHolder.append(row);
     });
     declarationUsage.checked = Boolean(field.document_usage?.declaration);

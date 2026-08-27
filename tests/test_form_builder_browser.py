@@ -29,6 +29,9 @@ def test_form_builder_add_edit_resize_drag_preview_delete_and_serialize():
             <input type=checkbox data-property=required>
             <label data-options-setting><textarea data-property=options></textarea></label>
             <input data-property=section><input data-property=document_label>
+            <div data-availability-settings></div>
+            <label><input type=checkbox data-document-usage=declaration></label>
+            <div data-repeatable-group-settings></div>
             <button type=button data-duplicate-field>Duplikuj</button><button type=button data-delete-field>Usuń</button>
           </div>
         </aside>

@@ -4,9 +4,13 @@ from docx import Document
 from jinja2.sandbox import SandboxedEnvironment
 
 from services.documents.agreement_builder_service import (
+    AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
+    AGREEMENT_DOCUMENT_CONTEXT_VERSIONED_RUNTIME,
+    agreement_builder_document_hash,
     default_agreement_builder_document,
     normalize_agreement_builder_document,
     render_agreement_builder_template,
+    resolve_agreement_document_config,
     validate_agreement_builder_document,
 )
 from services.documents.agreement_template_context_service import (
@@ -249,6 +253,88 @@ def test_default_builder_is_valid_and_uses_per_training_variables():
     assert validate_agreement_builder_document(document) == []
     assert "agreement_number" in template
     assert "selected_trainings" in template
+
+
+def test_agreement_document_resolver_separates_admin_draft_from_versioned_runtime():
+    active = {"version": 1, "blocks": [{"type": "paragraph", "content": "WERSJA_A"}]}
+    draft = {"version": 1, "blocks": [{"type": "paragraph", "content": "WERSJA_B_UNIKALNY_TEST"}]}
+    workflow = {
+        "contract_template_source": "builder",
+        "contract_builder_document": draft,
+        "contract_builder_active_document": active,
+        "contract_template_html": "<p>LEGACY_HTML</p>",
+        "contract_docx_template": {"html": "<p>LEGACY_DOCX</p>"},
+    }
+
+    preview = resolve_agreement_document_config(
+        workflow,
+        context=AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
+    )
+    runtime = resolve_agreement_document_config(
+        workflow,
+        context=AGREEMENT_DOCUMENT_CONTEXT_VERSIONED_RUNTIME,
+    )
+
+    assert preview.source == runtime.source == "builder"
+    assert preview.builder_document == draft
+    assert runtime.builder_document == active
+    assert agreement_builder_document_hash(preview.builder_document) == agreement_builder_document_hash(draft)
+    assert agreement_builder_document_hash(runtime.builder_document) == agreement_builder_document_hash(active)
+
+
+def test_agreement_document_resolver_does_not_cross_fallback_between_modes():
+    workflow = {
+        "contract_builder_document": {"version": 1, "blocks": [{"type": "paragraph", "content": "BUILDER"}]},
+        "contract_docx_template": {"html": "<p>DOCX</p>"},
+        "contract_template_html": "<p>HTML</p>",
+    }
+
+    for source in ("builder", "docx", "html"):
+        resolved = resolve_agreement_document_config(
+            {**workflow, "contract_template_source": source},
+            context=AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
+        )
+        assert resolved.source == source
+        assert bool(resolved.builder_document) is (source == "builder")
+        assert bool(resolved.template_metadata) is (source == "docx")
+        assert bool(resolved.template_html) is (source == "html")
+
+    broken_builder = resolve_agreement_document_config(
+        {**workflow, "contract_template_source": "builder", "contract_builder_document": None},
+        context=AGREEMENT_DOCUMENT_CONTEXT_ADMIN_DRAFT,
+    )
+    assert broken_builder.source == "builder"
+    assert broken_builder.builder_document is None
+
+
+def test_form_config_runtime_uses_active_builder_snapshot_from_each_version():
+    service = FormConfigService()
+    version_a = {"version": 1, "blocks": [{"type": "paragraph", "content": "UMOWA_WERSJA_A"}]}
+    version_b = {"version": 1, "blocks": [{"type": "paragraph", "content": "UMOWA_WERSJA_B"}]}
+
+    historical = service.normalize_form_config({
+        "workflow": {
+            "requires_contract": True,
+            "contract_template_source": "builder",
+            "contract_builder_document": version_a,
+            "contract_builder_active_document": version_a,
+        }
+    })
+    current = service.normalize_form_config({
+        "workflow": {
+            "requires_contract": True,
+            "contract_template_source": "builder",
+            "contract_builder_document": version_b,
+            "contract_builder_active_document": version_b,
+        }
+    })
+
+    historical_agreement = next(item for item in historical["documents"] if item["id"] == "agreement")
+    current_agreement = next(item for item in current["documents"] if item["id"] == "agreement")
+    assert "UMOWA_WERSJA_A" in historical_agreement["template_html"]
+    assert "UMOWA_WERSJA_B" not in historical_agreement["template_html"]
+    assert "UMOWA_WERSJA_B" in current_agreement["template_html"]
+    assert "UMOWA_WERSJA_A" not in current_agreement["template_html"]
 
 
 def test_form_config_prefers_builder_for_new_forms_and_preserves_legacy_html():

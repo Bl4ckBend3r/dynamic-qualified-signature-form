@@ -37,6 +37,18 @@ docs/reports
 docs/setup
 docs/testing
 docs/workflow
+!docs/archive/
+docs/archive/*
+!docs/archive/FRONTEND_SPLIT_PLAN.md
+!docs/archive/LEGACY_REMOVAL_CHECKLIST.md
+!docs/archive/LEGACY_REMOVAL_MIGRATION_PLAN.md
+!docs/archive/LEGACY_APP_RETIREMENT_PLAN.md
+!docs/archive/LEGACY_DEPENDENCIES.md
+!docs/archive/MIGRATION_PLAN.md
+!docs/archive/REPO_CLEANUP_PLAN.md
+!docs/database/
+docs/database/*
+!docs/database/P4_SCHEMA_CHECK.md
 storage/*
 !storage/.gitkeep
 !storage/archive/
@@ -75,7 +87,7 @@ tmp*/
 .codex
 .agents
 agent.py
-
+local_agent.py
 # Operating-system metadata
 .DS_Store
 Thumbs.db

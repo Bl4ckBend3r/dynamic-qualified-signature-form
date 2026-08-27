@@ -12,12 +12,13 @@
 
 {% block content %}
 {% set initial_submission_id = submission_id or request.args.get('submission_id', '') %}
+{% set participant_access_token = access_token|default(request.args.get('token', ''), true) %}
 
 <div class="card">
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
-            Podaj ID wniosku. System pokaże aktualne statusy wniosku, deklaracji i umowy
+            Podaj ID wniosku. System pokaże aktualny status procesu
             oraz wyłącznie te czynności, które są obecnie dostępne.
         </p>
     </div>
@@ -34,6 +35,7 @@
     </div>
 
     <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
+        <input type="hidden" name="access_token" value="{{ participant_access_token }}" id="participant-access-token">
         <div class="form-field sign-id-field">
             <label for="submission_id">ID wniosku</label>
             <input
@@ -42,6 +44,7 @@
                 name="submission_id"
                 value="{{ initial_submission_id }}"
                 data-acceptance-status-url-template="{{ url_for('api.api_acceptance_status', submission_id='__SUBMISSION_ID__') }}"
+                data-access-token="{{ participant_access_token }}"
                 placeholder="Wpisz ID wniosku"
                 autocomplete="off"
                 required
@@ -65,7 +68,7 @@
         </div>
     </form>
 
-    <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
+    {% if not result %}<div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>{% endif %}
 
     <aside id="user-instruction-window" class="instruction-window is-hidden" aria-labelledby="user-instruction-title">
         <div class="instruction-window__header">
@@ -94,10 +97,6 @@
     </aside>
     <button type="button" id="user-instruction-restore" class="instruction-window__restore is-hidden">Instrukcja</button>
 
-    <div id="process-completed-box" class="result-box result-box--completed is-hidden">
-        <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
-    </div>
-
     {% if result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
         {% set declaration_completed = result.declaration_completed|default(result.declaration_signature_valid|default(false)) %}
@@ -113,22 +112,25 @@
         {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and (not agreement_completed or training_agreements) %}
         {% set show_agreement_stage = show_agreement_generate or show_agreement_upload or training_agreements %}
 
+        {% set current_status = result.status|default({}) %}
         <div class="result-box" id="signing-result-box">
-            {% if result.status_title %}<h3>{{ result.status_title }}</h3>{% endif %}
-            <p>{{ result.message }}</p>
+            <section
+                class="status-tile status-tile--{{ current_status.variant|default(result.status_variant|default('neutral')) }}"
+                data-public-current-status
+                role="{{ 'alert' if current_status.variant|default(result.status_variant) == 'danger' else 'status' }}"
+            >
+                <span class="status-tile__icon" aria-hidden="true">
+                    {{ '✓' if current_status.variant|default(result.status_variant) == 'success' else '!' if current_status.variant|default(result.status_variant) == 'danger' else '…' if current_status.variant|default(result.status_variant) == 'warning' else 'i' }}
+                </span>
+                <div>
+                    <h3 class="status-tile__title">{{ current_status.title|default(result.status_title) }}</h3>
+                    <p class="status-tile__description">{{ current_status.message|default(result.status_description|default(result.message)) }}</p>
+                    {% if current_status.reason|default(result.status_reason) %}<p><strong>Powód:</strong> {{ current_status.reason|default(result.status_reason) }}</p>{% endif %}
+                    {% if current_status.next_action|default(result.next_action) %}<p><strong>Co teraz?</strong> {{ current_status.next_action|default(result.next_action) }}</p>{% endif %}
+                </div>
+            </section>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
-
-            {% if result.process_status %}
-                <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
-            {% endif %}
-
-            {% if result.application_status %}<p><strong>Status wniosku:</strong> {{ result.application_status }}</p>{% endif %}
-            {% if result.declaration_status %}<p><strong>Status deklaracji:</strong> {{ result.declaration_status }}</p>{% endif %}
-            {% if result.agreement_status %}<p><strong>Status umowy:</strong> {{ result.agreement_status }}</p>{% endif %}
-            {% if result.blocking_reason %}<p><strong>Powód blokady:</strong> {{ result.blocking_reason }}</p>{% endif %}
-            {% if result.status_reason and not result.blocking_reason %}<p><strong>Powód:</strong> {{ result.status_reason }}</p>{% endif %}
-            {% if result.next_action %}<p><strong>Co dalej?</strong> {{ result.next_action }}</p>{% endif %}
             {% include "_training_agreements_overview.html" %}
             {% if result.training_selection_url %}
                 <p>
@@ -151,6 +153,7 @@
                     </div>
                     <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
                         <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                        <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                         {% if result.additional_errors.get('compliance') %}<div class="form-errors" role="alert"><p>{{ result.additional_errors.get('compliance') }}</p></div>{% endif %}
                         {% if result.additional_form_definition.fields|selectattr('required')|list %}
                             <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
@@ -254,6 +257,7 @@
                     </div>
 
                     <form method="post" action="{{ result.declaration_upload_url }}" enctype="multipart/form-data" class="dynamic-form">
+                        <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                         <div class="form-row width-full">
                             <label class="upload-dropzone" data-upload-dropzone>
                                 <input
@@ -295,6 +299,7 @@
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
                         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
+                            <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                             <div class="submit-row">
                                 <button type="submit" class="btn-primary">Wygeneruj umowę</button>
                             </div>
@@ -400,6 +405,7 @@
 
                             {% if result.can_upload_signed_agreement %}
                             <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
+                                <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                                 <div class="form-row width-full">
                                     <label class="upload-dropzone" data-upload-dropzone>
                                         <input

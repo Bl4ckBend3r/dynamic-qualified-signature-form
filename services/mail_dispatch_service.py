@@ -366,7 +366,13 @@ class MailDispatchService:
             return MailDispatchResult("sent", recipient, subject, log=log)
         except Exception as exc:
             error_message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-            current_app.logger.exception("mail_send_failed form_id=%s error=%s", getattr(form, "id", None), error_message)
+            metrics = current_app.extensions.get("observability_metrics")
+            if metrics is not None:
+                metrics.operation_failures.labels(operation="mail_dispatch", kind="smtp").inc()
+            current_app.logger.exception(
+                "mail_dispatch_failed",
+                extra={"event": "mail_dispatch_failed", "operation": "mail_dispatch", "form_id": getattr(form, "id", None)},
+            )
             log = self.log_email(
                 db,
                 form=form,

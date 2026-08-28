@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
@@ -16,13 +15,12 @@ from routes.documents import bp as documents_bp
 from routes.public_forms import bp as public_forms_bp
 from services.container import create_services
 from services.database_schema_service import database_readiness_status, prepare_database_schema
+from services.observability import configure_logging, register_observability
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +28,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_object or Config)
     _apply_runtime_env_overrides(app, enabled=config_object is None)
+    configure_logging(app)
     _configure_reverse_proxy(app)
     _validate_config(app)
     _validate_strict_mode_config(app)
@@ -46,13 +45,16 @@ def create_app(config_object=None, storage_override=None) -> Flask:
 
     register_context_processors(app)
     register_blueprints(app)
+    register_observability(app)
     register_operational_routes(app)
     register_cli_commands(app)
 
-    logger.info("NEXTCLOUD_BASE_URL=%s", app.config["NEXTCLOUD_BASE_URL"])
-    logger.info("NEXTCLOUD_USERNAME=%s", app.config["NEXTCLOUD_USERNAME"])
-    logger.info("NEXTCLOUD_FORMS_DIR=%s", app.config["NEXTCLOUD_FORMS_DIR"])
-    logger.info("NEXTCLOUD_OUTPUT_DIR=%s", app.config["NEXTCLOUD_OUTPUT_DIR"])
+    logger.info(
+        "storage_configuration_loaded base_url_configured=%s credentials_configured=%s",
+        bool(app.config["NEXTCLOUD_BASE_URL"]),
+        bool(app.config["NEXTCLOUD_USERNAME"] and app.config["NEXTCLOUD_APP_PASSWORD"]),
+        extra={"event": "storage_configuration_loaded", "operation": "storage_configuration"},
+    )
     return app
 
 
@@ -147,10 +149,14 @@ def register_operational_routes(app: Flask) -> None:
         readiness = database_readiness_status(current_app.config.get("DATABASE_URL"))
         status_code = 200 if readiness["status"] == "ready" else 503
         if status_code != 200:
+            metrics = current_app.extensions.get("observability_metrics")
+            if metrics is not None:
+                metrics.readiness_failures.inc()
             current_app.logger.error(
                 "readiness_failed database=%s schema=%s",
                 readiness["database"],
                 readiness["schema"],
+                extra={"event": "readiness_failed", "operation": "readiness"},
             )
         return jsonify(readiness), status_code
 

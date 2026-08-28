@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from statuses import (
@@ -13,6 +14,9 @@ from statuses import (
 )
 from services.status_catalog import can_transition, get_status_label, normalize_status as catalog_normalize_status
 from services.workflow_state_service import FinalOutcome, final_outcome_for_status
+
+
+logger = logging.getLogger(__name__)
 
 
 def workflow_status_label(status_id: str, form_config: dict | None = None) -> str:
@@ -88,6 +92,10 @@ class WorkflowService:
             updates["officer_decision"] = str((metadata or {})["officer_decision"])
         updated = self.submission_repository.update(submission_id, updates)
         if updated:
+            logger.info(
+                "workflow_transition",
+                extra={"event": "workflow_transition", "operation": "workflow_transition", "workflow_step": target_step},
+            )
             self._record_workflow_event(
                 submission_id,
                 previous_status=submission.get("process_status"),
@@ -174,6 +182,10 @@ class WorkflowService:
             user_message="",
             side_effects={},
             source="workflow_transition_submission",
+        )
+        logger.info(
+            "workflow_transition",
+            extra={"event": "workflow_transition", "operation": "workflow_transition", "workflow_step": new_step},
         )
         if self.audit_log_service:
             self.audit_log_service.log_event(

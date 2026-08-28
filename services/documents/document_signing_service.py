@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
+from flask import current_app, has_app_context
+
 from services.documents.document_storage_service import DocumentStorageService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.upload_validation import UploadValidationError, validate_pdf_upload
@@ -65,10 +67,13 @@ class DocumentSigningService:
 
         verification = self._verify_pdf(uploaded_bytes, temp_dir)
         if not verification.get("is_signed"):
+            self._record_verification_rejection("unsigned")
             raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
         if not verification.get("cryptographically_valid") or not verification.get("integrity_ok"):
+            self._record_verification_rejection("invalid_or_modified")
             raise ValueError("Podpis PDF jest nieprawidłowy albo dokument został zmieniony po podpisaniu.")
         if not verification.get("is_szafir_signature"):
+            self._record_verification_rejection("unsupported_signer")
             raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
 
         storage_path = self.document_storage_service.save_pdf(
@@ -79,7 +84,7 @@ class DocumentSigningService:
             document_type=None,
             signed=True,
         )
-        logger.info("Upload podpisanego PDF do Nextcloud zakonczony sukcesem: %s", signed_pdf_filename)
+        logger.info("document_signature_verified", extra={"event": "document_signature_verified", "operation": "signature_verification"})
         self.submission_repository.update(submission_id, {"signed_pdf_filename": signed_pdf_filename})
         recorded = self.submission_document_service.record_signed_document(
             submission_id=submission_id,
@@ -95,7 +100,7 @@ class DocumentSigningService:
             storage=self.storage,
         )
         if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
-            raise RuntimeError(f"Nie udalo sie zapisac metadanych podpisanego dokumentu: {signed_pdf_filename}")
+            raise RuntimeError("Nie udalo sie zapisac metadanych podpisanego dokumentu.")
         return SignedSubmissionPdfUpload(
             signed_filename=signed_pdf_filename,
             verification=verification,
@@ -123,6 +128,26 @@ class DocumentSigningService:
             tmp_signed_path = Path(tmp_signed.name)
             tmp_signed.write(pdf_bytes)
         try:
-            return self.verifier(tmp_signed_path)
+            metrics = current_app.extensions.get("observability_metrics") if has_app_context() else None
+            if metrics is None:
+                return self.verifier(tmp_signed_path)
+            with metrics.operation("signature_verification", "pdf"):
+                return self.verifier(tmp_signed_path)
         finally:
             tmp_signed_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _record_verification_rejection(reason: str) -> None:
+        if not has_app_context():
+            return
+        metrics = current_app.extensions.get("observability_metrics")
+        if metrics is not None:
+            metrics.operation_failures.labels(operation="signature_verification", kind="pdf").inc()
+        current_app.logger.warning(
+            "document_signature_verification_failed",
+            extra={
+                "event": "document_signature_verification_failed",
+                "operation": "signature_verification",
+                "failure_reason": reason,
+            },
+        )

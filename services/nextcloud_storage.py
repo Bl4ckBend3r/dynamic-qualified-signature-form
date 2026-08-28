@@ -1,14 +1,17 @@
 import csv
+import hashlib
 import io
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Union
 from urllib.parse import quote, unquote, urlparse
 import xml.etree.ElementTree as ET
 
 import requests
+from flask import current_app, has_app_context
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +57,7 @@ class NextcloudStorage:
         self.auth = (self.username, self.app_password)
         self.dav_root = f"{self.base_url}/remote.php/dav/files/{quote(self.username)}"
 
-        logger.info("Nextcloud verify_ssl=%r", self.verify_ssl)
-        logger.info("Nextcloud DAV root=%s", self.dav_root)
-        logger.info("Nextcloud CSV filename=%s", self.csv_filename)
+        logger.info("storage_adapter_initialized verify_ssl=%r", self.verify_ssl, extra={"event": "storage_adapter_initialized", "operation": "storage"})
 
         if self.verify_ssl is False:
             logger.warning("Nextcloud SSL verification is DISABLED. Use only for local diagnostics.")
@@ -93,6 +94,7 @@ class NextcloudStorage:
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = self._encode_path(path)
+        started = time.perf_counter()
 
         try:
             response = requests.request(
@@ -106,21 +108,44 @@ class NextcloudStorage:
             return response
 
         except requests.exceptions.SSLError as exc:
+            self._record_failure(method)
             verify_description = (
                 self.verify_ssl if isinstance(self.verify_ssl, str) else str(self.verify_ssl)
             )
             raise NextcloudStorageError(
-                f"SSL error for URL '{url}'. "
+                f"Storage SSL error during {method}; path_ref={self._path_ref(path)}. "
                 f"verify={verify_description!r}. "
                 f"Check server certificate chain or configure "
                 f"NEXTCLOUD_CA_BUNDLE / NEXTCLOUD_VERIFY_SSL. "
-                f"Original error: {exc}"
+                f"Original error type: {type(exc).__name__}"
             ) from exc
 
         except requests.exceptions.RequestException as exc:
+            self._record_failure(method)
             raise NextcloudStorageError(
-                f"HTTP request failed for URL '{url}'. Original error: {exc}"
+                f"Storage HTTP request failed during {method}; path_ref={self._path_ref(path)}; error={type(exc).__name__}"
             ) from exc
+        finally:
+            if has_app_context():
+                metrics = current_app.extensions.get("observability_metrics")
+                if metrics is not None:
+                    metrics.operation_duration.labels(operation="storage", kind=str(method).lower()).observe(time.perf_counter() - started)
+
+    @staticmethod
+    def _path_ref(path: str) -> str:
+        return hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
+
+    @staticmethod
+    def _record_failure(method: str) -> None:
+        if not has_app_context():
+            return
+        metrics = current_app.extensions.get("observability_metrics")
+        if metrics is not None:
+            metrics.operation_failures.labels(operation="storage", kind=str(method).lower()).inc()
+        current_app.logger.error(
+            "storage_operation_failed",
+            extra={"event": "storage_operation_failed", "operation": str(method).lower()},
+        )
 
     def _check_status(
         self,
@@ -129,8 +154,9 @@ class NextcloudStorage:
         message: str,
     ) -> None:
         if response.status_code not in allowed_statuses:
+            self._record_failure("status")
             raise NextcloudStorageError(
-                f"{message}. HTTP {response.status_code}. Response: {response.text}"
+                f"{message}. HTTP {response.status_code}."
             )
 
     def exists(self, path: str) -> bool:
@@ -156,8 +182,7 @@ class NextcloudStorage:
             return
 
         raise NextcloudStorageError(
-            f"Cannot create directory '{path}'. "
-            f"HTTP {response.status_code}. Response: {response.text}"
+            f"Cannot create storage directory; path_ref={self._path_ref(path)}. HTTP {response.status_code}."
         )
 
     def ensure_base_structure(self) -> None:
@@ -347,7 +372,7 @@ class NextcloudStorage:
         try:
             return json.loads(response.text)
         except json.JSONDecodeError as exc:
-            raise NextcloudStorageError(f"Invalid JSON in form '{filename}': {exc}") from exc
+            raise NextcloudStorageError(f"Invalid JSON in stored form; file_ref={self._path_ref(filename)}; error={type(exc).__name__}") from exc
 
     def read_text_or_empty(self, path: str) -> str:
         response = self._request("GET", path)
@@ -525,7 +550,7 @@ class NextcloudStorage:
         if last_error:
             raise last_error
 
-        raise NextcloudStorageError(f"Cannot read PDF file '{filename}'")
+        raise NextcloudStorageError(f"Cannot read PDF file; file_ref={self._path_ref(filename)}")
 
     def get_file_bytes(self, path: str) -> bytes:
         normalized_path = str(path).replace("\\", "/").lstrip("/")

@@ -5,6 +5,8 @@ projektu i szybki start pozostają w [`README.md`](../README.md).
 
 ## Uruchomienie i wdrożenie
 
+- [`P3_OPERATIONS.md`](P3_OPERATIONS.md) — obserwowalność, backup/restore,
+  test DR, wydajność i konkurencja dla PostgreSQL/MariaDB.
 - [`deployment/production.md`](deployment/production.md) — wdrożenie produkcyjne
   z Docker Compose.
 - [`deployment/STRICT_MODE_ROLLOUT.md`](deployment/STRICT_MODE_ROLLOUT.md) —

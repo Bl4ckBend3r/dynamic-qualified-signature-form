@@ -2173,6 +2173,17 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             exc_info=True,
         )
 
+    current_app.logger.info(
+        "officer_decision_saved",
+        extra={
+            "event": "officer_decision_saved",
+            "operation": "officer_decision",
+            "submission_pk": submission.id,
+            "workflow_step": target_step or previous_step,
+            "decision_category": category,
+        },
+    )
+
     mail_result = None
     if accepted_after_correction:
         try:

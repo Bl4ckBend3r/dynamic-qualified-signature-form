@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Mapping
 
+from flask import current_app, has_app_context
+
 from models import Form, FormSubmission, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.process_service import ProcessStatus
 from services.training_catalog_service import TrainingCatalogService
@@ -386,6 +388,16 @@ class SubmissionTrainingService:
             else ProcessStatus.TRAINING_SELECTION_OPEN.value
         )
         submission.workflow_step = submission.process_status
+        if has_app_context():
+            current_app.logger.info(
+                "training_selection_saved",
+                extra={
+                    "event": "training_selection_saved",
+                    "operation": "training_selection",
+                    "submission_pk": submission.id,
+                    "selected_count": len(selected),
+                },
+            )
         return self.summary(db, submission, field)
 
     def associate_generated_agreements(
@@ -518,6 +530,14 @@ class SubmissionTrainingService:
                 .count()
             )
             if occupied >= int(capacity):
+                if has_app_context():
+                    metrics = current_app.extensions.get("observability_metrics")
+                    if metrics is not None:
+                        metrics.training_capacity_rejections.inc()
+                    current_app.logger.warning(
+                        "training_capacity_rejected",
+                        extra={"event": "training_capacity_rejected", "operation": "training_capacity_lock"},
+                    )
                 raise TrainingSelectionError("Brak dostępnych miejsc dla tego szkolenia. Skontaktuj się z administratorem.")
         now = datetime.now(timezone.utc)
         previous_status = str(submission.process_status or "")
@@ -547,6 +567,11 @@ class SubmissionTrainingService:
             },
         ))
         db.flush()
+        if has_app_context():
+            current_app.logger.info(
+                "training_seat_locked",
+                extra={"event": "training_seat_locked", "operation": "training_capacity_lock", "submission_pk": submission.id},
+            )
         return True
 
     @staticmethod

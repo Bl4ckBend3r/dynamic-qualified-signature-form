@@ -32,6 +32,11 @@ def normalize_app_base_path(value: str | None) -> str:
 
 class Config:
     APP_NAME = "Formularze Lubuskie"
+    SERVICE_NAME = os.getenv("SERVICE_NAME", "dynamic-qualified-signature-form").strip() or "dynamic-qualified-signature-form"
+    LOG_FORMAT = os.getenv("LOG_FORMAT", "text").strip().lower() or "text"
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    METRICS_ENABLED = _env_bool("METRICS_ENABLED", "true")
+    METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")
     ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")

@@ -2,6 +2,8 @@
 
 Flask application for dynamic form submissions, generated PDF documents, external electronic signatures and configurable document workflows.
 
+Operational guidance for logs, metrics, verified backup/restore, disaster-recovery tests and controlled performance checks is in [`docs/P3_OPERATIONS.md`](docs/P3_OPERATIONS.md).
+
 The current implementation is no longer a single hard-coded flow in `legacy_app.py`. The application starts from a normal Flask application factory, registers blueprints, creates a service container, reads form definitions from Nextcloud and keeps the current CSV/Nextcloud storage adapter as the persistence layer.
 
 ## What The Application Does

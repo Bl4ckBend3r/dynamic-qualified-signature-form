@@ -278,7 +278,6 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
             raise RuntimeError("Production startup requires a reachable DATABASE_URL.")
         return {}
 
-    safe_url = redact_database_url(database_url)
     if app.config.get("AUTO_CREATE_DB_SCHEMA"):
         if production_like:
             raise RuntimeError("AUTO_CREATE_DB_SCHEMA cannot be enabled in production.")
@@ -293,19 +292,22 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
         app.extensions["database_migration_status"] = migration_status
         if migration_status["state"] != "head":
             app.logger.error(
-                "%s state=%s current=%s heads=%s database_url=%s",
+                "%s state=%s current=%s heads=%s",
                 MIGRATION_HINT,
                 migration_status["state"],
                 ",".join(migration_status["current"]) or "-",
                 ",".join(migration_status["heads"]) or "-",
-                safe_url,
+                extra={"event": "schema_mismatch", "operation": "database_schema_check"},
             )
             if production_like:
                 raise RuntimeError("Production database is not at the current Alembic head.")
     except RuntimeError:
         raise
     except Exception as exc:
-        app.logger.exception("Nie udało się odczytać stanu Alembic. database_url=%s", safe_url)
+        app.logger.exception(
+            "Nie udało się odczytać stanu Alembic.",
+            extra={"event": "schema_check_failed", "operation": "database_schema_check"},
+        )
         if production_like:
             raise RuntimeError("Production database readiness check failed.") from exc
 
@@ -313,10 +315,9 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
         missing = check_database_schema(database_url)
     except Exception as exc:
         app.logger.exception(
-            "Nie udało się zweryfikować schematu bazy. database_url=%s "
-            "auto_db_migrate=%s",
-            safe_url,
+            "Nie udało się zweryfikować schematu bazy. auto_db_migrate=%s",
             auto_migrate,
+            extra={"event": "schema_check_failed", "operation": "database_schema_check"},
         )
         if production_like:
             raise RuntimeError("Production database schema check failed.") from exc
@@ -326,22 +327,20 @@ def prepare_database_schema(app) -> dict[str, list[str]]:
     if missing:
         for table_name, columns in missing.items():
             app.logger.error(
-                "%s table=%s missing_columns=%s database_url=%s "
-                "auto_db_migrate=%s",
+                "%s table=%s missing_columns=%s auto_db_migrate=%s",
                 MIGRATION_HINT,
                 table_name,
                 ",".join(columns),
-                safe_url,
                 auto_migrate,
+                extra={"event": "schema_mismatch", "operation": "database_schema_check"},
             )
         if production_like:
             raise RuntimeError("Production database schema is incomplete.")
     else:
         app.logger.info(
-            "Schemat rozszerzony bazy danych jest aktualny. database_url=%s "
-            "auto_db_migrate=%s",
-            safe_url,
+            "Schemat rozszerzony bazy danych jest aktualny. auto_db_migrate=%s",
             auto_migrate,
+            extra={"event": "schema_check_completed", "operation": "database_schema_check"},
         )
     app.extensions["database_readiness"] = {
         "status": "ready" if migration_status.get("state") == "head" and not missing else "not_ready",

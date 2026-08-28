@@ -283,7 +283,10 @@ class SubmissionService:
                 )
             except Exception:
                 logger.exception("Automatyczny przydział zgłoszenia %s nie powiódł się; sprawa pozostaje w kolejce.", submission_id)
-        logger.info("Zapis zgloszenia %s zakonczony sukcesem.", submission_id)
+        logger.info(
+            "submission_created",
+            extra={"event": "submission_created", "operation": "submission_create"},
+        )
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
         if dispatch_received and self.mail_dispatch_service:

@@ -1,0 +1,125 @@
+name: P3 performance validation
+
+on:
+  pull_request:
+    paths:
+      - "app.py"
+      - "routes/**"
+      - "services/**"
+      - "models.py"
+      - "performance/**"
+      - "performance/seed_data.py"
+      - ".github/workflows/p3-performance.yml"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Load profile"
+        required: true
+        default: "full"
+        type: choice
+        options: [smoke, full]
+  schedule:
+    - cron: "41 1 * * 2-6"
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: forms_performance_test
+          POSTGRES_USER: forms
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forms -d forms_performance_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://forms:test-only-password@127.0.0.1:5432/forms_performance_test
+      PERF_CONTEXT: .performance/context.json
+      SECRET_KEY: performance-ci-only-secret
+      FLASK_ENV: development
+      FLASK_DEBUG: "false"
+      LOG_FORMAT: json
+      METRICS_ENABLED: "true"
+      NEXTCLOUD_BASE_URL: http://127.0.0.1:9
+      NEXTCLOUD_USERNAME: synthetic
+      NEXTCLOUD_APP_PASSWORD: synthetic
+      SMTP_HOST: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Select controlled profile
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ inputs.profile }}" == "full" ]]; then
+            echo "PERF_COUNT=1000" >> "$GITHUB_ENV"
+            echo "PERF_USERS=10" >> "$GITHUB_ENV"
+            echo "PERF_DURATION=60s" >> "$GITHUB_ENV"
+            echo "PDF_REPETITIONS=4" >> "$GITHUB_ENV"
+            echo "PDF_CONCURRENCY=1,5,10,20" >> "$GITHUB_ENV"
+          else
+            echo "PERF_COUNT=100" >> "$GITHUB_ENV"
+            echo "PERF_USERS=2" >> "$GITHUB_ENV"
+            echo "PERF_DURATION=10s" >> "$GITHUB_ENV"
+            echo "PDF_REPETITIONS=1" >> "$GITHUB_ENV"
+            echo "PDF_CONCURRENCY=1" >> "$GITHUB_ENV"
+          fi
+      - name: Record artifact metadata
+        shell: bash
+        run: |
+          mkdir -p .performance/reports
+          printf '{"commit_sha":"%s","users":"%s","duration":"%s","dataset_size":"%s"}\n' \
+            "$GITHUB_SHA" "$PERF_USERS" "$PERF_DURATION" "$PERF_COUNT" \
+            > .performance/reports/run-metadata.json
+      - run: alembic upgrade head
+      - run: python -m performance.seed_data --count "$PERF_COUNT" --output "$PERF_CONTEXT"
+      - name: Controlled list baseline and query-count check
+        run: python -m performance.submissions_benchmark --sizes "100,$PERF_COUNT" --repetitions 3 --output .performance/reports/submissions-baseline.json
+      - name: Start isolated application
+        shell: bash
+        run: |
+          mkdir -p .performance/reports
+          gunicorn performance.application:application --bind 127.0.0.1:8000 --workers 2 --timeout 120 > .performance/reports/application.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/ready >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Submissions list load smoke/full
+        run: >-
+          locust -f performance/submissions_list.py --headless --host http://127.0.0.1:8000
+          -u "$PERF_USERS" -r 2 -t "$PERF_DURATION" --csv .performance/reports/submissions
+          --csv-full-history --html .performance/reports/submissions.html --exit-code-on-error 1
+      - name: Public status load smoke/full
+        run: >-
+          locust -f performance/public_status.py --headless --host http://127.0.0.1:8000
+          -u "$PERF_USERS" -r 2 -t "$PERF_DURATION" --csv .performance/reports/public-status
+          --csv-full-history --html .performance/reports/public-status.html --exit-code-on-error 1
+      - name: PDF pipeline benchmark
+        run: python -m performance.pdf_generation --repetitions "$PDF_REPETITIONS" --concurrency "$PDF_CONCURRENCY" --output .performance/reports/pdf.json
+      - name: Check observability cardinality and request IDs
+        shell: bash
+        run: |
+          curl -fsS http://127.0.0.1:8000/live | grep -q alive
+          curl -fsS http://127.0.0.1:8000/metrics > .performance/reports/metrics.txt
+          grep -q app_http_requests_total .performance/reports/metrics.txt
+          ! grep -q 'synthetic-access-token' .performance/reports/metrics.txt
+          ! grep -q 'PERF-' .performance/reports/metrics.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p3-performance-${{ github.run_id }}
+          path: .performance/reports
+          retention-days: 14

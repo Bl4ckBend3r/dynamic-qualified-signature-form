@@ -630,6 +630,15 @@ def test_rbac_backend_separates_view_decision_and_mail(admin_app, admin_client):
             process_status="WAITING_FOR_OFFICER_DECISION", email="participant@example.org",
         )
         db.add(submission)
+        db.add(
+            FormSubmission(
+                submission_id="correction-other-uuid",
+                form_slug="correction_form",
+                form_name="Correction Form",
+                access_token="correction-other-token",
+                process_status="RETURNED_FOR_CORRECTION",
+            )
+        )
         db.commit()
         submission_pk = submission.id
     grant_rbac(admin_app, user_id, ["can_view_submissions"], form_id=form_id)
@@ -1545,6 +1554,15 @@ def test_participant_can_refill_returned_submission_and_conditions_are_evaluated
 
     monkeypatch.setattr("services.submission_service.generate_pdf", fake_generate_pdf)
     path = "/form/correction_form/correction/correction-public-uuid?token=correction-secret"
+    assert admin_client.get(
+        "/form/correction_form/correction/correction-public-uuid"
+    ).status_code == 404
+    assert admin_client.get(
+        "/form/correction_form/correction/correction-public-uuid?token=wrong"
+    ).status_code == 404
+    assert admin_client.get(
+        "/form/correction_form/correction/correction-public-uuid?token=correction-other-token"
+    ).status_code == 404
     get_response = admin_client.get(path, environ_overrides={"SCRIPT_NAME": "/aplikacja"})
 
     assert get_response.status_code == 200
@@ -4582,6 +4600,14 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
                 access_token="training-secret",
             )
         )
+        db.add(
+            FormSubmission(
+                submission_id="training-declaration-other",
+                form_slug="training_form",
+                form_name="Training Form",
+                access_token="training-other-token",
+            )
+        )
         db.commit()
 
     edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
@@ -4599,7 +4625,9 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
     assert "Dostępne szkolenia" not in edit_html
     assert "Przejdź do zarządzania szkoleniami" in edit_html
 
-    declaration_response = admin_client.get("/declaration/training_form/training-declaration-1")
+    declaration_response = admin_client.get(
+        "/declaration/training_form/training-declaration-1?token=training-secret"
+    )
     declaration_html = declaration_response.get_data(as_text=True)
 
     assert declaration_response.status_code == 200
@@ -4609,6 +4637,15 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
     training_response = admin_client.get(
         "/submissions/training-declaration-1/trainings?token=training-secret"
     )
+    assert admin_client.get(
+        "/submissions/training-declaration-1/trainings"
+    ).status_code == 404
+    assert admin_client.get(
+        "/submissions/training-declaration-1/trainings?token=wrong"
+    ).status_code == 404
+    assert admin_client.get(
+        "/submissions/training-declaration-1/trainings?token=training-other-token"
+    ).status_code == 404
     training_html = training_response.get_data(as_text=True)
     assert training_response.status_code == 200
     assert "Excel zaawansowany" in training_html

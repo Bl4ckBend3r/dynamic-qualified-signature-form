@@ -10,5 +10,5 @@ def test_access_token_verification():
     assert not service.verify_token({"access_token": token}, None)
 
 
-def test_missing_legacy_token_allows_access():
-    assert AccessTokenService().verify_token({}, None)
+def test_missing_legacy_token_denies_access():
+    assert not AccessTokenService().verify_token({}, None)

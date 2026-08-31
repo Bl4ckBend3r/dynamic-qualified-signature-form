@@ -20,6 +20,7 @@ from services.site_document_service import SERVICE_DOCUMENT_TYPES
 from services.nextcloud_storage import NextcloudStorageError
 
 from services.form_access_service import verify_share_token
+from routes.participant_access import require_participant_submission_access
 
 logger = logging.getLogger(__name__)
 
@@ -527,7 +528,6 @@ def correct_submission(slug: str, submission_id: str):
     if not session_factory:
         abort(404)
     services = get_services()
-    token = str(request.values.get("token") or request.args.get("token") or "").strip()
     with session_factory() as db:
         form = db.execute(
             select(Form).where(
@@ -541,10 +541,16 @@ def correct_submission(slug: str, submission_id: str):
         ).scalar_one_or_none()
         if not form or not submission or submission.form_slug != slug:
             abort(404)
-        if not services.access_token_service.verify_token(
-            {"access_token": submission.access_token}, token
-        ):
-            abort(403)
+        access = require_participant_submission_access(
+            submission_id,
+            slug=slug,
+            submission={
+                "submission_id": submission.submission_id,
+                "form_slug": submission.form_slug,
+                "access_token": submission.access_token,
+            },
+        )
+        token = access.credential
         if submission.process_status != ProcessStatus.RETURNED_FOR_CORRECTION.value:
             abort(404)
         version = services.form_version_service.resolve_for_submission(db, submission)
@@ -587,6 +593,9 @@ def correct_submission(slug: str, submission_id: str):
         )
 
     request_data = request.get_json(silent=True) if request.is_json else request.form
+    csrf_valid, _csrf_missing = _valid_public_csrf(request_data or {})
+    if not csrf_valid:
+        abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
     result = services.submission_service.submit_correction_form(
         slug,
         initial_form_config,

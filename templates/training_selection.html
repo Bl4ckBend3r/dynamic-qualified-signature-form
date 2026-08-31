@@ -42,6 +42,7 @@
         data-training-currency="{{ field.get('currency') or 'PLN' }}"
         novalidate
     >
+        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
         <section class="training-summary" aria-label="Podsumowanie limitu finansowania">
             <div class="training-summary__item">
                 <span>Limit finansowania</span>

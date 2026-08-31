@@ -37,7 +37,6 @@ docs/reports
 docs/setup
 docs/testing
 docs/workflow
-!docs/archive/
 docs/archive/*
 !docs/archive/FRONTEND_SPLIT_PLAN.md
 !docs/archive/LEGACY_REMOVAL_CHECKLIST.md
@@ -48,6 +47,7 @@ docs/archive/*
 !docs/archive/REPO_CLEANUP_PLAN.md
 !docs/database/
 docs/database/*
+docs/P3_OPERATIONS.md
 !docs/database/P4_SCHEMA_CHECK.md
 storage/*
 !storage/.gitkeep

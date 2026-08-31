@@ -243,7 +243,8 @@ def test_show_result_for_existing_submission(client, app, valid_form_data, monke
     assert submit_response.status_code == 200
 
     submission_id = app.testing_storage.csv_rows[0]["submission_id"]
-    response = client.get(f"/result/formularz_zgloszeniowy/{submission_id}")
+    token = app.testing_storage.csv_rows[0]["access_token"]
+    response = client.get(f"/result/formularz_zgloszeniowy/{submission_id}?token={token}")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -251,7 +252,7 @@ def test_show_result_for_existing_submission(client, app, valid_form_data, monke
     assert "Formularz" in html
 
 
-def test_show_result_generates_pdf_link_with_access_token(client, app, valid_form_data, monkeypatch):
+def test_show_result_does_not_render_stored_access_token(client, app, valid_form_data, monkeypatch):
     import app as app_module
 
     monkeypatch.setattr(app_module, "validate_submission", lambda *args, **kwargs: {})
@@ -260,11 +261,11 @@ def test_show_result_generates_pdf_link_with_access_token(client, app, valid_for
     assert submit_response.status_code == 200
 
     row = app.testing_storage.csv_rows[0]
-    response = client.get(f"/result/formularz_zgloszeniowy/{row['submission_id']}")
+    response = client.get(f"/result/formularz_zgloszeniowy/{row['submission_id']}?token={row['access_token']}")
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert f"token={row['access_token']}" in html
+    assert row["access_token"] not in html
 
 
 def test_download_pdf_returns_generated_pdf(client, app, valid_form_data, monkeypatch):
@@ -296,7 +297,7 @@ def test_download_pdf_returns_403_without_valid_token(client, app, valid_form_da
     row = app.testing_storage.csv_rows[0]
     response = client.get(f"/downloads/pdfs/formularz_zgloszeniowy/{row['pdf_filename']}?token=invalid")
 
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 def test_download_pdf_rejects_token_from_other_submission(client, app):
@@ -320,7 +321,7 @@ def test_download_pdf_rejects_token_from_other_submission(client, app):
 
     response = client.get("/downloads/pdfs/formularz_zgloszeniowy/second.pdf?token=first-token")
 
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 def test_download_signed_pdf_requires_valid_token(client, app):
@@ -344,7 +345,7 @@ def test_download_signed_pdf_requires_valid_token(client, app):
     )
 
     assert ok_response.status_code == 200
-    assert bad_response.status_code == 403
+    assert bad_response.status_code == 404
 
 
 def test_upload_signed_pdf_rejects_file_without_pdf_header(client, app):
@@ -360,7 +361,7 @@ def test_upload_signed_pdf_rejects_file_without_pdf_header(client, app):
 
     response = client.post(
         "/upload-signed/formularz_zgloszeniowy/signed-1",
-        data={"signed_pdf": (io.BytesIO(b"not a pdf"), "signed.pdf")},
+        data={"access_token": "secret-token", "signed_pdf": (io.BytesIO(b"not a pdf"), "signed.pdf")},
         content_type="multipart/form-data",
     )
 
@@ -382,8 +383,8 @@ def test_download_pdf_without_token_for_new_submission_is_forbidden(client, app)
 
     response = client.get("/downloads/pdfs/formularz_zgloszeniowy/formularz_zgloszeniowy-new-no-token.pdf")
 
-    assert response.status_code == 403
-    assert app.testing_storage.csv_rows[0]["access_token"]
+    assert response.status_code == 404
+    assert "access_token" not in app.testing_storage.csv_rows[0]
 
 
 def test_documents_to_sign_get_loads(client):
@@ -677,7 +678,7 @@ def test_additional_fields_unlock_declaration_download(client, app):
     csrf_token = form_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     save_response = client.post(
         "/additional-fields/formularz_zgloszeniowy/abc",
-        data={"post_acceptance_note": "Uzupełniono", "csrf_token": csrf_token},
+        data={"post_acceptance_note": "Uzupełniono", "csrf_token": csrf_token, "access_token": "secret-token"},
     )
     assert save_response.status_code == 302
     assert app.testing_storage.csv_rows[0]["process_status"] == "additional_fields_completed"
@@ -725,11 +726,12 @@ def test_generate_agreements_uses_today_and_redirects_to_current_submission(clie
 
     response = client.post(
         "/agreements/formularz_zgloszeniowy/abc/generate",
-        data={"agreement_generated_at": "2000-01-01"},
+        data={"agreement_generated_at": "2000-01-01", "access_token": "secret-token"},
     )
 
     assert response.status_code == 302
-    assert response.location.endswith("/do-podpisania?submission_id=abc")
+    assert "submission_id=abc" in response.location
+    assert "token=secret-token" in response.location
     assert captured["context_extra"]["generated_date"] == date.today().isoformat()
 
 
@@ -806,12 +808,13 @@ def test_upload_participant_signed_training_agreement_notifies_with_default_next
 
     response = client.post(
         "/agreements/formularz_zgloszeniowy/abc/excel/upload",
-        data={"signed_agreement_pdf": (io.BytesIO(b"%PDF-1.4"), "signed.pdf")},
+        data={"access_token": "secret-token", "signed_agreement_pdf": (io.BytesIO(b"%PDF-1.4"), "signed.pdf")},
         content_type="multipart/form-data",
     )
 
     assert response.status_code == 302
-    assert response.location.endswith("/do-podpisania?submission_id=abc")
+    assert "submission_id=abc" in response.location
+    assert "token=secret-token" in response.location
     assert notified == []
 
 
@@ -956,7 +959,7 @@ def test_upload_all_training_agreements_requires_public_access_token(client, app
         headers={"Accept": "application/json"},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 def test_acceptance_status_missing_submission(client):

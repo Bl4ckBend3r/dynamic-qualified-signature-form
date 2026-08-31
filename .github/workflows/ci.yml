@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev, develop, "deploy/production-readiness"]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  FLASK_ENV: development
+  FLASK_DEBUG: "false"
+  SECRET_KEY: ci-only-secret-key
+  NEXTCLOUD_BASE_URL: http://127.0.0.1:9
+  NEXTCLOUD_USERNAME: synthetic
+  NEXTCLOUD_APP_PASSWORD: synthetic
+  SMTP_HOST: ""
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libpango1.0-dev pkg-config
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q
+
+  alembic-graph:
+    name: alembic-graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libpango1.0-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_alembic_graph.py
+      - name: Require exactly one Alembic head
+        shell: bash
+        run: test "$(alembic heads | grep -c '(head)')" -eq 1
+
+  migrations-mariadb:
+    name: migrations-mariadb
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: forms_ci
+          MARIADB_USER: forms
+          MARIADB_PASSWORD: test-only-password
+          MARIADB_ROOT_PASSWORD: root-test-only-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: mysql+pymysql://forms:test-only-password@127.0.0.1:3306/forms_ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libpango1.0-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: python manage.py db-check
+
+  migrations-postgresql:
+    name: migrations-postgresql
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: forms_ci
+          POSTGRES_USER: forms
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forms -d forms_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://forms:test-only-password@127.0.0.1:5432/forms_ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libpango1.0-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: python manage.py db-check
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Dependency audit
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit -r requirements.txt --strict
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: dynamic-qualified-signature-form:ci
+
+  smoke-test:
+    name: smoke-test
+    needs: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: forms_smoke
+          POSTGRES_USER: forms
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forms -d forms_smoke"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://forms:test-only-password@127.0.0.1:5432/forms_smoke
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build smoke image
+        run: docker build -t dynamic-qualified-signature-form:smoke .
+      - name: Migrate empty database
+        run: >-
+          docker run --rm --network host
+          -e DATABASE_URL -e FLASK_ENV -e FLASK_DEBUG -e SECRET_KEY
+          -e NEXTCLOUD_BASE_URL -e NEXTCLOUD_USERNAME -e NEXTCLOUD_APP_PASSWORD -e SMTP_HOST
+          dynamic-qualified-signature-form:smoke alembic upgrade head
+      - name: Start application and check health
+        shell: bash
+        run: |
+          docker run --rm --network host --name forms-smoke \
+            -e DATABASE_URL -e FLASK_ENV -e FLASK_DEBUG -e SECRET_KEY \
+            -e NEXTCLOUD_BASE_URL -e NEXTCLOUD_USERNAME -e NEXTCLOUD_APP_PASSWORD -e SMTP_HOST \
+            dynamic-qualified-signature-form:smoke &
+          trap 'docker rm -f forms-smoke >/dev/null 2>&1' EXIT
+          for attempt in {1..45}; do
+            if curl -fsS http://127.0.0.1:8000/live >/dev/null && \
+               curl -fsS http://127.0.0.1:8000/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs forms-smoke
+          exit 1

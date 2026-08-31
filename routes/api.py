@@ -9,6 +9,7 @@ from flask import Blueprint, current_app, jsonify, request
 from services.status_catalog import build_status_view
 from services.process_instruction_service import build_process_instruction_view
 from services.public_submission_status_service import build_public_submission_status
+from routes.participant_access import resolve_participant_submission_access
 
 logger = logging.getLogger(__name__)
 
@@ -28,31 +29,12 @@ def get_submission_context(submission_id: str) -> dict | None:
     )
 
 
-def _provided_access_token() -> str:
-    authorization = str(request.headers.get("Authorization") or "").strip()
-    if authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return str(request.args.get("token") or request.args.get("access_token") or "").strip()
-
-
-def _provided_access_token() -> str:
-    authorization = str(request.headers.get("Authorization") or "").strip()
-    if authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return str(request.args.get("token") or request.args.get("access_token") or "").strip()
-
-
 def _authorized_submission_context(submission_id: str) -> dict | None:
-    submission = get_submission_context(submission_id)
-    if not submission:
-        return None
-    row = submission.get("row") or submission
-    if not get_services().access_token_service.verify_required_token(
-        row,
-        _provided_access_token(),
-    ):
-        return None
-    return submission
+    access = resolve_participant_submission_access(
+        submission_id,
+        submission_loader=get_submission_context,
+    )
+    return access.submission if access else None
 
 
 def _opaque_status_response(*, include_instruction: bool = False):

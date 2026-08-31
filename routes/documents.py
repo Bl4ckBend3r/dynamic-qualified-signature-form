@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import secrets
 import tempfile
 import unicodedata
 from copy import deepcopy
@@ -28,6 +27,11 @@ from services.training_availability_service import TrainingAvailabilityService
 from services.training_service import format_price_pln
 from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
+from routes.participant_access import (
+    participant_credential,
+    require_participant_submission_access,
+    require_public_csrf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +140,6 @@ def form_config_with_training_adapter(form_config: dict) -> tuple[dict, dict]:
         form_config=form_config,
         document_service=services.document_service,
     )
-
-
-def _training_access_token(submission: dict) -> str:
-    return str((submission.get("row") or {}).get("access_token") or "").strip()
 
 
 def _lock_submission_training(submission_id: str, agreement_id: str) -> bool:
@@ -368,17 +368,14 @@ def training_selection(submission_id: str):
     if not database_url:
         abort(404)
 
-    token = str(request.values.get("token") or "").strip()
+    access = require_participant_submission_access(submission_id)
+    token = access.credential
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
         submission = db.execute(
             select(FormSubmission).where(FormSubmission.submission_id == submission_id)
         ).scalar_one_or_none()
-        if (
-            submission is None
-            or not token
-            or not secrets.compare_digest(token, str(submission.access_token or ""))
-        ):
+        if submission is None or submission.form_slug != access.submission["form_slug"]:
             abort(404)
 
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
@@ -417,6 +414,7 @@ def training_selection(submission_id: str):
         error = None
         status_code = 200
         if request.method == "POST":
+            require_public_csrf()
             if not form.training_selection_open:
                 error = "Wybór szkoleń dla tego formularza został zamknięty."
                 status_code = 409
@@ -475,6 +473,7 @@ def training_selection(submission_id: str):
                     summary["limit_remaining_after_selection"], currency
                 ) if summary["limit_remaining_after_selection"] is not None else None,
                 error=error,
+                token=token,
                 action_url=url_for(
                     "documents.training_selection",
                     submission_id=submission.submission_id,
@@ -508,10 +507,9 @@ def nextcloud_asset(asset_path: str):
 
 @bp.post("/upload-declaration-signed/<slug>/<submission_id>")
 def upload_signed_declaration(slug: str, submission_id: str):
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku dla podpisanej deklaracji.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
     if not submission["can_sign_documents"]:
         flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
         return redirect(documents_to_sign_url(submission_id))
@@ -528,7 +526,7 @@ def upload_signed_declaration(slug: str, submission_id: str):
             flash("Podpis deklaracji nie jest dopuszczalnym podpisem mSzafir ani Profilem Zaufanym.", "error")
         else:
             flash("Deklaracja została podpisana i poprawnie zweryfikowana.", "success")
-            token = _training_access_token(submission)
+            token = access.credential
             if token and _open_training_selection_stage(submission_id, slug):
                 return redirect(
                     url_for(
@@ -549,10 +547,8 @@ def upload_signed_declaration(slug: str, submission_id: str):
 @bp.route("/declaration/<slug>/<submission_id>", methods=["GET", "POST"])
 def declaration_form(slug: str, submission_id: str):
     services = get_services()
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku dla deklaracji.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    submission = access.submission
     if not submission["can_sign_documents"]:
         flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
         return redirect(documents_to_sign_url(submission_id))
@@ -577,15 +573,15 @@ def declaration_form(slug: str, submission_id: str):
     )
 
     if request.method == "POST":
-        from routes.public_forms import _valid_public_csrf
-        csrf_valid, _csrf_missing = _valid_public_csrf(request.form)
-        if not csrf_valid:
+        try:
+            require_public_csrf()
+        except HTTPException:
             flow_result.errors = {"compliance": "Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie."}
             flow_result.values = dict(request.form)
             return render_template(
                 "declaration_form.html",
                 form_definition=flow_result.declaration_definition,
-                action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id),
+                action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id, token=access.credential),
                 errors=flow_result.errors,
                 values=flow_result.values,
             ), 400
@@ -616,7 +612,7 @@ def declaration_form(slug: str, submission_id: str):
     return render_template(
         "declaration_form.html",
         form_definition=flow_result.declaration_definition,
-        action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id),
+        action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id, token=access.credential),
         errors=flow_result.errors,
         values=flow_result.values,
     )
@@ -625,10 +621,9 @@ def declaration_form(slug: str, submission_id: str):
 @bp.post("/additional-fields/<slug>/<submission_id>")
 def save_additional_fields(slug: str, submission_id: str):
     services = get_services()
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
     if not submission["can_sign_documents"]:
         flash("Wniosek nie został jeszcze zaakceptowany przez urzędnika.", "error")
         return redirect(documents_to_sign_url(submission_id))
@@ -638,22 +633,6 @@ def save_additional_fields(slug: str, submission_id: str):
     if not services.declaration_flow_service.has_additional_fields(form_config):
         flash("Ten formularz nie wymaga dodatkowych informacji.", "info")
         return redirect(documents_to_sign_url(submission_id))
-
-    from routes.public_forms import _valid_public_csrf
-    csrf_valid, _csrf_missing = _valid_public_csrf(request.form)
-    if not csrf_valid:
-        return render_template(
-            "documents_to_sign.html",
-            submission_id=submission_id,
-            acceptance_value="Tak",
-            errors={},
-            result=build_documents_to_sign_result(
-                submission_id,
-                submission,
-                additional_errors={"compliance": "Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie."},
-                additional_values=dict(request.form),
-            ),
-        ), 400
 
     flow_result = services.declaration_flow_service.save_additional_fields(
         submission_id=submission_id,
@@ -673,6 +652,7 @@ def save_additional_fields(slug: str, submission_id: str):
             result=build_documents_to_sign_result(
                 submission_id,
                 submission,
+                access_token=access.credential,
                 additional_errors=flow_result.errors,
                 additional_values=flow_result.values,
             ),
@@ -685,10 +665,9 @@ def save_additional_fields(slug: str, submission_id: str):
 @bp.post("/agreements/<slug>/<submission_id>/generate")
 def generate_training_agreements(slug: str, submission_id: str):
     services = get_services()
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku dla umów.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
 
     form_config = get_form_config(slug, submission_id)
     if not form_config:
@@ -713,10 +692,9 @@ def generate_training_agreements(slug: str, submission_id: str):
 @bp.post("/agreements/<slug>/<submission_id>/<agreement_id>/upload")
 def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id: str):
     services = get_services()
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku dla podpisanej umowy.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
 
     try:
         result = services.document_signing_service.upload_signed_document(
@@ -746,15 +724,10 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
 def upload_signed_training_agreements(slug: str, submission_id: str):
     """Upload multiple signed training agreements while preserving per-file results."""
     services = get_services()
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        return jsonify({"ok": False, "error": "Nie znaleziono wniosku dla podpisanych umów."}), 404
-
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
     row = submission.get("row") or {}
-    expected_token = str(row.get("access_token") or "").strip()
-    provided_token = str(request.form.get("access_token") or "").strip()
-    if expected_token and not secrets.compare_digest(provided_token, expected_token):
-        return jsonify({"ok": False, "error": "Nieprawidłowy token dostępu."}), 403
     if str(row.get("officer_decision") or "").strip().lower() in {"nie", "rejected"}:
         return jsonify({"ok": False, "error": "Zgłoszenie nie pozwala na wgrywanie umów."}), 403
     declaration_status = str(row.get("declaration_signature_valid") or "").strip().lower()
@@ -881,10 +854,9 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
 
 @bp.post("/agreement/<slug>/<submission_id>/upload")
 def upload_signed_agreement(slug: str, submission_id: str):
-    submission = get_submission_context(submission_id)
-    if not submission or submission["form_slug"] != slug:
-        flash("Nie znaleziono wniosku dla podpisanej umowy.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    submission = access.submission
     try:
         result = get_services().document_signing_service.upload_signed_document(
             submission=submission,
@@ -907,6 +879,8 @@ def upload_signed_agreement(slug: str, submission_id: str):
 
 @bp.post("/upload-signed/<slug>/<submission_id>")
 def upload_signed_pdf(slug: str, submission_id: str):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
     if not get_form_config(slug, submission_id):
         abort(404)
 
@@ -924,21 +898,21 @@ def upload_signed_pdf(slug: str, submission_id: str):
     except Exception as exc:
         logger.exception("Błąd uploadu podpisanego PDF: %s", exc)
         flash("Wystąpił błąd podczas wgrywania lub weryfikacji podpisu.", "error")
-    return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id))
+    return redirect(url_for("documents.show_result", slug=slug, submission_id=submission_id, token=access.credential))
 
 
 @bp.get("/result/<slug>/<submission_id>")
 def show_result(slug: str, submission_id: str):
     services = get_services()
+    access = require_participant_submission_access(submission_id, slug=slug)
     form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
-    submission = services.submission_repository.get_by_id(submission_id)
-    if not submission:
-        abort(404)
+    submission = access.submission
 
-    pdf_filename = submission.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
-    signed_pdf_filename = submission.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
+    row = submission.get("row") or submission
+    pdf_filename = row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
+    signed_pdf_filename = row.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
 
     verification = None
     signed_exists = bool(signed_pdf_filename)
@@ -958,10 +932,9 @@ def show_result(slug: str, submission_id: str):
 
     result = {
         "submission_id": submission_id,
-        "access_token": str((submission.get("row") or {}).get("access_token") or ""),
         "form_slug": slug,
         "pdf_filename": pdf_filename,
-        "pdf_url": services.document_service.build_download_url(submission, pdf_filename),
+        "pdf_url": "",
         "signature_request_id": "mobywatel-manual",
         "signature_status": (
             "szafir"
@@ -969,12 +942,9 @@ def show_result(slug: str, submission_id: str):
             else "uploaded" if signed_exists else "manual"
         ),
         "signed_pdf_filename": signed_pdf_filename if signed_exists else "",
-        "signed_pdf_url": (
-            services.document_service.build_download_url(submission, signed_pdf_filename, signed=True)
-            if signed_exists
-            else None
-        ),
-        "upload_url": url_for("documents.upload_signed_pdf", slug=slug, submission_id=submission_id),
+        "signed_pdf_url": None,
+        "upload_url": "",
+        "can_continue": False,
         "form_title": form_config["title"],
         "verification": verification,
     }
@@ -984,6 +954,7 @@ def show_result(slug: str, submission_id: str):
 def build_documents_to_sign_result(
     submission_id: str,
     submission: dict,
+    access_token: str = "",
     additional_errors: dict | None = None,
     additional_values: dict | None = None,
 ) -> dict:
@@ -991,7 +962,7 @@ def build_documents_to_sign_result(
     form_config = get_form_config(submission["form_slug"], submission_id) or {}
     row = submission["row"]
     if requires_additional_fields(form_config, row):
-        return services.document_service.document_view_service.build_additional_fields_result(
+        result = services.document_service.document_view_service.build_additional_fields_result(
             submission_id=submission_id,
             submission=submission,
             form_config=form_config,
@@ -1005,6 +976,8 @@ def build_documents_to_sign_result(
             additional_errors=additional_errors,
             additional_values=additional_values,
         )
+        result["access_token"] = access_token
+        return result
 
     declaration = build_existing_declaration_result(services, submission, form_config)
 
@@ -1045,6 +1018,7 @@ def build_documents_to_sign_result(
             refreshed_submission,
             filename,
             signed=signed,
+            access_token=access_token,
         ),
         declaration_upload_url=url_for(
             "documents.upload_signed_declaration",
@@ -1072,16 +1046,15 @@ def build_documents_to_sign_result(
         status_labeler=workflow_status_label,
         available_filenames=documents_view.get("available_filenames", set()),
     )
-    token = _training_access_token(refreshed_submission)
-    result["access_token"] = token
+    result["access_token"] = access_token
     training_field = get_training_selection_field(form_config)
     result["training_selection_url"] = (
         url_for(
             "documents.training_selection",
             submission_id=submission_id,
-            token=token,
+            token=access_token,
         )
-        if token
+        if access_token
         and result.get("declaration_signature_valid")
         and training_field
         and training_field.get("enabled", True)
@@ -1111,24 +1084,20 @@ def build_existing_declaration_result(services, submission: dict, form_config: d
 def documents_to_sign():
     if request.method == "GET":
         submission_id = request.args.get("submission_id", "").strip()
-        access_token = str(request.args.get("token") or request.args.get("access_token") or "").strip()
+        access_token = participant_credential()
         if submission_id:
-            submission = get_submission_context(submission_id)
+            access = require_participant_submission_access(submission_id)
+            submission = access.submission
+            access_token = access.credential
             errors = {}
             result = None
             status_code = 200
-            if not submission or not get_services().access_token_service.verify_required_token(
-                submission.get("row") or submission,
-                access_token,
-            ):
-                errors["submission_id"] = "Nie można udostępnić statusu zgłoszenia. Użyj bezpiecznego linku otrzymanego z systemu."
-                status_code = 404
-            elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
+            if not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
                 errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
                 status_code = 400
             else:
                 try:
-                    result = build_documents_to_sign_result(submission_id, submission)
+                    result = build_documents_to_sign_result(submission_id, submission, access_token=access_token)
                 except Exception as exc:
                     logger.exception("Nie udało się przygotować dokumentów do podpisania: %s", exc)
                     errors["submission_id"] = "Nie udało się przygotować dokumentów do podpisania."
@@ -1152,9 +1121,8 @@ def documents_to_sign():
             access_token="",
         )
 
-    services = get_services()
     submission_id = request.form.get("submission_id", "").strip()
-    access_token = str(request.form.get("access_token") or "").strip()
+    access_token = participant_credential()
     acceptance_value = request.form.get("akceptacja", "").strip()
     errors = {}
     submission = None
@@ -1162,13 +1130,11 @@ def documents_to_sign():
     if not submission_id:
         errors["submission_id"] = "Podaj ID wniosku."
     else:
-        submission = get_submission_context(submission_id)
-        if not submission or not services.access_token_service.verify_required_token(
-            submission.get("row") or submission,
-            access_token,
-        ):
-            errors["submission_id"] = "Nie można udostępnić statusu zgłoszenia. Użyj bezpiecznego linku otrzymanego z systemu."
-        elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
+        access = require_participant_submission_access(submission_id)
+        submission = access.submission
+        access_token = access.credential
+        require_public_csrf()
+        if not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
             errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
     if acceptance_value != "Tak":
         errors["akceptacja"] = "Akceptacja dokumentów jest wymagana."
@@ -1184,7 +1150,7 @@ def documents_to_sign():
         ), 400
 
     try:
-        result = build_documents_to_sign_result(submission_id, submission)
+        result = build_documents_to_sign_result(submission_id, submission, access_token=access_token)
     except Exception as exc:
         logger.exception("Nie udało się przygotować dokumentów do podpisania: %s", exc)
         errors["submission_id"] = "Nie udało się przygotować dokumentów do podpisania."
@@ -1214,6 +1180,11 @@ def download_pdf(slug: str, filename: str):
         submission = services.submission_repository.find_by_pdf(slug, clean_filename)
         if not submission:
             abort(404)
+        require_participant_submission_access(
+            str(submission.get("submission_id") or ""),
+            slug=slug,
+            submission=submission,
+        )
         services.submission_document_service.backfill_existing_legacy_documents(submission)
         metadata = services.submission_repository.get_file_metadata(
             submission.get("submission_id", ""), clean_filename, signed=None
@@ -1233,12 +1204,6 @@ def download_pdf(slug: str, filename: str):
         form_config = get_form_config(slug, str(submission.get("submission_id") or "")) or {}
         if clean_filename == str(submission.get("declaration_filename") or "") and requires_additional_fields(form_config, submission):
             flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
-            abort(403)
-        if not services.document_download_service.verify_access(
-            document_service=services.document_service,
-            submission=submission,
-            token=request.args.get("token"),
-        ):
             abort(403)
         download = services.document_download_service.prepare_download(
             document_service=services.document_service,
@@ -1326,6 +1291,11 @@ def download_signed_pdf(slug: str, filename: str):
         submission = services.submission_repository.find_by_pdf(slug, clean_filename)
         if not submission:
             abort(404)
+        require_participant_submission_access(
+            str(submission.get("submission_id") or ""),
+            slug=slug,
+            submission=submission,
+        )
         services.submission_document_service.backfill_existing_legacy_documents(submission)
         metadata = services.submission_repository.get_file_metadata(
             submission.get("submission_id", ""), clean_filename, signed=True
@@ -1339,12 +1309,6 @@ def download_signed_pdf(slug: str, filename: str):
         }
         if metadata and str(metadata.get("document_type") or "") not in allowed_types:
             abort(404)
-        if not services.document_download_service.verify_access(
-            document_service=services.document_service,
-            submission=submission,
-            token=request.args.get("token"),
-        ):
-            abort(403)
         download = services.document_download_service.prepare_download(
             document_service=services.document_service,
             submission=submission,

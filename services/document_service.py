@@ -563,9 +563,16 @@ class DocumentService:
             "updates": updates,
         }
 
-    def build_download_url(self, submission: dict, filename: str, signed: bool = False) -> str:
+    def build_download_url(
+        self,
+        submission: dict,
+        filename: str,
+        signed: bool = False,
+        *,
+        access_token: str | None = None,
+    ) -> str:
         values = {"slug": self._slug(submission), "filename": filename}
-        token = self.ensure_access_token(submission)
+        token = str(access_token or "").strip() or self.ensure_access_token(submission)
         if token:
             values["token"] = token
         endpoint = "documents.download_signed_pdf" if signed else "documents.download_pdf"

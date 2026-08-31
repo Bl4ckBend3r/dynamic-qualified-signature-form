@@ -6,6 +6,7 @@
 {% set signature = result.signature if result.signature is defined and result.signature else {} %}
 {% set signature_mode = signature.mode if signature.mode is defined else "none" %}
 {% set has_signature_flow = signature_mode != "none" %}
+{% set participant_credential = result.participant_credential|default(result.access_token|default('')) %}
 
 <div class="card result-card">
     <div class="card-header">
@@ -68,11 +69,11 @@
     </div>
 
     <div class="download-links">
-        <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
+        {% if result.pdf_url %}<a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>{% endif %}
 
         {% if result.can_continue|default(true) %}<a
             class="btn-primary"
-            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=result.access_token|default('')) }}"
+            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=participant_credential) }}"
         >
             Przejdź do dokumentów do podpisania
         </a>{% endif %}
@@ -130,6 +131,8 @@
         </div>
 
         <form method="post" action="{{ result.upload_url }}" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            <input type="hidden" name="access_token" value="{{ participant_credential }}">
             <div class="form-row width-full">
                 <label for="signed_pdf">Podpisany plik PDF</label>
                 <input type="file" id="signed_pdf" name="signed_pdf" accept="application/pdf" required>

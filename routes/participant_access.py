@@ -12,18 +12,27 @@ class ParticipantSubmissionAccess:
     credential: str
 
 
-def participant_credential() -> str:
-    """Return an existing participant credential without creating a new one."""
+def participant_credential() -> str | None:
+    """Return one unambiguous participant credential without creating a new one."""
     authorization = str(request.headers.get("Authorization") or "").strip()
+    credentials: list[str] = []
     if authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return str(
-        request.form.get("access_token")
-        or request.form.get("token")
-        or request.args.get("access_token")
-        or request.args.get("token")
-        or ""
-    ).strip()
+        credentials.append(authorization[7:].strip())
+    credentials.extend(
+        str(value or "").strip()
+        for value in (
+            request.form.get("access_token"),
+            request.form.get("token"),
+            request.args.get("access_token"),
+            request.args.get("token"),
+        )
+    )
+    distinct = {credential for credential in credentials if credential}
+    if not distinct:
+        return ""
+    if len(distinct) != 1:
+        return None
+    return distinct.pop()
 
 
 def resolve_participant_submission_access(

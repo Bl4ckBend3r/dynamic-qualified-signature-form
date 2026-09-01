@@ -39,6 +39,25 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest -q
 
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+      - name: Install Chromium and browser dependencies
+        run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q tests/e2e
+
   alembic-graph:
     name: alembic-graph
     runs-on: ubuntu-latest

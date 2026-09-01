@@ -16,7 +16,7 @@ from flask import url_for
 from sqlalchemy import select, text
 from werkzeug.security import generate_password_hash
 
-from conftest import InMemoryStorage
+from testing_support import InMemoryStorage
 from config import Config
 from database import create_session_factory
 from models import (

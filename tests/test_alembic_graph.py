@@ -103,6 +103,7 @@ def test_p0_chain_is_linear_and_ordered():
         "20260824_0044",
         "20260824_0045",
         "20260826_0046",
+        "20260831_0047",
     ]
     script = _script_directory()
     for parent, child in zip(expected, expected[1:]):
@@ -117,6 +118,7 @@ def test_p0_json_types_compile_for_mariadb_and_postgresql():
         "migrations.versions.20260813_0035_public_form_drafts",
         "migrations.versions.20260813_0036_field_workflow_availability",
         "migrations.versions.20260818_0040_workflow_sla_deadlines",
+        "migrations.versions.20260831_0047_training_pre_post_tests",
         "migrations.versions.20260818_0041_role_based_permissions",
     ):
         json_type = importlib.import_module(module_name)._json_type()

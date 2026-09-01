@@ -161,6 +161,7 @@ def test_participant_routes_use_central_fail_closed_authorization():
     assert "verify_token(" not in documents_source
     assert "verify_token(" not in public_forms_source
     assert "verify_token(" not in api_source
+    assert "_provided_access_token" not in api_source
 
 
 @pytest.mark.parametrize(

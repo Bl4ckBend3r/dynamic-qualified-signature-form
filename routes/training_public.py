@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from flask import Blueprint, current_app, render_template, request
+from sqlalchemy.exc import IntegrityError
 
 from database import create_session_factory
 from services.training_management_service import TrainingManagementError
@@ -59,11 +60,17 @@ def survey(token: str):
                 for question in questions
             }
             try:
-                service.submit_survey(db, token, answers)
+                response = service.submit_survey(db, token, answers)
                 db.commit()
-                return render_template("training_survey_public.html", valid=True, completed=True, survey=survey_record, questions=questions)
+                return render_template("training_survey_public.html", valid=True, completed=True, survey=survey_record, questions=questions, response=response)
             except TrainingManagementError as exc:
                 db.rollback()
                 return render_template("training_survey_public.html", valid=True, completed=False, survey=survey_record, questions=questions, error=str(exc)), 400
+            except IntegrityError:
+                db.rollback()
+                if survey_record.survey_type in {"pre_test", "post_test"} and survey_record.attempt_policy == "single_attempt":
+                    return render_template("training_survey_public.html", valid=True, completed=True, survey=survey_record, questions=questions)
+                raise
         db.rollback()
-        return render_template("training_survey_public.html", valid=True, completed=bool(invitation.completed_at), survey=survey_record, questions=questions)
+        completed = bool(invitation.completed_at) and (survey_record.survey_type == "survey" or survey_record.attempt_policy == "single_attempt")
+        return render_template("training_survey_public.html", valid=True, completed=completed, survey=survey_record, questions=questions)

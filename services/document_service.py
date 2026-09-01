@@ -593,7 +593,7 @@ class DocumentService:
         expected = self.ensure_access_token(submission)
         if not expected:
             return False
-        return self.access_token_service.verify_token({"access_token": expected}, token)
+        return self.access_token_service.verify_required_token({"access_token": expected}, token)
 
     def read_document_bytes_for_download(self, submission: dict, filename: str, *, signed: bool) -> bytes:
         clean_filename = Path(filename).name

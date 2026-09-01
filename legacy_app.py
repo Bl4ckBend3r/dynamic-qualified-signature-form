@@ -1246,8 +1246,10 @@ def documents_to_sign():
 def download_pdf(slug: str, filename: str):
     try:
         submission = find_submission_by_pdf(slug, filename)
-        if submission and not access_token_service.verify_token(submission, request.args.get("token")):
-            abort(403)
+        if not submission or not access_token_service.verify_required_token(
+            submission, request.args.get("token")
+        ):
+            abort(404)
         pdf_bytes = storage.get_pdf_bytes(slug, filename)
     except HTTPException:
         raise

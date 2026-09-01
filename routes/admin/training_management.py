@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import date
 from html import escape
 from io import BytesIO, StringIO
+import json
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from models import (
     TrainingAttendanceSession,
     TrainingParticipantActionHistory,
     TrainingSurvey,
+    TrainingSurveyQuestion,
 )
 from services.submission_training_service import ACTIVE_STATUSES
 from services.admin_form_service import parse_training_catalog
@@ -35,6 +37,24 @@ from .forms import (
 def _csv_safe(value) -> str:
     text = "" if value is None else str(value)
     return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
+
+
+def _csv_download(rows, fields: list[str], filename: str):
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        serialized = {}
+        for key in fields:
+            value = row.get(key, "")
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            elif hasattr(value, "isoformat"):
+                value = value.isoformat()
+            serialized[key] = _csv_safe(value)
+        writer.writerow(serialized)
+    payload = ("\ufeff" + output.getvalue()).encode("utf-8")
+    return send_file(BytesIO(payload), mimetype="text/csv; charset=utf-8", as_attachment=True, download_name=filename)
 
 
 def _training_service():
@@ -58,6 +78,30 @@ def _survey_for_form(db, form, training_id: str, survey_id: int) -> TrainingSurv
     if survey is None or survey.form_id != form.id or survey.training_id != training_id:
         abort(404)
     return survey
+
+
+def _test_questions_from_request(survey_type: str) -> list[dict]:
+    questions = []
+    texts = request.form.getlist("question_text")
+    types = request.form.getlist("question_type")
+    options_list = request.form.getlist("question_options")
+    correct_list = request.form.getlist("question_correct_answers")
+    points_list = request.form.getlist("question_points")
+    keys_list = request.form.getlist("question_comparison_key")
+    for index, text in enumerate(texts):
+        question_type = types[index] if index < len(types) else "text"
+        options = options_list[index] if index < len(options_list) else ""
+        correct = correct_list[index] if index < len(correct_list) else ""
+        points = points_list[index] if index < len(points_list) else "1"
+        key = keys_list[index] if index < len(keys_list) else ""
+        questions.append({
+            "text": text, "type": question_type,
+            "options": [item.strip() for item in str(options).splitlines() if item.strip()],
+            "correct_answers": [item.strip() for item in str(correct).splitlines() if item.strip()],
+            "points": points, "comparison_key": key, "required": True,
+            "is_scored": survey_type in {"pre_test", "post_test"} and question_type in {"single_choice", "multiple_choice", "true_false"},
+        })
+    return questions
 
 
 @bp.get("/forms/<int:form_id>/training-management")
@@ -243,6 +287,13 @@ def training_management_detail(form_id: int, training_id: str):
             ).scalars().all()
         }
         surveys = db.execute(select(TrainingSurvey).where(TrainingSurvey.form_id == form.id, TrainingSurvey.training_id == training_id).order_by(TrainingSurvey.id.desc())).scalars().all()
+        knowledge_tests = {}
+        for item in surveys:
+            if item.survey_type in {"pre_test", "post_test"}:
+                knowledge_tests.setdefault(item.survey_type, item)
+        satisfaction_surveys = [item for item in surveys if item.survey_type == "survey"]
+        test_kpis = {kind: _training_service().survey_results(db, item) for kind, item in knowledge_tests.items()}
+        comparison = _training_service().comparison(db, form, training_id, include_pii=False)
         history = db.execute(
             select(TrainingParticipantActionHistory)
             .where(TrainingParticipantActionHistory.form_id == form.id, TrainingParticipantActionHistory.training_id == training_id)
@@ -250,7 +301,7 @@ def training_management_detail(form_id: int, training_id: str):
         ).scalars().all()
         templates = db.execute(select(MailTemplate).where(MailTemplate.form_id == form.id, MailTemplate.is_active.is_(True)).order_by(MailTemplate.name)).scalars().all()
         permissions = {key: has_permission(db, key, form=form) for key in ("can_view_sensitive_data", "can_send_email", "can_manage_documents", "can_export_data")}
-        return render_template("admin/trainings/detail.html", form=form, training=training, participants=participants, sessions=sessions, attendance_records=attendance_records, surveys=surveys, history=history, templates=templates, permissions=permissions)
+        return render_template("admin/trainings/detail.html", form=form, training=training, participants=participants, sessions=sessions, attendance_records=attendance_records, surveys=satisfaction_surveys, knowledge_tests=knowledge_tests, test_kpis=test_kpis, comparison=comparison, history=history, templates=templates, permissions=permissions)
 
 
 @bp.post("/forms/<int:form_id>/training-management/<training_id>/participants/<int:participant_id>/cancel")
@@ -415,17 +466,74 @@ def training_survey_create(form_id: int, training_id: str):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, permission="can_view_submissions")
         _require_permission(db, form, "can_manage_documents")
-        questions = []
-        for text, question_type, options in zip(request.form.getlist("question_text"), request.form.getlist("question_type"), request.form.getlist("question_options")):
-            questions.append({"text": text, "type": question_type, "options": [item.strip() for item in str(options).splitlines() if item.strip()], "required": True})
+        survey_type = str(request.form.get("survey_type") or "survey")
+        questions = _test_questions_from_request(survey_type)
         try:
-            _training_service().create_survey(db, form, training_id, name=request.form.get("name", ""), description=request.form.get("description", ""), anonymous=request.form.get("anonymous") == "on", questions=questions, actor_id=g.admin_user.id)
+            _training_service().create_survey(
+                db, form, training_id, name=request.form.get("name", ""),
+                description=request.form.get("description", ""),
+                anonymous=request.form.get("anonymous") == "on", questions=questions,
+                survey_type=survey_type,
+                attempt_policy=str(request.form.get("attempt_policy") or "single_attempt"),
+                post_requires_attendance=request.form.get("post_requires_attendance") == "on",
+                actor_id=g.admin_user.id,
+            )
             db.commit()
-            flash("Utworzono ankietę roboczą.", "success")
+            flash("Utworzono roboczy test." if survey_type != "survey" else "Utworzono ankietę roboczą.", "success")
         except TrainingManagementError as exc:
             db.rollback()
             flash(str(exc), "error")
     return redirect(url_for("admin.training_management_detail", form_id=form_id, training_id=training_id))
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/<survey_type>/new")
+@login_required
+def training_test_create_view(form_id: int, training_id: str, survey_type: str):
+    if survey_type not in {"pre_test", "post_test"}:
+        abort(404)
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_manage_documents")
+        training = _training_service().require_training(db, form, training_id)
+        return render_template("admin/trainings/test_builder.html", form=form, training=training, survey_type=survey_type)
+
+
+@bp.route("/forms/<int:form_id>/training-management/<training_id>/tests/<int:survey_id>/edit", methods=["GET", "POST"])
+@login_required
+def training_test_edit(form_id: int, training_id: str, survey_id: int):
+    if request.method == "POST":
+        validate_csrf()
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_manage_documents")
+        training = _training_service().require_training(db, form, training_id)
+        survey = _survey_for_form(db, form, training_id, survey_id)
+        if survey.survey_type not in {"pre_test", "post_test"}:
+            abort(404)
+        if request.method == "POST":
+            try:
+                _training_service().update_test(db, form, survey, name=request.form.get("name", ""), description=request.form.get("description", ""), attempt_policy=str(request.form.get("attempt_policy") or "single_attempt"), post_requires_attendance=request.form.get("post_requires_attendance") == "on", questions=_test_questions_from_request(survey.survey_type), actor_id=g.admin_user.id)
+                db.commit()
+                flash("Zapisano test.", "success")
+                return redirect(url_for("admin.training_management_detail", form_id=form.id, training_id=training_id) + "#knowledge-tests")
+            except TrainingManagementError as exc:
+                db.rollback()
+                flash(str(exc), "error")
+        questions = db.execute(select(TrainingSurveyQuestion).where(TrainingSurveyQuestion.survey_id == survey.id).order_by(TrainingSurveyQuestion.sort_order)).scalars().all()
+        return render_template("admin/trainings/test_builder.html", form=form, training=training, survey_type=survey.survey_type, survey=survey, questions=questions)
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/<int:survey_id>/preview")
+@login_required
+def training_test_preview(form_id: int, training_id: str, survey_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        training = _training_service().require_training(db, form, training_id)
+        survey = _survey_for_form(db, form, training_id, survey_id)
+        if survey.survey_type not in {"pre_test", "post_test"}:
+            abort(404)
+        questions = db.execute(select(TrainingSurveyQuestion).where(TrainingSurveyQuestion.survey_id == survey.id).order_by(TrainingSurveyQuestion.sort_order)).scalars().all()
+        return render_template("admin/trainings/test_preview.html", form=form, training=training, survey=survey, questions=questions)
 
 
 @bp.post("/forms/<int:form_id>/training-management/<training_id>/surveys/<int:survey_id>/status")
@@ -476,4 +584,91 @@ def training_survey_results(form_id: int, training_id: str, survey_id: int):
         form = ensure_form_access(db, form_id, permission="can_view_submissions")
         survey = _survey_for_form(db, form, training_id, survey_id)
         results = _training_service().survey_results(db, survey)
-        return render_template("admin/trainings/survey_results.html", form=form, survey=survey, results=results)
+        include_pii = has_permission(db, "can_view_sensitive_data", form=form)
+        if survey.survey_type in {"pre_test", "post_test"}:
+            results["attempts"] = _training_service().test_attempt_rows(db, survey, include_pii=include_pii)
+        return render_template("admin/trainings/survey_results.html", form=form, survey=survey, results=results, include_pii=include_pii, can_export=has_permission(db, "can_export_data", form=form))
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/<int:survey_id>/results.csv")
+@login_required
+def training_test_results_export(form_id: int, training_id: str, survey_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_export_data")
+        survey = _survey_for_form(db, form, training_id, survey_id)
+        if survey.survey_type not in {"pre_test", "post_test"}:
+            abort(404)
+        include_pii = has_permission(db, "can_view_sensitive_data", form=form)
+        training = _training_service().require_training(db, form, training_id)
+        rows = []
+        for row in _training_service().test_attempt_rows(db, survey, include_pii=include_pii):
+            rows.append({"training_id": training_id, "training_name": training["name"], **row})
+        fields = ["training_id", "training_name", "test_id", "test_type", "test_title", "participant_id", "submission_id", "submission_training_id"]
+        if include_pii:
+            fields += ["participant_name", "participant_email"]
+        fields += ["attempt_number", "status", "started_at", "completed_at", "score_points", "max_points", "score_percent"]
+        kind = "pre" if survey.survey_type == "pre_test" else "post"
+        return _csv_download(rows, fields, f"training-{training_id}-{kind}-test-results-{date.today().isoformat()}.csv")
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/<int:survey_id>/answers.csv")
+@login_required
+def training_test_answers_export(form_id: int, training_id: str, survey_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_export_data")
+        survey = _survey_for_form(db, form, training_id, survey_id)
+        if survey.survey_type not in {"pre_test", "post_test"}:
+            abort(404)
+        include_pii = has_permission(db, "can_view_sensitive_data", form=form)
+        training = _training_service().require_training(db, form, training_id)
+        rows = [{"training_id": training_id, "training_name": training["name"], **row} for row in _training_service().detailed_answer_rows(db, survey, include_pii=include_pii)]
+        fields = ["training_id", "training_name", "test_type", "test_id", "participant_id", "submission_id", "submission_training_id"]
+        if include_pii:
+            fields += ["participant_name", "participant_email"]
+        fields += ["attempt_number", "question_id", "question_key", "question_text", "question_type", "answer", "is_correct", "points_awarded", "points_max", "completed_at"]
+        return _csv_download(rows, fields, f"training-{training_id}-{survey.survey_type.replace('_test','')}-test-answers-{date.today().isoformat()}.csv")
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/comparison")
+@login_required
+def training_tests_comparison(form_id: int, training_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        include_pii = has_permission(db, "can_view_sensitive_data", form=form)
+        training = _training_service().require_training(db, form, training_id)
+        comparison = _training_service().comparison(db, form, training_id, include_pii=include_pii)
+        return render_template("admin/trainings/test_comparison.html", form=form, training=training, comparison=comparison, include_pii=include_pii, can_export=has_permission(db, "can_export_data", form=form))
+
+
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/tests/comparison.csv")
+@login_required
+def training_tests_comparison_export(form_id: int, training_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_export_data")
+        include_pii = has_permission(db, "can_view_sensitive_data", form=form)
+        training = _training_service().require_training(db, form, training_id)
+        comparison = _training_service().comparison(db, form, training_id, include_pii=include_pii)
+        rows = []
+        for item in comparison["rows"]:
+            pre, post = item["pre"], item["post"]
+            row = {
+                "training_id": training_id, "training_name": training["name"],
+                "participant_id": item["participant_id"], "submission_id": item["submission_id"],
+                "submission_training_id": item["submission_training_id"],
+                "pre_completed_at": pre["completed_at"] if pre else "", "pre_score_points": pre["score_points"] if pre else "",
+                "pre_max_points": pre["max_points"] if pre else "", "pre_score_percent": pre["score_percent"] if pre else "",
+                "post_completed_at": post["completed_at"] if post else "", "post_score_points": post["score_points"] if post else "",
+                "post_max_points": post["max_points"] if post else "", "post_score_percent": post["score_percent"] if post else "",
+                "change_percentage_points": item["change_percentage_points"] if item["change_percentage_points"] is not None else "",
+            }
+            if include_pii:
+                row.update(participant_name=item.get("participant_name", ""), participant_email=item.get("participant_email", ""))
+            rows.append(row)
+        fields = ["training_id", "training_name", "participant_id", "submission_id", "submission_training_id"]
+        if include_pii:
+            fields += ["participant_name", "participant_email"]
+        fields += ["pre_completed_at", "pre_score_points", "pre_max_points", "pre_score_percent", "post_completed_at", "post_score_points", "post_max_points", "post_score_percent", "change_percentage_points"]
+        return _csv_download(rows, fields, f"training-{training_id}-pre-post-comparison-{date.today().isoformat()}.csv")

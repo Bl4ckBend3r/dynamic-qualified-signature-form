@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, event, func, inspect, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, UniqueConstraint, event, func, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
@@ -294,7 +294,10 @@ class TrainingSurvey(Base):
     __tablename__ = "training_surveys"
     __table_args__ = (
         CheckConstraint("status IN ('draft', 'active', 'closed')", name="ck_training_surveys_status"),
+        CheckConstraint("survey_type IN ('survey', 'pre_test', 'post_test')", name="ck_training_surveys_type"),
+        CheckConstraint("attempt_policy IN ('single_attempt', 'multiple_attempts')", name="ck_training_surveys_attempt_policy"),
         Index("ix_training_surveys_training", "form_id", "training_id"),
+        Index("ix_training_surveys_training_type", "form_id", "training_id", "survey_type", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -303,6 +306,9 @@ class TrainingSurvey(Base):
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    survey_type: Mapped[str] = mapped_column(String(16), default="survey", nullable=False)
+    attempt_policy: Mapped[str] = mapped_column(String(24), default="single_attempt", nullable=False)
+    post_requires_attendance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -312,7 +318,7 @@ class TrainingSurvey(Base):
 class TrainingSurveyQuestion(Base):
     __tablename__ = "training_survey_questions"
     __table_args__ = (
-        CheckConstraint("question_type IN ('scale', 'single_choice', 'multiple_choice', 'text')", name="ck_training_survey_questions_type"),
+        CheckConstraint("question_type IN ('scale', 'single_choice', 'multiple_choice', 'true_false', 'text')", name="ck_training_survey_questions_type"),
         Index("ix_training_survey_questions_order", "survey_id", "sort_order"),
     )
 
@@ -323,6 +329,10 @@ class TrainingSurveyQuestion(Base):
     options_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
     required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_scored: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    points: Mapped[float] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    correct_answers_json: Mapped[list] = mapped_column(JsonDict, default=list, nullable=False)
+    comparison_key: Mapped[str] = mapped_column(String(128), default="", nullable=False)
 
 
 class TrainingSurveyInvitation(Base):
@@ -345,10 +355,21 @@ class TrainingSurveyInvitation(Base):
 
 class TrainingSurveyResponse(Base):
     __tablename__ = "training_survey_responses"
-    __table_args__ = (UniqueConstraint("invitation_id", name="uq_training_survey_response_invitation"),)
+    __table_args__ = (
+        UniqueConstraint("invitation_id", "attempt_number", name="uq_training_survey_response_attempt"),
+        CheckConstraint("status IN ('in_progress', 'completed')", name="ck_training_survey_responses_status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     invitation_id: Mapped[int] = mapped_column(ForeignKey("training_survey_invitations.id", ondelete="CASCADE"), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="in_progress", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    score_points: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    max_points: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    score_percent: Mapped[float | None] = mapped_column(Numeric(7, 2), nullable=True)
+    test_snapshot_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -361,6 +382,10 @@ class TrainingSurveyAnswer(Base):
     response_id: Mapped[int] = mapped_column(ForeignKey("training_survey_responses.id", ondelete="CASCADE"), nullable=False)
     question_id: Mapped[int] = mapped_column(ForeignKey("training_survey_questions.id", ondelete="CASCADE"), nullable=False)
     value_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    question_snapshot_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    points_awarded: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    points_max: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
 
 
 class SubmissionFile(Base):

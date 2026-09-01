@@ -34,7 +34,7 @@ def test_public_api_endpoint_urls_are_registered(app):
 
 def test_create_app_rejects_default_secret_key_in_production(monkeypatch, form_definition):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
     from config import Config
 
     class ProductionConfig(Config):
@@ -56,7 +56,7 @@ def test_strict_flags_are_disabled_by_default():
 
 def test_create_app_logs_active_strict_flags_independently(monkeypatch, tmp_path, form_definition, caplog):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     monkeypatch.setenv("FLASK_ENV", "testing")
     monkeypatch.setenv("TESTING", "1")
@@ -81,7 +81,7 @@ def test_create_app_logs_active_strict_flags_independently(monkeypatch, tmp_path
 
 def test_require_strict_readiness_check_logs_external_gate(monkeypatch, tmp_path, form_definition, caplog):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     monkeypatch.setenv("FLASK_ENV", "testing")
     monkeypatch.setenv("TESTING", "1")

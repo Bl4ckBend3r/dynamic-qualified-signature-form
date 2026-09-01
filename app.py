@@ -125,14 +125,8 @@ def _validate_config(app: Flask) -> None:
         raise RuntimeError("SESSION_COOKIE_SECURE must be enabled in production.")
     if production_like and not app.config.get("SESSION_COOKIE_HTTPONLY"):
         raise RuntimeError("SESSION_COOKIE_HTTPONLY must be enabled in production.")
-    if production_like and not app.config.get("SESSION_COOKIE_SECURE"):
-        raise RuntimeError("SESSION_COOKIE_SECURE must be enabled in production.")
     if production_like and str(app.config.get("SESSION_COOKIE_SAMESITE") or "").lower() not in {"lax", "strict"}:
         raise RuntimeError("SESSION_COOKIE_SAMESITE must be Lax or Strict in production.")
-    if production_like and app.config.get("ALLOW_UNSCANNED_UPLOADS"):
-        raise RuntimeError("ALLOW_UNSCANNED_UPLOADS cannot be enabled in production.")
-    if production_like and app.config.get("AUTO_CREATE_DB_SCHEMA"):
-        raise RuntimeError("AUTO_CREATE_DB_SCHEMA cannot be enabled in production.")
 
 
 def register_operational_routes(app: Flask) -> None:

@@ -22,7 +22,7 @@ def test_app_base_path_is_empty_locally(app):
 
 def test_app_base_path_uses_configured_prefix(monkeypatch, tmp_path, form_definition):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     class PrefixedConfig(Config):
         TESTING = True
@@ -72,7 +72,7 @@ def test_base_template_renders_app_base_path_for_frontend(app):
 
 def test_base_template_renders_prefixed_app_base_path(monkeypatch, tmp_path, form_definition):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     class PrefixedConfig(Config):
         TESTING = True

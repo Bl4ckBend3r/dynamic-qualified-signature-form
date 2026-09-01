@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -174,6 +175,23 @@ def _assert_p0_schema_and_backfill(engine, form_ids=(), submission_ids=()) -> No
     assert ATTACHMENT_COLUMNS <= {item["name"] for item in inspector.get_columns("submission_files")}
     assert {"is_listed", "share_token_hash"} <= {item["name"] for item in inspector.get_columns("forms")}
     assert "availability_json" in {item["name"] for item in inspector.get_columns("form_fields")}
+    response_columns = {item["name"] for item in inspector.get_columns("training_survey_responses")}
+    assert {
+        "attempt_number", "status", "started_at", "completed_at", "score_points",
+        "max_points", "score_percent", "test_snapshot_json",
+    } <= response_columns
+    response_indexes = inspector.get_indexes("training_survey_responses")
+    assert any(not item.get("unique") and item["column_names"] == ["invitation_id"] for item in response_indexes)
+    response_uniques = inspector.get_unique_constraints("training_survey_responses")
+    assert not any(item["column_names"] == ["invitation_id"] for item in response_uniques)
+    assert any(item["column_names"] == ["invitation_id", "attempt_number"] for item in response_uniques)
+    response_foreign_keys = inspector.get_foreign_keys("training_survey_responses")
+    assert any(
+        item["constrained_columns"] == ["invitation_id"]
+        and item["referred_table"] == "training_survey_invitations"
+        and item["referred_columns"] == ["id"]
+        for item in response_foreign_keys
+    )
     metadata = sa.MetaData()
     versions = sa.Table("form_versions", metadata, autoload_with=engine)
     submissions = sa.Table("form_submissions", metadata, autoload_with=engine)
@@ -184,7 +202,7 @@ def _assert_p0_schema_and_backfill(engine, form_ids=(), submission_ids=()) -> No
     drafts = sa.Table("form_drafts", metadata, autoload_with=engine)
     files = sa.Table("submission_files", metadata, autoload_with=engine)
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == "20260813_0037"
+        assert MigrationContext.configure(connection).get_current_revision() == "20260831_0047"
         assert connection.scalar(sa.text("SELECT COUNT(*) FROM alembic_version")) == 1
         for form_id in form_ids:
             assert connection.scalar(sa.select(sa.func.count()).select_from(versions).where(versions.c.form_id == form_id)) >= 1
@@ -257,6 +275,38 @@ def test_p0_clean_and_pre_p0_upgrade(environment_name):
         finally:
             engine.dispose()
             _drop_database(admin_url, database)
+
+
+def test_training_0047_retries_partial_mariadb_ddl():
+    admin_url = os.getenv("P0_MARIADB_ADMIN_DATABASE_URL", "").strip()
+    if not admin_url:
+        pytest.skip("Set P0_MARIADB_ADMIN_DATABASE_URL to run this MariaDB migration retry test.")
+    database = f"p0_test_{uuid4().hex[:12]}"
+    _create_database(admin_url, database)
+    url = _database_url(admin_url, database)
+    engine = sa.create_engine(url)
+    try:
+        config = _config(url)
+        command.upgrade(config, "20260826_0046")
+        with engine.begin() as connection:
+            operations = Operations(MigrationContext.configure(connection))
+            operations.add_column("training_surveys", sa.Column("survey_type", sa.String(16), nullable=False, server_default="survey"))
+            operations.add_column("training_surveys", sa.Column("attempt_policy", sa.String(24), nullable=False, server_default="single_attempt"))
+            operations.add_column("training_surveys", sa.Column("post_requires_attendance", sa.Boolean(), nullable=False, server_default=sa.false()))
+            operations.create_check_constraint("ck_training_surveys_type", "training_surveys", "survey_type IN ('survey', 'pre_test', 'post_test')")
+            operations.create_check_constraint("ck_training_surveys_attempt_policy", "training_surveys", "attempt_policy IN ('single_attempt', 'multiple_attempts')")
+            operations.create_index("ix_training_surveys_training_type", "training_surveys", ["form_id", "training_id", "survey_type", "status"])
+            operations.drop_constraint("ck_training_survey_questions_type", "training_survey_questions", type_="check")
+            operations.add_column("training_survey_questions", sa.Column("is_scored", sa.Boolean(), nullable=False, server_default=sa.false()))
+            operations.add_column("training_survey_questions", sa.Column("points", sa.Numeric(10, 2), nullable=False, server_default="0"))
+            operations.add_column("training_survey_questions", sa.Column("correct_answers_json", sa.JSON(), nullable=False, server_default="[]"))
+            operations.add_column("training_survey_questions", sa.Column("comparison_key", sa.String(128), nullable=False, server_default=""))
+            operations.create_check_constraint("ck_training_survey_questions_type", "training_survey_questions", "question_type IN ('scale', 'single_choice', 'multiple_choice', 'true_false', 'text')")
+        command.upgrade(config, "head")
+        _assert_p0_schema_and_backfill(engine)
+    finally:
+        engine.dispose()
+        _drop_database(admin_url, database)
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,8 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+from flask import render_template
+from lxml import html
 
 
 def test_declaration_template_contains_no_training_picker_ui():
@@ -69,6 +73,96 @@ def test_attendance_confirmation_uses_public_design_system_and_mobile_layout():
     assert ".attendance-confirmation__actions .btn-primary" in stylesheet
     assert ".btn-primary:focus-visible" in stylesheet
     assert "@media (max-width: 640px)" in stylesheet
+
+
+def test_public_training_test_renders_accessible_option_rows(app):
+    survey = SimpleNamespace(
+        name="Test PRE — Bezpieczeństwo informacji",
+        description="Wybierz poprawne odpowiedzi.",
+        survey_type="pre_test",
+        attempt_policy="single_attempt",
+    )
+    questions = [
+        SimpleNamespace(id=1, text="Jedna odpowiedź", question_type="single_choice", options_json=["Alfa", "Beta"], required=True),
+        SimpleNamespace(id=2, text="Wiele odpowiedzi", question_type="multiple_choice", options_json=["Ciekły", "Stały"], required=True),
+        SimpleNamespace(id=3, text="Prawda czy fałsz", question_type="true_false", options_json=["true", "false"], required=True),
+    ]
+    with app.test_request_context("/training-survey/test-token"):
+        rendered = render_template(
+            "training_survey_public.html",
+            valid=True,
+            completed=False,
+            survey=survey,
+            questions=questions,
+        )
+
+    document = html.fromstring(rendered)
+    question_cards = document.xpath('//article[contains(concat(" ", normalize-space(@class), " "), " training-test-question ")]')
+    assert len(question_cards) == 3
+    assert all(len(card.xpath("./fieldset/legend")) == 1 for card in question_cards)
+    assert all(len(card.xpath('.//span[contains(@class, "training-test-question__number")]')) == 1 for card in question_cards)
+    assert all(len(card.xpath('.//span[contains(@class, "training-test-question__title")]')) == 1 for card in question_cards)
+    option_labels = document.xpath('//label[contains(concat(" ", normalize-space(@class), " "), " training-test-option ")]')
+    assert len(option_labels) == 6
+    assert all(len(label.xpath("./input")) == 1 for label in option_labels)
+    assert all(len(label.xpath('./span[contains(@class, "training-test-option__text")]')) == 1 for label in option_labels)
+    assert len(document.xpath('//input[@type="radio" and @name="question_1"]/parent::label')) == 2
+    assert len(document.xpath('//input[@type="checkbox" and @name="question_2"]/parent::label')) == 2
+    assert len(document.xpath('//input[@type="radio" and @name="question_3"]/parent::label')) == 2
+    assert document.xpath('//input[@name="question_1" and @value="Alfa"]')
+    assert document.xpath('//input[@name="question_2" and @value="Ciekły"]')
+    assert "Prawda" in rendered and "Fałsz" in rendered
+    assert ">>>>" not in rendered
+    assert document.xpath('//input[@name="csrf_token" and @type="hidden"]')
+    assert document.xpath('//button[@type="submit" and contains(@class, "btn-primary") and normalize-space()="Zakończ test"]')
+    assert document.xpath("//fieldset/legend")
+    assert len(document.xpath('//fieldset[@aria-required="true" and @aria-describedby]')) == 3
+    assert len(document.xpath('//p[@data-question-error and @aria-live="polite"]')) == 3
+    assert document.xpath('//dialog[@data-training-test-dialog]')
+
+
+def test_public_training_test_styles_cover_selection_focus_and_mobile():
+    template = Path("templates/training_survey_public.html").read_text(encoding="utf-8")
+    stylesheet = Path("static/css/training_test.css").read_text(encoding="utf-8")
+
+    assert "training_test.css" in template
+    assert "data-training-test-progress" in template
+    assert "Nie odpowiedziano na pytania" in template
+    assert "data-single-attempt" in template
+    assert "width: min(100%, 900px)" in stylesheet
+    assert ".training-test__questions { display: grid; gap: 24px; }" in stylesheet
+    assert ".training-test-question__fieldset" in stylesheet
+    assert "padding: 26px" in stylesheet
+    assert "border: 0" in stylesheet
+    assert ".training-test-option:has(.training-test-option__control:checked)" in stylesheet
+    assert ".training-test-option:has(.training-test-option__control:focus-visible)" in stylesheet
+    assert "width: 1.15rem" in stylesheet
+    assert "flex: 0 0 auto" in stylesheet
+    assert "min-height: 44px" in stylesheet
+    assert "overflow-wrap: anywhere" in stylesheet
+    assert "@media (max-width: 640px)" in stylesheet
+    assert "padding: 18px" in stylesheet
+    assert "font-size: 1.2rem" in stylesheet
+    assert ".training-test__actions .btn-primary" in stylesheet
+    assert "!important" not in stylesheet
+
+
+def test_training_management_suppresses_only_local_required_notes():
+    template = Path("templates/admin/trainings/detail.html").read_text(encoding="utf-8")
+    admin_base = Path("templates/admin/base.html").read_text(encoding="utf-8")
+
+    assert template.count('data-required-note="false"') == 2
+    assert 'class="training-cancel-form"' in template
+    assert 'name="reason" required' in template
+    assert 'class="training-attendance-form"' in template
+    assert 'Nazwa <span class="required-marker" aria-hidden="true">*</span>' in template
+    assert 'Data <span class="required-marker" aria-hidden="true">*</span>' in template
+    assert 'name="name" required' in template
+    assert 'name="session_date" required' in template
+    assert "Utwórz sesję" in template
+    assert "Pola oznaczone * są obowiązkowe." not in template
+    assert 'form.dataset.requiredNote !== "false"' in admin_base
+    assert 'note.className = "admin-required-note"' in admin_base
 
 
 def test_training_picker_script_updates_and_enforces_limit():

@@ -226,7 +226,7 @@
                                         labelText.append(" ", marker);
                                     }
                                 });
-                                if (!form.querySelector(".admin-required-note")) {
+                                if (form.dataset.requiredNote !== "false" && !form.querySelector(".admin-required-note")) {
                                     const note = document.createElement("p");
                                     note.className = "admin-required-note";
                                     note.append("Pola oznaczone ");

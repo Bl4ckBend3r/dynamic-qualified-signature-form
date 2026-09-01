@@ -308,7 +308,7 @@ class SubmissionService:
         existing = self.submission_repository.get_by_id(submission_id)
         if not existing or str(existing.get("form_slug") or "") != form_slug:
             return {"ok": False, "errors": {"submission_id": "Nie znaleziono zgłoszenia."}, "values": {}, "result": None}
-        if not self.access_token_service.verify_token(existing, access_token):
+        if not self.access_token_service.verify_required_token(existing, access_token):
             return {"ok": False, "errors": {"submission_id": "Nieprawidłowy link do poprawy."}, "values": {}, "result": None}
         if str(existing.get("process_status") or "") != ProcessStatus.RETURNED_FOR_CORRECTION.value:
             return {

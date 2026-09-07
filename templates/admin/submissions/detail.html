@@ -253,7 +253,7 @@
     <section class="admin-card">
         <h3>{{ checklist_entry.checklist.name }}</h3>
         <p><span class="admin-badge">Etap: {{ checklist_entry.checklist.workflow_step }}</span></p>
-        {% for entry in checklist_entry.items %}
+        {% for entry in checklist_entry.get("items", []) %}
         {% set item = entry.item %}{% set result = entry.result %}
         <form method="post" action="{{ url_for('admin.submission_checklist_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="item_id" value="{{ item.id }}">

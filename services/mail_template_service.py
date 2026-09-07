@@ -735,11 +735,12 @@ def render_platform_mail_html(
     header_logo_section = logo_row("header")
     before_content_logo_section = logo_row("before_content")
     after_content_logo_section = logo_row("after_content")
-    platform_name_html = (
-        f'<div class="platform-name" style="margin:0 0 12px;color:{mail_layout["primary_color"]};font-weight:700;">{platform_name}</div>'
-        if platform_name
-        else ""
-    )
+    platform_name_html = ""
+    # platform_name_html = (
+    #     f'<div class="platform-name" style="margin:0 0 12px;color:{mail_layout["primary_color"]};font-weight:700;">{platform_name}</div>'
+    #     if platform_name
+    #     else ""
+    # )
     # The platform layout never owns the mail-footer logo. A footer logo is
     # rendered exclusively by MailDispatchService.build_footer().
     footer_parts = [platform_name_html, footer_html]

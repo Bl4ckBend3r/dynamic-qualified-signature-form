@@ -15,7 +15,7 @@ from services.process_instruction_service import build_process_instruction_view
 from services.public_submission_status_service import build_readonly_submission_status
 from services.workflow_service import WorkflowTransitionError
 from test_admin_panel import admin_app, create_form, create_user, login
-from test_signature_verifier import signed_pdf_factory
+from test_signature_verifier import certificate_chain_signed_pdf_factory, signed_pdf_factory
 
 
 @pytest.fixture
@@ -471,6 +471,92 @@ def test_composite_training_agreements_keep_separate_locks(composite_env):
     ]
     with env.repo.session_factory() as db:
         assert all(t.status == 'agreement_signed_by_office' for t in db.execute(select(SubmissionTraining)).scalars())
+
+
+def test_training_agreement_upload_cannot_validate_another_instance(composite_env):
+    from models import SubmissionTraining
+
+    env = composite_env('agreement', participant_signature=True, upload_required=True)
+    env.definition['documents'][0]['generation_mode'] = 'per_training'
+    snapshots = [{'id': key, 'name': f'Szkolenie {key}', 'price': '25.00'} for key in ['a', 'b']]
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == env.public_id)).scalar_one()
+        model.selected_trainings = json.dumps(snapshots)
+        for snapshot in snapshots:
+            db.add(env.services.submission_training_service._new_row(model.id, snapshot))
+        model.form_version.definition_json = deepcopy(env.definition)
+        db.commit()
+    env.enter()
+
+    different = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=210, height=210)
+    writer.write(different)
+    source_b = next(item for item in env.state()['files'] if item['training_key'] == 'b')
+    env.services.document_service.document_storage_service.save_pdf(
+        storage=env.services.document_service.storage,
+        slug=env.row()['form_slug'],
+        filename=source_b['filename'],
+        document_bytes=different.getvalue(),
+        document_type=env.services.document_service._storage_document_type('agreement'),
+        signed=False,
+    )
+
+    result = env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='b')
+
+    assert result['result'] == 'INVALID_SIGNATURE'
+    assert not env.state().get('signatures', {}).get('b', {}).get('participant')
+    rejected = [item for item in env.services.submission_document_service.list_documents(env.public_id)
+                if item['status'] == 'rejected']
+    assert rejected[-1]['signature_validation_result']['reason_code'] == 'DOCUMENT_REVISION_MISMATCH'
+    assert rejected[-1]['signature_validation_result']['cryptographically_valid'] is True
+
+
+def test_agreement_uses_trusted_profile_backend_through_shared_upload_pipeline(
+    composite_env, certificate_chain_signed_pdf_factory, monkeypatch
+):
+    from signature_verifier import verify_signed_pdf
+
+    material = certificate_chain_signed_pdf_factory
+    monkeypatch.setenv('SIGNATURE_TRUST_ROOTS', str(material['root_path']))
+    monkeypatch.setenv('SIGNATURE_INTERMEDIATE_CERTS', str(material['intermediate_path']))
+    monkeypatch.setenv('TRUSTED_PROFILE_PYHANKO_DIAGNOSTIC', 'false')
+    env = composite_env('agreement', participant_signature=True, upload_required=True)
+    env.definition['documents'][0]['allowed_signatures'] = ['profil_zaufany']
+    env.enter()
+    signed = material['signed_path'].read_bytes()
+    original_end = signed.index(b'%%EOF') + len(b'%%EOF')
+    while original_end < len(signed) and signed[original_end:original_end + 1] in {b'\r', b'\n'}:
+        original_end += 1
+    original = signed[:original_end]
+    source = env.state()['files'][0]
+    env.services.document_service.document_storage_service.save_pdf(
+        storage=env.services.document_service.storage,
+        slug=env.row()['form_slug'],
+        filename=source['filename'],
+        document_bytes=original,
+        document_type=env.services.document_service._storage_document_type('agreement'),
+        signed=False,
+    )
+    monkeypatch.setattr(env.services.document_signing_service, 'verifier', verify_signed_pdf)
+
+    result = env.document.upload(
+        env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(signed), filename='agreement-pz.pdf', content_type='application/pdf'),
+    )
+
+    assert result['result'] == 'VALID_SIGNATURE'
+    signed_file = next(item for item in env.services.submission_document_service.list_documents(env.public_id)
+                       if item['status'] == 'signed')
+    verification = signed_file['signature_validation_result']
+    assert verification['provider'] == 'eurocert'
+    assert verification['detected_signature_type'] == 'profil_zaufany'
+    assert verification['verifier_backend'] == 'trusted_profile_minimal_cms'
+    assert verification['signature_count'] == 1
+    assert verification['cryptographic_valid'] is True
+    assert verification['document_integrity_valid'] is True
+    assert verification['certificate_chain_valid'] is True
+    assert verification['provider_allowed'] is True
 
 
 def test_composite_office_route_permissions_and_csrf(composite_env):

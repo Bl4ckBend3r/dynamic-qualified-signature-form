@@ -13,6 +13,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -202,7 +203,8 @@ def _assert_p0_schema_and_backfill(engine, form_ids=(), submission_ids=()) -> No
     drafts = sa.Table("form_drafts", metadata, autoload_with=engine)
     files = sa.Table("submission_files", metadata, autoload_with=engine)
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == "20260831_0047"
+        expected_head = ScriptDirectory.from_config(_config(str(engine.url))).get_current_head()
+        assert MigrationContext.configure(connection).get_current_revision() == expected_head
         assert connection.scalar(sa.text("SELECT COUNT(*) FROM alembic_version")) == 1
         for form_id in form_ids:
             assert connection.scalar(sa.select(sa.func.count()).select_from(versions).where(versions.c.form_id == form_id)) >= 1

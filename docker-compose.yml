@@ -1,4 +1,14 @@
 services:
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   app:
     build: .
     container_name: formularze-app
@@ -8,8 +18,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - formularze_tmp:/tmp/formularze
 

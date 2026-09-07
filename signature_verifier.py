@@ -835,6 +835,7 @@ class PyHankoSignatureBackend:
 def _detect_signature_classification(pdf_path: Path) -> dict[str, Any]:
     """Classify signer identity for routing only; it is never proof of validity."""
     fallback = _classify_signature("")
+    classifications = []
     try:
         with Path(pdf_path).open("rb") as stream:
             signatures = list(PdfFileReader(stream).embedded_signatures)
@@ -843,8 +844,7 @@ def _detect_signature_classification(pdf_path: Path) -> dict[str, Any]:
             subject = _normalize_name_dict(certificate.subject.native if certificate else {})
             issuer = _normalize_name_dict(certificate.issuer.native if certificate else {})
             classification = _classify_signature(f"{subject} || {issuer}")
-            if classification["signature_type"] == "profil_zaufany":
-                return classification
+            classifications.append(classification)
             if fallback["signature_type"] == "unsupported":
                 fallback = classification
     except Exception:
@@ -852,10 +852,14 @@ def _detect_signature_classification(pdf_path: Path) -> dict[str, Any]:
             "signature_backend_classification_failed",
             extra={"event": "signature_backend_classification_failed", "operation": "signature_verification"},
         )
+    cms_names = []
     try:
-        for subject, issuer in inspect_pdf_cms_signer_names(Path(pdf_path).read_bytes()):
+        cms_names = inspect_pdf_cms_signer_names(Path(pdf_path).read_bytes())
+        if len(cms_names) > 1:
+            return _classify_signature("")
+        for subject, issuer in cms_names:
             classification = _classify_signature(f"{subject} || {issuer}")
-            if classification["signature_type"] == "profil_zaufany":
+            if len(cms_names) == 1 and classification["signature_type"] == "profil_zaufany":
                 return classification
             if fallback["signature_type"] == "unsupported":
                 fallback = classification
@@ -864,6 +868,10 @@ def _detect_signature_classification(pdf_path: Path) -> dict[str, Any]:
             "signature_cms_fallback_classification_failed",
             extra={"event": "signature_backend_classification_failed", "operation": "signature_verification"},
         )
+    if not cms_names and len(classifications) == 1:
+        classification = classifications[0]
+        if classification["signature_type"] == "profil_zaufany":
+            return classification
     return fallback
 
 

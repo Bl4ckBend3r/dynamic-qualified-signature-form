@@ -315,6 +315,9 @@ AUTO_DB_MIGRATE=true
 Na produkcji zalecane jest ręczne wykonanie `alembic upgrade head` przed
 startem aplikacji. Gdy `AUTO_DB_MIGRATE=false`, aplikacja sprawdza kluczowe
 kolumny i zapisuje w logu instrukcję migracji, ale nie modyfikuje schematu.
+`docker compose up` uruchamia migrację jako osobny, jednorazowy serwis `migrate`;
+kontener `app` startuje dopiero po jego poprawnym zakończeniu. Nie uruchamia to
+migracji w każdym workerze Gunicorna.
 
 Przykładowa aktualizacja usługi produkcyjnej:
 

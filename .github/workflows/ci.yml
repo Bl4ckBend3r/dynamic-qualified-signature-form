@@ -104,6 +104,7 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python manage.py db-check
+      - run: python -m pytest -q tests/test_submission_assignment_migration.py -k upgraded_database
 
   migrations-postgresql:
     name: migrations-postgresql
@@ -133,6 +134,7 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python manage.py db-check
+      - run: python -m pytest -q tests/test_submission_assignment_migration.py -k upgraded_database
 
   security:
     name: security

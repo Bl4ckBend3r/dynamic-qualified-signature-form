@@ -85,7 +85,7 @@ def test_alembic_down_revisions_exist_without_self_reference_or_cycle():
         visit(revision)
 
 
-def test_p0_chain_is_linear_and_ordered():
+def test_critical_migration_chain_is_ordered_and_reachable_from_head():
     expected = [
         "20260812_0031",
         "20260813_0032",
@@ -104,11 +104,14 @@ def test_p0_chain_is_linear_and_ordered():
         "20260824_0045",
         "20260826_0046",
         "20260831_0047",
+        "20260901_0048",
     ]
     script = _script_directory()
     for parent, child in zip(expected, expected[1:]):
         assert script.get_revision(child).down_revision == parent
-    assert script.get_heads() == [expected[-1]]
+    head = script.get_current_head()
+    reachable = {revision.revision for revision in script.iterate_revisions(head, "base")}
+    assert set(expected) <= reachable
 
 
 def test_p0_json_types_compile_for_mariadb_and_postgresql():

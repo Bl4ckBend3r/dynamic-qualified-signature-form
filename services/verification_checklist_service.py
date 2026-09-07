@@ -100,10 +100,33 @@ class VerificationChecklistService:
 
     def delete_item(self, db, item: VerificationChecklistItemDefinition) -> None:
         self._require_draft(item.checklist.form_version)
+        has_results = db.execute(
+            select(SubmissionChecklistItemResult.id)
+            .where(SubmissionChecklistItemResult.checklist_item_definition_id == item.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if has_results is not None:
+            raise VerificationChecklistError(
+                "Nie można usunąć kryterium, ponieważ zawiera historyczne wyniki weryfikacji."
+            )
         db.delete(item)
 
     def delete_checklist(self, db, checklist: VerificationChecklistDefinition) -> None:
         self._require_draft(checklist.form_version)
+        has_results = db.execute(
+            select(SubmissionChecklistItemResult.id)
+            .join(
+                VerificationChecklistItemDefinition,
+                SubmissionChecklistItemResult.checklist_item_definition_id
+                == VerificationChecklistItemDefinition.id,
+            )
+            .where(VerificationChecklistItemDefinition.checklist_id == checklist.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if has_results is not None:
+            raise VerificationChecklistError(
+                "Nie można usunąć checklisty, ponieważ zawiera historyczne wyniki weryfikacji."
+            )
         db.delete(checklist)
 
     def clone_definitions(self, db, source_version_id: int, target_version: FormVersion) -> None:

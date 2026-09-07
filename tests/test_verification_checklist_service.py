@@ -3,7 +3,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from models import (
-    Base, Form, FormPermission, FormSubmission, FormVersion, SubmissionChecklistResultHistory,
+    Base, Form, FormPermission, FormSubmission, FormVersion, SubmissionChecklistItemResult,
+    SubmissionChecklistResultHistory,
     SubmissionFile, User, VerificationChecklistDefinition, VerificationChecklistItemDefinition,
 )
 from services.verification_checklist_service import (
@@ -151,3 +152,40 @@ def test_blocking_no_does_not_block_negative_decision(checklist_db):
         assert not service.validate_for_decision(db, submission).valid
         assert service.validate_for_decision(db, submission, decision="rejected").valid
         assert service.validate_for_decision(db, submission, decision="correction").valid
+
+
+def test_delete_draft_definitions_refuses_to_destroy_historical_results(checklist_db):
+    Session, ids = checklist_db
+    service = VerificationChecklistService()
+    with Session.begin() as db:
+        source = db.get(FormVersion, ids["version"])
+        draft = FormVersion(
+            form_id=source.form_id,
+            version_major=2,
+            version_minor=0,
+            version_label="2.0",
+            status="draft",
+            definition_json=source.definition_json,
+        )
+        db.add(draft)
+        db.flush()
+        checklist = service.create_checklist(
+            db, draft, name="Historyczna", workflow_step="officer_review"
+        )
+        item = service.add_item(db, checklist, key="history", label="Historyczne kryterium")
+        db.add(
+            SubmissionChecklistItemResult(
+                submission_id=ids["submission"],
+                checklist_item_definition_id=item.id,
+                result="yes",
+            )
+        )
+        db.flush()
+
+        with pytest.raises(VerificationChecklistError, match="historyczne wyniki"):
+            service.delete_item(db, item)
+        with pytest.raises(VerificationChecklistError, match="historyczne wyniki"):
+            service.delete_checklist(db, checklist)
+
+        assert db.get(VerificationChecklistItemDefinition, item.id) is item
+        assert db.get(VerificationChecklistDefinition, checklist.id) is checklist

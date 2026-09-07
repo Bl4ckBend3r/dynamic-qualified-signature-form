@@ -21,6 +21,39 @@ def test_submission_lists_have_column_filters_copyable_ids_and_sticky_action_men
         assert 'class="actions-column"' in source
 
 
+def test_form_submission_list_has_compact_filters_single_select_all_and_grouped_columns():
+    source = _template("submissions/list.html")
+
+    assert source.count('id="select-all-submissions"') == 1
+    assert 'id="select-all-assignments"' not in source
+    assert 'aria-label="Zaznacz wszystkie zgłoszenia na stronie"' in source
+    assert 'data-advanced-filters' in source
+    assert 'aria-controls="submission-additional-filters"' in source
+    assert 'aria-expanded=' in source
+    for field in (
+        "q", "status", "date_from", "date_to", "field", "operator", "value",
+        "value_to", "sort", "direction", "checklist_status", "queue", "assignee",
+        "priority",
+    ):
+        assert f'name="{field}"' in source
+    for heading in ("Osoba", "Kontakt", "Prowadzący", "Priorytet / termin", "Etap workflow"):
+        assert heading in source
+    assert "admin-submission-bulk" in source
+    assert "admin-table-wrap" in source
+    assert 'aria-label="Kopiuj pełne ID"' in source
+
+
+def test_checklist_edit_forms_submit_exactly_one_semantic_action():
+    source = _template("forms/checklists.html")
+
+    assert 'type="hidden"\n               name="action"\n               value="update_checklist"' not in source
+    assert 'type="hidden"\n               name="action"\n               value="update_item"' not in source
+    for action in ("update_checklist", "delete_checklist", "update_item", "delete_item"):
+        assert f'name="action"\n            value="{action}"' in source
+    assert 'value="create_checklist"' in source
+    assert 'value="add_item"' in source
+
+
 def test_dashboard_groups_every_existing_metric_and_queue():
     source = _template("dashboard.html")
 

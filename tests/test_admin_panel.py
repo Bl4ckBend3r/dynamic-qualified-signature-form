@@ -48,6 +48,8 @@ from models import (
     SystemMailSettings,
     User,
     UserGlobalRole,
+    VerificationChecklistDefinition,
+    VerificationChecklistItemDefinition,
 )
 from services.admin_form_service import build_definition_from_html, sync_form_fields
 from services.admin_submission_service import format_business_datetime
@@ -3358,6 +3360,17 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
             )
         )
         db.add(
+            FormSubmission(
+                submission_id="unselected",
+                form_slug="sample_form",
+                form_name="Sample",
+                email="anna@example.com",
+                imiona="Anna",
+                officer_decision="accepted",
+                data_json={"imiona": "Anna"},
+            )
+        )
+        db.add(
             MailTemplate(
                 form_id=form_id,
                 name="Accepted",
@@ -3375,12 +3388,18 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
 
+    missing_csrf = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/mail-selected",
+        data={"submission_ids": ["abc"]},
+    )
     response = admin_client.post(
         f"/admin/forms/{form_id}/submissions/mail-selected",
         data={"csrf_token": token, "submission_ids": ["abc"]},
     )
 
+    assert missing_csrf.status_code == 400
     assert response.status_code == 302
+    assert len(sent) == 1
     assert sent[0]["subject"] == "Witaj Jan"
     assert "platform-mail-card" in sent[0]["html_body"]
     assert "accepted" in sent[0]["html_body"]
@@ -3389,6 +3408,9 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
         log = db.query(EmailLog).one()
         assert log.status == "sent"
         assert log.public_submission_id == "abc"
+        assert db.execute(
+            select(EmailLog).where(EmailLog.public_submission_id == "unselected")
+        ).scalar_one_or_none() is None
 
 
 def test_bulk_mail_opens_composer_with_preview_variables_and_missing_addresses(admin_app, admin_client):
@@ -6584,6 +6606,197 @@ def test_agreement_docx_preview_and_example_pdf_are_stateless_and_form_scoped(ad
         assert training.status == "selected"
         assert training.is_locked is False
         assert training.agreement_id == ""
+
+
+def test_submission_detail_renders_existing_submission_with_checklist_and_keeps_missing_404(
+    admin_app, admin_client
+):
+    create_user(admin_app)
+    definition = {
+        "title": "Checklist detail",
+        "fields": [],
+        "workflow": {"steps": [{"id": "officer_review", "admin_label": "Weryfikacja"}]},
+    }
+    form_id = create_form(
+        admin_app,
+        slug="checklist_detail",
+        name="Checklist detail",
+        definition_json=definition,
+    )
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        version = FormVersion(
+            form_id=form_id,
+            version_major=1,
+            version_minor=0,
+            version_label="1.0",
+            status="published",
+            definition_json=definition,
+        )
+        db.add(version)
+        db.flush()
+        checklist = VerificationChecklistDefinition(
+            form_version_id=version.id,
+            name="Weryfikacja formalna",
+            workflow_step="officer_review",
+            active=True,
+        )
+        db.add(checklist)
+        db.flush()
+        db.add(
+            VerificationChecklistItemDefinition(
+                checklist_id=checklist.id,
+                key="document",
+                label="Dokument jest kompletny",
+            )
+        )
+        submission = FormSubmission(
+            submission_id="CHECKLIST-DETAIL-1",
+            form_slug="checklist_detail",
+            form_name="Checklist detail",
+            form_version_id=version.id,
+            process_status="FORM_SUBMITTED",
+            workflow_step="officer_review",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    login(admin_client)
+
+    existing = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    missing = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk + 1000}")
+
+    assert existing.status_code == 200
+    assert "Weryfikacja formalna" in existing.get_data(as_text=True)
+    assert "Dokument jest kompletny" in existing.get_data(as_text=True)
+    assert missing.status_code == 404
+
+
+def test_form_submission_list_renders_two_rows_and_keeps_filtering_and_sorting(
+    admin_app, admin_client
+):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="compact_list", name="Lista kompaktowa")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        db.add_all(
+            [
+                FormSubmission(
+                    submission_id="LIST-FIRST",
+                    form_slug="compact_list",
+                    form_name="Lista kompaktowa",
+                    imiona="Anna",
+                    nazwisko="Nowak",
+                    email="anna@example.test",
+                    process_status="FORM_SUBMITTED",
+                ),
+                FormSubmission(
+                    submission_id="LIST-SECOND",
+                    form_slug="compact_list",
+                    form_name="Lista kompaktowa",
+                    imiona="Jan",
+                    nazwisko="Kowalski",
+                    email="jan@example.test",
+                    process_status="WAITING_FOR_OFFICER_DECISION",
+                ),
+            ]
+        )
+        db.commit()
+    login(admin_client)
+
+    response = admin_client.get(
+        f"/admin/forms/{form_id}/submissions?sort=submission_id&direction=asc"
+    )
+    html = response.get_data(as_text=True)
+    filtered = admin_client.get(f"/admin/forms/{form_id}/submissions?q=LIST-SECOND")
+
+    assert response.status_code == 200
+    assert "LIST-FIRS" in html and "LIST-SECO" in html
+    assert html.count('id="select-all-submissions"') == 1
+    assert html.index("LIST-FIRS") < html.index("LIST-SECO")
+    assert filtered.status_code == 200
+    assert "LIST-SECO" in filtered.get_data(as_text=True)
+    assert "LIST-FIRS" not in filtered.get_data(as_text=True)
+
+
+def test_checklist_route_dispatches_update_and_delete_actions_independently(
+    admin_app, admin_client
+):
+    create_user(admin_app)
+    definition = {"fields": [], "workflow": {"steps": [{"id": "review"}]}}
+    form_id = create_form(
+        admin_app, slug="checklist_actions", name="Checklist actions", definition_json=definition
+    )
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        version = FormVersion(
+            form_id=form_id,
+            version_major=1,
+            version_minor=0,
+            version_label="1.0",
+            status="draft",
+            definition_json=definition,
+        )
+        db.add(version)
+        db.flush()
+        checklist = VerificationChecklistDefinition(
+            form_version_id=version.id,
+            name="Przed zmianą",
+            workflow_step="review",
+        )
+        db.add(checklist)
+        db.flush()
+        item = VerificationChecklistItemDefinition(
+            checklist_id=checklist.id,
+            key="criterion",
+            label="Kryterium",
+        )
+        db.add(item)
+        db.commit()
+        checklist_id = checklist.id
+        item_id = item.id
+    login(admin_client)
+    page = admin_client.get(f"/admin/forms/{form_id}/checklists")
+    token = page.get_data(as_text=True).split('name="csrf_token"', 1)[1].split('value="', 1)[1].split('"', 1)[0]
+
+    update = admin_client.post(
+        f"/admin/forms/{form_id}/checklists",
+        data={
+            "csrf_token": token,
+            "action": "update_checklist",
+            "checklist_id": str(checklist_id),
+            "name": "Po zmianie",
+            "workflow_step": "review",
+            "position": "3",
+            "active": "on",
+        },
+    )
+    with session_factory() as db:
+        assert db.get(VerificationChecklistDefinition, checklist_id).name == "Po zmianie"
+        assert db.get(VerificationChecklistItemDefinition, item_id) is not None
+
+    delete_item = admin_client.post(
+        f"/admin/forms/{form_id}/checklists",
+        data={"csrf_token": token, "action": "delete_item", "item_id": str(item_id)},
+    )
+    with session_factory() as db:
+        assert db.get(VerificationChecklistItemDefinition, item_id) is None
+        assert db.get(VerificationChecklistDefinition, checklist_id) is not None
+
+    delete_checklist = admin_client.post(
+        f"/admin/forms/{form_id}/checklists",
+        data={
+            "csrf_token": token,
+            "action": "delete_checklist",
+            "checklist_id": str(checklist_id),
+        },
+    )
+    with session_factory() as db:
+        assert db.get(VerificationChecklistDefinition, checklist_id) is None
+
+    assert update.status_code == 302
+    assert delete_item.status_code == 302
+    assert delete_checklist.status_code == 302
 
 
 def test_agreement_preview_example_needs_no_submission_or_training_and_has_full_context(admin_app, admin_client, monkeypatch):

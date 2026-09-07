@@ -3510,6 +3510,157 @@ a.admin-stat:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px
     border: 0 !important;
 }
 
+/* Compact form submissions workspace. */
+.admin-submissions-summary {
+    justify-content: flex-start;
+    margin: -8px 0 12px;
+    color: var(--muted);
+}
+
+.admin-submission-filters {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.admin-submission-filters__primary {
+    display: grid;
+    grid-template-columns: minmax(240px, 1.6fr) minmax(190px, 1fr) 150px 150px auto;
+    gap: 10px;
+    align-items: end;
+}
+
+.admin-submission-filters__primary label,
+.admin-submission-filters__additional label {
+    min-width: 0;
+}
+
+.admin-submission-filters__primary input,
+.admin-submission-filters__primary select,
+.admin-submission-filters__additional input,
+.admin-submission-filters__additional select {
+    width: 100%;
+}
+
+.admin-submission-filters .admin-filter-more {
+    padding-top: 8px;
+}
+
+.admin-submission-filters__additional {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(150px, 1fr));
+    gap: 10px;
+    padding-top: 10px;
+}
+
+.admin-submission-bulk {
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-alt);
+}
+
+.admin-submission-bulk__count {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.admin-submission-bulk__controls {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.admin-submission-bulk__controls select { max-width: 210px; }
+.admin-submission-bulk__controls input:not([type]),
+.admin-submission-bulk__controls input[type="text"] { max-width: 210px; }
+.admin-submission-bulk__notification { white-space: nowrap; }
+.admin-submission-bulk__more { position: relative; flex: 0 0 auto; }
+.admin-submission-bulk__more > summary { list-style: none; }
+.admin-submission-bulk__more > summary::-webkit-details-marker { display: none; }
+.admin-submission-bulk__more[open] > button { margin-top: 6px; }
+
+.admin-table--submissions {
+    min-width: 1720px;
+    table-layout: fixed;
+}
+
+.admin-table--submissions .col-select { width: 48px; text-align: center; }
+.admin-table--submissions .col-id { width: 145px; min-width: 145px; }
+.admin-table--submissions .col-person { width: 180px; }
+.admin-table--submissions .col-contact { width: 220px; }
+.admin-table--submissions .col-date { width: 145px; }
+.admin-table--submissions .col-form { width: 210px; }
+.admin-table--submissions .col-assignee { width: 190px; }
+.admin-table--submissions .col-priority { width: 155px; }
+.admin-table--submissions .col-status { width: 200px; }
+.admin-table--submissions .col-workflow { width: 175px; }
+.admin-table--submissions .col-decision { width: 230px; }
+.admin-table--submissions .col-actions { width: 95px; }
+
+.admin-table--submissions th,
+.admin-table--submissions td {
+    padding: 9px 10px;
+    line-height: 1.3;
+}
+
+.admin-table--submissions td.admin-id-cell,
+.admin-table--submissions th.col-id {
+    padding: 9px 10px;
+}
+
+.admin-table--submissions .admin-contact-cell,
+.admin-table--submissions .admin-assignee-cell {
+    white-space: nowrap;
+}
+
+.admin-contact-cell > span,
+.admin-priority-cell > :is(span, small) { display: block; }
+.admin-contact-cell > span + span,
+.admin-priority-cell > :is(span, small) + :is(span, small) { margin-top: 4px; }
+
+.admin-contact-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+
+.admin-table--submissions .admin-form-name-cell {
+    max-width: none;
+    white-space: normal;
+}
+
+.admin-table--submissions .admin-badge {
+    width: fit-content;
+    white-space: nowrap;
+}
+
+.admin-table--submissions .admin-decision-controls,
+.admin-table--submissions .admin-decision-select,
+.admin-table--submissions .admin-decision-reason {
+    width: 100%;
+    min-width: 0;
+}
+
+@media (max-width: 1450px) {
+    .admin-submission-filters__additional { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+}
+
+@media (max-width: 900px) {
+    .admin-submission-filters__primary,
+    .admin-submission-filters__additional { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .admin-submission-bulk { align-items: stretch; flex-direction: column; }
+}
+
+@media (max-width: 620px) {
+    .admin-submission-filters__primary,
+    .admin-submission-filters__additional { grid-template-columns: minmax(0, 1fr); }
+}
+
 .document-template-configuration { display: grid; gap: 1rem; }
 .document-source-card,
 .document-variable-catalog {

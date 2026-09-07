@@ -265,6 +265,7 @@ class WorkflowSlaService:
             template=template,
             to_email=notification.recipient_email,
             event_type=notification.notification_type,
+            event_id=f"sla:{deadline.id}:{notification.reminder_key}:{notification.notification_type}",
             extra_context=context,
         )
         notification.email_log_id = getattr(getattr(dispatch, "log", None), "id", None)

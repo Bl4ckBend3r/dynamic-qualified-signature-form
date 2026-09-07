@@ -49,6 +49,7 @@ class SubmissionDocumentService:
         training_key: str = "",
         generated_at: datetime | None = None,
         storage_path: str = "",
+        workflow_step_at_upload: str = "",
         storage=None,
     ) -> bool:
         return self.record_document_metadata(
@@ -62,6 +63,7 @@ class SubmissionDocumentService:
             agreement_number=agreement_number,
             training_key=training_key,
             generated_at=generated_at or datetime.now(timezone.utc),
+            workflow_step_at_upload=workflow_step_at_upload,
             storage_path=storage_path,
             signed=False,
             status=GENERATED_STATUS,
@@ -84,6 +86,7 @@ class SubmissionDocumentService:
         training_key: str = "",
         signed_at: datetime | None = None,
         storage_path: str = "",
+        workflow_step_at_upload: str = "",
         storage=None,
     ) -> bool:
         return self.record_document_metadata(
@@ -99,6 +102,7 @@ class SubmissionDocumentService:
             agreement_number=agreement_number,
             training_key=training_key,
             signed_at=signed_at or datetime.now(timezone.utc),
+            workflow_step_at_upload=workflow_step_at_upload,
             storage_path=storage_path,
             signed=True,
             status=SIGNED_STATUS,
@@ -124,6 +128,7 @@ class SubmissionDocumentService:
         generated_at: datetime | None = None,
         signed_at: datetime | None = None,
         storage_path: str = "",
+        workflow_step_at_upload: str = "",
         storage=None,
     ) -> bool:
         try:
@@ -146,6 +151,7 @@ class SubmissionDocumentService:
                 generated_at=generated_at,
                 signed_at=signed_at,
                 storage_path=storage_path,
+                workflow_step_at_upload=workflow_step_at_upload,
             )
         except Exception:
             self.logger.warning(

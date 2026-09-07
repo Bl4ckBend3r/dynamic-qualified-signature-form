@@ -192,5 +192,7 @@ def test_all_qualification_conditions_pass_and_normal_flow_continues(app, client
     row = app.testing_storage.csv_rows[0]
 
     assert response.status_code == 200
-    assert row["process_status"] == "FORM_SUBMITTED"
+    # Successful qualification follows the configured submission edge into review.
+    assert row["process_status"] == "WAITING_FOR_OFFICER_DECISION"
+    assert row["workflow_step"] == "officer_review"
     assert row["data_json"]["_qualification"]["passed"] is True

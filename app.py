@@ -16,6 +16,7 @@ from routes.public_forms import bp as public_forms_bp
 from services.container import create_services
 from services.database_schema_service import database_readiness_status, prepare_database_schema
 from services.observability import configure_logging, register_observability
+from signature_verifier import check_signature_trust_configuration
 
 load_dotenv()
 
@@ -32,6 +33,7 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     _configure_reverse_proxy(app)
     _validate_config(app)
     _validate_strict_mode_config(app)
+    check_signature_trust_configuration(app.logger)
     if os.getenv("TEMP_DIR"):
         app.config["TEMP_DIR"] = Path(os.getenv("TEMP_DIR", ""))
 

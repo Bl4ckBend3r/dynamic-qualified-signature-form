@@ -531,7 +531,7 @@ def _normalize_repeatable_group_records(
 
         record = deepcopy(item)
 
-        raw_id = str(record.get("id") or "").strip()
+        raw_id = str(record.get("record_uuid") or record.get("id") or "").strip()
         record_id = ""
 
         if raw_id:
@@ -548,6 +548,9 @@ def _normalize_repeatable_group_records(
             while record_id in used_ids:
                 record_id = str(uuid4())
 
+        # ``record_uuid`` is the canonical domain identifier. ``id`` remains
+        # a compatibility alias for historical definitions and browser drafts.
+        record["record_uuid"] = record_id
         record["id"] = record_id
 
         used_ids.add(record_id)
@@ -666,6 +669,90 @@ def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
     return True
 
 
+def evaluate_scoped_condition(
+    rule: Any,
+    *,
+    root_data: Dict[str, Any],
+    current_data: Dict[str, Any] | None = None,
+) -> bool:
+    """Evaluate a condition in an explicit root or current-record scope."""
+    if not rule:
+        return True
+    scope = str(rule.get("scope") or "current").strip().casefold()
+    values = root_data if scope == "root" else (current_data or root_data)
+    return evaluate_visible_if(rule, values)
+
+
+def _validate_repeatable_child(field: Dict[str, Any], value: Any, *, required: bool) -> str | None:
+    field_type = str(field.get("type") or "")
+    label = str(field.get("label") or field.get("name") or "Pole")
+    empty = value in (None, "", [], {})
+    if required and empty:
+        return f"Pole „{label}” jest wymagane."
+    if empty:
+        return None
+    if field_type == "email" and not EMAIL_REGEX.fullmatch(str(value).strip()):
+        return "Podaj poprawny adres e-mail."
+    if field_type in {"tel", "phone"} and not TEL_REGEX.fullmatch(str(value).strip()):
+        return "Podaj poprawny numer telefonu."
+    if field_type == "number":
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return "Podaj poprawną wartość liczbową."
+    if field_type in {"date", "time"}:
+        try:
+            datetime.strptime(str(value), "%Y-%m-%d" if field_type == "date" else "%H:%M")
+        except ValueError:
+            return "Podaj poprawną datę w formacie RRRR-MM-DD." if field_type == "date" else "Podaj poprawną godzinę w formacie GG:MM."
+    if field_type in {"select", "radio"}:
+        from services.form_option_service import option_value
+
+        if value not in {option_value(option) for option in field.get("options", [])}:
+            return "Wybrano nieprawidłową wartość."
+    return None
+
+
+def _validate_repeatable_group(field: Dict[str, Any], records: Any, root_data: Dict[str, Any]) -> Dict[str, str]:
+    name = str(field.get("name") or "")
+    label = str(field.get("label") or name)
+    errors: Dict[str, str] = {}
+    if not isinstance(records, list):
+        return {name: f"Pole „{label}” ma nieprawidłowy format."}
+    minimum = int(field.get("min_items", 1))
+    maximum = int(field.get("max_items", 20))
+    if len(records) < minimum:
+        errors[name] = f"Pole „{label}” wymaga co najmniej {minimum} elementów."
+    elif len(records) > maximum:
+        errors[name] = f"Pole „{label}” może zawierać najwyżej {maximum} elementów."
+    seen: set[str] = set()
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            errors[f"{name}.{index}"] = "Element grupy ma nieprawidłowy format."
+            continue
+        record_uuid = str(record.get("record_uuid") or record.get("id") or "")
+        try:
+            normalized_uuid = str(UUID(record_uuid))
+        except (TypeError, ValueError, AttributeError):
+            normalized_uuid = ""
+        if not normalized_uuid or normalized_uuid in seen:
+            errors[f"{name}.{index}.record_uuid"] = "Element grupy musi posiadać unikalny UUID."
+            continue
+        seen.add(normalized_uuid)
+        for child in field.get("fields") or []:
+            if not isinstance(child, dict) or not child.get("name") or child.get("readonly"):
+                continue
+            if not evaluate_scoped_condition(child.get("visible_if"), root_data=root_data, current_data=record):
+                continue
+            required = bool(child.get("required"))
+            if child.get("required_if"):
+                required = required or evaluate_scoped_condition(child.get("required_if"), root_data=root_data, current_data=record)
+            error = _validate_repeatable_child(child, record.get(child["name"]), required=required)
+            if error:
+                errors[f"{name}.{normalized_uuid}.{child['name']}"] = error
+    return errors
+
+
 def validate_submission(
     form_definition: Dict[str, Any],
     submission_data: Dict[str, Any],
@@ -684,6 +771,10 @@ def validate_submission(
 
         label = field.get("label", field_name)
         value = submission_data.get(field_name, "")
+
+        if field_type == "repeatable_group":
+            errors.update(_validate_repeatable_group(field, value, submission_data))
+            continue
 
         required = bool(field.get("required"))
         if field.get("required_if"):

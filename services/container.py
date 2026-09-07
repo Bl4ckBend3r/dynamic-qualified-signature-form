@@ -215,7 +215,9 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_repository,
         audit_log_service=audit_log_service,
         workflow_sla_service=workflow_sla_service,
+        document_service=document_service,
     )
+    document_service.workflow_service = workflow_service
     compliance_service = ComplianceService(submission_repository)
     submission_attachment_service = SubmissionAttachmentService(
         submission_repository,

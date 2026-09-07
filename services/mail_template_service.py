@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
 
-from jinja2 import TemplateError
+from jinja2 import ChainableUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 from services.status_catalog import get_status_label
@@ -135,18 +135,27 @@ class MailImportError(ValueError):
 
 
 class _TextExtractor(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, *, preserve_links=False) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self._skip_depth = 0
+        self._preserve_links = preserve_links
+        self._links = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
+        if self._preserve_links and tag.lower() == 'a' and not self._skip_depth:
+            href = str(dict(attrs).get('href') or '')
+            self._links.append(href if href.startswith(('http://', 'https://', 'mailto:', '/')) else '')
         if tag.lower() in {"style", "script"}:
             self._skip_depth += 1
         if tag.lower() in {"br", "p", "div", "tr", "h1", "h2", "h3", "li"}:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        if self._preserve_links and tag.lower() == 'a' and not self._skip_depth and self._links:
+            href = self._links.pop()
+            if href:
+                self.parts.append(f' ({href})')
         if tag.lower() in {"style", "script"} and self._skip_depth:
             self._skip_depth -= 1
         if tag.lower() in {"p", "div", "tr", "h1", "h2", "h3", "li"}:
@@ -284,8 +293,8 @@ class _InlineStyleApplier(HTMLParser):
         return merge_style_attributes(matched)
 
 
-def html_to_text(raw_html: str) -> str:
-    parser = _TextExtractor()
+def html_to_text(raw_html: str, *, preserve_links=False) -> str:
+    parser = _TextExtractor(preserve_links=preserve_links)
     parser.feed(raw_html or "")
     return parser.text()
 
@@ -539,13 +548,42 @@ def generate_text_from_html(content_html: str) -> str:
     return html_to_text(content_html)
 
 
+SPECIAL_LINK_VARIABLES = frozenset({
+    'status_url', 'public_status_url', 'participant_action_url', 'podpisz_url',
+    'pobierz_url', 'document_url', 'correction_url', 'signed_agreement_download_link',
+    'draft_resume_url',
+})
+
+
+class _MailUndefined(ChainableUndefined):
+    """Keep the existing empty-value policy, including nested optional values."""
+
+    def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError(name)
+        return type(self)(name=f'{self._undefined_name}.{name}')
+
+    def __getitem__(self, key):
+        return type(self)(name=f'{self._undefined_name}.{key}')
+
+    def __str__(self):
+        name = str(self._undefined_name or 'unknown')
+        # A dynamic index can contain personal data: log only variable identifiers.
+        name = name if re.fullmatch(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*', name) else 'unknown'
+        label = 'missing_special_link' if name in SPECIAL_LINK_VARIABLES else 'missing_template_variable'
+        logger.warning('%s=%s', label, name)
+        return ''
+
+
 def _jinja_env() -> SandboxedEnvironment:
-    return SandboxedEnvironment(autoescape=False)
+    return SandboxedEnvironment(autoescape=False, undefined=_MailUndefined)
 
 
 def render_template_text(raw_text: str, context: dict[str, Any]) -> str:
     raw_text = raw_text or ""
     env = _jinja_env()
+    context = {key: (_MailUndefined(name=key) if key in SPECIAL_LINK_VARIABLES and not value else value)
+               for key, value in context.items()}
     candidates = [raw_text]
     unescaped_text = html.unescape(raw_text)
     if unescaped_text != raw_text:
@@ -556,22 +594,36 @@ def render_template_text(raw_text: str, context: dict[str, Any]) -> str:
             return env.from_string(candidate).render(**context)
         except TemplateError as exc:
             last_error = exc
-    logger.warning("mail_template_render_failed error=%s", last_error, exc_info=last_error)
-    return candidates[-1]
+    logger.warning("mail_template_render_failed error=%s", type(last_error).__name__)
+    raise TemplateError('Nie można wyrenderować szablonu wiadomości.') from None
 
 
 def build_status_label(value: str) -> str:
     return STATUS_LABELS.get(str(value or ""), str(value or ""))
 
 
-def build_mail_context(form, submission, files: list | None = None, extra: dict | None = None) -> dict[str, Any]:
+def build_mail_context(form, submission, files: list | None = None, extra: dict | None = None,
+                       *, participant: dict | None = None) -> dict[str, Any]:
     context: dict[str, Any] = {}
     if submission:
-        context.update(submission.data_json or {})
-        for column in submission.__table__.columns:
-            context[column.name] = getattr(submission, column.name)
-        context["submission"] = dict(context)
-        context["data_json"] = dict(submission.data_json or {})
+        if participant is None:
+            context.update(submission.data_json or {})
+            dynamic_contact = {'imiona', 'imie', 'nazwisko', 'email', 'phone', 'telefon'}
+            for column in submission.__table__.columns:
+                value = getattr(submission, column.name)
+                if column.name not in dynamic_contact or value not in (None, '') or column.name not in context:
+                    context[column.name] = value
+            context["submission"] = dict(context)
+            context["data_json"] = dict(submission.data_json or {})
+        else:
+            from services.mail_recipient_service import PARTICIPANT_FIELDS
+            person = {key: str(participant.get(key) or '') for key in PARTICIPANT_FIELDS}
+            person.update({key: str(participant[key] or '') for key in ('decision', 'decision_label', 'decision_reason') if key in participant})
+            context.update({key: getattr(submission, key, '') for key in (
+                'submission_id', 'created_at', 'updated_at', 'process_status', 'workflow_step', 'workflow_stage')})
+            context.update(participant=person, participant_name=person['full_name'],
+                           imiona=person['first_name'], imie=person['first_name'], nazwisko=person['last_name'],
+                           email=person['email'], phone=person['phone'])
     context["form_name"] = getattr(form, "name", "") if form else context.get("form_name", "")
     context["form_title"] = context["form_name"]
     context["form_slug"] = getattr(form, "slug", "") if form else context.get("form_slug", "")
@@ -586,10 +638,15 @@ def build_mail_context(form, submission, files: list | None = None, extra: dict 
         else process_status_label
     )
     context["status_label"] = context["process_status_label"]
+    context['public_submission_id'] = context.get('submission_id', '')
+    context['submitted_at'] = context.get('created_at', '')
+    context['submission_date'] = context['submitted_at']
+    context['current_status'] = context['status_label']
     current_stage = str(context.get("workflow_stage") or context.get("workflow_step") or "")
     context["current_stage"] = current_stage
     context["current_stage_label"] = (
-        workflow_status_label(current_stage, getattr(form, "definition_json", {}) if form else {})
+        workflow_status_label(current_stage, (getattr(getattr(submission, 'form_version', None), 'definition_json', None)
+                                              or getattr(form, "definition_json", {}) or {}))
         if current_stage
         else ""
     )
@@ -742,16 +799,19 @@ def render_platform_mail_html(
 
 def render_platform_mail_text(template, context: dict[str, Any]) -> str:
     title = render_template_text(getattr(template, "content_title", "") or getattr(template, "name", "") or "Wiadomosc", context)
-    raw_body = (
+    raw_text = (
         getattr(template, "body_text", "")
         or getattr(template, "text_body", "")
         or getattr(template, "content_text", "")
-        or getattr(template, "content_intro", "")
+    )
+    raw_body = (raw_text or getattr(template, "content_intro", "")
         or getattr(template, "content_html", "")
         or getattr(template, "body_html", "")
         or getattr(template, "html_body", "")
     )
     body = render_template_text(raw_body or "", context)
+    if not raw_text:
+        body = html_to_text(body, preserve_links=True)
     instruction = render_template_text(
         getattr(template, "instruction_text", "") or html_to_text(getattr(template, "instruction_html", "") or ""),
         context,

@@ -114,6 +114,7 @@ class SubmissionService:
                 "result": None,
             }
 
+        identity_metadata = self._repeatable_identity_metadata(form_config, submission_data)
         self.storage.ensure_form_output_structure(form_slug)
         pdf_filename = self.build_pdf_filename(form_slug, submission_id)
         submission = self.create_submission(
@@ -123,6 +124,7 @@ class SubmissionService:
                 **submission_data,
                 "data_json": {
                     **submission_data,
+                    **identity_metadata,
                     **(
                         {"_consent_snapshots": self.compliance_service.build_unversioned_snapshots(form_config, submission_data)}
                         if form_version_id is None
@@ -137,6 +139,7 @@ class SubmissionService:
             },
             submission_id=submission_id,
             dispatch_received=False,
+            start_workflow=(form_config.get("workflow") or {}).get("flow_mode") != "explicit",
         )
         try:
             self.compliance_service.record_submission_acceptances(
@@ -177,7 +180,9 @@ class SubmissionService:
             for condition in failed_conditions
         )
 
-        if auto_rejected:
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            self.workflow_service.enter_submission_review(submission, form_config)
+        elif auto_rejected:
             self._auto_reject_submission(
                 submission,
                 qualification,
@@ -188,7 +193,12 @@ class SubmissionService:
                 submission,
                 qualification,
             )
-        elif self.mail_dispatch_service:
+        repeatable_confirmation = any(
+            isinstance(field, dict) and field.get('type') == 'repeatable_group'
+            and (field.get('submission_confirmation') or {}).get('enabled')
+            for field in form_config.get('fields') or []
+        )
+        if self.mail_dispatch_service and (repeatable_confirmation or not (auto_rejected or requires_officer_decision)):
             try:
                 self.mail_dispatch_service.dispatch_submission_received(submission_id)
             except Exception as exc:
@@ -239,6 +249,7 @@ class SubmissionService:
         form_data: dict,
         submission_id: str | None = None,
         dispatch_received: bool = True,
+        start_workflow: bool = True,
         form_version_id: int | None = None,
     ) -> dict:
         submission_id = submission_id or str(uuid4())
@@ -289,6 +300,8 @@ class SubmissionService:
         )
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
+        if self.workflow_service and start_workflow:
+            self.workflow_service.enter_submission_review(submission, form_config)
         if dispatch_received and self.mail_dispatch_service:
             try:
                 self.mail_dispatch_service.dispatch_submission_received(submission_id)
@@ -324,6 +337,7 @@ class SubmissionService:
         )
         mapped_submission = build_submission_from_form(submission_data, form_config)
         errors = self._validate(form_config, submission_data)
+        errors.update(self._validate_preserved_applicants(form_config, submission_data, existing))
         attachments, attachment_errors = self.submission_attachment_service.validate_uploads(
             form_config,
             submission_data,
@@ -355,6 +369,13 @@ class SubmissionService:
             "_qualification": qualification,
             "_qualification_history": history,
         }
+        signed_snapshot = dict(system_data.get("_signed_declaration_snapshot") or {})
+        signed_data_changed = bool(signed_snapshot) and signed_snapshot.get("protected_data") != submission_data
+        if signed_data_changed:
+            signature_history = list(system_data.get("_declaration_signature_history") or [])
+            signature_history.append({**signed_snapshot, "invalidated_at": datetime.now(timezone.utc).isoformat(), "reason": "signed_data_changed_during_correction"})
+            stored_data.pop("_signed_declaration_snapshot", None)
+            stored_data["_declaration_signature_history"] = signature_history
         updates = {
             **submission_data,
             "data_json": stored_data,
@@ -365,6 +386,20 @@ class SubmissionService:
             "officer_decision": "",
             "officer_decision_reason": "",
         }
+        explicit_flow = (form_config.get("workflow") or {}).get("flow_mode") == "explicit"
+        if explicit_flow:
+            updates["workflow_step"] = existing.get("workflow_stage") or existing.get("workflow_step")
+            updates["process_status"] = existing.get("process_status")
+        if signed_data_changed:
+            updates.update({
+                "declaration_generated": "",
+                "declaration_filename": "",
+                "declaration_signed": "",
+                "declaration_signed_filename": "",
+                "declaration_signature_valid": "",
+                "declaration_signature_type": "",
+                "declaration_signature_error": "Dane objęte podpisem zmieniły się podczas korekty; wymagana jest nowa deklaracja i podpis.",
+            })
         self.submission_repository.update(submission_id, updates)
         self.submission_attachment_service.persist(
             form_slug=form_slug,
@@ -396,7 +431,9 @@ class SubmissionService:
             )
         )
 
-        if auto_rejected:
+        if explicit_flow:
+            self.workflow_service.advance_after_action(refreshed, form_config, actor="participant")
+        elif auto_rejected:
             self._auto_reject_submission(
                 refreshed,
                 qualification,
@@ -533,6 +570,48 @@ class SubmissionService:
         stored_data["_qualification_history"] = history
         self.submission_repository.update(submission["submission_id"], {"data_json": stored_data})
         submission["data_json"] = stored_data
+
+    @staticmethod
+    def _applicant_groups(form_config: dict) -> list[dict]:
+        return [
+            field for field in form_config.get("fields") or []
+            if isinstance(field, dict)
+            and field.get("type") == "repeatable_group"
+            and field.get("applicant_record") is True
+            and field.get("name")
+        ]
+
+    @classmethod
+    def _repeatable_identity_metadata(cls, form_config: dict, submission_data: dict) -> dict:
+        identities: dict[str, str] = {}
+        for group in cls._applicant_groups(form_config):
+            records = submission_data.get(str(group["name"])) or []
+            if not records or not isinstance(records[0], dict):
+                continue
+            record_uuid = str(records[0].get("record_uuid") or records[0].get("id") or "")
+            if record_uuid:
+                identities[str(group["name"])] = record_uuid
+        metadata: dict = {"_applicant_record_ids": identities}
+        if len(identities) == 1:
+            metadata["_applicant_record_id"] = next(iter(identities.values()))
+        return metadata
+
+    @classmethod
+    def _validate_preserved_applicants(cls, form_config: dict, submission_data: dict, existing: dict) -> dict[str, str]:
+        stored = dict(existing.get("data_json") or {})
+        identities = dict(stored.get("_applicant_record_ids") or {})
+        if not identities and stored.get("_applicant_record_id") and len(cls._applicant_groups(form_config)) == 1:
+            identities[str(cls._applicant_groups(form_config)[0]["name"])] = str(stored["_applicant_record_id"])
+        errors: dict[str, str] = {}
+        for group_name, applicant_id in identities.items():
+            records = submission_data.get(group_name) or []
+            record_ids = {
+                str(record.get("record_uuid") or record.get("id") or "")
+                for record in records if isinstance(record, dict)
+            }
+            if applicant_id not in record_ids:
+                errors[group_name] = "Nie można usunąć osoby składającej wniosek ani zmienić jej UUID."
+        return errors
 
     def _mark_officer_decision_required(
         self,
@@ -711,21 +790,34 @@ class SubmissionService:
             return None
         form_slug = str(row.get("form_slug") or "").strip()
         form_title = row.get("form_name") or form_slug
-        if form_config_service and storage and form_slug:
-            meta = form_config_service.get_form_meta(storage, form_slug)
+        if not row.get("form_name") and form_config_service and storage and form_slug:
+            try:
+                meta = form_config_service.get_form_meta(storage, form_slug)
+            except Exception as exc:
+                logger.warning("submission_metadata_unavailable error=%s", type(exc).__name__)
+                meta = None
             if meta:
                 form_title = row.get("form_name") or meta.get("title") or form_slug
         process_state = build_process_state(row)
         can_view_status_details = process_state.officer_decision == OfficerDecision.ACCEPTED or process_state.agreement_blocked
+        can_sign_documents = process_state.can_sign_documents
+        definition = self.workflow_service.definition_for(row) if self.workflow_service else {}
+        if definition.get("workflow", {}).get("flow_mode") == "explicit":
+            step = self.workflow_service._find_step(definition, self.workflow_service.get_current_step(row, definition)) or {}
+            can_sign_documents = step.get("stage_type") in {"document", "user_action"} and step.get("action") in {"generate_document", "await_signature"} and not step.get("final")
+            if step.get("document_lifecycle") == "composite":
+                can_sign_documents = True
+            can_view_status_details = True
         return {
             "submission_id": submission_id,
             "form_slug": form_slug,
             "form_title": form_title,
             "officer_decision": process_state.officer_decision.value,
             "process_status": str(row.get("process_status") or process_state.status.value),
-            "can_sign_documents": process_state.can_sign_documents,
+            "can_sign_documents": can_sign_documents,
             "can_view_status_details": can_view_status_details,
             "workflow_step": str(row.get("workflow_step") or "").strip(),
+            "form_version_id": row.get("form_version_id"),
             "row": row,
         }
 

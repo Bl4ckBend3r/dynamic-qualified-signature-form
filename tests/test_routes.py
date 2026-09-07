@@ -10,6 +10,9 @@ def test_index_lists_available_forms(client):
 
     assert response.status_code == 200
     assert "Formularz" in response.get_data(as_text=True)
+    assert "Wybierz formularz</p>" in response.get_data(as_text=True)
+    assert 'aria-label="Wypełnij formularz:' in response.get_data(as_text=True)
+    assert 'class="form-tile__action">Wypełnij formularz</span>' in response.get_data(as_text=True)
 
 
 def test_form_page_loads(client):
@@ -20,6 +23,35 @@ def test_form_page_loads(client):
     assert "Formularz" in html
     assert 'name="imie"' in html
     assert 'name="pesel"' in html
+    assert '<h3>Twoje dane</h3>' in html
+
+
+def test_public_section_wording_preserves_definition_and_address_fields(client, app):
+    from copy import deepcopy
+
+    definition = app.testing_storage.form_definition
+    definition['fields'].append({'type': 'section', 'label': 'Status kandydata / kandydatki i dane dodatkowe'})
+    definition['fields'].append({'type': 'text', 'name': 'status_note', 'label': 'Dodatkowe informacje'})
+    original = deepcopy(definition)
+    html = client.get('/form/formularz_zgloszeniowy').get_data(as_text=True)
+    assert '<h3>Twój status</h3>' in html
+    assert '<h3>Dane kontaktowe</h3>' in html
+    for name in ('wojewodztwo', 'powiat', 'gmina', 'miejscowosc', 'ulica', 'nr_budynku', 'nr_lokalu', 'kod_pocztowy'):
+        assert f'name="{name}"' in html
+    assert definition == original
+
+
+def test_contact_preserves_details_without_duplicate_heading(app):
+    from flask import render_template
+
+    page = dict(title='Kontakt', content_html='<p>Biuro projektu</p>', address='Testowa 1\nZielona Góra',
+                email='biuro@example.org', phones=[dict(label='tel.', number='123456789')])
+    with app.test_request_context('/kontakt'):
+        html = render_template('contact.html', page=page)
+    assert '<h2>Kontakt</h2>' in html
+    assert 'Dane kontaktowe' not in html
+    for value in ('Biuro projektu', 'Testowa 1', 'Zielona Góra', '123456789', 'mailto:biuro@example.org'):
+        assert value in html
 
 
 def test_form_page_pesel_autofill_locks_dependent_fields(client):
@@ -250,6 +282,8 @@ def test_show_result_for_existing_submission(client, app, valid_form_data, monke
     assert response.status_code == 200
     assert submission_id in html
     assert "Formularz" in html
+    assert '<h2>Potwierdzamy Twoje zgłoszenie</h2>' in html
+    assert 'Zapisaliśmy Twoje zgłoszenie.' in html
 
 
 def test_show_result_does_not_render_stored_access_token(client, app, valid_form_data, monkeypatch):
@@ -393,6 +427,11 @@ def test_documents_to_sign_get_loads(client):
 
     assert response.status_code == 200
     assert "podpisania" in html
+    assert 'Otwórz link dostępu' in html
+    assert 'Podaj numer zgłoszenia wniosku (ID)' not in html
+    assert 'data-access-token=' not in html
+    assert 'Sprawdzimy status wniosku przed pokazaniem dokumentów do podpisu.' in html
+    assert 'aria-describedby="signing-status-help acceptance-status"' in html
 
 
 def test_document_endpoint_names_stay_registered(app):

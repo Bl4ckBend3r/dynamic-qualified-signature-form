@@ -1,42 +1,51 @@
 {% extends "admin/base.html" %}
-{% block title %}Zgloszenia{% endblock %}
+{% block title %}Zgłoszenia{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">Wszystkie formularze</p>
-        <h1>Zgloszenia</h1>
+        <h1>Zgłoszenia</h1>
     </div>
 </div>
-<form id="all-submission-advanced-filters" method="get" class="admin-card admin-filters admin-filters--compact">
-    <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
-    <select name="status">
+<form id="all-submission-advanced-filters" method="get" class="admin-card admin-filters admin-submission-filters">
+    <div class="admin-filter-grid admin-filter-grid--primary">
+    <label><span>Szukaj</span><input name="q" value="{{ filters.get('q', '') }}" placeholder="ID, osoba, e-mail lub formularz"></label>
+    <label><span>Status</span><select name="status">
         <option value="">Wszystkie statusy</option>
         {% for option in status_options %}
             <option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
-    </select>
-    <select name="checklist_status"><option value="">Każdy stan checklisty</option><option value="incomplete" {% if filters.get('checklist_status') == 'incomplete' %}selected{% endif %}>Checklista niekompletna</option><option value="blocking_failure" {% if filters.get('checklist_status') == 'blocking_failure' %}selected{% endif %}>Kryterium blokujące: NIE</option><option value="ready" {% if filters.get('checklist_status') == 'ready' %}selected{% endif %}>Gotowe do decyzji</option></select>
+    </select></label>
+    <label><span>Stan workflow</span><input name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" placeholder="Każdy stan"></label>
+    <label><span>Stan checklisty</span><select name="checklist_status"><option value="">Każdy stan checklisty</option><option value="incomplete" {% if filters.get('checklist_status') == 'incomplete' %}selected{% endif %}>Checklista niekompletna</option><option value="blocking_failure" {% if filters.get('checklist_status') == 'blocking_failure' %}selected{% endif %}>Kryterium blokujące: NIE</option><option value="ready" {% if filters.get('checklist_status') == 'ready' %}selected{% endif %}>Gotowe do decyzji</option></select></label>
     <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
     <label><span>Data do</span><input type="date" name="date_to" value="{{ filters.get('date_to', '') }}"></label>
-    <select name="sort">
+    </div>
+    <details class="admin-filter-more" {% if filters.get('sort') or filters.get('direction') or filters.get('queue') or filters.get('assignee') or filters.get('priority') %}open{% endif %}>
+    <summary>Więcej filtrów</summary>
+    <div class="admin-filter-grid admin-filter-grid--additional">
+    <label><span>Sortowanie</span><select name="sort">
         {% for option in ["created_at", "process_status", "nazwisko", "email", "submission_id"] %}
             <option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
-    </select>
-    <select name="direction">
+    </select></label>
+    <label><span>Kierunek</span><select name="direction">
         <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
         <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
-    </select>
-    <select name="queue">{% for value, label in [("", "Wszystkie kolejki"), ("mine", "Moje sprawy"), ("unassigned", "Nieprzydzielone"), ("overdue", "Po terminie przydziału"), ("sla_overdue", "SLA po terminie"), ("sla_today", "SLA dzisiaj"), ("sla_24h", "SLA ≤ 24h"), ("sla_48h", "SLA ≤ 48h"), ("requiring_decision", "Wymagające decyzji"), ("waiting_office_signature", "Oczekujące na podpis urzędu")] %}<option value="{{ value }}" {% if filters.get('queue') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
-    <select name="assignee"><option value="">Każdy prowadzący</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Nieprzydzielone</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select>
-    <select name="priority"><option value="">Każdy priorytet</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select>
-    <button class="admin-button-secondary" type="submit">Filtruj</button>
+    </select></label>
+    <label><span>Kolejka</span><select name="queue">{% for value, label in [("", "Wszystkie kolejki"), ("mine", "Moje sprawy"), ("unassigned", "Nieprzydzielone"), ("overdue", "Po terminie przydziału"), ("sla_overdue", "SLA po terminie"), ("sla_today", "SLA dzisiaj"), ("sla_24h", "SLA ≤ 24h"), ("sla_48h", "SLA ≤ 48h"), ("requiring_decision", "Wymagające decyzji"), ("waiting_office_signature", "Oczekujące na podpis urzędu")] %}<option value="{{ value }}" {% if filters.get('queue') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label><span>Prowadzący</span><select name="assignee"><option value="">Każdy prowadzący</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Nieprzydzielone</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></label>
+    <label><span>Priorytet</span><select name="priority"><option value="">Każdy priorytet</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></label>
+    </div>
+    </details>
+    <div class="admin-filter-actions"><button class="admin-button" type="submit">Filtruj</button><a class="admin-button-secondary" href="{{ url_for('admin.submissions_all') }}">Wyczyść filtry</a></div>
 </form>
 <form id="all-submission-column-filters" method="get"><input type="hidden" name="sort" value="{{ filters.get('sort', 'created_at') }}"><input type="hidden" name="direction" value="{{ filters.get('direction', 'desc') }}"></form>
-<div class="admin-filter-summary"><span>Znaleziono: <strong>{{ pagination.total }}</strong></span><a href="{{ url_for('admin.submissions_all') }}">Wyczyść filtry</a></div>
+<div class="admin-filter-summary"><span>Znaleziono: <strong>{{ pagination.total }}</strong></span></div>
 {% macro sortable(label, field) -%}<a class="admin-sort-link" href="{{ sort_urls[field] }}">{{ label }}{% if filters.get('sort', 'created_at') == field %}<span class="admin-sort-indicator">{{ '↑' if filters.get('direction') == 'asc' else '↓' }}</span>{% endif %}</a>{%- endmacro %}
 <div class="admin-card admin-table-wrap">
     <table class="admin-table admin-table--submissions admin-table--responsive">
+        <colgroup><col class="col-id"><col class="col-name"><col class="column-secondary col-email"><col class="column-secondary col-phone"><col class="col-date"><col class="col-form"><col class="col-assignee"><col class="col-priority"><col class="col-status"><col class="column-secondary col-workflow"><col class="column-secondary col-decision"><col class="col-actions"></colgroup>
         <thead>
             <tr>
                 <th>{{ sortable('ID', 'submission_id') }}</th>
@@ -69,7 +78,7 @@
                 <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
                 <td>{{ form.name if form else submission.form_slug }}</td>
                 <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
-                <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
+                <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at|business_datetime('%d.%m.%Y, %H:%M') if submission.due_at else "Bez terminu" }}</small></td>
                 <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
                 <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step, form) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
 <td class="column-secondary">

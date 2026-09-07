@@ -33,7 +33,7 @@ class DocumentState(StrEnum):
 class LayeredWorkflowState:
     workflow_stage: str
     officer_decision: str
-    document_states: dict[str, str]
+    document_states: dict[str, Any]
     final_outcome: FinalOutcome
     normalized_process_status: ProcessStatusCode
     legacy_process_status: str
@@ -142,7 +142,7 @@ def layered_state_from_legacy(
         used_fallback = True
         logger.warning("Unknown legacy workflow status: %s", raw or "<empty>")
 
-    documents = {str(key): str(value) for key, value in dict(document_states or {}).items()}
+    documents = {str(key): value if isinstance(value, dict) else str(value) for key, value in dict(document_states or {}).items()}
     if "declaration" not in documents and raw in _DECLARATION_STATES:
         documents["declaration"] = _DECLARATION_STATES[raw].value
     if "agreement" not in documents and raw in _AGREEMENT_STATES:

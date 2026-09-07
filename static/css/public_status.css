@@ -1,0 +1,137 @@
+.status-page {
+    max-width: 820px;
+    margin: 0 auto 32px;
+    padding: 32px;
+}
+
+.status-page .card-header h1 {
+    margin: 0;
+    font-size: 2rem;
+    line-height: 1.2;
+}
+
+.status-page .status-lookup-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.status-page .status-lookup-form__field {
+    min-width: 0;
+}
+
+.status-page .status-lookup-form__field label {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.status-page .status-lookup-form input,
+.status-page .status-lookup-form .btn-primary {
+    min-height: 48px;
+    padding: 12px 16px;
+    font-size: 1rem;
+    line-height: 22px;
+}
+
+.status-page .status-lookup-form input,
+.status-page .status-result__id {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.status-page .status-lookup-form input {
+    border-color: var(--muted);
+}
+
+.status-page .status-result,
+.status-page .status-page__message {
+    margin: 32px 0 0;
+    padding: 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-soft);
+}
+
+.status-page .status-result h2 {
+    margin: 0 0 16px;
+    font-size: 1.25rem;
+}
+
+.status-page .status-result__badge {
+    max-width: 100%;
+    margin: 0;
+    padding: 8px 12px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 1rem;
+    line-height: 1.5;
+    white-space: normal;
+    text-transform: none;
+    overflow-wrap: anywhere;
+}
+
+.status-page .status-result__number {
+    margin: 24px 0 0;
+}
+
+.status-page .status-result__number dt {
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.status-page .status-result__number dd {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 0;
+}
+
+.status-page .status-result__id {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+}
+
+.status-page .status-result__number button {
+    flex-shrink: 0;
+    padding: 10px 16px;
+}
+
+.status-page .status-result__copy-message {
+    margin: 12px 0 0;
+}
+
+.status-page .status-page__message--error {
+    color: var(--danger);
+    border-color: var(--danger);
+    background: var(--surface);
+}
+
+@media (max-width: 600px) {
+    .status-page {
+        padding: 24px;
+    }
+
+    .status-page .status-lookup-form {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .status-page .status-lookup-form .btn-primary {
+        width: 100%;
+    }
+
+    .status-page .status-result,
+    .status-page .status-page__message {
+        padding: 16px;
+    }
+
+    .status-page .status-result__number dd {
+        flex-wrap: wrap;
+    }
+
+    .status-page .status-result__id {
+        flex-basis: 100%;
+    }
+}

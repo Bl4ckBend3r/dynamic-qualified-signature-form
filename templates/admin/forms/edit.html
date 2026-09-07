@@ -13,11 +13,10 @@
     </div>
 </div>
 {% include "admin/forms/_tabs.html" %}
-<form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id) }}">
+<form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-required-note="false" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
     {% if form.editable_version_id %}<input type="hidden" name="form_version_id" value="{{ form.editable_version_id }}">{% endif %}
-    <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
     <section
     class="admin-form-tab-panel"
     id="form-tab-basic"
@@ -241,7 +240,7 @@
         </label>
 
     </div>
-        {% set qualification = (form.definition_json or {}).get('qualification_conditions') or {} %}
+        {% set qualification = (form.workflow_editor_definition|default(form.definition_json) or {}).get('qualification_conditions') or {} %}
         <div class="admin-section" data-qualification-builder>
             <div class="admin-section-heading">
                 <div>
@@ -760,8 +759,8 @@
                     <div class="admin-instruction-stage__heading">
                         <h3>Etap <span data-stage-number>{{ loop.index }}</span></h3>
                         <div class="admin-instruction-stage__actions">
-                            <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przenieś etap wyżej">↑</button>
-                            <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przenieś etap niżej">↓</button>
+                            <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przesuń etap w górę">↑</button>
+                            <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przesuń etap w dół">↓</button>
                             <button type="button" class="admin-link-button admin-link-danger" data-remove-stage>Usuń etap</button>
                         </div>
                     </div>
@@ -812,8 +811,8 @@
             <div class="admin-instruction-stage__heading">
                 <h3>Etap <span data-stage-number></span></h3>
                 <div class="admin-instruction-stage__actions">
-                    <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przenieś etap wyżej">↑</button>
-                    <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przenieś etap niżej">↓</button>
+                    <button type="button" class="admin-button-secondary" data-stage-up aria-label="Przesuń etap w górę">↑</button>
+                    <button type="button" class="admin-button-secondary" data-stage-down aria-label="Przesuń etap w dół">↓</button>
                     <button type="button" class="admin-link-button admin-link-danger" data-remove-stage>Usuń etap</button>
                 </div>
             </div>
@@ -859,6 +858,9 @@
     {% endif %}
     {% set workflow = workflow_builder %}
     <div class="admin-workflow-builder" data-workflow-builder>
+        {% if workflow_documents_converted|default(false) %}
+        <p class="workflow-help" data-document-conversion-notice>Połączono techniczne fazy dokumentów w złożone etapy. Sprawdź przebieg i instrukcje; zapis dotyczy wyłącznie wersji roboczej.</p>
+        {% endif %}
         <input type="hidden" name="workflow_controls_present" value="1">
         <input type="hidden" name="workflow_builder_json" data-workflow-builder-json>
 
@@ -879,18 +881,20 @@
                     <select name="workflow_initial_step" data-workflow-initial required>
                         {% for step in workflow.get('steps', []) %}<option value="{{ step.get('id') }}" {% if workflow.get('initial_step') == step.get('id') %}selected{% endif %}>{{ step.get('admin_label') }}</option>{% endfor %}
                     </select>
-                    <small>Ten status określa, od którego etapu rozpoczyna się proces.</small>
+                    <small>Wybór wskazuje ID jednego początkowego etapu procesu.</small>
                 </label>
-                <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
-                <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
-                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" data-workflow-toggle="agreement-confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Wymaga potwierdzenia podpisania umowy przez urząd</span></label>
+                <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Skonfigurowana deklaracja</span></label>
+                <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Skonfigurowana umowa</span></label>
+                <label class="admin-check"><input type="checkbox" name="requires_agreement_confirmation" data-workflow-toggle="agreement-confirmation" {% if workflow.get('requires_agreement_confirmation') %}checked{% endif %}><span>Obsługa potwierdzenia podpisu urzędu</span></label>
                 <label class="admin-check"><input type="checkbox" name="send_email_notifications" {% if workflow.get('send_email_notifications') %}checked{% endif %}><span>Wysyłaj powiadomienia e-mail</span></label>
                 <label class="admin-check"><input type="checkbox" name="allow_correction" {% if workflow.get('allow_correction') %}checked{% endif %}><span>Pozwól na korektę zgłoszenia</span></label>
             </div>
-            <p class="workflow-help">Dokumenty wymagane w procesie konfigurujesz w osobnych zakładkach „Deklaracja” i „Umowa”.</p>
-            {% set assignment = (form.definition_json or {}).get('assignment') or {} %}
+            <p class="workflow-help">Dokumenty konfigurujesz w zakładkach „Deklaracja” i „Umowa”. Ich wykonanie i kolejność wynikają wyłącznie z etapów poniżej.</p>
+            <p class="workflow-help">Etap decyzji urzędnika zatrzymuje proces do czasu wyboru decyzji. Jeżeli następuje bezpośrednio po złożeniu formularza, zgłoszenie automatycznie oczekuje na tym etapie.</p>
+            {% if g.admin_user.role == 'super_admin' %}<div class="workflow-decision-action"><a class="admin-button-secondary" href="{{ url_for('admin.decision_types') }}">Konfiguruj opcje decyzji</a><p class="workflow-help">Zdefiniuj decyzje dostępne w etapach procesu.</p></div>{% endif %}
+            {% set assignment = (form.workflow_editor_definition|default(form.definition_json) or {}).get('assignment') or {} %}
             <div class="admin-section"><div class="admin-section-heading"><div><h3>Automatyczny przydział spraw</h3><p>Round-robin obejmuje tylko aktywnych użytkowników z dostępem i uprawnieniem do opiniowania.</p></div></div><div class="admin-form-grid"><label><span>Tryb</span><select name="assignment_mode"><option value="manual" {% if assignment.get('mode', 'manual') == 'manual' %}selected{% endif %}>Ręczny</option><option value="round_robin" {% if assignment.get('mode') == 'round_robin' %}selected{% endif %}>Round-robin</option></select></label></div><div class="admin-check-grid">{% for user in users if user.is_active and not user.is_blocked %}<label class="admin-check"><input type="checkbox" name="assignment_eligible_user_ids" value="{{ user.id }}" {% if user.id in (assignment.get('eligible_users') or []) %}checked{% endif %}><span>{{ user.email }}</span></label>{% else %}<p>Brak aktywnych użytkowników.</p>{% endfor %}</div></div>
-            <p><button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.form_repair_agreement_confirmation', form_id=form.id) }}" formmethod="post">Napraw ścieżkę podpisu urzędu</button></p>
+
         </section>
 
         <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="workflow" {% if active_tab != 'workflow' %}hidden{% endif %}>
@@ -905,21 +909,21 @@
                         <div class="workflow-stage-card__heading">
                             <div><span class="workflow-stage-number">Etap {{ loop.index }}</span><h3 data-step-heading>{{ step.get('admin_label') }}</h3></div>
                             <div class="workflow-stage-actions">
-                                <button type="button" class="admin-button-secondary compact" data-edit-workflow-step>Edytuj etap</button>
+                                <button type="button" class="admin-button-secondary compact" data-edit-workflow-step aria-expanded="false">Edytuj etap</button>
                                 <button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button>
-                                <button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przenieś etap wyżej">Przesuń w górę</button>
-                                <button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przenieś etap niżej">Przesuń w dół</button>
+                                <button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przesuń etap w górę">↑</button>
+                                <button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przesuń etap w dół">↓</button>
                                 <button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button>
                             </div>
                         </div>
                         <div class="workflow-stage-badges" data-step-badges></div>
-                        <p class="workflow-stage-summary" data-step-summary></p>
+                        <dl class="workflow-stage-summary" data-step-summary></dl>
                         <div class="workflow-stage-editor" data-workflow-step-editor hidden>
                         <div class="workflow-stage-fields">
-                            <label><span>ID etapu</span><input data-step-id value="{{ step.get('id') }}" {% if form.workflow_ids_locked %}readonly title="ID jest zablokowane, ponieważ etap mógł zostać użyty w zgłoszeniach."{% endif %}><small>Techniczny identyfikator używany w przejściach workflow.{% if form.workflow_ids_locked %} Zmiana jest zablokowana, ponieważ formularz ma już zgłoszenia.{% endif %}</small></label>
+                            <label><span>ID etapu</span><input data-step-id required value="{{ step.get('id') }}" {% if form.workflow_ids_locked %}readonly title="ID jest zablokowane, ponieważ etap mógł zostać użyty w zgłoszeniach."{% endif %}><small>ID jest używane w przejściach workflow. Nie można go zmienić po utworzeniu zgłoszeń.</small></label>
                             <label><span>Nazwa dla administratora</span><input data-step-admin-label value="{{ step.get('admin_label') }}" required></label>
-                            <label><span>Nazwa dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required></label>
-                            <label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
+                            <label><span>Status widoczny dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required><small>Tekst wyświetlany użytkownikowi na tym etapie.</small></label>
+                            <label><span>Status techniczny</span><select data-step-status required title="Status zapisywany przez silnik workflow; niezależny od tekstu widocznego dla użytkownika.">{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
                             <label><span>Typ etapu</span><select data-step-stage-type><option value="system" {% if step.get('stage_type') == 'system' %}selected{% endif %}>Etap automatyczny</option><option value="user_action" {% if step.get('stage_type') == 'user_action' %}selected{% endif %}>Akcja użytkownika</option><option value="officer_action" {% if step.get('stage_type') == 'officer_action' %}selected{% endif %}>Akcja urzędnika / decyzja</option><option value="document" {% if step.get('stage_type') == 'document' %}selected{% endif %}>Etap dokumentowy</option><option value="final" {% if step.get('stage_type') == 'final' %}selected{% endif %}>Etap końcowy</option></select></label>
                             <label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label>
                         </div>
@@ -950,10 +954,10 @@
             <div class="workflow-diagram-toolbar" role="toolbar" aria-label="Sterowanie diagramem workflow">
                 <span class="workflow-diagram-mode" data-workflow-diagram-mode>Układ automatyczny</span>
                 <button type="button" class="admin-button-secondary" data-workflow-diagram-fit>Dopasuj do ekranu</button>
-                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-in aria-label="Powiększ diagram">Powiększ</button>
-                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-out aria-label="Pomniejsz diagram">Pomniejsz</button>
-                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-reset>Reset zoom</button>
-                <button type="button" class="admin-button-secondary" data-workflow-diagram-layout-reset>Resetuj układ diagramu</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-in aria-label="Powiększ diagram" title="Powiększ diagram">+</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-out aria-label="Pomniejsz diagram" title="Pomniejsz diagram">−</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-zoom-reset title="Przywróć skalę 100% bez zmiany położenia węzłów">Reset</button>
+                <button type="button" class="admin-button-secondary" data-workflow-diagram-layout-reset title="Usuń ręczne położenia węzłów i dopasuj automatyczny układ">Resetuj układ diagramu</button>
             </div>
             <div class="workflow-diagram" data-workflow-diagram-wrap>
                 <div class="workflow-diagram__viewport" data-workflow-diagram-viewport>
@@ -1168,12 +1172,27 @@
             ('beneficiary_agreement_confirmed', 'Po podpisaniu umowy przez urząd'), ('beneficiary_agreement_rejected', 'Po skierowaniu umowy do poprawy')
         ] %}
         {% set available_mail_templates = form.mail_templates|selectattr('is_active')|list %}
+        {% set mail_events = namespace(rows=notification_definitions, ids=notification_definitions|map(attribute=0)|list) %}
+        {% for notification in workflow.get('email_notifications', []) %}
+            {% if notification.get('id') and notification.id not in mail_events.ids %}
+                {% set mail_events.rows = mail_events.rows + [(notification.id, notification.get('label') or notification.id)] %}
+                {% set mail_events.ids = mail_events.ids + [notification.id] %}
+            {% endif %}
+        {% endfor %}
+        {% for mail_template in available_mail_templates %}
+            {% if mail_template.template_type not in mail_events.ids %}
+                {% set mail_events.rows = mail_events.rows + [(mail_template.template_type, mail_template.name)] %}
+                {% set mail_events.ids = mail_events.ids + [mail_template.template_type] %}
+            {% endif %}
+        {% endfor %}
+        {% set recipient_groups = form.workflow_editor_fields|default([])|selectattr('type', 'equalto', 'repeatable_group')|list %}
         <section class="admin-section workflow-section admin-form-tab-panel" data-form-tab-panel="emails" {% if active_tab != 'emails' %}hidden{% endif %}>
             <div class="admin-section-heading"><div><h2>Powiadomienia e-mail</h2><p>Włącz wiadomości wysyłane po najważniejszych zmianach statusu.</p></div></div>
             <div class="workflow-notification-list">
-                {% for event_id, event_label in notification_definitions %}
+                {% for event_id, event_label in mail_events.rows %}
                     {% set notification = (workflow.get('email_notifications', [])|selectattr('id', 'equalto', event_id)|list|first)|default({}, true) %}
                     <article class="workflow-notification-row">
+                        <input type="hidden" name="notification_id" value="{{ event_id }}">
                         <h3>{{ event_label }}</h3>
                         <label class="admin-check"><input type="checkbox" name="notification_{{ event_id }}_enabled" {% if notification.get('enabled') %}checked{% endif %}><span>Wyślij e-mail</span></label>
                         <label><span>Szablon e-maila</span><select name="notification_{{ event_id }}_template">
@@ -1182,6 +1201,25 @@
                             {% for mail_template in available_mail_templates %}<option value="{{ mail_template.template_type }}" {% if selected_template_type == mail_template.template_type %}selected{% endif %}>{{ mail_template.name }}</option>{% endfor %}
                             {% if not available_mail_templates and not selected_template_type %}<option value="">Brak aktywnych szablonów</option>{% endif %}
                         </select></label>
+                        <label><span>Zdarzenie (opcjonalne)</span><input name="notification_{{ event_id }}_event" value="{{ notification.get('event', '') }}" placeholder="Każde wywołanie wybranego szablonu"></label>
+                        {% set source = notification.get('recipient_source') or {} %}
+                        <div data-mail-recipient>
+                            <label><span>Odbiorcy wiadomości</span><select name="notification_{{ event_id }}_recipient_type" data-mail-recipient-type>
+                                <option value="submission" {% if not source %}selected{% endif %}>Dotychczasowy odbiorca zgłoszenia</option>
+                                <option value="repeatable_group" {% if source.get('type') == 'repeatable_group' %}selected{% endif %}>Każda osoba z listy — osobna wiadomość</option>
+                            </select></label>
+                            <div data-mail-recipient-fields {% if source.get('type') != 'repeatable_group' %}hidden{% endif %}>
+                                <label><span>Lista osób</span><select name="notification_{{ event_id }}_recipient_group">
+                                    <option value="">Wybierz listę</option>
+                                    {% for group in recipient_groups %}<option value="{{ group.name }}" {% if source.get('group') == group.name %}selected{% endif %}>{{ group.get('label') or group.name }}</option>{% endfor %}
+                                </select></label>
+                                <label><span>Pole e-mail osoby</span><select name="notification_{{ event_id }}_recipient_email">
+                                    <option value="">Pole kontaktowe listy</option>
+                                    {% for group in recipient_groups %}{% for field in group.get('fields', []) if field.get('type') == 'email' %}<option value="{{ field.name }}" {% if source.get('email_field') == field.name %}selected{% endif %}>{{ group.get('label') or group.name }} — {{ field.get('label') or field.name }}</option>{% endfor %}{% endfor %}
+                                </select></label>
+                                <p class="admin-help-text">Dla zdarzenia całego zgłoszenia każda osoba z aktywnej listy otrzyma osobną wiadomość. Decyzja osoby trafi wyłącznie do tej osoby. Powiadomienie nie nadaje dostępu do edycji zgłoszenia.</p>
+                            </div>
+                        </div>
                         <label class="admin-check"><input type="checkbox" name="notification_{{ event_id }}_manual" {% if notification.get('manual_confirmation') %}checked{% endif %}><span>Ręczne potwierdzenie</span></label>
                         <label class="admin-check"><input type="checkbox" name="notification_{{ event_id }}_automatic" {% if notification.get('automatic') %}checked{% endif %}><span>Automatycznie po zmianie statusu</span></label>
                     </article>
@@ -1226,10 +1264,10 @@
     <template data-workflow-step-template>
         <article class="workflow-stage-card" data-workflow-step>
             <script type="application/json" data-workflow-step-source>{}</script>
-            <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-edit-workflow-step>Edytuj etap</button><button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button><button type="button" class="admin-button-secondary compact" data-workflow-step-up>Przesuń w górę</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down>Przesuń w dół</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
+            <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-edit-workflow-step aria-expanded="false">Edytuj etap</button><button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button><button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przesuń etap w górę">↑</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przesuń etap w dół">↓</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
             <div class="workflow-stage-badges" data-step-badges></div>
-            <p class="workflow-stage-summary" data-step-summary></p>
-            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>ID etapu</span><input data-step-id data-auto-step-id value="nowy_etap" required><small>Podpowiadany automatycznie z nazwy; możesz go zmienić przed pierwszym użyciem etapu.</small></label><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Nazwa dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status etapu</span><select data-step-status required>{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Typ etapu</span><select data-step-stage-type><option value="system">Etap automatyczny</option><option value="user_action">Akcja użytkownika</option><option value="officer_action">Akcja urzędnika / decyzja</option><option value="document">Etap dokumentowy</option><option value="final">Etap końcowy</option></select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
+            <dl class="workflow-stage-summary" data-step-summary></dl>
+            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>ID etapu</span><input data-step-id value="nowy_etap" required><small>ID jest używane w przejściach workflow. Nie można go zmienić po utworzeniu zgłoszeń.</small></label><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Status widoczny dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status techniczny</span><select data-step-status required title="Status zapisywany przez silnik workflow; niezależny od tekstu widocznego dla użytkownika.">{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Typ etapu</span><select data-step-stage-type><option value="system">Etap automatyczny</option><option value="user_action">Akcja użytkownika</option><option value="officer_action">Akcja urzędnika / decyzja</option><option value="document">Etap dokumentowy</option><option value="final">Etap końcowy</option></select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
             <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div></div>
             <textarea data-step-description hidden></textarea><textarea data-step-next-action hidden></textarea>
         </article>
@@ -1256,8 +1294,8 @@
         <div class="admin-form-grid">
             <label><span>Nazwa workflow</span><input name="workflow_name" value="{{ workflow.get('name', '') }}"></label>
             <label><span>Status początkowy</span><input name="workflow_initial_step" value="{{ workflow.get('initial_step', '') }}" placeholder="submission"></label>
-            <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Wymaga deklaracji</span></label>
-            <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Wymaga umowy</span></label>
+            <label class="admin-check"><input type="checkbox" name="requires_declaration" data-workflow-toggle="declaration" {% if workflow.get('requires_declaration') %}checked{% endif %}><span>Skonfigurowana deklaracja</span></label>
+            <label class="admin-check"><input type="checkbox" name="requires_contract" data-workflow-toggle="contract" {% if workflow.get('requires_contract') %}checked{% endif %}><span>Skonfigurowana umowa</span></label>
         </div>
         <div class="admin-trigger-help">
             {% for trigger, description in trigger_descriptions.items() %}
@@ -1339,6 +1377,18 @@
     </div>
 </form>
 <script>
+window.workflowFields = {{ (workflow_converted_fields if workflow_converted_fields is defined and workflow_converted_fields is not none else form.workflow_editor_fields|default((form.workflow_editor_definition|default(form.definition_json) or {}).get("fields", [])))|tojson }};
+window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson }};
+document.querySelectorAll('[data-mail-recipient]').forEach(section => {
+    section.querySelector('[data-mail-recipient-type]').addEventListener('change', event => {
+        section.querySelector('[data-mail-recipient-fields]').hidden = event.target.value !== 'repeatable_group';
+    });
+});
+window.workflowDecisionCatalog = {{ workflow_decision_catalog|default([])|tojson }};
+window.workflowMailChoices = [{% for item in form.mail_templates if item.is_active %}{{ [item.template_type, item.name]|tojson }}{{ ',' if not loop.last }}{% endfor %}];
+</script>
+<script src="{{ url_for('static', filename='js/workflow_stage_editor.js') }}"></script>
+<script>
 document.querySelectorAll("[data-legacy-editor] input, [data-legacy-editor] select, [data-legacy-editor] textarea, [data-legacy-editor] button").forEach((control) => {
     control.disabled = true;
 });
@@ -1409,7 +1459,7 @@ function setActiveFormTab(tabName, updateAddress = true) {
     }
     if (tabName === "workflow") {
         window.requestAnimationFrame(() => {
-            if (!workflowDiagramState.hasInitialFit) fitWorkflowDiagram();
+            fitWorkflowDiagram();
         });
     }
 }
@@ -1433,6 +1483,12 @@ tabbedForm?.addEventListener("invalid", (event) => {
     const panel = event.target.closest("[data-form-tab-panel]");
     const tabName = fragment?.dataset.formTabOnly?.split(/\s+/)[0] || panel?.dataset.formTabPanel?.split(/\s+/)[0];
     if (tabName) setActiveFormTab(tabName);
+    const card = event.target.closest('[data-workflow-step]');
+    if (card) {
+        card.querySelector('[data-workflow-step-editor]').hidden = false;
+        const button = card.querySelector('[data-edit-workflow-step]');
+        button.textContent = 'Zwiń edycję'; button.setAttribute('aria-expanded', 'true');
+    }
 }, true);
 window.addEventListener("beforeunload", (event) => {
     if (!formIsDirty || formIsSubmitting) return;
@@ -1767,6 +1823,12 @@ const workflowDecisionTemplate = document.querySelector("[data-workflow-decision
 const workflowBuilderInput = workflowBuilder?.querySelector("[data-workflow-builder-json]");
 const workflowInitialSelect = workflowBuilder?.querySelector("[data-workflow-initial]");
 let workflowSource = {{ workflow_builder|tojson }};
+let workflowWasEdited = workflowSource.flow_mode === 'explicit' || Boolean(workflowSource.document_stage_conversion);
+workflowBuilder?.addEventListener('input', () => { workflowWasEdited = true; });
+workflowBuilder?.addEventListener('change', () => { workflowWasEdited = true; });
+workflowBuilder?.addEventListener('click', event => {
+    if (event.target.closest('[data-add-workflow-step], [data-remove-workflow-step], [data-workflow-step-up], [data-workflow-step-down]')) workflowWasEdited = true;
+});
 const initialDiagramNodes = workflowSource?.diagram_layout?.nodes;
 const workflowDiagramState = {
     zoom: 1,
@@ -1860,8 +1922,8 @@ function setWorkflowStep(card, step) {
     const source = card.querySelector("[data-workflow-step-source]");
     if (source) source.textContent = JSON.stringify(step || {});
     card.querySelector("[data-step-id]").value = step.id || uniqueWorkflowStepId();
-    card.querySelector("[data-step-admin-label]").value = step.admin_label || step.label || "Nowy etap";
-    card.querySelector("[data-step-user-label]").value = step.user_label || step.label || "Nowy etap";
+    card.querySelector("[data-step-admin-label]").value = step.admin_label ?? step.label ?? "";
+    card.querySelector("[data-step-user-label]").value = step.user_label ?? step.label ?? "";
     const status = card.querySelector("[data-step-status]");
     if (status && step.status && !Array.from(status.options).some((option) => option.value === step.status)) {
         status.add(new Option("Inny status z istniejącej konfiguracji", step.status));
@@ -1879,13 +1941,8 @@ function setWorkflowStep(card, step) {
 }
 
 function workflowBadges(card) {
-    const badges = [];
-    if (card.querySelector("[data-step-user-action]")?.checked) badges.push("Akcja użytkownika");
-    if (card.querySelector("[data-step-officer-action]")?.checked) badges.push("Akcja urzędnika");
-    if (card.querySelector("[data-step-final]")?.checked) badges.push("Etap końcowy");
-    if (card.querySelector("[data-step-rejected]")?.checked) badges.push("Odrzucenie");
-    const source = workflowStepSource(card);
-    if (source.document_id) badges.push("Wymaga dokumentu");
+    const kind = card.querySelector("[data-step-stage-type]").value;
+    const badges = [WorkflowStageEditor.types[kind] || kind];
     const holder = card.querySelector("[data-step-badges]");
     holder?.replaceChildren(...badges.map((label) => {
         const badge = document.createElement("span");
@@ -1895,33 +1952,7 @@ function workflowBadges(card) {
     }));
 }
 
-function workflowStepIsActive(card) {
-    const step = {
-        ...workflowStepSource(card),
-        id: card.querySelector("[data-step-id]")?.value || "",
-        status: card.querySelector("[data-step-status]")?.value || "",
-        stage_type: card.querySelector("[data-step-stage-type]")?.value || "system",
-    };
-    const id = String(step.id || "");
-    const status = String(step.status || step.status_code || "");
-    const type = String(step.type || "");
-    const documentId = String(step.document_id || "");
-    const requiresDeclaration = Boolean(workflowBuilder?.querySelector('[name="requires_declaration"]')?.checked);
-    const requiresContract = Boolean(workflowBuilder?.querySelector('[name="requires_contract"]')?.checked);
-    const requiresConfirmation = requiresContract && Boolean(workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]')?.checked);
-    const allowCorrection = Boolean(workflowBuilder?.querySelector('[name="allow_correction"]')?.checked);
-    const officeStep = ["stage_10", "stage_11", "beneficiary_agreement_review", "office_agreement_signature"].includes(id)
-        || ["AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE", "AGREEMENT_SIGNED_BY_OFFICE"].includes(status);
-    if (officeStep) return requiresConfirmation;
-    const correctionStep = id.includes("correction") || type.includes("correction")
-        || ["WAITING_FOR_CORRECTION", "CORRECTION_REQUIRED", "RETURNED_FOR_CORRECTION"].includes(status);
-    const agreementStep = id.includes("agreement") || id.includes("contract")
-        || ["agreement", "training_agreement"].includes(documentId) || status.startsWith("AGREEMENT_");
-    if (correctionStep) return allowCorrection && (agreementStep ? requiresContract : true);
-    if (id.includes("declaration") || documentId === "declaration" || status.startsWith("DECLARATION_")) return requiresDeclaration;
-    if (agreementStep) return requiresContract;
-    return step.active !== false;
-}
+function workflowStepIsActive(card) { return workflowStepSource(card).active !== false; }
 
 function setWorkflowNext(stepId, nextId) {
     const card = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).find(
@@ -1934,32 +1965,12 @@ function setWorkflowNext(stepId, nextId) {
     return true;
 }
 
-function syncAgreementConfirmationPath() {
-    const contract = workflowBuilder?.querySelector('[name="requires_contract"]');
-    const confirmation = workflowBuilder?.querySelector('[name="requires_agreement_confirmation"]');
-    if (!confirmation) return;
-    if (!contract?.checked) confirmation.checked = false;
-    confirmation.disabled = !contract?.checked;
-    const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
-    const byId = new Map(cards.map((card) => [card.querySelector("[data-step-id]")?.value || "", card]));
-    const signature = byId.get("training_agreements_signature");
-    if (!signature) return;
-    const currentNext = signature.querySelector("[data-step-next]")?.value
-        || signature.dataset.selectedNext || workflowStepSource(signature).next || "";
-    if (confirmation.checked && currentNext === "completed"
-        && ["stage_10", "stage_11", "completed"].every((id) => byId.has(id))) {
-        setWorkflowNext("training_agreements_signature", "stage_10");
-        setWorkflowNext("stage_10", "stage_11");
-        setWorkflowNext("stage_11", "completed");
-    } else if (!confirmation.checked && ["stage_10", "stage_11"].includes(currentNext)) {
-        setWorkflowNext("training_agreements_signature", "completed");
-    }
-}
+function syncAgreementConfirmationPath() { /* Capability changes never rewrite the graph. */ }
 
 function collectWorkflow() {
     const steps = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []).map((card) => ({
         ...workflowStepSource(card),
-        id: card.querySelector("[data-step-id]")?.value || uniqueWorkflowStepId(),
+        id: card.querySelector("[data-step-id]")?.value.trim() || "",
         admin_label: card.querySelector("[data-step-admin-label]")?.value.trim() || "",
         user_label: card.querySelector("[data-step-user-label]")?.value.trim() || "",
         label: card.querySelector("[data-step-admin-label]")?.value.trim() || "",
@@ -1973,9 +1984,12 @@ function collectWorkflow() {
         final: Boolean(card.querySelector("[data-step-final]")?.checked),
         rejected: Boolean(card.querySelector("[data-step-rejected]")?.checked),
         active: workflowStepIsActive(card),
+        ...WorkflowStageEditor.collect(card),
     }));
     const workflow = {
         ...workflowSource,
+        flow_mode: "explicit", schema_version: 2,
+        decision_types: WorkflowStageEditor.decisions([...workflowStepList.querySelectorAll("[data-workflow-step]")]),
         name: workflowBuilder?.querySelector('[name="workflow_name"]')?.value.trim() || "Workflow",
         initial_step: workflowInitialSelect?.value || "",
         requires_declaration: Boolean(workflowBuilder?.querySelector('[name="requires_declaration"]')?.checked),
@@ -2014,6 +2028,7 @@ function collectWorkflow() {
 }
 
 function workflowStepType(step) {
+    if (WorkflowStageEditor.types[step.stage_type]) return WorkflowStageEditor.types[step.stage_type];
     if (step.final) return "Etap końcowy";
     if (step.rejected) return "Odrzucenie";
     if (String(step.type || "").includes("correction")) return "Korekta";
@@ -2081,36 +2096,14 @@ function renderWorkflowPreview() {
     const ids = new Set(config.steps.map((step) => step.id));
     const labels = new Map(config.steps.map((step) => [step.id, step.admin_label || "Etap bez nazwy"]));
     const allDecisions = allDecisionSettings();
-    const decisions = allDecisions.filter((decision) => decision.active && decision.step_id);
-    const errors = [];
-    if (!config.steps.length) errors.push("Workflow nie zawiera żadnego etapu.");
-    if (config.initial_step && !ids.has(config.initial_step)) errors.push("Status początkowy prowadzi do nieistniejącego etapu.");
-    if (config.requires_contract && !config.steps.some((step) => String(step.status).startsWith("AGREEMENT_") || ["agreement", "training_agreement"].includes(step.document_id))) {
-        errors.push("Etap umowy jest wymagany, ale nie został dodany.");
-    }
-    if (config.requires_agreement_confirmation && !config.steps.some((step) => [
-        "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
-        "AGREEMENT_SIGNED_BY_OFFICE",
-    ].includes(String(step.status)))) {
-        const agreementStep = config.steps.find((step) => String(step.status).startsWith("AGREEMENT_"));
-        errors.push(`${agreementStep?.admin_label || "Workflow"}: brakuje etapu podpisu urzędu wymaganego przez konfigurację umowy.`);
-    }
-    allDecisions.filter((decision) => decision.active).forEach((decision) => {
-        if (!decision.step_id) errors.push(`${decision.label}: przypisz aktywną decyzję do etapu.`);
-        else if (!ids.has(decision.step_id)) errors.push(`${decision.label}: przypisany etap nie istnieje.`);
-        if (![decision.yes_status, decision.no_status, decision.correction_status].some(Boolean)) {
-            errors.push(`${decision.label}: aktywna decyzja musi mieć przynajmniej jedno realne przejście.`);
-        }
-    });
-    if (document.querySelector("[data-inactive-instruction]")) errors.push("Instrukcja przypisana do etapu spoza workflow została oznaczona jako nieaktywna.");
+    const decisions = config.decision_types || [];
+    const validation = WorkflowStageEditor.validate(config);
+    const errors = validation.errors;
+    preview.dataset.loopWarning = validation.warnings.join(' ');
     list.replaceChildren();
     config.steps.forEach((step, index) => {
-        const localErrors = [];
+        const localErrors = errors.filter(error => error.startsWith(`${step.admin_label || step.id}:`));
         const stepDecisions = Object.entries(step.decisions || {});
-        if (!step.final && !step.rejected && !step.next && !stepDecisions.length) localErrors.push("Brak kolejnego etapu.");
-        if (step.next && !ids.has(step.next)) localErrors.push("Przejście prowadzi do nieistniejącego etapu.");
-        stepDecisions.forEach(([choice, target]) => { if (target && !ids.has(target)) localErrors.push(`Decyzja „${choice}” prowadzi do nieistniejącego etapu.`); });
-        errors.push(...localErrors.map((error) => `${step.admin_label || step.id}: ${error}`));
 
         const item = document.createElement("li");
         item.className = `workflow-preview-step${localErrors.length ? " has-error" : ""}`;
@@ -2127,7 +2120,11 @@ function renderWorkflowPreview() {
             const technical = document.createElement("code"); technical.textContent = step.status || "Brak statusu"; card.appendChild(technical);
             if (step.document_id) { const doc = document.createElement("p"); doc.textContent = `Dokument: ${step.document_id}`; card.appendChild(doc); }
             emailsForWorkflowStep(step).forEach((label) => { const mail = document.createElement("p"); mail.textContent = `E-mail: ${label}`; card.appendChild(mail); });
-            decisions.filter((decision) => decision.step_id === step.id).forEach((decision) => { const row = document.createElement("p"); row.textContent = `Decyzja: ${decision.label} — Tak: ${decision.yes_status || "bez zmiany"}, Nie: ${decision.no_status || "bez zmiany"}, Do poprawy: ${decision.correction_status || "bez zmiany"}`; card.appendChild(row); });
+            if (step.decision_scope === 'item') {
+                const completion = document.createElement('p'); completion.textContent = `Po zakończeniu decyzji wszystkich osób (ALL) → ${labels.get(step.completion_next) || 'wybierz etap'}`; card.append(completion);
+            }
+            decisions.filter(option => option.step_id === step.id).forEach(option => { const row = document.createElement("p"); row.textContent = `${option.label}${step.decision_scope === 'item' ? '' : ` → ${labels.get(option.target_step) || 'brak celu'}`}${option.require_reason ? " · wymagane uzasadnienie" : ""}`; card.appendChild(row); });
+            if (step.decision_email?.enabled) { const row = document.createElement("p"); row.textContent = `E-mail po decyzji: ${step.decision_email.template_type}`; card.appendChild(row); }
             stepDecisions.forEach(([choice, target]) => { const row = document.createElement("p"); row.textContent = `${choice} → ${labels.get(target) || target || "brak celu"}`; card.appendChild(row); });
         }
         if (step.description) { const description = document.createElement("div"); description.className = "instruction-safe-html"; description.innerHTML = sanitizeInstructionPreview(step.description); card.appendChild(description); }
@@ -2137,9 +2134,14 @@ function renderWorkflowPreview() {
         item.appendChild(card); list.appendChild(item);
     });
     const errorBox = preview.querySelector("[data-workflow-preview-errors]");
-    if (errorBox) { errorBox.hidden = !errors.length; errorBox.replaceChildren(...errors.map((error) => { const p = document.createElement("p"); p.textContent = error; return p; })); }
+    WorkflowStageEditor.showValidation([...workflowStepList.querySelectorAll('[data-workflow-step]')], validation, errorBox);
     const empty = preview.querySelector("[data-workflow-preview-empty]"); if (empty) empty.hidden = config.steps.length > 0;
-    renderWorkflowDiagram(config, decisions, errors);
+    renderWorkflowDiagram(config, [], errors);
+    const structure = JSON.stringify(config.steps.map(s => [s.id, s.stage_type, s.next, s.completion_next, s.transitions]).concat(config.decision_types.map(o => [o.step_id, o.code, o.target_step])));
+    if (workflowDiagramState.structure !== structure) {
+        workflowDiagramState.structure = structure;
+        window.requestAnimationFrame(fitWorkflowDiagram);
+    }
 }
 
 function renderWorkflowDiagramLegacy(config, configuredDecisions, validationErrors) {
@@ -2280,6 +2282,16 @@ function workflowDiagramOutcomeLabel(value) {
 }
 
 function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplicate = true} = {}) {
+    const catalogByStep = new Map();
+    WorkflowStageEditor.decisions([...workflowStepList.querySelectorAll("[data-workflow-step]")]).filter(option => option.active !== false).forEach(option => {
+        // Item decisions only advance the submission once ALL is complete.
+        if (steps.find(step => step.id === option.step_id)?.decision_scope === 'item') return;
+        if (!catalogByStep.has(option.step_id)) catalogByStep.set(option.step_id, []);
+        catalogByStep.get(option.step_id).push({code: option.code, label: option.label, target_step: option.target_step});
+    });
+    configuredDecisions = [
+        ...[...catalogByStep].map(([step_id, outcomes]) => ({id: `catalog:${step_id}`, step_id, label: steps.find(s => s.id === step_id)?.decision_name || 'Decyzja', outcomes, active: true})),
+    ];
     const stepById = new Map(steps.map((step) => [step.id, step]));
     const statusTargets = new Map(steps.map((step) => [step.status, step.id]));
     const decisions = [];
@@ -2304,6 +2316,7 @@ function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplic
         ).trim();
         if (!targetStep || !stepById.has(targetStep)) return null;
         return {
+            code: outcome?.code,
             label: workflowDiagramOutcomeLabel(outcome?.label || outcome?.code),
             target_step: targetStep,
         };
@@ -2312,7 +2325,9 @@ function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplic
         incoming.map(normalizeOutcome).filter(Boolean).forEach((outcome) => {
             const semanticLabel = workflowDiagramOutcomeLabel(outcome.label).toLowerCase();
             const existingByLabel = target.outcomes.find(
-                (item) => workflowDiagramOutcomeLabel(item.label).toLowerCase() === semanticLabel
+                (item) => catalogByStep.has(target.step_id)
+                    ? item.code === outcome.code
+                    : workflowDiagramOutcomeLabel(item.label).toLowerCase() === semanticLabel
             );
             if (existingByLabel) {
                 if (existingByLabel.target_step !== outcome.target_step) {
@@ -2324,7 +2339,7 @@ function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplic
                 }
                 return;
             }
-            if (target.outcomes.some((item) => item.target_step === outcome.target_step)) return;
+            if (!catalogByStep.has(target.step_id) && target.outcomes.some((item) => item.target_step === outcome.target_step)) return;
             target.outcomes.push(outcome);
         });
     };
@@ -2368,6 +2383,7 @@ function buildWorkflowDiagramDecisions(steps, configuredDecisions, {warnOnDuplic
     });
 
     steps.forEach((step) => {
+        if (catalogByStep.has(step.id)) return;
         const inlineOutcomes = Object.entries(step.decisions || {}).map(([label, targetStep]) => ({
             label,
             target_step: targetStep,
@@ -2435,7 +2451,7 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
     const outgoing = new Map(steps.map((step) => [step.id, []]));
     steps.forEach((step) => {
         if (stepById.has(step.next)) outgoing.get(step.id).push(step.next);
-        Object.values(step.decisions || {}).forEach((target) => {
+        [...Object.values(step.decisions || {}), ...(Array.isArray(step.transitions) ? step.transitions : []).map(t => t.next), step.completion_next].filter(Boolean).forEach((target) => {
             if (stepById.has(target) && !outgoing.get(step.id).includes(target)) outgoing.get(step.id).push(target);
         });
     });
@@ -2613,7 +2629,11 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
         }, String(label).slice(0, 24)));
     };
 
-    steps.forEach((step) => drawEdge(positions.get(step.id), positions.get(step.next), "Dalej"));
+    steps.forEach(step => {
+        drawEdge(positions.get(step.id), positions.get(step.next), "Dalej");
+        (Array.isArray(step.transitions) ? step.transitions : []).forEach((transition, index) => drawEdge(positions.get(step.id), positions.get(transition.next), `Warunek ${index + 1}`, "", index));
+        if (step.decision_scope === "item") drawEdge(positions.get(step.id), positions.get(step.completion_next), "ALL zakończone");
+    });
     decisions.forEach((decision, index) => {
         const nodeId = `decision:${decision.step_id}:${decision.id || index}`;
         const position = decisionPositions.get(nodeId);
@@ -2692,12 +2712,8 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
     steps.forEach((step, index) => {
         const position = positions.get(step.id);
         const nodeErrors = validationErrors.filter((error) => String(error).includes(step.admin_label || step.id));
-        const hasError = nodeErrors.length > 0
-            || (!step.final && !step.rejected && !step.next && !Object.keys(step.decisions || {}).length)
-            || (step.next && !stepById.has(step.next));
-        const fallbackError = !step.final && !step.rejected && !step.next && !Object.keys(step.decisions || {}).length
-            ? "Etap nie ma skonfigurowanego wyjścia."
-            : (step.next && !stepById.has(step.next) ? "Przejście prowadzi do nieistniejącego etapu." : "");
+        const hasError = nodeErrors.length > 0;
+        const fallbackError = "";
         const group = draggableGroup(
             step.id,
             position,
@@ -2767,15 +2783,20 @@ document.addEventListener("pointerup", () => {
 });
 
 function setWorkflowDiagramZoom(value) {
-    workflowDiagramState.zoom = Math.max(.35, Math.min(2, Number(value) || 1));
-    renderWorkflowPreview();
+    workflowDiagramState.zoom = Math.max(.05, Math.min(2, Number(value) || 1));
+    const svg = document.querySelector('[data-workflow-diagram]');
+    if (svg) {
+        svg.style.width = `${workflowDiagramState.canvasWidth * workflowDiagramState.zoom}px`;
+        svg.style.height = `${workflowDiagramState.canvasHeight * workflowDiagramState.zoom}px`;
+    }
 }
 
 function fitWorkflowDiagram() {
     const wrap = document.querySelector("[data-workflow-diagram-wrap]");
     if (!wrap || wrap.clientWidth < 1) return false;
-    const available = Math.max(320, wrap.clientWidth - 72);
-    setWorkflowDiagramZoom(Math.min(1, available / workflowDiagramState.canvasWidth));
+    const available = Math.max(100, wrap.clientWidth - 40);
+    const height = Math.max(160, Math.min(window.innerHeight * .55, 520) - 40);
+    setWorkflowDiagramZoom(Math.min(1, available / workflowDiagramState.canvasWidth, height / workflowDiagramState.canvasHeight));
     workflowDiagramState.hasInitialFit = true;
     wrap.scrollTo({left: 0, top: 0, behavior: "smooth"});
     return true;
@@ -2962,52 +2983,7 @@ function enhanceDecisionCard(card) {
 
 function syncDecisionEditorsToStages() {
     const pool = document.querySelector("[data-workflow-decision-pool]");
-    if (!pool || !workflowStepList) return;
-    const stageOptions = Array.from(workflowStepList.querySelectorAll("[data-workflow-step]")).map((stage) => ({
-        value: stage.querySelector("[data-step-id]")?.value || "",
-        label: stage.querySelector("[data-step-admin-label]")?.value.trim() || "Etap bez nazwy",
-    }));
-    workflowStepList.querySelectorAll("[data-workflow-step]").forEach((stage) => {
-        let holder = stage.querySelector(":scope > [data-stage-decisions]");
-        if (!holder) {
-            holder = document.createElement("section");
-            holder.dataset.stageDecisions = "";
-            holder.className = "workflow-stage-decisions";
-            holder.innerHTML = `
-                <div class="workflow-stage-decisions__heading">
-                    <h4>Decyzje dostępne na tym etapie</h4>
-                    <button type="button" class="admin-button-secondary compact" data-add-workflow-decision>Dodaj decyzję do tego etapu</button>
-                </div>
-                <p class="workflow-empty" data-stage-decisions-empty>Brak aktywnych decyzji na tym etapie.</p>
-            `;
-            stage.appendChild(holder);
-        }
-    });
-    document.querySelectorAll("[data-workflow-decision-card]").forEach((decisionCard) => {
-        const stepSelect = decisionCardField(decisionCard, "step");
-        const selectedStep = stepSelect?.value || "";
-        if (stepSelect) {
-            stepSelect.replaceChildren(
-                new Option("Nieaktywna", ""),
-                ...stageOptions.map((option) => new Option(option.label, option.value, false, option.value === selectedStep)),
-            );
-            stepSelect.value = selectedStep;
-        }
-        enhanceDecisionCard(decisionCard);
-        const stepId = stepSelect?.value || "";
-        const active = decisionCard.dataset.decisionActive === "true";
-        const stage = Array.from(workflowStepList.querySelectorAll("[data-workflow-step]")).find(
-            (item) => item.querySelector("[data-step-id]")?.value === stepId && !item.hidden
-        );
-        ((active ? stage?.querySelector("[data-stage-decisions]") : null) || pool).appendChild(decisionCard);
-        renderDecisionCardSummary(decisionCard);
-    });
-    workflowStepList.querySelectorAll("[data-stage-decisions]").forEach((holder) => {
-        const empty = holder.querySelector("[data-stage-decisions-empty]");
-        if (empty) empty.hidden = Boolean(holder.querySelector("[data-workflow-decision-card]"));
-    });
-    const poolEmpty = pool.querySelector("[data-decision-pool-empty]");
-    if (poolEmpty) poolEmpty.hidden = Boolean(pool.querySelector(":scope > [data-workflow-decision-card]"));
+    pool?.closest("section.admin-section")?.classList.add("workflow-legacy-settings");
 }
 
 function uniqueWorkflowDecisionId() {
@@ -3054,6 +3030,7 @@ function addWorkflowDecisionToStage(stage) {
 
 function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
+    cards.forEach(card => WorkflowStageEditor.initialize(card, workflowSource));
     cards.forEach((card) => {
         const active = workflowStepIsActive(card);
         card.hidden = !active;
@@ -3063,32 +3040,36 @@ function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
     const options = cards.map((card) => ({
         value: card.querySelector("[data-step-id]")?.value || "",
         label: card.querySelector("[data-step-admin-label]")?.value.trim() || "Etap bez nazwy",
+        id: card.querySelector("[data-step-id]")?.value || "",
+        user_label: card.querySelector("[data-step-user-label]")?.value || "",
     }));
-    const previousInitial = workflowInitialSelect?.value || workflowSource.initial_step || "";
+    const previousInitial = workflowInitialSelect?.dataset.ready ? workflowInitialSelect.value : (workflowSource.initial_step || "");
     if (workflowInitialSelect) {
         const activeOptions = activeCards.map((card) => ({
             value: card.querySelector("[data-step-id]")?.value || "",
             label: card.querySelector("[data-step-admin-label]")?.value.trim() || "Etap bez nazwy",
         }));
-        workflowInitialSelect.replaceChildren(...activeOptions.map((item) => new Option(item.label, item.value, false, item.value === previousInitial)));
-        if (!workflowInitialSelect.value && activeOptions[0]) workflowInitialSelect.value = activeOptions[0].value;
+        workflowInitialSelect.dataset.ready = "true";
+        workflowInitialSelect.replaceChildren(new Option("Wybierz etap początkowy", ""), ...activeOptions.map((item) => new Option(item.label, item.value, false, item.value === previousInitial)));
+        workflowInitialSelect.value = previousInitial;
     }
     cards.forEach((card, index) => {
+        WorkflowStageEditor.sync(card, options.filter(option => activeCards.some(active => active.querySelector('[data-step-id]').value === option.id)));
         const next = card.querySelector("[data-step-next]");
-        const previousNext = next?.value || card.dataset.selectedNext || workflowStepSource(card).next || "";
+        const previousNext = card.dataset.nextReady ? next.value : (workflowStepSource(card).next || "");
+        card.dataset.nextReady = "true";
         if (next) {
-            next.replaceChildren(new Option("Brak — koniec ścieżki", ""), ...options.filter((_, optionIndex) => optionIndex !== index).map((item) => new Option(item.label, item.value, false, item.value === previousNext)));
+            next.replaceChildren(new Option("Brak — koniec ścieżki", ""), ...options.map((item) => new Option(item.label, item.value, false, item.value === previousNext)));
+            if (previousNext && !options.some(item => item.value === previousNext)) next.add(new Option(`Nieistniejący etap: ${previousNext}`, previousNext));
             next.value = previousNext;
         }
         card.dataset.selectedNext = next?.value || "";
         const heading = card.querySelector("[data-step-heading]");
         if (heading) heading.textContent = options[index].label;
-        const statusLabel = card.querySelector("[data-step-status]")?.selectedOptions?.[0]?.textContent || "Brak statusu";
-        const nextLabel = next?.selectedOptions?.[0]?.textContent || "Brak — koniec ścieżki";
         const summary = card.querySelector("[data-step-summary]");
-        if (summary) summary.textContent = `Status: ${statusLabel} · Kolejny etap: ${nextLabel}`;
+        if (summary) WorkflowStageEditor.summarize(card, options);
         const number = card.querySelector(".workflow-stage-number");
-        if (number) number.textContent = `Etap ${index + 1}`;
+        if (number) number.textContent = `Etap ${activeCards.indexOf(card) + 1}`;
         const up = card.querySelector("[data-workflow-step-up]");
         const down = card.querySelector("[data-workflow-step-down]");
         if (up) up.disabled = index === 0;
@@ -3104,7 +3085,9 @@ function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
 }
 
 function renderWorkflowFromJson(config) {
+    workflowWasEdited = true;
     workflowSource = config;
+    workflowInitialSelect.dataset.ready = "";
     const importedDiagramNodes = config?.diagram_layout?.nodes;
     workflowDiagramState.positions = importedDiagramNodes && typeof importedDiagramNodes === "object"
         ? structuredClone(importedDiagramNodes)
@@ -3131,14 +3114,6 @@ function isWorkflowInstructionEditorEvent(event) {
 
 workflowBuilder?.addEventListener("input", (event) => {
     const card = event.target.closest?.("[data-workflow-step]");
-    const stepId = card?.querySelector("[data-step-id]");
-    if (event.target.matches?.("[data-step-id]")) stepId?.removeAttribute("data-auto-step-id");
-    if (event.target.matches?.("[data-step-admin-label]") && stepId?.hasAttribute("data-auto-step-id")) {
-        const base = event.target.value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "etap";
-        const used = new Set(Array.from(workflowStepList?.querySelectorAll("[data-step-id]") || []).filter((item) => item !== stepId).map((item) => item.value));
-        let candidate = base; let suffix = 2; while (used.has(candidate)) candidate = `${base}_${suffix++}`;
-        stepId.value = candidate;
-    }
     if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();
 });
 workflowBuilder?.addEventListener("change", (event) => {
@@ -3192,11 +3167,13 @@ workflowBuilder?.addEventListener("click", (event) => {
     if (event.target.closest("[data-add-workflow-step]") && workflowStepTemplate && workflowStepList) {
         const fragment = workflowStepTemplate.content.cloneNode(true);
         const card = fragment.querySelector("[data-workflow-step]");
-        if (card) { setWorkflowStep(card, {id: uniqueWorkflowStepId(), admin_label: "Nowy etap", user_label: "Nowy etap"}); workflowStepList.appendChild(card); }
+        if (card) { setWorkflowStep(card, {id: uniqueWorkflowStepId(), admin_label: "", user_label: ""}); workflowStepList.appendChild(card); card.querySelector('[data-workflow-step-editor]').hidden = false; card.querySelector('[data-edit-workflow-step]').textContent = 'Zwiń edycję'; }
     }
     const remove = event.target.closest("[data-remove-workflow-step]");
     if (remove) {
         const stage = remove.closest("[data-workflow-step]");
+        const refs = WorkflowStageEditor.references(collectWorkflow(), stage.querySelector('[data-step-id]').value);
+        if (refs.length) { window.alert(`Ten etap jest używany przez: ${refs.join(', ')}. Najpierw popraw przejścia.`); return; }
         const pool = document.querySelector("[data-workflow-decision-pool]");
         stage?.querySelectorAll("[data-workflow-decision-card]").forEach((card) => {
             const select = card.querySelector("[data-decision-step]");
@@ -3211,18 +3188,32 @@ workflowBuilder?.addEventListener("click", (event) => {
         const panel = edit.closest("[data-workflow-step]")?.querySelector("[data-workflow-step-editor]");
         if (panel) {
             panel.hidden = !panel.hidden;
+            edit.setAttribute("aria-expanded", String(!panel.hidden));
             edit.textContent = panel.hidden ? "Edytuj etap" : "Zwiń edycję";
         }
     }
     const instruction = event.target.closest("[data-edit-step-instruction]");
     if (instruction) {
-        const stepId = instruction.closest("[data-workflow-step]")?.querySelector("[data-step-id]")?.value || "";
-        setActiveFormTab("instructions");
-        const instructionCard = document.querySelector(`[data-instruction-step-id="${CSS.escape(stepId)}"]`);
-        instructionCard?.classList.add("is-focused");
-        instructionCard?.scrollIntoView({behavior: "smooth", block: "center"});
-        instructionCard?.querySelector("textarea")?.focus({preventScroll: true});
-        window.setTimeout(() => instructionCard?.classList.remove("is-focused"), 1800);
+        const card = instruction.closest("[data-workflow-step]");
+        if (card?.querySelector('[data-step-stage-type]')?.value === 'document' && card.querySelector('[data-stage-field="document_composite"]')?.checked) {
+            const panel = card.querySelector('[data-workflow-step-editor]');
+            panel.hidden = false;
+            const toggle = card.querySelector('[data-edit-workflow-step]');
+            toggle.setAttribute('aria-expanded', 'true');
+            toggle.textContent = 'Zwiń edycję';
+            const details = card.querySelector('[data-document-substate]:not([hidden])');
+            if (details) details.open = true;
+            details?.scrollIntoView({behavior: 'smooth', block: 'center'});
+            details?.querySelector('textarea')?.focus({preventScroll: true});
+        } else {
+            const stepId = card?.querySelector("[data-step-id]")?.value || "";
+            setActiveFormTab("instructions");
+            const instructionCard = document.querySelector(`[data-instruction-step-id="${CSS.escape(stepId)}"]`);
+            instructionCard?.classList.add("is-focused");
+            instructionCard?.scrollIntoView({behavior: "smooth", block: "center"});
+            instructionCard?.querySelector("textarea")?.focus({preventScroll: true});
+            window.setTimeout(() => instructionCard?.classList.remove("is-focused"), 1800);
+        }
     }
     const up = event.target.closest("[data-workflow-step-up]")?.closest("[data-workflow-step]");
     if (up?.previousElementSibling) workflowStepList?.insertBefore(up, up.previousElementSibling);
@@ -3245,7 +3236,7 @@ document.querySelector("[data-workflow-instruction-list]")?.addEventListener("in
 });
 document.getElementById("instruction_title")?.addEventListener("input", renderInstructionPreview);
 document.getElementById("user_instruction")?.addEventListener("input", renderInstructionPreview);
-document.querySelector("[data-refresh-workflow-preview]")?.addEventListener("click", renderWorkflowPreview);
+document.querySelector("[data-refresh-workflow-preview]")?.addEventListener("click", () => { renderWorkflowPreview(); fitWorkflowDiagram(); });
 document.querySelector("[data-workflow-user-preview]")?.addEventListener("change", renderWorkflowPreview);
 document.querySelector("[data-workflow-diagram-zoom-in]")?.addEventListener("click", () => {
     setWorkflowDiagramZoom(workflowDiagramState.zoom + .15);
@@ -3262,6 +3253,7 @@ document.querySelector("[data-workflow-diagram-layout-reset]")?.addEventListener
     if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
     formIsDirty = true;
     renderWorkflowPreview();
+    fitWorkflowDiagram();
 });
 document.querySelector("[data-refresh-instruction-preview]")?.addEventListener("click", renderInstructionPreview);
 
@@ -3356,12 +3348,26 @@ document.querySelectorAll("[data-document-toggle]").forEach((input) => {
 });
 syncWorkflowTemplateVisibility();
 
-document.querySelector("form.admin-form")?.addEventListener("submit", function () {
+document.querySelector("form.admin-form")?.addEventListener("submit", function (event) {
     formIsSubmitting = true;
     syncQualificationBuilder();
     syncInstructionEditor();
     syncLinkedInstructionValues();
     syncWorkflowBuilder();
+    if (!workflowWasEdited) {
+        const original = {...workflowSource};
+        ["contract_builder_document", "contract_builder_active_document", "declaration_builder_document", "declaration_builder_active_document"].forEach(key => delete original[key]);
+        workflowBuilderInput.value = JSON.stringify(original);
+        return;
+    }
+    const errors = WorkflowStageEditor.validate(collectWorkflow()).errors;
+    if (errors.length) {
+        event.preventDefault(); formIsSubmitting = false;
+        setActiveFormTab("workflow");
+        const message = document.querySelector("[data-workflow-preview-errors]");
+        message?.scrollIntoView({block: "center"});
+        message?.setAttribute("tabindex", "-1"); message?.focus();
+    }
 });
 enhanceRichTextFields();
 document.querySelectorAll("[data-agreement-template-test]").forEach((tester) => {

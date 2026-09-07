@@ -119,6 +119,9 @@ class DocumentViewService:
     ) -> Mapping[str, Any] | None:
         document_type = self._document_type_for_view(document_id, signed=signed)
         rows = files_by_type.get(document_type) or []
+        if not rows:
+            legacy_type = SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
+            rows = [row for row in files_by_type.get(legacy_type, []) if row.get("document_id") == document_id]
         return rows[-1] if rows else None
 
     def _document_type_for_view(self, document_id: str, *, signed: bool) -> str:
@@ -132,7 +135,9 @@ class DocumentViewService:
             )
         if document_id == "agreement":
             return SubmissionDocumentType.SIGNED_AGREEMENT if signed else SubmissionDocumentType.AGREEMENT
-        return SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
+        if document_id in {"", "form_submission"}:
+            return SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
+        return f"signed_{document_id}" if signed else document_id
 
     def build_additional_fields_result(
         self,
@@ -254,6 +259,8 @@ class DocumentViewService:
                 ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
             }
         )
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            agreement_actions_allowed = bool(public_status["can_generate_agreement"] or public_status["can_upload_signed_agreement"])
         today_iso = date.today().isoformat()
         declaration_enabled = bool(declaration.get("enabled"))
         declaration_filename = declaration.get("filename", "")

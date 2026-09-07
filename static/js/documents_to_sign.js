@@ -6,6 +6,22 @@ const generateButton = document.getElementById("generate-button");
 const acceptanceSelect = document.getElementById("akceptacja");
 const signDocumentsForm = document.getElementById("sign-documents-form");
 const instructionWindow = document.getElementById("user-instruction-window");
+document.querySelectorAll('[data-composite-document] a[href*="/download/"]').forEach(link => {
+    link.addEventListener('click', () => setTimeout(checkAcceptanceStatus, 700));
+});
+document.querySelectorAll('[data-document-upload]').forEach(form => {
+    const input = form.querySelector('input[type="file"]');
+    const zone = form.querySelector('.composite-document-dropzone');
+    zone.addEventListener('dragover', event => event.preventDefault());
+    zone.addEventListener('drop', event => {
+        event.preventDefault();
+        if (event.dataTransfer.files.length === 1) input.files = event.dataTransfer.files;
+    });
+    form.addEventListener('submit', () => {
+        form.querySelector('button[type="submit"]').disabled = true;
+        form.querySelector('[data-document-upload-status]').textContent = 'Wysyłamy dokument i sprawdzamy wymagane podpisy…';
+    });
+});
 const instructionTitle = document.getElementById("user-instruction-title");
 const formInstructionSection = document.getElementById("form-instruction-section");
 const formInstructionContent = document.getElementById("form-instruction-content");
@@ -23,6 +39,15 @@ const instructionMinimizeButton = document.getElementById("user-instruction-mini
 const instructionCloseButton = document.getElementById("user-instruction-close");
 const instructionRestoreButton = document.getElementById("user-instruction-restore");
 const participantAccessToken = document.getElementById("participant-access-token");
+const initialCredentialId = submissionInput?.value.trim() || "";
+const initialCredential = participantAccessToken?.value || "";
+const accessDenied = signDocumentsForm?.dataset.accessDenied === "true";
+
+function credentialForSubmission(id) {
+    if (id === initialCredentialId && initialCredential) return initialCredential;
+    try { return sessionStorage.getItem(`participant-access:${window.APP_BASE_PATH}:${id}`) || ""; }
+    catch (_) { return ""; }
+}
 
 let timeoutId = null;
 let currentInstruction = null;
@@ -344,12 +369,7 @@ function clearStatusTile() {
 
 function renderSubmissionStatus(data) {
     if (!data.exists) {
-        renderStatusTile({
-            variant: "warning",
-            icon: "?",
-            title: "Nie znaleziono wniosku",
-            description: data.message || "Sprawdź poprawność wpisanego ID wniosku.",
-        });
+        renderAccessLinkMessage();
         return;
     }
 
@@ -532,40 +552,60 @@ function resetState() {
     hideInstruction();
 }
 
+function renderAccessLinkMessage() {
+    hideElement(signDocumentsForm);
+    hideElement(document.querySelector('.documents-instructions'));
+    renderStatusTile({
+        variant: "warning",
+        icon: "i",
+        title: "Otwórz link dostępu",
+        description: "Otwórz link dostępu otrzymany po wysłaniu zgłoszenia — na stronie potwierdzenia lub w wiadomości e-mail.",
+    });
+}
+
 async function checkAcceptanceStatus() {
     const submissionId = submissionInput ? submissionInput.value.trim() : "";
 
     resetState();
 
-    if (!submissionId) {
-        renderStatusTile({
-            variant: "warning",
-            icon: "i",
-            title: "Podaj ID wniosku",
-            description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
-        });
+    const token = credentialForSubmission(submissionId).trim();
+    if (!submissionId || !token || accessDenied) {
+        renderAccessLinkMessage();
         return;
     }
+    if (participantAccessToken) participantAccessToken.value = token;
+    showElement(signDocumentsForm);
 
     renderStatusTile({
         variant: "warning",
         icon: "…",
         title: "Sprawdzanie statusu wniosku",
-        description: "System weryfikuje, czy urzędnik zaakceptował wniosek.",
+        description: "Sprawdzamy, czy urzędnik zaakceptował Twój wniosek.",
     });
 
     try {
-        const token = String(participantAccessToken?.value || submissionInput?.dataset.accessToken || "").trim();
-        const headers = token ? {Authorization: `Bearer ${token}`} : {};
+        const headers = {Authorization: `Bearer ${token}`};
         const response = await fetch(buildAcceptanceStatusUrl(submissionId), {headers});
         const data = await response.json();
-
-        if (statusBox) {
-            statusBox.textContent = data.status_title ? "" : data.message || "";
+        if (submissionInput.value.trim() !== submissionId) return;
+        if (data.authorized && token) {
+            try {
+                sessionStorage.setItem(`participant-access:${window.APP_BASE_PATH}:${submissionId}`, token);
+                sessionStorage.setItem(`participant-last-submission:${window.APP_BASE_PATH}`, submissionId);
+            }
+            catch (_) { /* Storage is optional; keep using the provided link credential. */ }
         }
+
         renderSubmissionStatus(data);
+        if (!data.authorized) return;
+        if (!data.agreement_blocked) showElement(document.querySelector('.documents-instructions'));
         applyProcessStageVisibility(data);
         showUserInstruction(data, submissionId);
+        if (data.composite_document) {
+            hideElement(document.querySelector('.documents-instructions'));
+            hideElement(document.querySelector('.sign-actions'));
+            return;
+        }
 
         if (
             data.exists
@@ -585,9 +625,7 @@ async function checkAcceptanceStatus() {
             }
         }
     } catch (error) {
-        if (statusBox) {
-            statusBox.textContent = "Nie udało się sprawdzić statusu wniosku.";
-        }
+        if (submissionInput.value.trim() !== submissionId) return;
         renderStatusTile({
             variant: "danger",
             icon: "!",
@@ -606,6 +644,8 @@ async function checkAcceptanceStatus() {
 if (submissionInput) {
     submissionInput.addEventListener("input", () => {
         clearTimeout(timeoutId);
+        resetState();
+        if (participantAccessToken) participantAccessToken.value = credentialForSubmission(submissionInput.value.trim());
         timeoutId = setTimeout(checkAcceptanceStatus, 500);
     });
 }
@@ -714,13 +754,10 @@ bindDownloadReplacementCards();
 bindUploadDropzones();
 bindBulkAgreementUpload();
 
-if (submissionInput && submissionInput.value.trim()) {
-    checkAcceptanceStatus();
-} else {
-    renderStatusTile({
-        variant: "warning",
-        icon: "i",
-        title: "Podaj ID wniosku",
-        description: "Status wniosku zostanie sprawdzony przed pokazaniem dokumentów do podpisu.",
-    });
+if (submissionInput && !submissionInput.value.trim() && !accessDenied) {
+    try {
+        const lastId = sessionStorage.getItem(`participant-last-submission:${window.APP_BASE_PATH}`) || "";
+        if (lastId && credentialForSubmission(lastId)) submissionInput.value = lastId;
+    } catch (_) { /* Access remains available through the confirmation or email link. */ }
 }
+checkAcceptanceStatus();

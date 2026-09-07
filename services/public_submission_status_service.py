@@ -23,6 +23,12 @@ REJECTED_STATUSES = {
     ProcessStatus.OFFICER_REJECTED,
     ProcessStatus.PARTICIPANT_REJECTED,
 }
+
+
+def build_readonly_submission_status(row: Mapping[str, Any], *, form_config: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """Explicit public allowlist: no actions, identifiers, reasons or participant data."""
+    status = build_public_submission_status(row, form_config=form_config)
+    return {"status_label": status["status_title"]}
 CORRECTION_STATUSES = {
     ProcessStatus.RETURNED_FOR_CORRECTION,
     ProcessStatus.AGREEMENT_REJECTED_BY_OFFICE,
@@ -154,6 +160,8 @@ def build_public_submission_status(
         agreement_generated=is_yes(row.get("agreement_generated")),
     )
     configured_step = workflow_context.get("config") or {}
+    if configured_step.get("user_label") and (configured_step.get("type") == "manual_decision" or (form_config or {}).get("workflow", {}).get("flow_mode") == "explicit"):
+        headline = str(configured_step["user_label"]).strip()
     description = str(configured_step.get("description") or description).strip()
     next_action = str(configured_step.get("next_action") or next_action).strip()
 
@@ -186,7 +194,35 @@ def build_public_submission_status(
         and not correction
     )
 
+    explicit_flow = (form_config or {}).get("workflow", {}).get("flow_mode") == "explicit"
+    can_generate_agreement = bool(state.can_generate_agreement and accepted and not rejected and not correction and not blocked)
+    if explicit_flow:
+        document_id = configured_step.get("document_id")
+        action = configured_step.get("action")
+        active_action = configured_step.get("stage_type") in {"document", "user_action", "system"} and not configured_step.get("final")
+        declaration_stage = active_action and document_id == "declaration"
+        agreement_stage = active_action and document_id in {"agreement", "training_agreement"}
+        can_fill_declaration = bool(declaration_stage and action == "generate_document")
+        can_download_declaration = bool(declaration_stage and row.get("declaration_filename"))
+        can_upload_signed_declaration = bool(declaration_stage and action == "await_signature" and can_download_declaration and not is_declaration_signature_valid(row))
+        can_generate_agreement = bool(agreement_stage and action == "generate_document")
+        can_download_agreement = bool(agreement_stage and (row.get("agreement_filename") or row.get("training_agreements")))
+        can_upload_signed_agreement = bool(agreement_stage and action == "await_signature" and can_download_agreement and not agreement_completed)
+        application_status = headline
+        description = str(configured_step.get("description") or "")
+        next_action = str(configured_step.get("next_action") or ("Oczekuj na rozpatrzenie decyzji." if configured_step.get("stage_type") == "decision" else ""))
+
     blocking_reason = state.block_reason if blocked else ""
+    from services.documents.document_workflow_service import is_document_step, document_step_status
+    composite = is_document_step(configured_step)
+    if composite:
+        document_status = document_step_status(row, configured_step)
+        headline, description, variant = document_status["title"], document_status["message"], document_status["variant"]
+        next_action = ""
+        can_fill_declaration = can_generate_agreement = can_download_declaration = can_download_agreement = False
+        can_upload_signed_declaration = can_upload_signed_agreement = False
+        blocked = False
+        blocking_reason = ""
     status_reason = (
         blocking_reason
         or (str(row.get("correction_message") or "").strip() if correction else "")
@@ -202,6 +238,7 @@ def build_public_submission_status(
     }
     return {
         "status": current_status,
+        "composite_document": composite,
         "current_workflow_step": current_status["step"],
         "effective_process_status": state.status.value,
         "process_status_label": get_status_label(state.status.value),
@@ -222,13 +259,7 @@ def build_public_submission_status(
         "can_fill_declaration": can_fill_declaration,
         "can_download_declaration": can_download_declaration,
         "can_upload_signed_declaration": can_upload_signed_declaration,
-        "can_generate_agreement": bool(
-            state.can_generate_agreement
-            and accepted
-            and not rejected
-            and not correction
-            and not blocked
-        ),
+        "can_generate_agreement": can_generate_agreement,
         "can_download_agreement": can_download_agreement,
         "can_upload_signed_agreement": can_upload_signed_agreement,
     }

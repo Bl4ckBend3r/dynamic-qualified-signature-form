@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-import tempfile
 import json
+from hashlib import sha256
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -10,7 +10,6 @@ from typing import Any, Mapping
 from flask import Flask, current_app, request, url_for
 
 from form_loader import build_consents_view, build_submission_view
-from signature_verifier import verify_signed_pdf
 from services.access_token_service import AccessTokenService
 from services.agreement_context_service import (
     build_training_agreement_value_context,
@@ -154,6 +153,10 @@ class DocumentService:
             storage=storage,
         )
         self.strict_document_metadata_read = strict_document_metadata_read
+        from services.documents.document_workflow_service import DocumentWorkflowService
+        from contextvars import ContextVar
+        self._document_operation_token = ContextVar("document_operation_token", default=None)
+        self.document_workflow = DocumentWorkflowService(self)
 
     def get_documents_config(self, form_config: dict) -> list[dict]:
         from services.form_config_service import FormConfigService
@@ -168,6 +171,7 @@ class DocumentService:
         context_extra: dict | None = None,
         force: bool = False,
     ) -> dict:
+        self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
         if not document:
             raise ValueError(f"Unknown document_id: {document_id}")
@@ -179,6 +183,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
+        composite = self.composite_step(row, form_config)
         resolved_context_extra = dict(context_extra or {})
         agreement_number = ""
         if document_id == DocumentType.AGREEMENT:
@@ -207,7 +212,7 @@ class DocumentService:
             existing_filename = str(row.get("agreement_filename") or "").strip()
             generated_field = "agreement_generated"
 
-        if not force and row.get(generated_field, "").strip().lower() == "tak" and existing_filename:
+        if not composite and not force and row.get(generated_field, "").strip().lower() == "tak" and existing_filename:
             try:
                 self.storage.get_pdf_bytes(slug, existing_filename)
             except Exception:
@@ -220,14 +225,26 @@ class DocumentService:
                     "document_id": document_id,
                 }
 
-        render_row = {**row, **resolved_context_extra}
+        document_values = {field["name"]: row["data_json"][field["name"]]
+            for field in document.get("fields") or [] if field.get("name") in (row.get("data_json") or {})}
+        render_row = {**row, **document_values, **resolved_context_extra}
         filename = self.build_filename_for_document(document, render_row, document_id)
+        if composite:
+            filename = f"{Path(filename).stem}-{submission_id}-{composite['id']}.pdf"
+            from services.documents.document_workflow_service import document_step_state
+            revision = document_step_state(row, composite["id"]).get("data_sha256", "")
+            if revision:
+                filename = f"{Path(filename).stem}-{revision[:16]}.pdf"
+        # The render view combines fields; the persisted form definition stays unchanged.
+        render_definition = {**form_config, "fields": [*(form_config.get("fields") or []),
+            *({**field, "document_usage": {**(field.get("document_usage") or {}), document_id: True}}
+              for field in document.get("fields") or [])]}
         context = build_document_pdf_context(
-            form_definition=form_config,
+            form_definition=render_definition,
             submission_id=submission_id,
             row=render_row,
-            submission_view=build_submission_view(form_config, render_row),
-            consents_view=build_consents_view(form_config, render_row),
+            submission_view=build_submission_view(render_definition, render_row),
+            consents_view=build_consents_view(render_definition, render_row),
             pdf_image_url=self.resolve_pdf_image_url(form_config),
             document_type=document_id,
         )
@@ -236,9 +253,14 @@ class DocumentService:
         if document_id == DocumentType.DECLARATION:
             context = build_declaration_render_context(
                 context,
-                form_definition=form_config,
-                fields=form_config.get("fields") or (),
+                form_definition=render_definition,
+                fields=render_definition["fields"],
             )
+            from services.training_service import parse_training_snapshots
+            for field in document.get("fields") or []:
+                if field.get("type") == "training_selection":
+                    selected = parse_training_snapshots(render_row.get(field["name"]))
+                    context["selected_trainings"] = context["selected_trainings_normalized"] = selected
         document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
@@ -261,6 +283,7 @@ class DocumentService:
             document_id=document_id,
             document_type=self._document_metadata_type(document_id, signed=False),
             agreement_number=agreement_number,
+            workflow_step_at_upload=composite["id"] if composite else "",
             storage_path=storage_path,
             storage=self.storage,
         )
@@ -296,6 +319,7 @@ class DocumentService:
         item_alias: str,
         context_extra: dict | None = None,
     ) -> list[dict]:
+        self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
         if not document:
             raise ValueError(f"Unknown document_id: {document_id}")
@@ -303,6 +327,12 @@ class DocumentService:
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
         items = parse_training_snapshots(row.get(collection_field)) or normalize_selected_items(row.get(collection_field))
+        composite = self.composite_step(row, form_config)
+        existing_files = {str(f.get("training_key")): f for f in self.submission_document_service.list_documents(submission_id)
+            if composite and f.get("workflow_step_at_upload") == composite["id"] and f.get("document_id") == document_id
+            and not f.get("signed") and f.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}}
+        previous_agreements = normalize_selected_items(row.get("training_agreements"))
+        previous_by_id = {str(item.get("id")): item for item in previous_agreements}
         if not items:
             raise RuntimeError("Nie wybrano elementów do wygenerowania dokumentów.")
 
@@ -390,14 +420,23 @@ class DocumentService:
             item_id = prepared["item_id"]
             render_row = prepared["render_row"]
             record = prepared["record"]
-            filename = build_available_storage_filename(
-                storage_service=self.document_storage_service,
-                storage=self.storage,
-                slug=slug,
-                filename=filename,
-                document_type=self._storage_document_type(document_id),
-                signed=False,
-            )
+            if composite and str(item_id) in existing_files:
+                existing = existing_files[str(item_id)]
+                record.update(previous_by_id.get(str(item_id), {}))
+                record.update(filename=existing["filename"], agreement_number=existing.get("agreement_number") or agreement_number)
+                generated_documents.append(record)
+                continue
+            if composite:
+                filename = f"{Path(filename).stem}-{submission_id}-{composite['id']}.pdf"
+            if not composite:
+                filename = build_available_storage_filename(
+                    storage_service=self.document_storage_service,
+                    storage=self.storage,
+                    slug=slug,
+                    filename=filename,
+                    document_type=self._storage_document_type(document_id),
+                    signed=False,
+                )
             record["filename"] = filename
             record["number"] = agreement_number
             record["agreement_number"] = agreement_number
@@ -443,6 +482,7 @@ class DocumentService:
                 document_type=self._document_metadata_type(document_id, signed=False),
                 agreement_number=record["agreement_number"],
                 training_key=str(item_id),
+                workflow_step_at_upload=(self.composite_step(row, form_config) or {}).get("id", ""),
                 storage_path=storage_path,
                 storage=self.storage,
             )
@@ -460,7 +500,10 @@ class DocumentService:
             "agreement_generated": "Tak",
             "agreement_filename": generated_documents[0]["filename"] if generated_documents else "",
             "agreement_generated_at": generated_date,
-            "training_agreements": serialize_json_list(generated_documents),
+            "training_agreements": serialize_json_list([
+                *[item for item in previous_agreements if str(item.get("id")) not in {str(record["id"]) for record in generated_documents}],
+                *generated_documents,
+            ]),
             "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
         }
         self._update_submission(submission, updates)
@@ -480,6 +523,7 @@ class DocumentService:
     ) -> dict:
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Nie wybrano podpisanego pliku PDF.")
+        self.require_workflow_document_action(submission, document_id, "await_signature")
         row = self._row(submission)
         previous_status = str(row.get("process_status") or "")
         slug = self._slug(submission)
@@ -491,17 +535,33 @@ class DocumentService:
             raise ValueError(str(exc)) from exc
         source_filename, signed_filename, update_target = self._signed_document_target(row, document_id, instance_id)
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=current_app.config["TEMP_DIR"]) as tmp_signed:
-            tmp_signed_path = Path(tmp_signed.name)
-            tmp_signed.write(uploaded_bytes)
-
-        try:
-            verification = verify_signed_pdf(tmp_signed_path)
-        finally:
-            tmp_signed_path.unlink(missing_ok=True)
-
+        definition = self.workflow_service.definition_for(row)
+        document = self.get_document_by_id(definition, document_id) or {}
+        verification = current_app.extensions["services"].document_signing_service.verify_uploaded_pdf(
+            uploaded_bytes,
+            current_app.config["TEMP_DIR"],
+            allowed_signatures=document.get("allowed_signatures"),
+        )
         is_signed = bool(verification.get("is_signed"))
-        is_valid = bool(verification.get("is_allowed_signature") or verification.get("is_szafir_signature"))
+        is_valid = verification.get("result") == "VALID_SIGNATURE"
+        if is_valid and document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+            try:
+                original = self.read_document_bytes_for_download(row, source_filename, signed=False)
+            except Exception:
+                verification.update(
+                    validation_status="ERROR",
+                    reason_code="STORAGE_READ_ERROR",
+                    result="VERIFICATION_ERROR",
+                )
+                is_valid = False
+            else:
+                if uploaded_bytes == original or not uploaded_bytes.startswith(original):
+                    verification.update(
+                        validation_status="INVALID",
+                        reason_code="DOCUMENT_REVISION_MISMATCH",
+                        result="INVALID_SIGNATURE",
+                    )
+                    is_valid = False
         if is_valid:
             storage_path = self.document_storage_service.save_pdf(
                 storage=self.storage,
@@ -543,6 +603,8 @@ class DocumentService:
             is_valid,
             update_target,
         )
+        if is_valid and document_id == DocumentType.DECLARATION:
+            updates["data_json"] = self.signed_declaration_snapshot(row, uploaded_bytes, signed_filename)
         self._update_submission(submission, updates)
         new_status = str(updates.get("process_status") or previous_status)
         if is_valid and new_status != previous_status:
@@ -712,7 +774,7 @@ class DocumentService:
 
             return render_document_builder_template(
                 document.get("builder_document") or {},
-                str(document.get("id") or "agreement"),
+                "declaration" if document.get("id") == "declaration" else "agreement",
             )
         if document.get("template_source") == "docx":
             try:
@@ -771,12 +833,48 @@ class DocumentService:
     def _submission_id(self, submission: dict) -> str:
         return str(submission.get("submission_id") or self._row(submission).get("submission_id") or "").strip()
 
+    def require_workflow_document_action(self, submission, document_id, action, form_config=None):
+        workflow = getattr(self, "workflow_service", None)
+        if not workflow:
+            return
+        row = self._row(submission)
+        definition = form_config or workflow.definition_for(row)
+        if definition.get("workflow", {}).get("flow_mode") != "explicit":
+            return
+        step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
+        from services.documents.document_workflow_service import is_document_step, document_states
+        if is_document_step(step):
+            # Composite uploads must pass the lifecycle's verification and completion gate.
+            if step.get("document_id") == document_id and action == "generate_document" and self._document_operation_token.get() and document_states(row).get("document_operation") == self._document_operation_token.get():
+                return
+            raise ValueError("Użyj czynności złożonego etapu dokumentowego.")
+        if step.get("document_id") != document_id or step.get("action") != action or step.get("final"):
+            raise ValueError("Ta czynność dokumentowa nie jest dostępna na bieżącym etapie workflow.")
+
     def _update_submission(self, submission: dict, updates: dict) -> bool:
         row = self._row(submission)
+        workflow = getattr(self, "workflow_service", None)
+        definition = workflow.definition_for(row) if workflow else {}
+        explicit = definition.get("workflow", {}).get("flow_mode") == "explicit"
+        if explicit:
+            # Metadata is owned here; workflow status is owned by the graph.
+            updates.pop("process_status", None)
         row.update(updates)
         submission_id = self._submission_id(submission)
         if self.submission_repository and submission_id:
-            return self.submission_repository.update(submission_id, updates)
+            saved = self.submission_repository.update(submission_id, updates)
+            if saved and explicit and submission_id not in workflow._driving and not self.composite_step(row, definition):
+                step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
+                document_id = step.get("document_id")
+                prefix = "agreement" if document_id in {"agreement", "training_agreement"} else "declaration" if document_id == "declaration" else ""
+                generated = prefix and (updates.get(f"{prefix}_filename") or updates.get("training_agreements"))
+                signed = prefix and str(updates.get(f"{prefix}_signature_valid") or "").lower() in {"tak", "true"}
+                if document_id == "training_agreement" and updates.get("training_agreements"):
+                    agreements = normalize_selected_items(updates["training_agreements"])
+                    signed = bool(agreements) and all(item.get("signature_valid") is True for item in agreements)
+                if (step.get("action") == "generate_document" and generated) or (step.get("action") == "await_signature" and signed):
+                    workflow.advance_after_action(row, definition)
+            return saved
         return False
 
     def _record_document_workflow_event(
@@ -865,7 +963,80 @@ class DocumentService:
             )
         if document_id == DocumentType.AGREEMENT:
             return SubmissionDocumentType.SIGNED_AGREEMENT if signed else SubmissionDocumentType.AGREEMENT
-        return SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
+        if document_id in {"", "form_submission"}:
+            return SubmissionDocumentType.SIGNED_FORM_PDF if signed else SubmissionDocumentType.FORM_PDF
+        return f"signed_{document_id}" if signed else document_id
+
+    def composite_step(self, row, definition=None):
+        from services.documents.document_workflow_service import is_document_step
+        workflow = getattr(self, "workflow_service", None)
+        if not workflow:
+            return None
+        definition = definition or workflow.definition_for(row)
+        step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
+        return step if is_document_step(step) else None
+
+    def workflow_upload_metadata_type(self, document_id, *, signer, signed):
+        """Adapt lifecycle roles to the existing canonical document metadata types."""
+        if signer == "office" and document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+            from services.office_signed_agreement_service import OFFICE_FINAL_TYPE
+            return OFFICE_FINAL_TYPE
+        return self._document_metadata_type(document_id, signed=signed)
+
+    def record_composite_participant_signature(self, row, step, data, filename, instance, verification):
+        """Keep existing declaration snapshots and per-training seat locks in their services."""
+        document_id = step["document_id"]
+        updates = {}
+        if document_id in {"declaration", "agreement", "training_agreement"}:
+            target = None
+            if instance:
+                _, _, target = self._signed_document_target(row, document_id, instance)
+            updates = self._signed_updates(row, document_id, filename, verification, True, True, target)
+        if document_id == "declaration":
+            updates["data_json"] = self.signed_declaration_snapshot(row, data, filename)
+        if instance and document_id in {"agreement", "training_agreement"}:
+            from sqlalchemy import select
+            from models import FormSubmission, SubmissionFile
+            with self.submission_repository.session_factory() as db:
+                model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == row["submission_id"])).scalar_one()
+                file = db.execute(select(SubmissionFile).where(SubmissionFile.public_submission_id == row["submission_id"], SubmissionFile.filename == filename, SubmissionFile.signed.is_(True))).scalar_one()
+                current_app.extensions["services"].submission_training_service.synchronize_legacy(db, model)
+                if not current_app.extensions["services"].submission_training_service.lock_for_agreement(db, model, instance, agreement_file_id=file.id):
+                    raise ValueError("Nie znaleziono szkolenia przypisanego do umowy.")
+                db.commit()
+        if updates:
+            self._update_submission(row, updates)
+
+    def record_composite_office_signature(self, row, step, filename, instance):
+        if not instance or step["document_id"] not in {"agreement", "training_agreement"}:
+            return
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionFile, SubmissionTraining
+        with self.submission_repository.session_factory() as db:
+            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == row["submission_id"])).scalar_one()
+            file = db.execute(select(SubmissionFile).where(SubmissionFile.public_submission_id == row["submission_id"], SubmissionFile.filename == filename)).scalar_one()
+            current_app.extensions["services"].submission_training_service.synchronize_legacy(db, model)
+            if not current_app.extensions["services"].submission_training_service.lock_for_agreement(db, model, instance, agreement_file_id=file.id):
+                raise ValueError("Nie znaleziono szkolenia przypisanego do umowy.")
+            training = db.execute(select(SubmissionTraining).where(SubmissionTraining.submission_id == model.id, SubmissionTraining.agreement_id == instance)).scalar_one()
+            training.status = "agreement_signed_by_office"
+            training.updated_at = datetime.now().astimezone()
+            db.commit()
+
+    @staticmethod
+    def signed_declaration_snapshot(row, uploaded_bytes, signed_filename):
+        data_json = dict(row.get("data_json") or {})
+        data_json["_signed_declaration_snapshot"] = {
+            "applicant_record_id": data_json.get("_applicant_record_id"),
+            "applicant_record_ids": dict(data_json.get("_applicant_record_ids") or {}),
+            "repeatable_groups": {key: [str(item.get("record_uuid") or item.get("id")) for item in value]
+                for key, value in data_json.items() if isinstance(value, list) and value
+                and all(isinstance(item, dict) and (item.get("record_uuid") or item.get("id")) for item in value)},
+            "protected_data": {key: value for key, value in data_json.items() if not str(key).startswith("_")},
+            "form_version_id": row.get("form_version_id"), "document_filename": signed_filename,
+            "document_sha256": sha256(uploaded_bytes).hexdigest(), "signed_at": datetime.now().astimezone().isoformat(),
+        }
+        return data_json
 
     def _not_required_updates(self, document_id: str, form_config: Mapping[str, Any]) -> dict[str, str]:
         if document_id == DocumentType.DECLARATION:

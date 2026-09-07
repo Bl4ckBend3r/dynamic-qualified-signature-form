@@ -1,4 +1,16 @@
 document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-training-disclosure]").forEach(disclosure => {
+        const toggle = disclosure.querySelector("[data-training-disclosure-toggle]");
+        const panel = disclosure.querySelector("[data-training-disclosure-panel]");
+        if (!toggle || !panel) return;
+        toggle.addEventListener("click", () => {
+            const expanded = toggle.getAttribute("aria-expanded") === "true";
+            toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+            toggle.textContent = expanded ? "Wybierz szkolenia" : "Ukryj wybór szkoleń";
+            panel.hidden = expanded;
+        });
+    });
+
     const picker = document.querySelector("[data-training-picker]");
     if (!picker) return;
 
@@ -27,6 +39,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const exceeded = limit !== null && selected > limit;
 
         if (usedNode) usedNode.textContent = formatter.format(locked);
+        const totalNode = picker.querySelector('[data-training-total]');
+        if (totalNode) totalNode.textContent = formatter.format(selected);
         if (pendingNode) pendingNode.textContent = formatter.format(pending);
         if (remainingNode && limit !== null) {
             remainingNode.textContent = formatter.format(Math.max(0, limit - locked));

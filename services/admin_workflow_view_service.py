@@ -96,9 +96,14 @@ def build_admin_workflow_view(
             "state": "completed" if status in COMPLETED_STATUSES else "future",
         },
     ]
+    workflow = (form_config or {}).get("workflow") or {}
+    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", ""))
+    step = next((s for s in workflow.get("steps", []) if s.get("id") == current), {})
     return {
+        "explicit_flow": workflow.get("flow_mode") == "explicit",
+        "officer_action": step if workflow.get("flow_mode") == "explicit" and step.get("stage_type") == "officer_action" else None,
         "sections": sections,
-        "can_edit_application_decision": can_edit_application_decision(submission) or _workflow_allows_decision(submission, form_config or {}),
+        "can_edit_application_decision": _workflow_allows_decision(submission, form_config or {}) if ((form_config or {}).get("workflow") or {}).get("flow_mode") == "explicit" else can_edit_application_decision(submission) or _workflow_allows_decision(submission, form_config or {}),
         "can_review_agreement": can_review_agreement,
         "application_decision": application_decision,
         "agreement_decision": agreement_decision,
@@ -109,6 +114,8 @@ def _workflow_allows_decision(submission, form_config: Mapping[str, Any]) -> boo
     workflow = form_config.get("workflow") or {}
     current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or workflow.get("initial_step") or "")
     step = next((item for item in workflow.get("steps") or [] if str(item.get("id") or "") == current), None)
+    if workflow.get("flow_mode") == "explicit":
+        return bool(step and step.get("stage_type") == "decision" and step.get("decision_scope") == "submission")
     return bool(step and (step.get("requires_officer_action") or step.get("type") == "manual_decision" or step.get("decisions")))
 
 

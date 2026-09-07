@@ -1,12 +1,24 @@
 {% extends "admin/base.html" %}
-{% block title %}Zgloszenie{% endblock %}
+{% block title %}Zgłoszenie{% endblock %}
 {% block content %}
+{% if composite_document %}
+<section class="admin-card admin-section" data-office-document-step>
+    <h2>{{ composite_document.label }}</h2><p>{{ composite_document.status.message }}</p>
+    {% for file in composite_document.files %}
+        {% if file.filename %}<p><a class="admin-button-secondary" href="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id, filename=file.filename) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
+        {% if file.can_upload %}<form method="post" enctype="multipart/form-data" action="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="instance" value="{{ file.instance }}">
+            <label>Dokument z podpisem urzędu<input type="file" name="document_pdf" accept="application/pdf,.pdf" required></label>
+            <button class="admin-button" type="submit">Wgraj dokument z podpisem urzędu</button>
+        </form>{% endif %}
+    {% endfor %}
+</section>
+{% endif %}
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
-<h1>Zgloszenie {{ submission.submission_id }}</h1>
-<p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p>
+<div class="admin-page-title admin-submission-title"><div><p class="admin-eyebrow">Szczegóły zgłoszenia</p><h1>Zgłoszenie <code>{{ submission.submission_id }}</code></h1></div><p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p></div>
 <section class="admin-card admin-section" id="assignment">
     <div class="admin-section-heading"><div><h2>Prowadzący sprawę</h2><p>Bieżący właściciel, priorytet i termin sprawy.</p></div></div>
-    <dl class="admin-workflow-summary"><dt>Prowadzący</dt><dd>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</dd><dt>Priorytet</dt><dd>{{ priority_labels.get(submission.priority, submission.priority) }}</dd><dt>Termin</dt><dd>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</dd></dl>
+    <dl class="admin-workflow-summary"><dt>Prowadzący</dt><dd>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</dd><dt>Priorytet</dt><dd>{{ priority_labels.get(submission.priority, submission.priority) }}</dd><dt>Termin</dt><dd>{{ submission.due_at|business_datetime('%d.%m.%Y, %H:%M') if submission.due_at else "Bez terminu" }}</dd></dl>
     {% if can_assign_submissions %}<form method="post" action="{{ url_for('admin.submission_assignment_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
         <div class="admin-form-grid"><label><span>Prowadzący</span><select name="assigned_to_user_id"><option value="">Nieprzydzielona</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if submission.assigned_to_user_id == user.id %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></label><label><span>Priorytet</span><select name="priority">{% for priority in priorities %}<option value="{{ priority }}" {% if submission.priority == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></label><label><span>Termin</span><input type="datetime-local" name="due_at" value="{{ submission.due_at.strftime('%Y-%m-%dT%H:%M') if submission.due_at else '' }}"></label><label><span>Powód zmiany</span><input name="assignment_reason"></label></div>
@@ -14,6 +26,44 @@
     </form>{% endif %}
     {% if can_claim_submission and submission.assigned_to_user_id != g.admin_user.id and (not submission.assigned_to_user_id or can_assign_submissions) %}<form method="post" action="{{ url_for('admin.submission_assignment_claim', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary" type="submit">Przejmij sprawę</button></form>{% endif %}
 </section>
+{% if repeatable_groups %}
+<section id="repeatable-decisions">
+  <h2>Osoby objęte wnioskiem</h2>
+  {% for group in repeatable_groups %}
+    <section class="admin-card"><h3>{{ group.label }}</h3><div class="admin-repeatable-decision-grid">
+    {% for item in group.get("items", []) %}
+      {% set history = repeatable_item_decisions|selectattr('group_key', 'equalto', group.key)|selectattr('item_id', 'equalto', item.id)|list %}
+      {% set latest = history|first %}
+      <article class="admin-card admin-repeatable-decision-item">
+        <h4>{{ group.config.item_label or 'Element' }} {{ loop.index }}{% if item.is_applicant %} <span class="admin-badge">Osoba składająca wniosek</span>{% endif %}</h4>
+        <p class="admin-person-name"><strong>{{ item.display_name if can_view_sensitive_data else "Dane osoby ukryte" }}</strong></p>
+        {% if can_view_sensitive_data %}
+        <dl class="admin-person-summary">{% for field in item.primary_fields %}<dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>{% endfor %}</dl>
+        {% for segment in item.summary_groups %}<p class="admin-person-segment"><strong>{{ segment.label }}</strong><br>{{ segment.get('values', [])|join(', ') }}</p>{% endfor %}
+        {% if item.additional_fields %}<details><summary>Pełne dane osoby</summary><dl class="admin-detail-list">{% for field in item.additional_fields %}<dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>{% endfor %}</dl></details>{% endif %}
+        {% endif %}
+        <div class="admin-person-current-decision">
+          <p>Aktualna decyzja</p><span class="admin-badge">{{ latest.decision_label if latest else 'Brak decyzji' }}</span>
+          {% if latest %}<p class="admin-person-decision-meta"><small>{{ latest.decided_at|business_datetime('%d.%m.%Y, %H:%M') }}<br>{{ latest.decided_by.email if latest.decided_by else 'System' }}</small></p>{% endif %}
+        </div>
+        {% if can_make_decision and group.decisions %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_update', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}" class="admin-form admin-person-decision" data-required-note="false" data-item-decision>
+          <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+          <label><span>Decyzja <span class="required-marker" aria-hidden="true">*</span></span><select name="decision_code" required aria-required="true"><option value="">Wybierz decyzję</option>{% for decision in group.decisions %}<option value="{{ decision.code }}" data-reason-required="{{ 'true' if decision.get('reason_required', decision.get('require_reason')) else 'false' }}">{{ decision.label }}</option>{% endfor %}</select></label>
+          <label><span>Powód / komentarz <span class="required-marker" data-reason-marker aria-hidden="true" hidden>*</span></span><textarea name="comment" rows="2"></textarea></label><button class="admin-button" type="submit">Zapisz decyzję</button>
+        </form>{% elif not group.decisions %}<p>Decyzje dla osób nie są dostępne na bieżącym etapie.</p>{% endif %}
+        <div class="admin-person-history">
+        {% if history %}<details><summary>Historia decyzji ({{ history|length }})</summary><ul>{% for entry in history %}<li>{{ entry.decision_label }} · {{ entry.decided_at|business_datetime('%d.%m.%Y, %H:%M') }}{% if entry.decided_by %} · {{ entry.decided_by.email }}{% endif %}</li>{% endfor %}</ul>
+          {% if latest and item.contact_email and can_send_email and can_view_sensitive_data %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_email', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="decision_id" value="{{ latest.id }}"><button class="admin-button-secondary compact" type="submit">Wyślij ponownie e-mail</button>
+          </form>{% endif %}
+        </details>{% endif %}
+        </div>
+      </article>
+    {% else %}<p>Brak elementów.</p>{% endfor %}
+    </div></section>
+  {% endfor %}
+</section>
+{% endif %}
 <section class="admin-card admin-section" id="workflow-sla" aria-labelledby="workflow-sla-title">
     <div class="admin-section-heading"><div><h2 id="workflow-sla-title">Terminy etapów i SLA</h2><p>Terminy liczone od wejścia do etapu; zakończone rekordy pozostają w historii.</p></div></div>
     {% if deadline_history %}
@@ -94,7 +144,7 @@
     </dl>
     {% if blocked_agreement_view.can_manage %}
     <div class="admin-actions">
-        {% if can_return_for_correction %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
+        {% if can_return_for_correction and not workflow_view.explicit_flow %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
         {% if can_edit_workflow and rollback_options %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
         {% if blocked_agreement_view.can_unblock %}<button class="admin-button" type="button" data-admin-modal-target="unblock-agreement-dialog">Odblokuj umowę</button>{% endif %}
         {% if blocked_agreement_view.can_reject_final %}<button class="admin-button-danger" type="button" data-admin-modal-target="reject-final-dialog">Zakończ jako odrzucone</button>{% endif %}
@@ -130,7 +180,7 @@
         </form>
     </dialog>
 {% endif %}
-{% if can_return_for_correction and submission.process_status != "RETURNED_FOR_CORRECTION" %}
+{% if can_return_for_correction and not workflow_view.explicit_flow and submission.process_status != "RETURNED_FOR_CORRECTION" %}
     {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
     <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
@@ -233,6 +283,14 @@
 </section>
 {% endif %}
 <h2>Workflow zgłoszenia</h2>
+{% if workflow_view.officer_action and can_make_decision %}
+<form method="post" action="{{ url_for('admin.workflow_complete_action', form_id=form.id, submission_pk=submission.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="workflow_step" value="{{ workflow_view.officer_action.id }}">
+    <p>{{ workflow_view.officer_action.admin_label }}</p>
+    <button class="admin-button" type="submit">Zakończ akcję i przejdź dalej</button>
+</form>
+{% endif %}
 <div class="admin-workflow-grid">
     {% for section in workflow_view.sections %}
         <section class="admin-card admin-workflow-section admin-workflow-section--{{ section.state }}">
@@ -298,14 +356,14 @@
 </div>
 {% if can_send_email %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></div>{% endif %}
 {% if detail_view.qualification %}
-<section class="admin-card">
-    <h2>Warunki kwalifikujące</h2>
+<section class="admin-card admin-detail-card">
+    <div class="admin-section-heading"><div><h2>Warunki kwalifikujące</h2><p>Wynik automatycznej oceny warunków formularza.</p></div></div>
     <p class="admin-alert {{ 'admin-alert-success' if detail_view.qualification.passed else 'admin-alert-warning' }}">
         {{ "Warunki zostały spełnione." if detail_view.qualification.passed else "Zgłoszenie zostało odrzucone automatycznie na podstawie warunków formularza." }}
     </p>
-    <p><strong>Data oceny:</strong> {{ detail_view.qualification.evaluated_at or "-" }}</p>
+    <p><strong>Data oceny:</strong> {{ detail_view.qualification.evaluated_at|business_datetime('%d.%m.%Y, %H:%M') if detail_view.qualification.evaluated_at else "-" }}</p>
     {% if detail_view.qualification.user_message %}<p><strong>Komunikat dla użytkownika:</strong> {{ detail_view.qualification.user_message }}</p>{% endif %}
-    <div class="admin-table-wrap"><table class="admin-table">
+    {% if detail_view.qualification.results %}<div class="admin-table-wrap"><table class="admin-table">
         <thead><tr><th>Pole</th><th>Operator</th><th>Wartość oczekiwana</th><th>Wartość zgłoszenia</th><th>Wynik</th><th>Informacja dla urzędnika</th></tr></thead>
         <tbody>
         {% for condition in detail_view.qualification.results %}
@@ -317,11 +375,11 @@
             </tr>
         {% else %}<tr><td colspan="6">Brak aktywnych warunków do oceny.</td></tr>{% endfor %}
         </tbody>
-    </table></div>
+    </table></div>{% else %}<p class="admin-empty-state">Brak aktywnych warunków do oceny.</p>{% endif %}
 </section>
 {% endif %}
-<section class="admin-card">
-    <h2>Zaakceptowane zgody i regulaminy</h2>
+<section class="admin-card admin-detail-card admin-consents-card">
+    <div class="admin-section-heading"><div><h2>Zaakceptowane zgody i regulaminy</h2><p>Snapshoty treści i dowody audytowe z chwili wysłania formularza.</p></div></div>
     {% if submission_consents %}
     <div class="admin-table-wrap">
         <table class="admin-table admin-table--responsive">
@@ -329,15 +387,17 @@
             <tbody>
             {% for item in submission_consents %}
             {% set consent = item.record %}
+            {% set consent_hash = consent.regulation_sha256 or consent.consent_sha256 or '' %}
             <tr>
                 <td>{{ consent.consent_title_snapshot }}</td>
                 <td>{{ consent.regulation_version or consent.consent_version }}</td>
-                <td>{{ 'Tak' if consent.accepted else 'Nie' }}</td>
-                <td>{{ consent.accepted_at.strftime('%Y-%m-%d %H:%M:%S') if consent.accepted_at else 'Brak — migracja legacy' }}</td>
-                <td><code>{{ consent.regulation_sha256 or consent.consent_sha256 }}</code></td>
+                <td><span class="admin-badge {{ 'admin-badge-success' if consent.accepted else 'admin-badge-danger' }}">{{ 'Tak' if consent.accepted else 'Nie' }}</span></td>
+                <td>{% if consent.accepted_at %}{{ consent.accepted_at|business_datetime('%d.%m.%Y, %H:%M') }}{% else %}<span class="admin-muted">Brak — migracja legacy</span>{% endif %}</td>
+                <td><div class="admin-hash"><span>SHA-256</span><code title="Pełny hash jest dostępny w szczegółach audytowych">{{ consent_hash[:8] }}{% if consent_hash|length > 16 %}…{{ consent_hash[-7:] }}{% endif %}</code>{% if consent_hash %}<button type="button" class="admin-copy-id" data-copy-value="{{ consent_hash }}" aria-label="Kopiuj pełny SHA-256" title="Kopiuj pełny SHA-256">Kopiuj</button>{% endif %}</div></td>
                 <td>
-                    <details><summary>Treść i opis audytowy</summary>
+                    <details class="admin-audit-details"><summary>Szczegóły audytowe</summary>
                         <p>{{ item.audit_description }}</p>
+                        {% if consent_hash %}<p><strong>Pełny SHA-256:</strong> <code class="admin-code-wrap">{{ consent_hash }}</code></p>{% endif %}
                         <pre>{{ consent.consent_text_snapshot }}</pre>
                     </details>
                     {% if item.regulation_url %}<a href="{{ item.regulation_url }}" target="_blank" rel="noopener noreferrer">Pobierz regulamin</a>{% endif %}
@@ -348,7 +408,7 @@
         </table>
     </div>
     {% else %}
-        <p>Brak audytowalnych snapshotów. Starsze pola logiczne nie stanowią pełnego dowodu zaakceptowanej treści.</p>
+        <p class="admin-empty-state">Brak audytowalnych snapshotów. Starsze pola logiczne nie stanowią pełnego dowodu zaakceptowanej treści.</p>
     {% endif %}
 </section>
 <section class="admin-card" id="participant-attachments">
@@ -380,17 +440,15 @@
     </table></div>
     {% else %}<p>Brak załączników uczestnika.</p>{% endif %}
 </section>
-<h2>Dane zgłoszenia</h2>
+<div class="admin-section-heading admin-detail-heading"><div><h2>Dane zgłoszenia</h2><p>Dane pogrupowane zgodnie z sekcjami formularza.</p></div></div>
 {% for section in detail_view.sections %}
-    <section class="admin-card">
-        <h3>{{ section.title }}</h3>
-        <div class="admin-table-wrap"><table class="admin-table">
-            <tbody>
-                {% for item in section["items"] %}
-                    <tr><th>{{ item.label }}</th><td>{{ item.value }}</td></tr>
-                {% endfor %}
-            </tbody>
-        </table></div>
+    <section class="admin-card admin-detail-card">
+        <h3 class="admin-detail-card__title">{{ section.title }}</h3>
+        <dl class="admin-data-list{% if section.title == 'Deklaracje i oświadczenia' %} admin-data-list--declarations{% endif %}">
+            {% for item in section["items"] %}
+                <div class="admin-data-row"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
+            {% endfor %}
+        </dl>
     </section>
 {% endfor %}
 <section class="admin-card">
@@ -515,33 +573,6 @@
     </div>
 </section>
 {% endif %}
-{% if repeatable_groups %}
-<section id="repeatable-decisions">
-  <h2>Decyzje dla elementów grup powtarzalnych</h2>
-  {% for group in repeatable_groups %}
-    <section class="admin-card"><h3>{{ group.label }}</h3><div class="admin-repeatable-decision-grid">
-    {% for item in group.items %}
-      {% set history = repeatable_item_decisions|selectattr('group_key', 'equalto', group.key)|selectattr('item_id', 'equalto', item.id)|list %}
-      {% set latest = history|first %}
-      <article class="admin-card admin-repeatable-decision-item">
-        <h4>{{ item.summary }}</h4>
-        <p><strong>Aktualna decyzja:</strong> {{ latest.decision_label if latest else 'Brak' }}</p>
-        {% if latest %}<p><small>{{ latest.decided_by.email if latest.decided_by else 'System' }} · {{ latest.decided_at|business_datetime }}</small></p>{% endif %}
-        {% if can_make_decision %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_update', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}" class="admin-form">
-          <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-          <label><span>Decyzja</span><select name="decision_code" required><option value="">Wybierz</option>{% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}</select></label>
-          <label><span>Komentarz</span><textarea name="comment" rows="2"></textarea></label><button class="admin-button" type="submit">Zapisz</button>
-        </form>{% endif %}
-        {% if latest and item.contact_email and can_send_email and can_view_sensitive_data %}<form method="post" action="{{ url_for('admin.repeatable_item_decision_email', form_id=form.id, submission_pk=submission.id, group_key=group.key, item_id=item.id) }}">
-          <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="decision_id" value="{{ latest.id }}"><button class="admin-button-secondary" type="submit">Wyślij decyzję tej osobie</button>
-        </form>{% endif %}
-        {% if history %}<details><summary>Historia ({{ history|length }})</summary><ul>{% for entry in history %}<li>{{ entry.decision_label }} · {{ entry.decided_at|business_datetime }}{% if entry.decided_by %} · {{ entry.decided_by.email }}{% endif %}</li>{% endfor %}</ul></details>{% endif %}
-      </article>
-    {% else %}<p>Brak elementów.</p>{% endfor %}
-    </div></section>
-  {% endfor %}
-</section>
-{% endif %}
 <h2>Historia workflow</h2>
 <p><small>Źródło: {{ workflow_history.source }}</small></p>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
@@ -602,4 +633,19 @@
         <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
     {% endfor %}</tbody>
 </table></div>
+<script>
+document.querySelectorAll('[data-item-decision]').forEach((form) => {
+    const decision = form.querySelector('[name="decision_code"]');
+    const comment = form.querySelector('[name="comment"]');
+    const marker = form.querySelector('[data-reason-marker]');
+    const update = () => {
+        const required = decision.selectedOptions[0]?.dataset.reasonRequired === 'true';
+        comment.required = required;
+        comment.setAttribute('aria-required', String(required));
+        marker.hidden = !required;
+    };
+    decision.addEventListener('change', update);
+    update();
+});
+</script>
 {% endblock %}

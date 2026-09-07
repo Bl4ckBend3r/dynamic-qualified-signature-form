@@ -253,17 +253,21 @@ def test_dispatch_raw_logs_success_and_failure(app):
 
     db = FakeDb()
     sent = []
-    service = MailDispatchService(smtp_sender=lambda **kwargs: sent.append(kwargs))
+    def sender(**kwargs):
+        assert len(db.rows) == 1 and db.rows[0].status == 'pending'
+        assert 'credential-secret' not in db.rows[0].html_body
+        sent.append(kwargs)
+    service = MailDispatchService(smtp_sender=sender)
 
     with app.app_context():
         result = service.dispatch_raw(
             event_type="manual",
             recipient="jan@example.com",
             subject="Temat",
-            html_body="<p>Body</p>",
+            html_body="<p>Body credential-secret</p>",
             db=db,
             form=SimpleNamespace(id=1),
-            submission=SimpleNamespace(id=2, submission_id="abc"),
+            submission=SimpleNamespace(id=2, submission_id="abc", access_token='credential-secret'),
         )
 
     assert result.status == "sent"

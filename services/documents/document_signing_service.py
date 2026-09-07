@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from hashlib import sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -11,7 +12,7 @@ from flask import current_app, has_app_context
 from services.documents.document_storage_service import DocumentStorageService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.upload_validation import UploadValidationError, validate_pdf_upload
-from signature_verifier import verify_signed_pdf
+from signature_verifier import resolve_signature_policy, signature_verification_result, verify_signed_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,21 @@ class DocumentSigningService:
         if not verification.get("is_signed"):
             self._record_verification_rejection("unsigned")
             raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
-        if not verification.get("cryptographically_valid") or not verification.get("integrity_ok"):
-            self._record_verification_rejection("invalid_or_modified")
-            raise ValueError("Podpis PDF jest nieprawidłowy albo dokument został zmieniony po podpisaniu.")
-        if not verification.get("is_szafir_signature"):
+        outcome = signature_verification_result(verification, ["mszafir"])
+        if outcome != "VALID_SIGNATURE":
+            self._record_verification_rejection(str(verification.get("reason_code") or outcome).lower())
+            if outcome == "SIGNATURE_TYPE_NOT_ALLOWED":
+                raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
+            if outcome == "VERIFICATION_ERROR":
+                raise ValueError("Nie udało się obecnie zweryfikować podpisu PDF.")
+            if outcome == "NO_SIGNATURE":
+                raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
             self._record_verification_rejection("unsupported_signer")
-            raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
+            raise ValueError(
+                "Nie udało się potwierdzić poprawności podpisu elektronicznego. "
+                "Upewnij się, że wgrywasz oryginalny plik pobrany bezpośrednio po podpisaniu dokumentu. "
+                "Nie otwieraj i nie zapisuj ponownie podpisanego PDF przed wgraniem."
+            )
 
         storage_path = self.document_storage_service.save_pdf(
             storage=self.storage,
@@ -123,16 +133,52 @@ class DocumentSigningService:
             instance_id=instance_id,
         )
 
+    def verify_stored_pdf(self, pdf_bytes, temp_dir, *, storage, slug, filename, storage_path, allowed_signatures=None):
+        """Compare the stored artifact to the upload, then verify the original bytes once."""
+        diagnostics = {"upload_sha256": sha256(pdf_bytes).hexdigest(), "storage_sha256": None, "verifier_sha256": None}
+        try:
+            stored = self.document_storage_service.read_document_bytes(storage=storage, slug=slug,
+                filename=filename, metadata={"storage_path": storage_path}, strict_metadata=True)
+        except Exception:
+            return {**diagnostics, "validation_status": "ERROR", "reason_code": "STORAGE_READ_ERROR"}
+        diagnostics["storage_sha256"] = sha256(stored).hexdigest()
+        if diagnostics["storage_sha256"] != diagnostics["upload_sha256"]:
+            return {**diagnostics, "validation_status": "ERROR", "reason_code": "UPLOAD_STORAGE_HASH_MISMATCH"}
+        verification = self.verify_uploaded_pdf(pdf_bytes, temp_dir, allowed_signatures=allowed_signatures)
+        verification.update({key: value for key, value in diagnostics.items() if key != "verifier_sha256"})
+        return verification
+
+    def verify_uploaded_pdf(self, pdf_bytes, temp_dir, *, allowed_signatures=None):
+        """Verify uploaded bytes through the shared backend router and admission policy."""
+        try:
+            verification = dict(self._verify_pdf(pdf_bytes, temp_dir))
+        except Exception:
+            verification = {"validation_status": "ERROR", "reason_code": "VERIFIER_EXCEPTION"}
+        verification.update(resolve_signature_policy(verification, allowed_signatures))
+        outcome = signature_verification_result(verification, allowed_signatures)
+        verification["result"] = outcome
+        if outcome == "SIGNATURE_TYPE_NOT_ALLOWED":
+            verification["reason_code"] = "SIGNATURE_TYPE_NOT_ALLOWED"
+        return verification
+
     def _verify_pdf(self, pdf_bytes: bytes, temp_dir: str | Path) -> Mapping[str, object]:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=temp_dir) as tmp_signed:
             tmp_signed_path = Path(tmp_signed.name)
             tmp_signed.write(pdf_bytes)
+        verifier_digest = None
         try:
+            verifier_digest = sha256(tmp_signed_path.read_bytes()).hexdigest()
+            if verifier_digest != sha256(pdf_bytes).hexdigest():
+                return {"validation_status": "ERROR", "reason_code": "VERIFIER_INPUT_HASH_MISMATCH", "verifier_sha256": verifier_digest}
             metrics = current_app.extensions.get("observability_metrics") if has_app_context() else None
             if metrics is None:
-                return self.verifier(tmp_signed_path)
-            with metrics.operation("signature_verification", "pdf"):
-                return self.verifier(tmp_signed_path)
+                result = self.verifier(tmp_signed_path)
+            else:
+                with metrics.operation("signature_verification", "pdf"):
+                    result = self.verifier(tmp_signed_path)
+            return {**result, "verifier_sha256": verifier_digest}
+        except Exception:
+            return {"validation_status": "ERROR", "reason_code": "VERIFIER_EXCEPTION", "verifier_sha256": verifier_digest}
         finally:
             tmp_signed_path.unlink(missing_ok=True)
 

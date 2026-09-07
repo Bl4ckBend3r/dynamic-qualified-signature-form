@@ -314,13 +314,34 @@ def build_declaration_render_context(
         "selected_trainings": [],
         "selected_trainings_normalized": [],
     })
+    applicant_ids = dict(source.get("_applicant_record_ids") or {})
+    default_applicant_id = str(source.get("_applicant_record_id") or "")
+    for definition_field in (form_definition or {}).get("fields") or []:
+        if not isinstance(definition_field, Mapping) or definition_field.get("type") != "repeatable_group":
+            continue
+        group_name = str(definition_field.get("name") or "")
+        records = source.get(group_name)
+        if not group_name or not isinstance(records, list):
+            continue
+        applicant_id = str(applicant_ids.get(group_name) or default_applicant_id or "")
+        normalized_records = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            record_uuid = str(record.get("record_uuid") or record.get("id") or "")
+            normalized_records.append({**dict(record), "record_uuid": record_uuid, "id": record_uuid, "is_applicant": record_uuid == applicant_id})
+        result[group_name] = normalized_records
+        if definition_field.get("applicant_record"):
+            result["applicant_record_id"] = applicant_id
+            result["applicant"] = next((record for record in normalized_records if record["record_uuid"] == applicant_id), {})
     for field in fields:
         name = _field_value(field, "name")
         if not name:
             continue
         value = source.get(name, result.get(name, ""))
         field_type = _field_value(field, "field_type") or _field_value(field, "type")
-        result[name] = value
+        if field_type.casefold() != "repeatable_group":
+            result[name] = value
         result[f"{name}_display"] = _display_value(value, field_type)
         if field_type.casefold() in {"checkbox", "boolean", "bool"}:
             normalized = normalize_yes_no_value(value)

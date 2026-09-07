@@ -311,6 +311,74 @@ def test_admin_forms_actions_tables_and_modals_use_responsive_shared_rules():
     assert "overflow-y: auto;" in css
 
 
+def test_dashboard_filters_and_submission_details_define_required_responsive_contracts():
+    css = ADMIN_CSS.read_text(encoding="utf-8")
+
+    assert "width: min(1520px, calc(100% - 64px));" in css
+    assert ".admin-stats-grid--general" in css
+    assert ".admin-stats-grid--queues" in css
+    assert ".admin-filter-grid--primary" in css
+    assert ".admin-data-row" in css
+    assert "grid-template-columns: minmax(180px, 34%) minmax(0, 1fr);" in css
+    assert "@media (max-width: 620px)" in css
+    assert ".admin-consents-card .admin-table--responsive" in css
+
+
+def test_dashboard_submission_filters_table_and_detail_fit_1366_and_390():
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    css = "\n".join(path.read_text(encoding="utf-8") for path in (STYLE_CSS, ADMIN_CSS))
+    metrics = "".join(
+        '<article class="admin-card admin-stat"><span>Metryka</span><strong>128</strong></article>'
+        for _ in range(4)
+    )
+    filters = "".join(
+        f'<label><span>{label}</span><input></label>'
+        for label in ("Szukaj", "Status", "Stan workflow", "Stan checklisty", "Data od", "Data do")
+    )
+    html = f"""<!doctype html><html><head><style>{css}</style></head><body class="admin-body">
+      <main class="admin-main"><div class="admin-container">
+        <div class="admin-stats-grid admin-stats-grid--general">{metrics}</div>
+        <form class="admin-card admin-filters admin-submission-filters">
+          <div class="admin-filter-grid admin-filter-grid--primary">{filters}</div>
+          <div class="admin-filter-actions"><button class="admin-button">Filtruj</button><a class="admin-button-secondary">Wyczyść filtry</a></div>
+        </form>
+        <div class="admin-card admin-table-wrap" id="submission-table-wrap">
+          <table class="admin-table admin-table--submissions admin-table--responsive"><thead><tr>
+            <th>ID</th><th>Imię i nazwisko</th><th>Data</th><th>Formularz</th><th>Prowadzący</th><th>Priorytet</th><th>Status</th><th class="actions-column">Akcje</th>
+          </tr></thead><tbody><tr><td>a738ab5f…</td><td>Anna Kowalska</td><td>31.08.2026, 13:09</td><td>Wiedza kluczem do sukcesu</td><td>urzad@example.org</td><td>Normalny</td><td><span class="admin-badge">Wniosek zaakceptowany</span></td><td class="actions-column">Akcje</td></tr></tbody></table>
+        </div>
+        <section class="admin-card admin-detail-card"><h3 class="admin-detail-card__title">Dane kontaktowe</h3><dl class="admin-data-list"><div class="admin-data-row"><dt>Adres e-mail</dt><dd>anna@example.org</dd></div></dl></section>
+      </div></main></body></html>"""
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page(viewport={"width": 1366, "height": 900})
+        page.set_content(html)
+        desktop = page.evaluate("""() => ({
+          bodyFits: document.documentElement.scrollWidth <= innerWidth,
+          kpiColumns: getComputedStyle(document.querySelector('.admin-stats-grid')).gridTemplateColumns.split(' ').length,
+          filterColumns: getComputedStyle(document.querySelector('.admin-filter-grid')).gridTemplateColumns.split(' ').length,
+          tableFits: document.querySelector('#submission-table-wrap').scrollWidth <= document.querySelector('#submission-table-wrap').clientWidth,
+          detailColumns: getComputedStyle(document.querySelector('.admin-data-row')).gridTemplateColumns.split(' ').length,
+        })""")
+        assert desktop == {"bodyFits": True, "kpiColumns": 4, "filterColumns": 6, "tableFits": True, "detailColumns": 2}
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        mobile = page.evaluate("""() => ({
+          bodyFits: document.documentElement.scrollWidth <= innerWidth,
+          kpiColumns: getComputedStyle(document.querySelector('.admin-stats-grid')).gridTemplateColumns.split(' ').length,
+          filterColumns: getComputedStyle(document.querySelector('.admin-filter-grid')).gridTemplateColumns.split(' ').length,
+          tableScrollsInsideWrapper: document.querySelector('#submission-table-wrap').scrollWidth > document.querySelector('#submission-table-wrap').clientWidth,
+          detailColumns: getComputedStyle(document.querySelector('.admin-data-row')).gridTemplateColumns.split(' ').length,
+          actionsStacked: getComputedStyle(document.querySelector('.admin-filter-actions')).flexDirection,
+        })""")
+        assert mobile == {"bodyFits": True, "kpiColumns": 1, "filterColumns": 1, "tableScrollsInsideWrapper": True, "detailColumns": 1, "actionsStacked": "column"}
+        browser.close()
+
+
 def test_mobile_modal_buttons_do_not_inherit_a_tall_flex_basis():
     css = ADMIN_CSS.read_text(encoding="utf-8")
     mobile_rules = css.split("@media (max-width: 480px)", 1)[1]

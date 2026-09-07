@@ -9,6 +9,21 @@ from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
 VARIABLE_GROUPS = (
     (
+        "Osoba z listy — osobne powiadomienia",
+        (
+            ("participant.record_uuid", "UUID odbiorcy", "6ef64b28-530b-4df0-b421-53e6c8dd2735"),
+            ("participant.first_name", "Imię odbiorcy", "Jan"),
+            ("participant.last_name", "Nazwisko odbiorcy", "Kowalski"),
+            ("participant.full_name", "Imię i nazwisko odbiorcy", "Jan Kowalski"),
+            ("participant.email", "E-mail tylko tego odbiorcy", "jan@example.org"),
+            ("participant.phone", "Telefon tylko tego odbiorcy", "+48 500 000 000"),
+            ("submitted_at", "Data złożenia", "02.09.2026"),
+            ("current_status", "Publiczna etykieta statusu", "Wniosek oczekuje na weryfikację"),
+            ("public_status_url", "Publiczny link tylko do statusu", "https://formularze.example.com/sprawdz-status"),
+            ("participant_action_url", "Chroniony link — tylko dla wnioskodawcy, dla pozostałych pusty", ""),
+        ),
+    ),
+    (
         "Systemowe",
         (
             ("app_name", "Nazwa aplikacji", "Portal formularzy"),
@@ -88,6 +103,7 @@ VARIABLE_GROUPS = (
             ("draft_expires_at", "Data wygaśnięcia wersji roboczej", "2026-09-12 14:30"),
             ("podpisz_url", "Link do podpisania dokumentów", "https://formularze.example.com/podpisz/abc"),
             ("document_url", "Link do pobrania dokumentu", "https://formularze.example.com/dokument/abc"),
+            ("pobierz_url", "Link do pobrania dokumentu (alias)", "https://formularze.example.com/dokument/abc"),
         ),
     ),
     (
@@ -213,7 +229,9 @@ def _field_example(field: dict[str, Any]) -> str:
 
 
 def _variable(name: str, description: str, fallback: str, context: dict[str, Any]) -> dict[str, Any]:
-    raw_example = context.get(name, fallback)
+    raw_example = context
+    for part in name.split('.'):
+        raw_example = raw_example.get(part, fallback) if isinstance(raw_example, dict) else fallback
     if raw_example is None or raw_example == "":
         raw_example = fallback
     return {

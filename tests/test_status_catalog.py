@@ -28,6 +28,16 @@ def test_status_flags_and_labels_are_shared():
     assert get_status_label("AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE") == "Umowa oczekuje na podpis po stronie urzędu"
 
 
+def test_legacy_submitted_label_does_not_change_technical_status():
+    from services.status_catalog import LEGACY_STATUS_MAP
+
+    row = {'process_status': 'zlozony'}
+    assert get_status_label(row['process_status']) == 'Złożony'
+    assert export_status_catalog_for_frontend()['legacy_labels']['zlozony'] == 'Złożony'
+    assert row['process_status'] == 'zlozony'
+    assert 'zlozony' not in LEGACY_STATUS_MAP
+
+
 def test_transition_matrix_for_target_statuses():
     assert can_transition("SUBMITTED", "WAITING_FOR_REVIEW")
     assert not can_transition("SUBMITTED", "COMPLETED")

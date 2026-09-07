@@ -2,6 +2,22 @@
     overflow: hidden;
 }
 
+.training-picker-disclosure {
+    margin-bottom: 24px;
+}
+
+.training-picker-disclosure__toggle {
+    width: auto;
+}
+
+.training-picker-disclosure__panel {
+    margin-top: 16px;
+}
+
+.training-picker-disclosure__panel[hidden] {
+    display: none;
+}
+
 .training-picker__header {
     display: flex;
     align-items: flex-start;

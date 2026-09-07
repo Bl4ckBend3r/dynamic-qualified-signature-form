@@ -552,7 +552,7 @@ def submission_detail(form_id: int, submission_pk: int):
             db, submission, include_sensitive=can_view_sensitive_data
         )
         decision_definition_service = services.decision_definition_service
-        available_decisions = decision_definition_service.available_for_submission(submission)
+        available_decisions = decision_definition_service.available_for_submission(submission, scope="submission")
         repeatable_groups = decision_definition_service.repeatable_groups(submission)
         repeatable_item_decisions = decision_definition_service.item_history(db, submission.id)
         evidence_files = sorted(
@@ -601,6 +601,9 @@ def submission_detail(form_id: int, submission_pk: int):
             workflow_history=workflow_history,
             decision_history=decision_history,
             workflow_view=workflow_view,
+            composite_document=services.document_service.document_workflow.view(
+                services.submission_repository.get_by_id(submission.submission_id), submission_form_config, signer="office"
+            ) if services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form) else None,
             rollback_options=rollback_options,
             blocked_agreement_view=blocked_agreement_view,
             office_signed_agreement_view=office_signed_agreement_view,
@@ -1716,6 +1719,58 @@ def submission_decision_update(form_id: int, submission_pk: int):
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/complete-action")
+@login_required
+def workflow_complete_action(form_id: int, submission_pk: int):
+    from services.workflow_service import WorkflowTransitionError
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_make_decision")
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        services = current_app.extensions["services"]
+        definition = _submission_form_config(db, form, submission)
+        row = services.submission_repository.get_by_id(submission.submission_id)
+        try:
+            services.workflow_service.complete_officer_action(row, definition, request.form.get("workflow_step"), actor=str(g.admin_user.email))
+        except WorkflowTransitionError as exc:
+            flash(str(exc), "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
+@bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/document-step/<step_id>", methods=["GET", "POST"])
+@login_required
+def office_document_step(form_id, submission_pk, step_id):
+    from io import BytesIO
+    from flask import send_file
+    services = current_app.extensions["services"]
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_make_decision")
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        definition = _submission_form_config(db, form, submission)
+        row = services.submission_repository.get_by_id(submission.submission_id)
+    try:
+        if request.method == "GET":
+            filename = request.args.get("filename", "")
+            content = services.document_service.document_workflow.download(row, definition, step_id, filename, signer="office")
+            response = send_file(BytesIO(content), mimetype="application/pdf", as_attachment=True, download_name=filename)
+            response.headers["Cache-Control"] = "private, no-store"
+            return response
+        result = services.document_service.document_workflow.upload(row, definition, step_id, request.files.get("document_pdf"),
+            signer="office", instance=request.form.get("instance", ""))
+        flash("Podpis urzędu został przyjęty." if result["is_valid"] else "Nie udało się potwierdzić podpisu urzędu.", "success" if result["is_valid"] else "error")
+    except ValueError as exc:
+        if request.method == "GET":
+            abort(404)
+        flash(str(exc), "error")
+    except Exception:
+        current_app.logger.exception("Błąd obsługi podpisu urzędu w etapie dokumentowym")
+        flash("Nie udało się zakończyć obsługi dokumentu. Spróbuj ponownie.", "error")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/repeatable/<group_key>/<item_id>/decision")
 @login_required
 def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key: str, item_id: str):
@@ -1725,12 +1780,36 @@ def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key:
         if submission.form_slug != form.slug:
             abort(404)
         try:
-            current_app.extensions["services"].decision_definition_service.decide_item(
+            services = current_app.extensions["services"]
+            decision_service = services.decision_definition_service
+            decision = decision_service.decide_item(
                 db, submission, group_key=group_key, item_id=item_id,
                 decision_code=request.form.get("decision_code", ""),
                 comment=request.form.get("comment", ""), actor=g.admin_user,
             )
+            group = next((item for item in decision_service.repeatable_groups(submission) if item["key"] == group_key), None)
+            services.mail_dispatch_service.dispatch_workflow_decision_event(
+                db=db, form=form, submission=submission, decision=decision,
+                actor_id=g.admin_user.id, group_config=(group or {}).get("config") or {},
+            )
+            completion = decision_service.completion_state(db, submission, group_key)
+            if getattr(decision, "was_created", False) and completion.get("complete") and completion.get("target_step"):
+                target_step = str(completion["target_step"])
+                definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+                target_config = next((step for step in (definition.get("workflow") or {}).get("steps") or [] if str(step.get("id") or "") == target_step), {})
+                services.workflow_service.transition_submission(
+                    submission,
+                    str(target_config.get("status") or target_step.upper()),
+                    actor=str(g.admin_user.email or "admin"),
+                    reason=f"item_decision_completion:ALL:{completion.get('aggregate')}",
+                    target_step=target_step,
+                )
             db.commit()
+            definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+            row = services.submission_repository.get_by_id(submission.submission_id)
+            if row:
+                services.workflow_service.run_automatic_steps(row, definition)
+                db.refresh(submission)
             flash("Zapisano decyzję dla elementu grupy.", "success")
         except DecisionDefinitionError as exc:
             db.rollback()
@@ -1751,20 +1830,21 @@ def repeatable_item_decision_email(form_id: int, submission_pk: int, group_key: 
         decision = db.get(RepeatableGroupItemDecision, parse_int(request.form.get("decision_id"))) or abort(404)
         if decision.submission_id != submission.id or decision.group_key != group_key or decision.item_id != item_id:
             abort(404)
-        service = current_app.extensions["services"].decision_definition_service
-        try:
-            recipient = service.contact_email(submission, group_key, item_id)
-        except DecisionDefinitionError as exc:
-            flash(str(exc), "error")
+        participant = dict(decision.participant_snapshot_json or {})
+        recipient = str(participant.get("email") or "").strip()
+        if not recipient:
+            flash("Snapshot decyzji nie zawiera adresu e-mail odbiorcy.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk) + "#repeatable-decisions")
         dispatch = current_app.extensions["services"].mail_dispatch_service
         template = dispatch.select_template(list(form.mail_templates), submission, "repeatable_item_decision")
         result = dispatch.dispatch_to_submission(
             db=db, form=form, submission=submission, template=template,
             to_email=recipient, event_type="repeatable_item_decision", sent_by_id=g.admin_user.id,
-            extra_context={"decision_code": decision.decision_code, "decision_label": decision.decision_label,
+             extra_context={"participant": participant, "decision_code": decision.decision_code, "decision_label": decision.decision_label,
                            "decision_comment": decision.comment, "repeatable_group_key": group_key,
                            "repeatable_item_id": item_id},
+            record_uuid=item_id, group_key=group_key, participant_snapshot=participant,
+            item_decision_id=decision.id, event_id=f"item_decision:{decision.id}", force_send=True,
         )
         if result.log:
             result.log.repeatable_group_key = group_key
@@ -2057,7 +2137,9 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     current_workflow_step = str(submission.workflow_stage or submission.workflow_step or workflow_config.get("initial_step") or "submission")
     current_step_config = next((item for item in workflow_config.get("steps") or [] if str(item.get("id") or "") == current_workflow_step), {})
     workflow_allows_decision = bool(current_step_config and (current_step_config.get("requires_officer_action") or current_step_config.get("type") == "manual_decision" or current_step_config.get("decisions")))
-    if not can_edit_application_decision(submission) and not workflow_allows_decision:
+    if workflow_config.get("flow_mode") == "explicit":
+        workflow_allows_decision = current_step_config.get("stage_type") == "decision" and current_step_config.get("decision_scope") == "submission"
+    if (workflow_config.get("flow_mode") == "explicit" and not workflow_allows_decision) or (not can_edit_application_decision(submission) and not workflow_allows_decision):
         return {
             "invalid_stage": True,
             "missing_reason": False,
@@ -2068,7 +2150,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     decision = str(decision_value or "").strip()
     decision_service = current_app.extensions["services"].decision_definition_service
     try:
-        decision_definition = decision_service.resolve(submission, decision)
+        decision_definition = decision_service.resolve(submission, decision, scope="submission")
     except Exception:
         abort(400)
     category = str(decision_definition.get("semantic_category") or "neutral")
@@ -2086,8 +2168,8 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 "schema_warning": False, "send_mail": False, "checklist_errors": list(validation.errors),
             }
 
-    reason = str(reason_value or "").strip() if category in {"negative", "correction", "neutral"} else ""
-    if category in {"negative", "correction"} and not reason:
+    reason = str(reason_value or "").strip() if category != "positive" or "require_reason" in decision_definition or "reason_required" in decision_definition else ""
+    if decision_definition.get("reason_required", decision_definition.get("require_reason", category in {"negative", "correction"})) and not reason:
         return {"invalid_stage": False, "missing_reason": True, "skipped": False, "schema_warning": False, "send_mail": False}
 
     previous_decision = submission.officer_decision or ""
@@ -2123,11 +2205,14 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     target_step = str(decision_definition.get("target_step") or "") or workflow_service.resolve_next_step(
         historical_definition, previous_step, decision
     )
-    if category == "correction":
+    if category == "correction" and not target_step:
         target_step = "waiting_for_correction"
     elif category == "negative" and not target_step:
         target_step = "end_rejected"
     configured_target = next((item for item in workflow_config.get("steps") or [] if item.get("id") == target_step), None)
+    if workflow_config.get("flow_mode") == "explicit" and (not configured_target or configured_target.get("active") is False):
+        db.rollback()
+        abort(400)
     if configured_target and configured_target.get("status"):
         target_status = str(configured_target["status"])
     workflow_service.transition_submission(
@@ -2185,7 +2270,17 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     )
 
     mail_result = None
-    if accepted_after_correction:
+    if workflow_config.get("flow_mode") == "explicit":
+        mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_decision_event(
+            db=db, form=form, submission=submission, decision=None,
+            actor_id=g.admin_user.id, step_config=current_step_config,
+        )
+        db.commit()
+        row = workflow_service.submission_repository.get_by_id(public_submission_id)
+        if row:
+            workflow_service.run_automatic_steps(row, historical_definition)
+            db.refresh(submission)
+    elif accepted_after_correction:
         try:
             mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_correction_accepted(
                 public_submission_id

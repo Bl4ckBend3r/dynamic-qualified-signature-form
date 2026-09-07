@@ -257,9 +257,11 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
         verifier=lambda path: {
             "is_signed": True,
             "is_szafir_signature": True,
+            "signature_type": "mszafir",
             "cryptographically_valid": True,
             "integrity_ok": True,
-            "validation_status": "INDETERMINATE",
+            "trusted": True,
+            "validation_status": "VALID",
         },
     )
     uploaded_file = SimpleNamespace(
@@ -281,6 +283,33 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
     assert repository.updated == [("abc", {"signed_pdf_filename": "sample-abc-signed.pdf"})]
     assert repository.recorded[0][1]["filename"] == "sample-abc-signed.pdf"
     assert repository.recorded[0][1]["signed"] is True
+
+
+def test_document_signing_service_rejects_indeterminate_trust(tmp_path):
+    signing_service = DocumentSigningService(
+        storage=DummyStorage(),
+        submission_repository=DummyRepository(metadata=None),
+        submission_service=SimpleNamespace(build_signed_pdf_filename=lambda slug, submission_id: "signed.pdf"),
+        verifier=lambda path: {
+            "is_signed": True,
+            "signature_type": "mszafir",
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "trusted": False,
+            "validation_status": "INDETERMINATE",
+            "reason_code": "TRUST_STATUS_INDETERMINATE",
+        },
+    )
+    uploaded_file = SimpleNamespace(
+        filename="signed.pdf",
+        mimetype="application/pdf",
+        read=lambda: b"%PDF-1.4\nsigned",
+    )
+
+    with pytest.raises(ValueError, match="zweryfikować"):
+        signing_service.upload_signed_submission_pdf(
+            slug="sample", submission_id="abc", uploaded_file=uploaded_file, temp_dir=tmp_path
+        )
 
 
 def test_document_signing_service_delegates_declaration_and_agreement_uploads():

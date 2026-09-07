@@ -42,7 +42,7 @@
 
 .status-tile__description {
     margin: 0;
-    color: var(--muted);
+    color: var(--text);
 }
 
 .status-tile--success {
@@ -149,7 +149,7 @@
 
 .upload-dropzone__description {
     margin-top: 8px;
-    color: var(--muted);
+    color: var(--text);
     font-weight: 500;
 }
 
@@ -159,7 +159,7 @@
     border-radius: 999px;
     background: #fff;
     border: 1px solid var(--border);
-    color: var(--muted);
+    color: var(--text);
     font-size: 0.92rem;
     font-weight: 700;
     word-break: break-word;
@@ -393,3 +393,11 @@
         max-height: calc(70vh - 78px);
     }
 }
+
+.upload-dropzone__input:focus-visible + .upload-dropzone__inner {
+    outline: 3px solid var(--navy);
+    outline-offset: 3px;
+}
+.composite-document-dropzone { display: grid; gap: .75rem; padding: 1rem; margin-bottom: 1rem; border: 2px dashed #aeb9c7; border-radius: 10px; }
+.composite-document-dropzone input { width: 100%; min-width: 0; }
+.composite-document-file { margin-block: 1rem; }

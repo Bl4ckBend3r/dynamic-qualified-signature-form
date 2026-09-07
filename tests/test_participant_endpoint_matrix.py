@@ -147,7 +147,10 @@ def test_participant_endpoint_access_matrix(client, app, case):
     assert missing.status_code == wrong.status_code == cross_submission.status_code == 404
     assert allowed.status_code != 404
     if case.name == "result":
-        assert b"SECRET_PARTICIPANT_TOKEN_DO_NOT_RENDER" not in allowed.data
+        # A credential already supplied and validated may continue in an access link.
+        # The browser regression checks that it is absent from visible body text.
+        assert b"token=SECRET_PARTICIPANT_TOKEN_DO_NOT_RENDER" in allowed.data
+        assert b"Przejd" in allowed.data
 
 
 def test_participant_routes_use_central_fail_closed_authorization():

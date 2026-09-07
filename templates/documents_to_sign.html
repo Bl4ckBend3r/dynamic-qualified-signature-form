@@ -1,29 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}Do podpisania{% endblock %}
+{% block title %}Dokumenty do podpisania{% endblock %}
 
 {% block extra_css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/training_selection.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/documents_to_sign.css') }}">
 {% endblock %}
 
 {% block extra_js %}
+    <script src="{{ url_for('static', filename='js/training_selection.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/documents_to_sign.js') }}" defer></script>
 {% endblock %}
 
 {% block content %}
-{% set initial_submission_id = submission_id or request.args.get('submission_id', '') %}
-{% set participant_access_token = access_token|default(request.args.get('token', ''), true) %}
+{% set initial_submission_id = submission_id|default('') %}
+{% set participant_access_token = access_token|default('', true) %}
 
 <div class="card">
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
-            Podaj ID wniosku. System pokaże aktualny status procesu
-            oraz wyłącznie te czynności, które są obecnie dostępne.
+            Tutaj sprawdzisz aktualny status zgłoszenia i dostępne czynności.
         </p>
+        <p id="signing-status-help">Sprawdzimy status wniosku przed pokazaniem dokumentów do podpisu.</p>
     </div>
 
-    <div class="static-text documents-instructions{% if result and result.agreement_blocked %} is-hidden{% endif %}">
+    <div class="static-text documents-instructions{% if not participant_access_token or (result and result.agreement_blocked) %} is-hidden{% endif %}">
         <strong>Instrukcja podpisania dokumentów:</strong>
         <ol class="documents-instructions__list">
             <li>Wypełnij wymagany dokument.</li>
@@ -34,19 +36,19 @@
         </ol>
     </div>
 
-    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
+    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form{% if not participant_access_token %} is-hidden{% endif %}" id="sign-documents-form" data-access-denied="{{ 'true' if access_denied|default(false) else 'false' }}" novalidate>
         <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
         <input type="hidden" name="access_token" value="{{ participant_access_token }}" id="participant-access-token">
         <div class="form-field sign-id-field">
-            <label for="submission_id">ID wniosku</label>
+            <label for="submission_id">Numer zgłoszenia wniosku (ID)</label>
             <input
                 type="text"
                 id="submission_id"
                 name="submission_id"
                 value="{{ initial_submission_id }}"
                 data-acceptance-status-url-template="{{ url_for('api.api_acceptance_status', submission_id='__SUBMISSION_ID__') }}"
-                data-access-token="{{ participant_access_token }}"
-                placeholder="Wpisz ID wniosku"
+                readonly
+                aria-describedby="signing-status-help acceptance-status"
                 autocomplete="off"
                 required
             >
@@ -55,21 +57,23 @@
                 <div class="field-error">{{ errors.get("submission_id") }}</div>
             {% endif %}
 
-            <div id="acceptance-status" class="field-help"></div>
+            <div id="acceptance-status" class="field-help" aria-live="polite"></div>
         </div>
 
         <div class="form-field is-hidden" id="documents-section">
             <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
         </div>
 
-        <div class="form-actions sign-actions">
+        <div class="form-actions sign-actions{% if result and result.document_step %} is-hidden{% endif %}">
             <button type="submit" class="btn-primary" id="generate-button" disabled>
                 Kontynuuj
             </button>
         </div>
     </form>
 
-    {% if not result %}<div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>{% endif %}
+    {% if not result %}<div class="status-tiles" id="submission-status-tiles" aria-live="polite">
+        {% if not participant_access_token %}<div class="status-tile status-tile--warning" data-public-current-status role="status"><div><p class="status-tile__title">Otwórz link dostępu</p><p class="status-tile__description">Otwórz link dostępu otrzymany po wysłaniu zgłoszenia — na stronie potwierdzenia lub w wiadomości e-mail.</p></div></div>{% endif %}
+    </div>{% endif %}
 
     <aside id="user-instruction-window" class="instruction-window is-hidden" aria-labelledby="user-instruction-title">
         <div class="instruction-window__header">
@@ -98,7 +102,60 @@
     </aside>
     <button type="button" id="user-instruction-restore" class="instruction-window__restore is-hidden">Instrukcja</button>
 
-    {% if result %}
+    {% if result and result.training_picker %}
+        <div class="training-picker-disclosure" data-training-disclosure>
+            <button type="button" class="btn-secondary training-picker-disclosure__toggle"
+                    aria-expanded="false" aria-controls="public-training-picker"
+                    data-training-disclosure-toggle>Wybierz szkolenia</button>
+            <div id="public-training-picker" class="training-picker-disclosure__panel" hidden data-training-disclosure-panel>
+        {% with field=result.training_picker.field, submission=result.training_picker.submission,
+            catalog=result.training_picker.catalog, summary=result.training_picker.summary,
+            selection_open=result.training_picker.selection_open, action_url=result.training_picker.action_url,
+            limit_total_formatted=result.training_picker.limit_total_formatted,
+            limit_used_formatted=result.training_picker.limit_used_formatted,
+            limit_pending_formatted=result.training_picker.limit_pending_formatted,
+            limit_remaining_formatted=result.training_picker.limit_remaining_formatted,
+            limit_remaining_after_selection_formatted=result.training_picker.limit_remaining_after_selection_formatted %}
+            {% include "partials/training_picker.html" %}
+        {% endwith %}
+            </div>
+        </div>
+    {% endif %}
+    {% if result and result.completed_document_files %}
+    <section class="result-box"><h3>Dokumenty do pobrania</h3>
+        {% for file in result.completed_document_files %}<p><a href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=file.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endfor %}
+    </section>
+    {% endif %}
+    {% if result and result.document_step %}
+        {% set document = result.document_step %}
+        <section class="result-box" data-composite-document data-substate="{{ document.substate }}">
+            <div id="submission-status-tiles" aria-live="polite"><section class="status-tile" data-public-current-status><div>
+                <h3 class="status-tile__title">{{ document.status.title }}</h3>
+                <p class="status-tile__description">{{ document.status.message }}</p>
+            </div></section></div>
+            {% for file in document.files %}
+                <div class="composite-document-file">
+                {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
+                {% if file.can_upload %}
+                <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}" data-document-upload>
+                    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                    <input type="hidden" name="access_token" value="{{ result.access_token }}">
+                    <input type="hidden" name="instance" value="{{ file.instance }}">
+                    <label class="composite-document-dropzone">{{ 'Wgraj podpisany dokument' if document.policy.participant_signature else 'Wgraj dokument' }} — przeciągnij PDF tutaj lub wybierz plik
+                        <input type="file" name="document_pdf" accept="application/pdf,.pdf" required>
+                    </label>
+                    <button type="submit" class="btn-primary">{{ 'Wgraj ponownie' if document.substate == 'verification_failed' else 'Wgraj dokument' }}: {{ document.label }}</button>
+                    <p data-document-upload-status aria-live="polite"></p>
+                </form>
+                {% endif %}
+                </div>
+            {% endfor %}
+            {% if document.can_retry %}<form method="post" action="{{ url_for('documents.retry_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}">
+                <button class="btn-secondary" type="submit">Ponów przygotowanie dokumentu</button>
+            </form>{% endif %}
+        </section>
+    {% elif result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
         {% set declaration_completed = result.declaration_completed|default(result.declaration_signature_valid|default(false)) %}
         {% set agreement_completed = result.agreement_completed|default(result.agreement_signature_valid|default(false)) %}
@@ -115,6 +172,7 @@
 
         {% set current_status = result.status|default({}) %}
         <div class="result-box" id="signing-result-box">
+            <div id="submission-status-tiles" aria-live="polite">
             <section
                 class="status-tile status-tile--{{ current_status.variant|default(result.status_variant|default('neutral')) }}"
                 data-public-current-status
@@ -130,6 +188,7 @@
                     {% if current_status.next_action|default(result.next_action) %}<p><strong>Co teraz?</strong> {{ current_status.next_action|default(result.next_action) }}</p>{% endif %}
                 </div>
             </section>
+            </div>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
             {% include "_training_agreements_overview.html" %}

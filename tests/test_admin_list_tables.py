@@ -21,6 +21,55 @@ def test_submission_lists_have_column_filters_copyable_ids_and_sticky_action_men
         assert 'class="actions-column"' in source
 
 
+def test_dashboard_groups_every_existing_metric_and_queue():
+    source = _template("dashboard.html")
+
+    for heading in ("Ogólne", "E-mail", "SMTP", "Kolejki spraw"):
+        assert f">{heading}<" in source
+    for metric in (
+        "Liczba formularzy",
+        "Liczba zgłoszeń",
+        "Oczekujące zgłoszenia",
+        "Liczba dokumentów",
+        "Udane wysyłki e-mail",
+        "Nieudane wysyłki e-mail",
+        "Ostatnia próba wysyłki",
+        "Udane testy SMTP",
+        "Nieudane testy SMTP",
+        "Ostatnia próba SMTP",
+    ):
+        assert metric in source
+    for queue in ("mine", "unassigned", "overdue", "sla_overdue", "sla_today", "sla_24h", "sla_48h", "requiring_decision", "waiting_office_signature"):
+        assert f"queue='{queue}'" in source
+
+
+def test_all_submission_filters_are_labelled_and_keep_request_names():
+    source = _template("submissions/all.html")
+
+    for label in ("Szukaj", "Status", "Stan workflow", "Stan checklisty", "Data od", "Data do", "Sortowanie", "Kierunek", "Kolejka", "Prowadzący", "Priorytet"):
+        assert f"<span>{label}</span>" in source
+    for field in ("q", "status", "workflow_stage", "checklist_status", "date_from", "date_to", "sort", "direction", "queue", "assignee", "priority"):
+        assert f'name="{field}"' in source
+    assert "admin-filter-more" in source
+    assert "Więcej filtrów" in source
+    assert 'class="admin-button" type="submit">Filtruj' in source
+    assert "Wyczyść filtry" in source
+
+
+def test_submission_detail_uses_data_cards_and_keeps_full_audit_hash_available():
+    source = _template("submissions/detail.html")
+
+    assert "admin-data-list" in source
+    assert "admin-data-row" in source
+    assert "admin-data-list--declarations" in source
+    assert "Szczegóły audytowe" in source
+    assert "Pełny SHA-256" in source
+    assert 'data-copy-value="{{ consent_hash }}"' in source
+    assert "consent_hash[:8]" in source
+    assert "consent_hash[-7:]" in source
+    assert "can_view_sensitive_data" in source
+
+
 def test_form_list_has_safe_filters_sorting_pagination_and_action_menu():
     source = _template("forms/list.html")
 
@@ -49,6 +98,8 @@ def test_admin_action_menu_is_accessible_and_not_clipped_by_table_scroll():
     assert "closeActionMenu();" in scroll_listener
     assert "}, true);" in scroll_listener
     assert "navigator.clipboard.writeText" in base
+    assert 'closest("[data-copy-id], [data-copy-value]")' in base
+    assert "copyButton.dataset.copyValue || copyButton.dataset.copyId" in base
     action_rule = css.split(".admin-action-menu {", 1)[1].split("}", 1)[0]
     assert "position: fixed" in action_rule
     assert "z-index: 10000" in action_rule

@@ -29,6 +29,11 @@ PUBLIC_CSRF_SESSION_KEY = "public_form_csrf_token"
 FORM_VERSION_TOKEN_SALT = "public-form-version"
 
 
+@bp.get("/sprawdz-status")
+def public_status_page():
+    return render_template("public_status.html")
+
+
 def public_csrf_token() -> str:
     token = str(session.get(PUBLIC_CSRF_SESSION_KEY) or "")
     if not token:

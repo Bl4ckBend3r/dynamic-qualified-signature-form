@@ -190,6 +190,43 @@ main,
 
 /* CARD */
 
+/* Public copy uses the existing text palette; admin keeps its own colors. */
+.public-ui {
+    --muted: #505b70;
+    --warning: #765019;
+}
+
+.public-ui :is(.card-header p, .static-text, .help-text, .field-help, .result-label, .forms-showcase__header p) {
+    color: var(--text);
+}
+
+.public-ui :is(input, textarea)::placeholder {
+    color: var(--muted);
+    opacity: 1;
+}
+
+.public-ui :is(a, button, input, select, textarea, summary):focus-visible {
+    outline: 3px solid var(--navy);
+    outline-offset: 3px;
+}
+
+.public-ui :is(.site-header, .site-footer, .instruction-window__header) :focus-visible {
+    outline-color: #fff;
+}
+
+.public-ui .btn-primary {
+    color: var(--navy-strong);
+}
+
+.public-ui :is(.btn-primary, .btn-secondary) {
+    min-height: 44px;
+    font-size: 1rem;
+}
+
+.public-ui :is(.btn-secondary:hover, .back-link a) {
+    color: var(--navy);
+}
+
 .card {
     background: var(--surface);
     border: 1px solid rgba(229, 221, 209, 0.95);
@@ -766,7 +803,7 @@ textarea:focus {
 }
 
 .forms-showcase {
-    margin-top: clamp(40px, 7vh, 88px);
+    margin-top: 24px;
     margin-bottom: 40px;
 }
 
@@ -793,13 +830,14 @@ textarea:focus {
 
 .forms-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
     gap: 24px;
 }
 
 .form-tile {
     position: relative;
-    min-height: 190px;
+    display: flex;
+    min-height: 300px;
     border-radius: 20px;
     overflow: hidden;
     text-decoration: none;
@@ -816,19 +854,38 @@ textarea:focus {
     border-color: #d8cab4;
 }
 
+.form-tile__action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: flex-start;
+    min-height: 44px;
+    max-width: 100%;
+    margin-top: auto;
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: var(--navy);
+    color: var(--surface);
+    font-size: 1rem;
+    font-weight: 700;
+    text-align: center;
+}
+
 .form-tile__content {
-    height: 100%;
+    width: 100%;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     padding: 28px;
     gap: 0;
 }
 
 .form-tile__content h3 {
-    margin: 0;
-    font-size: 1.95rem;
-    line-height: 1.1;
+    margin: 0 0 24px;
+    max-width: 28ch;
+    font-size: 1.6rem;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
     letter-spacing: -0.02em;
     color: var(--navy);
     font-family: "Playfair Display", Georgia, serif;
@@ -868,12 +925,20 @@ textarea:focus {
     margin-bottom: 6px;
 }
 
-.form-tile__logo {
+.form-tile__logo-area {
+    display: flex;
+    align-items: center;
+    min-height: 56px;
+    margin-bottom: 16px;
+}
+
+.form-tile__logo-area .form-tile__logo {
     display: block;
-    max-width: 258px;
-    max-height: 48px;
+    width: auto;
+    max-width: min(100%, 258px);
+    max-height: 56px;
     object-fit: contain;
-    margin-bottom: 22px;
+    margin: 0;
 }
 
 .form-tile__logo + .form-tile__eyebrow {
@@ -1240,7 +1305,7 @@ textarea:focus {
 
 @media (max-width: 1200px) {
     .forms-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
     }
 }
 

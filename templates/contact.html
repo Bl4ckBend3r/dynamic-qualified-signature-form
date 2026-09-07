@@ -9,11 +9,6 @@
         {% if page.content_html %}
             <div class="static-text">{{ page.content_html|trusted_html }}</div>
         {% endif %}
-        {% if page.address or page.email or page.phones %}
-            <section class="form-section">
-                <h3>Dane kontaktowe</h3>
-            </section>
-        {% endif %}
         {% if page.address %}
             <p>{{ page.address|replace("\n", "<br>")|trusted_html }}</p>
         {% endif %}

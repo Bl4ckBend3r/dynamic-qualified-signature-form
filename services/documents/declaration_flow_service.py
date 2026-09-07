@@ -39,6 +39,88 @@ class DeclarationFlowResult:
 
 class DeclarationFlowService:
     @staticmethod
+    def document_fields_definition(document: Mapping[str, Any]) -> dict:
+        """Use the shared field renderer/validator without moving document fields."""
+        from form_loader import normalize_form_definition
+        definition = normalize_form_definition({
+            "title": document.get("form_title") or document.get("label") or "Dokument",
+            "description": document.get("form_description") or document.get("description") or "",
+            "fields": list(document.get("fields") or []),
+        })
+        definition["fields"] = normalize_training_fields(definition["fields"])
+        definition["submit_label"] = document.get("form_submit_label") or "Wygeneruj deklarację PDF"
+        return definition
+
+    def validate_document_fields(self, document, row, form_data, submission_repository):
+        from services.training_service import selected_training_snapshots, normalize_training_catalog
+        document = self.operational_document(document, row, submission_repository)
+        definition = self.document_fields_definition(document)
+        data = apply_pesel_derived_values(definition, extract_submission_data(definition, form_data))
+        saved = {field["name"]: row["data_json"][field["name"]]
+            for field in definition["fields"] if field.get("name") in (row.get("data_json") or {})}
+        values = {**row, **saved, **data}
+        errors = validate_submission(definition, values)
+        for field in definition["fields"]:
+            if field.get("type") != "training_selection" or field.get("readonly") or field.get("hidden"):
+                continue
+            availability = self._training_availability(submission=row, training_field=field, submission_repository=submission_repository)
+            selected, error = selected_training_snapshots(field, form_data, availability)
+            requested = set(form_data.getlist(field["name"]))
+            if requested - {item["id"] for item in normalize_training_catalog(field)}:
+                error = "Wybrano niedostępne szkolenie."
+            if error:
+                errors[field["name"]] = error
+            data[field["name"]] = serialize_json_list(selected)
+            values[field["name"]] = data[field["name"]]
+        return DeclarationFlowResult(success=not errors, errors=errors, values=values,
+            declaration_definition=definition, generated=None), data
+
+    @staticmethod
+    def operational_document(document, row, repository):
+        """Refresh only the operational catalog; keep document/version rules."""
+        from copy import deepcopy
+        from sqlalchemy import select
+        from models import Form
+        from services.submission_training_service import SubmissionTrainingService
+        if not hasattr(repository, "session_factory") or not any(
+            field.get("type") == "training_selection" for field in document.get("fields") or []
+        ):
+            return document
+        document = deepcopy(document)
+        with repository.session_factory() as db:
+            form = db.execute(select(Form).where(Form.slug == row["form_slug"])).scalar_one()
+            document["fields"] = [
+                SubmissionTrainingService.selection_field(form, {"id": "declaration", "fields": [field]})
+                if field.get("type") == "training_selection" else field
+                for field in document.get("fields") or []]
+        return document
+
+    def save_document_training_selection(self, document, row, form_data, services):
+        from sqlalchemy import select
+        from models import Form, FormSubmission
+        fields = [f for f in document.get("fields") or [] if f.get("type") == "training_selection"
+            and not f.get("readonly") and not f.get("hidden")]
+        if not fields:
+            return
+        with services.submission_repository.session_factory() as db:
+            submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == row["submission_id"])).scalar_one()
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug).with_for_update()).scalar_one()
+            db.refresh(submission, with_for_update=True)
+            for field in fields:
+                field = services.submission_training_service.selection_field(form, {"id": "declaration", "fields": [field]})
+                if not services.submission_training_service.can_select(form, submission, field):
+                    from services.training_service import parse_training_snapshots
+                    saved_ids = {item["id"] for item in parse_training_snapshots(submission.selected_trainings)}
+                    if saved_ids == set(form_data.getlist(field["name"])):
+                        continue
+                    from services.submission_training_service import TrainingSelectionError
+                    raise TrainingSelectionError("Wybór szkoleń jest zamknięty.")
+                services.submission_training_service.save(db, submission, field, form_data.getlist(field["name"]),
+                    availability=self._training_availability(submission=row, training_field=field, submission_repository=services.submission_repository),
+                    advance_workflow=False)
+            db.commit()
+
+    @staticmethod
     def build_declaration_form_definition(
         declaration_config: Mapping[str, Any],
         form_config: Mapping[str, Any] | None = None,
@@ -161,6 +243,8 @@ class DeclarationFlowService:
                 )
 
         rule_updates = rules_service.apply_rules(submission["row"], form_config, declaration_data)
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            rule_updates = {k: v for k, v in rule_updates.items() if k not in {"process_status", "workflow_step", "workflow_stage"}}
         updates = {**declaration_data, **rule_updates}
         submission_repository.update(submission_id, updates)
         refreshed_submission = refresh_submission(submission_id)
@@ -257,13 +341,16 @@ class DeclarationFlowService:
             "process_status": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
             "workflow_step": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
         }
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            updates.pop("process_status", None)
+            updates.pop("workflow_step", None)
         submission_repository.update(submission_id, updates)
         if hasattr(submission_repository, "record_workflow_event"):
             submission_repository.record_workflow_event(
                 submission_id,
                 {
                     "previous_status": str(submission["row"].get("process_status") or ""),
-                    "new_status": ProcessStatus.ADDITIONAL_FIELDS_COMPLETED.value,
+                    "new_status": updates.get("process_status") or str(submission["row"].get("process_status") or ""),
                     "previous_step": step,
                     "new_step": step,
                     "actor_role": "participant",

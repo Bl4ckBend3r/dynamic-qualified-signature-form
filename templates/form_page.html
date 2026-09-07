@@ -2,7 +2,11 @@
 endblock %} {% block content %}
 
 <div class="back-link">
+  {% if document_mode %}
+  <a href="{{ document_back_url }}">← Powrót do dokumentów</a>
+  {% else %}
   <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -33,6 +37,11 @@ endblock %} {% block content %}
     {% endif %}
   </div>
 
+  {% if document_mode %}
+  <p role="status" data-composite-document data-substate="collect_data">{{ document_status.message }}</p>
+  {% if document_instruction.description %}<div>{{ document_instruction.description|trusted_html }}</div>{% endif %}
+  {% if document_instruction.next_action %}<div>{{ document_instruction.next_action|trusted_html }}</div>{% endif %}
+  {% endif %}
   {% if correction_mode %}
   <div class="alert alert-warning" role="status">
     <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
@@ -76,9 +85,33 @@ endblock %} {% block content %}
     {% endif %} {% for field in form_definition.fields %} {% if field.type ==
     "section" %}
     <section class="form-section">
+      {% set section_label = field.label|striptags|trim|lower|replace(' / ', '/') %}
+      {% if section_label in ['dane kandydata', 'dane kandydatki', 'dane kandydata/kandydatki'] %}
+      <h3>Twoje dane</h3>
+      {% elif section_label in ['status kandydata', 'status kandydatki', 'status kandydata/kandydatki', 'status kandydata i dane dodatkowe', 'status kandydatki i dane dodatkowe', 'status kandydata/kandydatki i dane dodatkowe'] %}
+      <h3>Twój status</h3>
+      {% else %}
       <h3>{{ field.label|trusted_html }}</h3>
+      {% endif %}
     </section>
 
+    {% elif field.type == "training_selection" and document_mode %}
+    <fieldset class="form-section" data-document-trainings>
+      <legend>{{ field.label }}</legend>
+      {% if field.readonly %}<p role="status">Wybór szkoleń jest zamknięty.</p>{% endif %}
+      {% set selected_ids = (values.get(field.name, '') or '').split(',') %}
+      {% for training in field.catalog %}
+      <label class="checkbox-item">
+        <input type="checkbox" name="{{ field.name }}" value="{{ training.id }}" {% if training.id in selected_ids %}checked{% endif %} {% if field.readonly or training.is_locked or not training.active %}disabled{% endif %}>
+        <span>{{ training.name }} — {{ training.price_formatted }}{% for date in training.dates %} · {{ date.label }}{% endfor %}</span>
+        {% if training.is_locked %}<span>Wybór zablokowany</span>{% endif %}
+      </label>
+      {% if training.id in selected_ids and (field.readonly or training.is_locked or not training.active) %}
+      <input type="hidden" name="{{ field.name }}" value="{{ training.id }}">
+      {% endif %}
+      {% endfor %}
+      {% if errors.get(field.name) %}<p class="error-text" role="alert">{{ errors[field.name] }}</p>{% endif %}
+    </fieldset>
     {% elif field.type == "static_text" %}
     <div class="static-text">{{ field.label|trusted_html }}</div>
 
@@ -347,6 +380,7 @@ endblock %} {% block content %}
     {% endif %} {% endfor %}
 
     <div class="submit-row">
+      {% if document_mode %}<button type="submit" name="document_action" value="save" class="btn-secondary">Zapisz dane</button>{% endif %}
       {% if draft_enabled and not correction_mode and not draft_mode %}
       <button
         type="submit"
@@ -363,7 +397,7 @@ endblock %} {% block content %}
         >Wersja robocza jest aktywna.</span
       >{% endif %}
       <button type="submit" class="btn-primary">
-        {{ "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}
+        {{ form_definition.submit_label if document_mode else "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}
       </button>
     </div>
     {% if draft_mode %}
@@ -959,11 +993,34 @@ endblock %} {% block content %}
   }
 
 
+  function repeatableRootValue(fieldName) {
+      const controls = Array.from(document.querySelectorAll(`[name="${CSS.escape(fieldName)}"]`));
+      const checked = controls.find((control) => control.checked);
+      return checked ? checked.value : (controls[0]?.value || "");
+  }
+
+
+  function repeatableConditionMatches(rule, record) {
+      if (!rule) return true;
+      const current = rule.scope === "root" ? repeatableRootValue(rule.field) : (record?.[rule.field] ?? "");
+      const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find((key) => key in rule) || "equals";
+      const expected = rule.value ?? rule[operator];
+      if (operator === "equals") return current === expected;
+      if (operator === "not_equals") return current !== expected;
+      if (operator === "in") return (rule.values || expected || []).includes(current);
+      if (operator === "not_in") return !(rule.values || expected || []).includes(current);
+      if (operator === "is_empty") return current === "" || current == null;
+      if (operator === "is_not_empty") return current !== "" && current != null;
+      return false;
+  }
+
+
   function createRepeatableControl(
       groupName,
       recordId,
       field,
-      value
+      value,
+      required
   ) {
       const wrapper =
           document.createElement("div");
@@ -984,7 +1041,7 @@ endblock %} {% block content %}
       label.textContent =
           field.label || field.name;
 
-      if (field.required) {
+      if (required) {
           const marker =
               document.createElement("span");
 
@@ -1095,7 +1152,7 @@ endblock %} {% block content %}
                       String(value ?? "") ===
                       radio.value;
 
-                  if (field.required) {
+                  if (required) {
                       radio.required = true;
                   }
 
@@ -1230,7 +1287,7 @@ endblock %} {% block content %}
       control.placeholder =
           field.placeholder || "";
 
-      if (field.required) {
+      if (required) {
           control.required = true;
       }
 
@@ -1306,15 +1363,20 @@ endblock %} {% block content %}
       let records =
           initialValue.map((record) => ({
               ...record,
-              id:
-                  record?.id ||
+              record_uuid:
+                  record?.record_uuid || record?.id ||
                   createRepeatableUuid(),
+              id: record?.record_uuid || record?.id || createRepeatableUuid(),
           }));
+
+      records = records.map((record) => ({...record, id: record.record_uuid, record_uuid: record.record_uuid}));
+      let applicantRecordId = definition.applicant_record ? (records[0]?.record_uuid || "") : "";
 
 
       function readRecord(recordElement) {
           const record = {
               id: recordElement.dataset.recordId,
+              record_uuid: recordElement.dataset.recordId,
           };
 
           const fieldDefinitions =
@@ -1386,7 +1448,8 @@ endblock %} {% block content %}
               )
               .forEach((button) => {
                   button.disabled =
-                      records.length <= minItems;
+                      records.length <= minItems ||
+                      (definition.applicant_record && button.dataset.recordId === applicantRecordId);
               });
       }
 
@@ -1438,8 +1501,14 @@ endblock %} {% block content %}
 
                   remove.dataset.repeatableRemove =
                       "true";
+                  remove.dataset.recordId = record.record_uuid;
 
                   remove.textContent = "Usuń";
+                  if (definition.applicant_record && record.record_uuid === applicantRecordId) {
+                      remove.disabled = true;
+                      remove.title = "Nie można usunąć osoby składającej wniosek.";
+                      title.textContent += " — osoba składająca wniosek";
+                  }
 
                   remove.addEventListener(
                       "click",
@@ -1454,8 +1523,8 @@ endblock %} {% block content %}
                           records =
                               records.filter(
                                   (item) =>
-                                      item.id !==
-                                      record.id
+                                  item.record_uuid !==
+                                  record.record_uuid
                               );
 
                           render();
@@ -1493,12 +1562,19 @@ endblock %} {% block content %}
                           return;
                       }
 
+                      if (!repeatableConditionMatches(field.visible_if, record)) {
+                          return;
+                      }
+
+                      const required = Boolean(field.required) || Boolean(field.required_if && repeatableConditionMatches(field.required_if, record));
+
                       fields.append(
                           createRepeatableControl(
                               definition.name,
-                              record.id,
+                              record.record_uuid,
                               field,
-                              record[field.name]
+                              record[field.name],
+                              required
                           )
                       );
                   });
@@ -1532,6 +1608,8 @@ endblock %} {% block content %}
                   id: createRepeatableUuid(),
               });
 
+              records[records.length - 1].record_uuid = records[records.length - 1].id;
+
               render();
           }
       );
@@ -1541,6 +1619,13 @@ endblock %} {% block content %}
           "input",
           syncValue
       );
+
+      document.addEventListener("change", (event) => {
+          if ((definition.fields || []).some((field) => field.visible_if?.scope === "root" && field.visible_if.field === event.target?.name)) {
+              syncValue();
+              render();
+          }
+      });
 
       groupElement.addEventListener(
           "change",
@@ -1554,6 +1639,7 @@ endblock %} {% block content %}
           records.push({
               id: createRepeatableUuid(),
           });
+          records[records.length - 1].record_uuid = records[records.length - 1].id;
       }
 
       render();

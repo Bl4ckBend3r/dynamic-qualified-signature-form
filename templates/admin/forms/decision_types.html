@@ -1,23 +1,32 @@
 {% extends "admin/base.html" %}
 {% block title %}Typy decyzji{% endblock %}
 {% block content %}
+<div class="admin-decision-types">
+{% set categories = {'positive': 'Pozytywna', 'negative': 'Negatywna', 'correction': 'Do poprawy', 'neutral': 'Neutralna / inna'} %}
 <div class="admin-page-header"><div><h1>Typy decyzji</h1><p>Globalny katalog i wersjonowane przypisania do formularzy.</p></div></div>
 <section class="admin-card">
   <h2>Dodaj typ decyzji</h2>
-  <form method="post" class="admin-form-grid">
+  <form method="post" class="admin-form-grid" data-required-note="false">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-    <label><span>Kod techniczny</span><input name="code" pattern="[a-z][a-z0-9_]+" required></label>
     <label><span>Nazwa</span><input name="label" required></label>
+    <label><span>Kod techniczny</span><input name="code" pattern="[a-z][a-z0-9_]+" required></label>
     <label><span>Kategoria</span><select name="semantic_category" required><option value="positive">Pozytywna</option><option value="negative">Negatywna</option><option value="correction">Do poprawy</option><option value="neutral">Neutralna / inna</option></select></label>
     <label><span>Kolejność</span><input type="number" name="sort_order" value="0"></label>
-    <label class="admin-check"><input type="checkbox" name="is_active" checked><span>Aktywna</span></label>
+    <label class="admin-check admin-form-grid-full"><input type="checkbox" name="is_active" checked><span>Aktywna</span></label>
     <label class="admin-form-grid-full"><span>Opis</span><textarea name="description" rows="2"></textarea></label>
-    <button class="admin-button" type="submit">Dodaj</button>
+    <div class="admin-decision-types__actions"><button class="admin-button" type="submit">Dodaj typ decyzji</button></div>
   </form>
 </section>
+<h2>Istniejące typy decyzji</h2>
 {% for decision in catalog %}
-<section class="admin-card">
-  <form method="post" class="admin-form-grid">
+<section class="admin-card admin-decision-type">
+  <div class="admin-decision-type__header">
+    <div><h3>{{ decision.label }}</h3><code>{{ decision.code }}</code></div>
+    <div class="admin-decision-type__badges"><span class="admin-badge">{{ categories.get(decision.semantic_category, decision.semantic_category) }}</span><span class="admin-badge">{{ 'Aktywna' if decision.is_active else 'Nieaktywna' }}</span></div>
+  </div>
+  {% if decision.description %}<p class="admin-decision-type__description">{{ decision.description }}</p>{% endif %}
+  <details class="admin-decision-type__edit"><summary>Edytuj</summary>
+  <form method="post" class="admin-form-grid" data-required-note="false">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="decision_type_id" value="{{ decision.id }}">
     <label><span>Kod</span><input name="code" value="{{ decision.code }}" required></label>
     <label><span>Nazwa</span><input name="label" value="{{ decision.label }}" required></label>
@@ -25,19 +34,40 @@
     <label><span>Kolejność</span><input type="number" name="sort_order" value="{{ decision.sort_order }}"></label>
     <label class="admin-check"><input type="checkbox" name="is_active" {% if decision.is_active %}checked{% endif %}><span>Aktywna</span></label>
     <label class="admin-form-grid-full"><span>Opis</span><textarea name="description" rows="2">{{ decision.description }}</textarea></label>
-    <button class="admin-button-secondary" type="submit">Zapisz definicję</button>
+    <div class="admin-decision-types__actions"><button class="admin-button-secondary" type="submit">Zapisz definicję</button></div>
   </form>
+  </details>
   <details><summary>Przypisz do wersji roboczej formularza</summary>
     {% for row in form_rows if row.draft %}
-    <form method="post" action="{{ url_for('admin.decision_type_assign', decision_type_id=decision.id) }}" class="admin-form-grid">
+    <form method="post" action="{{ url_for('admin.decision_type_assign', decision_type_id=decision.id) }}" class="admin-form-grid" data-required-note="false">
       <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="form_id" value="{{ row.form.id }}">
       <strong>{{ row.form.name }} — draft {{ row.draft.version_label }}</strong>
       <label><span>Etap decyzji</span><select name="step_id" required>{% for step in row.steps %}<option value="{{ step.id }}">{{ step.admin_label or step.label or step.id }}</option>{% endfor %}</select></label>
       <label><span>Etap docelowy</span><select name="target_step" required>{% for step in row.steps %}<option value="{{ step.id }}">{{ step.admin_label or step.label or step.id }}</option>{% endfor %}</select></label>
+      <label><span>Zakres</span><select name="scope"><option value="both">Zgłoszenie i osoby</option><option value="submission">Zgłoszenie</option><option value="item">Osoby / elementy grup</option></select></label>
+      <label class="admin-check"><input type="checkbox" name="require_reason"><span>Wymagaj komentarza</span></label>
+      <label><span>Kolejność w tym formularzu</span><input type="number" name="sort_order" value="{{ decision.sort_order }}"></label>
       <button class="admin-button-secondary compact" type="submit">Przypisz</button>
     </form>
     {% else %}<p>Brak formularzy z wersją roboczą.</p>{% endfor %}
   </details>
+  <details><summary>Przypisania do wersji roboczych</summary>
+  {% for row in form_rows if row.draft %}
+  {% for assignment in row.assignments if assignment.code == decision.code %}
+  <form method="post" action="{{ url_for('admin.decision_type_assign', decision_type_id=decision.id) }}" class="admin-form-grid" data-required-note="false">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="form_id" value="{{ row.form.id }}"><input type="hidden" name="step_id" value="{{ assignment.step_id }}">
+    <strong>{{ row.form.name }} · {{ assignment.step_id }} · {{ assignment.label }}</strong>
+    <label><span>Etap docelowy</span><select name="target_step">{% for step in row.steps %}<option value="{{ step.id }}" {% if step.id == assignment.target_step %}selected{% endif %}>{{ step.admin_label or step.label or step.id }}</option>{% endfor %}</select></label>
+    <label><span>Zakres</span><select name="scope">{% for value, label in [('both', 'Zgłoszenie i osoby'), ('submission', 'Zgłoszenie'), ('item', 'Osoby / elementy grup')] %}<option value="{{ value }}" {% if assignment.get('scope', 'both') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="admin-check"><input type="checkbox" name="require_reason" {% if assignment.get('reason_required', assignment.get('require_reason')) %}checked{% endif %}><span>Wymagaj komentarza</span></label>
+    <label><span>Kolejność</span><input type="number" name="sort_order" value="{{ assignment.get('sort_order', 0) }}"></label>
+    <button class="admin-button-secondary" name="action" value="save">Zapisz przypisanie</button>
+    <button class="admin-button-secondary" name="action" value="remove">Usuń z draftu</button>
+  </form>
+  {% endfor %}{% endfor %}
+  </details>
 </section>
 {% else %}<div class="admin-empty-state">Brak typów decyzji.</div>{% endfor %}
+</div>
 {% endblock %}

@@ -3,17 +3,57 @@ from __future__ import annotations
 import json
 import logging
 from hashlib import sha256
+from uuid import UUID
 
 from flask import Blueprint, current_app, jsonify, request
 
 from services.status_catalog import build_status_view
 from services.process_instruction_service import build_process_instruction_view
 from services.public_submission_status_service import build_public_submission_status
+from services.public_submission_status_service import build_readonly_submission_status
+from services.admin_login_rate_limit_service import LoginRateLimitPolicy
 from routes.participant_access import resolve_participant_submission_access
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__)
+
+
+@bp.get("/api/public/submissions/<submission_id>/status")
+def public_readonly_status(submission_id: str):
+    message = {"message": "Nie można odnaleźć statusu dla podanego numeru zgłoszenia."}
+    payload, status_code = message, 404
+    try:
+        services = get_services()
+        factory = getattr(services.submission_repository, "session_factory", None)
+        if factory is None:
+            raise RuntimeError("Public status requires persistent rate limiting")
+        with factory() as db:
+            allowed = services.admin_login_rate_limit_service.consume_request(
+                db, client_address=request.remote_addr or "unknown", scope="public_status",
+                policy=LoginRateLimitPolicy(short_attempts=10, long_attempts=60),
+            )
+            db.commit()
+        if not allowed:
+            status_code = 429
+        else:
+            try:
+                public_id = str(UUID(submission_id.strip()))
+            except ValueError:
+                public_id = ""
+            row = services.submission_repository.get_by_id(public_id) if public_id else None
+            if row:
+                config = get_form_instruction_context(row['form_slug'], row.get('form_version_id'))['form_config']
+                payload = build_readonly_submission_status(row, form_config=config)
+                status_code = 200
+    except Exception as exc:
+        logger.warning("public_status_unavailable category=unavailable error=%s", type(exc).__name__)
+    response = jsonify(payload)
+    response.status_code = status_code
+    response.headers['Cache-Control'] = 'no-store'
+    if status_code == 429:
+        response.headers['Retry-After'] = '60'
+    return response
 
 
 def get_services():
@@ -116,10 +156,15 @@ def get_form_instruction_context(form_slug: str, form_version_id: int | str | No
 def instruction_payload(submission: dict) -> dict:
     form_context = get_form_instruction_context(submission["form_slug"], submission.get("form_version_id"))
     instruction = form_context["instruction"]
+    from services.documents.document_workflow_service import document_step_state
+    row = submission.get("row") or submission
+    step_id = row.get("workflow_stage") or row.get("workflow_step")
     process_view = build_process_instruction_view(
         submission.get("process_status"),
         instruction_config=form_context["instruction_config"],
         legacy_description=instruction,
+        workflow=form_context["form_config"].get("workflow"), step_id=step_id,
+        document_substate=document_step_state(row, step_id).get("substate"),
     )
     version_source = "\0".join(
         [
@@ -218,7 +263,7 @@ def api_acceptance_status(submission_id: str):
     try:
         submission = _authorized_submission_context(submission_id)
     except Exception as exc:
-        logger.exception("Błąd sprawdzania statusu zgłoszenia.")
+        logger.error("participant_status_unavailable category=status_unavailable error=%s", type(exc).__name__)
         return _opaque_status_response(include_instruction=True)
 
     if not submission:
@@ -256,7 +301,7 @@ def api_workflow_status(submission_id: str):
         return _opaque_status_response()
 
     services = get_services()
-    form_config = services.form_config_service.get_form_config(services.storage, submission["form_slug"]) or {}
+    form_config = get_form_instruction_context(submission["form_slug"], submission.get("form_version_id"))["form_config"]
     row = submission["row"]
     public_status = public_status_payload(submission)
     qualification = row.get("data_json", {}).get("_qualification") if isinstance(row.get("data_json"), dict) else None

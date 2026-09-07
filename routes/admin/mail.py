@@ -846,7 +846,7 @@ def template_body_text(template) -> str:
 
 def _safe_preview_context(db, form, submission=None) -> dict:
     context = preview_mail_context(form, submission)
-    for key in ("access_token", "podpisz_url", "pobierz_url", "document_url", "signed_agreement_download_link"):
+    for key in ("access_token", "participant_action_url", "podpisz_url", "pobierz_url", "document_url", "correction_url", "signed_agreement_download_link"):
         if key in context:
             context[key] = "Dane ukryte — sekret techniczny"
         nested = context.get("submission")

@@ -16,7 +16,7 @@ def test_declaration_template_contains_no_training_picker_ui():
 
 
 def test_public_training_picker_uses_full_training_cards():
-    template = Path("templates/training_selection.html").read_text(encoding="utf-8")
+    template = Path("templates/training_selection.html").read_text(encoding="utf-8") + Path("templates/partials/training_picker.html").read_text(encoding="utf-8")
 
     assert "training-card-list" in template
     assert "training-card__price" in template
@@ -167,7 +167,7 @@ def test_training_management_suppresses_only_local_required_notes():
 
 def test_training_picker_script_updates_and_enforces_limit():
     script = Path("static/js/training_selection.js").read_text(encoding="utf-8")
-    template = Path("templates/training_selection.html").read_text(encoding="utf-8")
+    template = Path("templates/training_selection.html").read_text(encoding="utf-8") + Path("templates/partials/training_picker.html").read_text(encoding="utf-8")
 
     assert "data-training-price" in script
     assert "used > limit" in script
@@ -179,6 +179,18 @@ def test_training_picker_script_updates_and_enforces_limit():
     assert "5000" not in template
     assert "Excel" not in script
     assert "Excel" not in template
+
+
+def test_status_training_picker_is_collapsed_with_accessible_toggle():
+    template = Path("templates/documents_to_sign.html").read_text(encoding="utf-8")
+    script = Path("static/js/training_selection.js").read_text(encoding="utf-8")
+
+    assert 'aria-expanded="false"' in template
+    assert 'aria-controls="public-training-picker"' in template
+    assert 'id="public-training-picker"' in template and " hidden " in template
+    assert "Wybierz szkolenia" in template
+    assert "Ukryj wybór szkoleń" in script
+    assert 'toggle.setAttribute("aria-expanded"' in script
 
 
 def test_admin_training_editor_contains_only_selection_stage_settings():

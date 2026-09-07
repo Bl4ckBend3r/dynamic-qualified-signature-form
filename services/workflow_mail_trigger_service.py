@@ -12,6 +12,7 @@ from services.workflow_config_service import (
 
 
 EVENT_LABELS = {
+    "submission_created": "Potwierdzenie złożenia wniosku dla osoby z listy",
     "correction_accepted": "Poprawiony wniosek zaakceptowany",
     "manual": "Wiadomość wysyłana ręcznie",
     "manual_bulk": "Wiadomość zbiorcza",
@@ -83,6 +84,9 @@ class WorkflowMailTriggerService:
         steps = active_workflow_steps(workflow)
         active_step_ids = {str(step.get("id") or "").strip() for step in steps}
         events: list[dict[str, str]] = []
+        if any(isinstance(field, Mapping) and (field.get('submission_confirmation') or {}).get('enabled')
+               for field in definition.get('fields') or []):
+            events.append(self._event('submission_created', source='system'))
         statuses: list[dict[str, str]] = []
         decisions: list[dict[str, str]] = []
         if workflow.get("allow_correction"):

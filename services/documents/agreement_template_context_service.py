@@ -137,14 +137,6 @@ def _repeatable_group_table(value: Any, field: Any) -> Markup:
     ]
 
     records = _repeatable_group_records(value)
-    print(
-        "REPEATABLE DEBUG:",
-        {
-            "value": value,
-            "records": records,
-            "child_fields": child_fields,
-        }
-    )
 
     if not child_fields or not records:
         return Markup("")

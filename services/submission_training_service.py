@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Mapping
@@ -65,21 +67,56 @@ class SubmissionTrainingService:
         return True
 
     @staticmethod
-    def can_select(form, submission) -> bool:
-        decision = str(
-            getattr(submission, "officer_decision", "")
-            or getattr(submission, "acceptance_required", "")
-            or ""
-        ).strip().lower()
-        return (
-            decision in {"tak", "accepted"}
-            and
-            str(getattr(submission, "declaration_generated", "") or "").lower() == "tak"
-            and str(getattr(submission, "declaration_signed", "") or "").lower() == "tak"
-            and
-            str(getattr(submission, "declaration_signature_valid", "") or "").lower() == "tak"
-            and bool(getattr(form, "training_selection_open", True))
-        )
+    def can_select(form, submission, field=None) -> bool:
+        if field is None:
+            version = getattr(submission, "form_version", None)
+            field = TrainingCatalogService.get_training_field(version or form)
+        return bool(field and field.get("enabled", True) and form.training_selection_open)
+
+    @staticmethod
+    def selection_field(form, definition):
+        """Versioned selection rules with the current operational catalog."""
+        field = TrainingCatalogService.get_training_field(definition)
+        if field is None:
+            return None
+        field = deepcopy(field)
+        current = TrainingCatalogService.get_training_field(form)
+        field["catalog"] = deepcopy((current or {}).get("catalog") or [])
+        return field
+
+    def public_view(self, db, form, submission, field, availability):
+        view = self.selection_view(db, submission, field, availability)
+        currency = str(field.get("currency") or "PLN")
+        return {**view, "field": field, "submission": submission,
+            "selection_open": self.can_select(form, submission, field),
+            **{f"{key}_formatted": format_price_pln(value, currency) if value is not None else None
+               for key, value in view["summary"].items() if key.startswith("limit_")}}
+
+    def save_public(self, db, form, submission, field, selected_ids, availability, *, definition, document_workflow):
+        if not self.can_select(form, submission, field):
+            raise TrainingSelectionError("Wybór szkoleń jest zamknięty.")
+        self.synchronize_legacy(db, submission)
+        rows = db.query(SubmissionTraining).filter_by(submission_id=submission.id).all()
+        protected = {row.training_id for row in rows if row.is_locked or row.status in LOCKING_STATUSES}
+        if protected - set(selected_ids):
+            raise TrainingSelectionError("Nie można odznaczyć zablokowanego szkolenia.")
+        previous = str(submission.selected_trainings or "[]")
+        previous_status, previous_step = submission.process_status, submission.workflow_step
+        self.save(db, submission, field, selected_ids, availability, advance_workflow=False)
+        if parse_training_snapshots(previous) != parse_training_snapshots(submission.selected_trainings):
+            states = submission.document_states or {}
+            if float(states.get("document_operation_until") or 0) > time.time():
+                raise TrainingSelectionError("Dokument jest już przetwarzany. Odśwież status za chwilę.")
+            document_workflow.training_selection_changed(db, submission, definition, field)
+            data = dict(submission.data_json or {})
+            data[str(field.get("name") or "selected_trainings")] = submission.selected_trainings
+            submission.data_json = data
+            db.add(SubmissionWorkflowEvent(submission_id=submission.id,
+                public_submission_id=submission.submission_id, form_slug=submission.form_slug,
+                previous_status=previous_status, new_status=submission.process_status,
+                previous_step=previous_step, new_step=submission.workflow_step,
+                actor_role="participant", source="training_selection_saved",
+                reason="Wybór szkoleń został zapisany."))
 
     def synchronize_legacy(self, db, submission) -> None:
         rows = {
@@ -168,7 +205,7 @@ class SubmissionTrainingService:
                 "price": row.training_price_snapshot, "price_formatted": format_price_pln(price, currency),
                 "currency": currency,
                 "status": row.status, "status_label": self.status_label(row.status, row.is_locked),
-                "is_locked": row.is_locked,
+                "is_locked": bool(row.is_locked or row.status in LOCKING_STATUSES),
                 "agreement_id": row.agreement_id,
                 "agreement_file_id": row.agreement_file_id,
                 "agreement_generated": bool(
@@ -202,12 +239,12 @@ class SubmissionTrainingService:
             (
                 parse_decimal_price(row.training_price_snapshot) or Decimal("0.00")
                 for row in rows
-                if row.is_locked
+                if row.is_locked or row.status in LOCKING_STATUSES
             ),
             Decimal("0.00"),
         )
         pending_total = sum(
-            (parse_decimal_price(row.training_price_snapshot) or Decimal("0.00") for row in rows if row.status in ACTIVE_STATUSES and not row.is_locked),
+            (parse_decimal_price(row.training_price_snapshot) or Decimal("0.00") for row in rows if row.status in ACTIVE_STATUSES and not row.is_locked and row.status not in LOCKING_STATUSES),
             Decimal("0.00"),
         )
         return {
@@ -264,7 +301,12 @@ class SubmissionTrainingService:
             is_selected = bool(
                 row and (row.status in ACTIVE_STATUSES or row.is_locked)
             )
-            is_locked = bool(row and row.is_locked)
+            is_locked = bool(row and (row.is_locked or row.status in LOCKING_STATUSES))
+            if is_selected:
+                snapshot = self._row_snapshot(row, field)
+                item = {**item, **{key: snapshot[key] for key in
+                    ("name", "price", "currency", "dates", "location", "locations", "version")}}
+                item["price_formatted"] = format_price_pln(item["price"], item["currency"])
             seat_occupied = bool(row and (row.is_locked or row.status in LOCKING_STATUSES))
             occupied = int(item.get("occupied_seats") or 0) + (1 if seat_occupied else 0)
             capacity = item.get("capacity")
@@ -304,6 +346,8 @@ class SubmissionTrainingService:
         field: Mapping[str, Any],
         selected_ids: list[str],
         availability: Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        advance_workflow: bool = True,
     ) -> dict[str, Any]:
         self.synchronize_legacy(db, submission)
         catalog = {
@@ -315,7 +359,7 @@ class SubmissionTrainingService:
         }
         selected = {str(item).strip() for item in selected_ids if str(item).strip()}
         rows = {row.training_id: row for row in db.query(SubmissionTraining).filter(SubmissionTraining.submission_id == submission.id).all()}
-        locked = {key for key, row in rows.items() if row.is_locked}
+        locked = {key for key, row in rows.items() if row.is_locked or row.status in LOCKING_STATUSES}
         historical = {
             key
             for key, row in rows.items()
@@ -342,7 +386,7 @@ class SubmissionTrainingService:
             (
                 parse_decimal_price(
                     rows[key].training_price_snapshot
-                    if key in protected
+                    if key in rows
                     else catalog[key].get("price")
                 )
                 or Decimal("0.00")
@@ -360,10 +404,10 @@ class SubmissionTrainingService:
                     row = self._new_row(submission.id, training)
                     db.add(row)
                     rows[training_id] = row
-                elif not row.is_locked and row.status in {"cancelled", "unselected"}:
+                elif training_id not in protected and row.status in {"cancelled", "unselected", "cancelled_before_signed_agreement"}:
                     row.status, row.unselected_at = "selected", None
                 row.updated_at = now
-            elif row is not None and not row.is_locked:
+            elif row is not None and training_id not in protected:
                 row.status, row.unselected_at, row.updated_at = "unselected", now, now
         db.flush()
         submission.selected_trainings = json.dumps(
@@ -380,14 +424,15 @@ class SubmissionTrainingService:
         agreement_required = str(
             getattr(submission, "agreement_required", "") or ""
         ).strip().lower() == "tak"
-        submission.process_status = (
-            ProcessStatus.AGREEMENT_READY.value
-            if has_selection and agreement_required
-            else ProcessStatus.PARTICIPANT_ACCEPTED.value
-            if has_selection
-            else ProcessStatus.TRAINING_SELECTION_OPEN.value
-        )
-        submission.workflow_step = submission.process_status
+        if advance_workflow:
+            submission.process_status = (
+                ProcessStatus.AGREEMENT_READY.value
+                if has_selection and agreement_required
+                else ProcessStatus.PARTICIPANT_ACCEPTED.value
+                if has_selection
+                else ProcessStatus.TRAINING_SELECTION_OPEN.value
+            )
+            submission.workflow_step = submission.process_status
         if has_app_context():
             current_app.logger.info(
                 "training_selection_saved",
@@ -546,8 +591,13 @@ class SubmissionTrainingService:
         row.locked_by_event, row.agreement_id, row.updated_at = "agreement_uploaded_by_beneficiary", str(agreement_id), now
         row.agreement_file_id = agreement_file_id
         row.signed_agreement_uploaded_at = now
-        submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
-        submission.workflow_step = submission.process_status
+        from services.documents.document_workflow_service import is_document_step
+        definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+        current = submission.workflow_stage or submission.workflow_step
+        composite = any(s.get("id") == current and is_document_step(s) for s in definition.get("workflow", {}).get("steps", []))
+        if not composite:
+            submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
+            submission.workflow_step = submission.process_status
         db.add(SubmissionWorkflowEvent(
             submission_id=submission.id,
             public_submission_id=submission.submission_id,

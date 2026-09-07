@@ -286,6 +286,28 @@ class FormConfigService:
         form_config["workflow"] = {"initial_step": "submission", "steps": steps}
         return form_config
 
+    def build_new_draft_workflow(self, form_config: dict) -> dict:
+        """New admin drafts use business stages; legacy runtime defaults stay intact."""
+        config = deepcopy(form_config)
+        documents = [d for d in self.normalize_documents_config(config) if d.get("enabled", True)]
+        used = {"submission", "completed"}
+        steps = [{"id": "submission", "type": "form_submit", "stage_type": "user_action",
+                  "admin_label": "Wniosek złożony", "user_label": "Wniosek złożony", "status": "FORM_SUBMITTED"}]
+        for index, document in enumerate(documents):
+            step_id = document["id"]
+            if step_id in used:
+                step_id = f"document_{index + 1}"
+            used.add(step_id)
+            steps.append({"id": step_id, "type": "document", "stage_type": "document", "document_lifecycle": "composite",
+                          "document_id": document["id"], "action": "none", "status": "WAITING_FOR_DOCUMENT",
+                          "admin_label": document["label"], "user_label": document["label"]})
+        steps.append({"id": "completed", "type": "end", "stage_type": "final", "final": True,
+                      "admin_label": "Proces zakończony", "user_label": "Proces zakończony", "status": "COMPLETED"})
+        for current, following in zip(steps, steps[1:]):
+            current["next"] = following["id"]
+        config["workflow"] = {"schema_version": 2, "flow_mode": "explicit", "initial_step": "submission", "steps": steps}
+        return config
+
     def normalize_workflow_config(self, workflow: Mapping[str, Any]) -> dict:
         normalized = dict(workflow or {})
         normalized.setdefault("name", normalized.get("label") or "Workflow")
@@ -371,6 +393,8 @@ class FormConfigService:
             ("requires_declaration", "declaration", "Deklaracja", "declaration_template_html"),
             ("requires_contract", "agreement", "Umowa", "contract_template_html"),
         ]
+        composite_documents = {step.get("document_id") for step in workflow.get("steps", [])
+            if step.get("stage_type", step.get("type")) == "document" and step.get("document_lifecycle") == "composite"}
         for flag, document_id, label, html_key in requirements:
             if document_id not in documents_by_id and workflow.get(flag):
                 documents_by_id[document_id] = {
@@ -382,6 +406,10 @@ class FormConfigService:
                 }
                 order.append(document_id)
             if document_id in documents_by_id:
+                # A composite stage may reference a standalone definition. Legacy
+                # global controls must not disable or replace that document.
+                if document_id in composite_documents and not workflow.get(flag):
+                    continue
                 if workflow.get("managed_documents"):
                     documents_by_id[document_id]["enabled"] = bool(workflow.get(flag))
                 else:
@@ -452,7 +480,7 @@ class FormConfigService:
                     if number_pattern:
                         documents_by_id[document_id]["numbering"] = {"number_pattern": number_pattern}
 
-        if workflow.get("managed_documents") and "training_agreement" in documents_by_id:
+        if workflow.get("managed_documents") and "training_agreement" in documents_by_id and "training_agreement" not in composite_documents:
             # The admin-managed agreement is the single source of truth. Per-training
             # generation is provided by AgreementFlowService's runtime adapter.
             documents_by_id["training_agreement"]["enabled"] = False
@@ -467,6 +495,9 @@ class FormConfigService:
         normalized.setdefault("kind", "generated_pdf")
         normalized.setdefault("signature_required", True)
         normalized.setdefault("allowed_signatures", ["mszafir", "profil_zaufany"])
+        if document_id == "training_agreement":
+            normalized.setdefault("repeat_over", "selected_trainings")
+            normalized.setdefault("repeat_item_alias", "training")
         if "enabled" in normalized:
             normalized["enabled"] = bool(normalized.get("enabled"))
         else:

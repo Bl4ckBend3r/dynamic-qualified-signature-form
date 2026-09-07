@@ -135,11 +135,31 @@ def build_process_instruction_view(
     *,
     instruction_config: Mapping[str, Any] | None = None,
     legacy_description: str | None = None,
+    workflow: Mapping[str, Any] | None = None,
+    step_id: str | None = None,
+    document_substate: str | None = None,
     **_legacy_arguments: Any,
 ) -> dict[str, Any]:
     """Build the public instruction exclusively from the form configuration."""
     raw_status = _plain_text(process_status, limit=128)
     config = normalize_instruction_config(instruction_config, legacy_description=legacy_description)
+    if document_substate and workflow:
+        steps = [s for s in workflow.get("steps", []) if s.get("active", True)]
+        step = next((s for s in steps if s.get("id") == step_id), None)
+        if step:
+            content = (step.get("document_instructions") or {}).get(document_substate) or {}
+            following = next((s for s in steps if s.get("id") == step.get("next")), {})
+            instruction = {
+                "title": config["title"] or DEFAULT_INSTRUCTION_TITLE, "description": config["description"], "has_instruction": True,
+                "current_stage_key": step_id, "current_stage_label": step.get("user_label") or step.get("admin_label"),
+                "current_stage_description": sanitize_instruction_html(content.get("description") or step.get("description")),
+                "next_action": sanitize_instruction_html(content.get("next_action") or step.get("next_action")),
+                "next_stage_key": following.get("id"), "next_stage_label": following.get("user_label") or following.get("admin_label"),
+                "stages": [{"key": s["id"], "label": s.get("user_label") or s.get("admin_label"), "current": s["id"] == step_id, "completed": False} for s in steps],
+            }
+            return {"instruction": instruction, "form_instruction": instruction["description"], "has_form_instruction": True,
+                    "current_step": step_id, "current_step_label": instruction["current_stage_label"], "next_action": instruction["next_action"],
+                    "next_action_label": "Co dalej?", "next_stage_label": instruction["next_stage_label"], "instruction_steps": instruction["stages"]}
     configured_stages = [stage for stage in config["stages"] if stage.get("active", True)]
     default_stage = DEFAULT_STATUS_INSTRUCTIONS.get(raw_status)
     current_index = _find_current_stage(configured_stages, raw_status)

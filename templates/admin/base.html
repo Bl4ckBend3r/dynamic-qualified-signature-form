@@ -37,7 +37,7 @@
         font: inherit;
         font-weight: 700;
         cursor: pointer;
-        padding: 14px 12px;
+        padding: 12px 14px;
         border-radius: 8px;
       }
 
@@ -412,10 +412,10 @@
                             menu.querySelectorAll("a, button").forEach((item) => item.setAttribute("role", "menuitem"));
                         });
                         document.addEventListener("click", async (event) => {
-                            const copyButton = event.target.closest("[data-copy-id]");
+                            const copyButton = event.target.closest("[data-copy-id], [data-copy-value]");
                             if (!copyButton) return;
                             try {
-                                await navigator.clipboard.writeText(copyButton.dataset.copyId || "");
+                                await navigator.clipboard.writeText(copyButton.dataset.copyValue || copyButton.dataset.copyId || "");
                                 copyButton.title = "Skopiowano";
                                 copyButton.setAttribute("aria-label", "Skopiowano pełne ID");
                             } catch (_error) {

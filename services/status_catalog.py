@@ -150,6 +150,7 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
 
 
 LEGACY_STATUS_LABELS: dict[str, str] = {
+    "zlozony": "Złożony",
     "FORM_SUBMITTED": "Wniosek złożony",
     "AUTO_REJECTED": "Odrzucony automatycznie",
     "RETURNED_FOR_CORRECTION": "Wysłany do poprawy",

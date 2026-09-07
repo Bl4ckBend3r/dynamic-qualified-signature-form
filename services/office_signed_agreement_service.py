@@ -8,7 +8,7 @@ from collections import Counter
 from models import SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.nextcloud_storage import NextcloudStorageError
 from services.process_service import ProcessStatus
-from signature_verifier import verify_signed_pdf_bytes
+from signature_verifier import signature_verification_result, verify_signed_pdf_bytes
 
 
 SIGNED_BY_BENEFICIARY_TYPES = {"signed_agreement", "signed_training_agreement"}
@@ -70,6 +70,12 @@ class OfficeSignedAgreementService:
         training_key: str | None = None,
         email_requested: bool = False,
     ) -> OfficeSignedAgreementResult:
+        from services.documents.document_workflow_service import is_document_step
+        version = getattr(submission, "form_version", None)
+        definition = (version.definition_json if version else {}) or {}
+        current = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
+        if any(step.get("id") == current and is_document_step(step) for step in definition.get("workflow", {}).get("steps", [])):
+            raise OfficeSignedAgreementError("Wgraj podpis urzędu w bieżącym etapie dokumentowym.")
         folder = self._folder(form)
         trainings = self._eligible_trainings(db, submission, training_key=training_key)
         if not trainings:
@@ -143,8 +149,9 @@ class OfficeSignedAgreementService:
                 errors.append(f"{filename}: walidacja podpisu ({exc.__class__.__name__})")
                 continue
             validation_status = str(verification.get("validation_status") or "INDETERMINATE").upper()
-            if validation_status in {"INVALID", "UNSIGNED"}:
-                errors.append(f"{filename}: {validation_status} — {verification.get('reason') or 'nieprawidłowy podpis'}")
+            outcome = signature_verification_result(verification)
+            if outcome != "VALID_SIGNATURE":
+                errors.append(f"{filename}: {outcome} — {verification.get('reason') or 'nieprawidłowy podpis'}")
                 continue
             db.add(SubmissionFile(
                 submission_id=submission.id,

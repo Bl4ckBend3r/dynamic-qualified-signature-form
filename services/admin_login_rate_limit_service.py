@@ -79,6 +79,19 @@ class AdminLoginRateLimitService:
             )
         )
 
+    def consume_request(self, db, *, client_address: str, scope: str, policy: LoginRateLimitPolicy) -> bool:
+        """Use the existing persistent counters for a separate endpoint namespace."""
+        now = datetime.now(timezone.utc)
+        key_hash = self.key_hash(client_address, "\0endpoint:" + scope)
+        if (self._count(db, key_hash, now, policy.short_window_seconds) >= policy.short_attempts
+                or self._count(db, key_hash, now, policy.long_window_seconds) >= policy.long_attempts):
+            return False
+        db.add(AdminLoginAttempt(key_hash=key_hash, attempted_at=now))
+        cutoff = now - timedelta(seconds=max(policy.long_window_seconds, self.policy.long_window_seconds))
+        db.execute(delete(AdminLoginAttempt).where(AdminLoginAttempt.attempted_at < cutoff))
+        db.flush()
+        return True
+
     @staticmethod
     def _count(db, key_hash: str, now: datetime, window_seconds: int) -> int:
         cutoff = now - timedelta(seconds=window_seconds)

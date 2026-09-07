@@ -41,6 +41,8 @@ class SubmissionCorrectionService:
         clear_submission: bool,
         actor,
     ) -> SubmissionCorrectionResult:
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            raise SubmissionCorrectionError("Skieruj zgłoszenie do poprawy przez opcję decyzji skonfigurowaną w bieżącym etapie.")
         normalized_reason = str(reason or "").strip()
         if not normalized_reason:
             raise SubmissionCorrectionError("Podaj powód wysłania zgłoszenia do poprawy.")

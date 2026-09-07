@@ -531,6 +531,7 @@ class RepeatableGroupItemDecision(Base):
     workflow_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     target_step: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    participant_snapshot_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc), nullable=False)
 

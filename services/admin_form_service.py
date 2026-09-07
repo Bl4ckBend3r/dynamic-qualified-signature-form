@@ -26,7 +26,7 @@ from services.form_config_service import FormConfigService
 from services.field_availability_service import FieldAvailabilityService
 from services.qualification_condition_service import QualificationConditionService
 from services.training_catalog_service import TrainingCatalogService
-from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator
+from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator, collapse_draft_document_stages
 from services.training_service import decimal_price_to_storage
 from validators.form_config_validator import FormConfigValidator
 
@@ -161,10 +161,15 @@ def build_form_definition_from_admin_form(
     builder_value = str(form_data.get("workflow_builder_json", "") or "").strip()
     advanced_value = str(form_data.get("workflow_json", "") or "").strip()
     use_advanced_json = allow_advanced_json and form_data.get("workflow_use_advanced_json") == "on"
+    convert_documents = form_data.get("active_tab") == "workflow"
     if use_advanced_json:
         workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
     elif builder_value:
         workflow = parse_workflow_json(builder_value, definition.get("workflow") or {})
+        if workflow.pop("document_stage_conversion", False):
+            # GET already converted the graph; remap its source field references too.
+            definition = collapse_draft_document_stages(definition)
+            convert_documents = True
     elif allow_advanced_json and advanced_value and advanced_value not in {"{}", "null"}:
         # Kompatybilność ze starszym panelem, który wysyłał wyłącznie workflow_json.
         workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
@@ -277,6 +282,12 @@ def build_form_definition_from_admin_form(
     workflow = normalizer.normalize(workflow)
     if "workflow_initial_step" in form_data:
         workflow["initial_step"] = requested_initial_step
+    if convert_documents:
+        # Convert the submitted graph, not only the fallback definition: a stale
+        # builder payload can still contain separate phases (including composites).
+        definition = collapse_draft_document_stages({**definition, "workflow": workflow})
+        workflow = definition["workflow"]
+    workflow.pop("document_stage_conversion", None)
     if builder_value or use_advanced_json:
         workflow_errors = WorkflowConfigValidator().validate(workflow)
         if workflow_errors:
@@ -387,9 +398,28 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
         ("beneficiary_agreement_confirmed", "Po podpisaniu umowy przez urząd"),
         ("beneficiary_agreement_rejected", "Po skierowaniu umowy do poprawy"),
     )
+    submitted_ids = form_data.getlist("notification_id")
+    event_labels = dict(events)
+    for event_id in [*existing_by_id, *submitted_ids]:
+        if event_id:
+            event_labels.setdefault(event_id, existing_by_id.get(event_id, {}).get("label") or event_id)
     result = []
-    for event_id, label in events:
+    for event_id, label in event_labels.items():
         current = existing_by_id.get(event_id, {})
+        if event_id not in dict(events) and event_id not in submitted_ids:
+            result.append(current)
+            continue
+        source_type = form_data.get(f"notification_{event_id}_recipient_type")
+        if source_type == "repeatable_group":
+            current["recipient_source"] = {"type": "repeatable_group",
+                "group": form_data.get(f"notification_{event_id}_recipient_group", "").strip(),
+                "email_field": form_data.get(f"notification_{event_id}_recipient_email", "").strip()}
+        elif source_type == "submission":
+            current.pop("recipient_source", None)
+        elif source_type is not None:
+            raise ValueError("Nieobsługiwane źródło odbiorców wiadomości.")
+        if f"notification_{event_id}_event" in form_data:
+            current["event"] = form_data.get(f"notification_{event_id}_event", "").strip()
         result.append(
             {
                 **current,

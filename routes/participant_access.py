@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Callable
 
 from flask import abort, current_app, request
+
+logger = logging.getLogger(__name__)
+
+
+def _access_denied(category: str) -> None:
+    logger.info("participant_access_denied category=%s", category)
 
 
 @dataclass(frozen=True)
@@ -52,20 +59,27 @@ def resolve_participant_submission_access(
             )
         submission = submission_loader(submission_id)
     if not submission:
+        _access_denied("submission_not_found")
         return None
 
     row = submission.get("row") or submission
     if str(row.get("submission_id") or submission.get("submission_id") or "") != str(submission_id):
+        _access_denied("submission_mismatch")
         return None
     actual_slug = str(submission.get("form_slug") or row.get("form_slug") or "")
     if slug is not None and actual_slug != str(slug):
+        _access_denied("form_mismatch")
         return None
 
     credential = participant_credential()
+    if not credential:
+        _access_denied("ambiguous_credential" if credential is None else "missing_credential")
+        return None
     if not current_app.extensions["services"].access_token_service.verify_required_token(
         row,
         credential,
     ):
+        _access_denied("invalid_credential")
         return None
     return ParticipantSubmissionAccess(submission=submission, credential=credential)
 

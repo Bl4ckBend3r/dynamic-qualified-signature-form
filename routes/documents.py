@@ -24,11 +24,11 @@ from services.submission_document_service import SubmissionDocumentType
 from services.process_service import build_process_state
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
-from services.training_service import format_price_pln
 from services.workflow_service import workflow_status_label
 from signature_verifier import verify_signed_pdf
 from routes.participant_access import (
     participant_credential,
+    resolve_participant_submission_access,
     require_participant_submission_access,
     require_public_csrf,
 )
@@ -341,6 +341,9 @@ def _enrich_training_agreement_states(submission: dict) -> None:
 
 
 def _open_training_selection_stage(submission_id: str, slug: str) -> bool:
+    definition = get_form_config(slug, submission_id) or {}
+    if definition.get("workflow", {}).get("flow_mode") == "explicit":
+        return False
     database_url = current_app.config.get("DATABASE_URL")
     if not database_url:
         return False
@@ -381,29 +384,18 @@ def training_selection(submission_id: str):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             abort(404)
-        version = get_services().form_version_service.resolve_for_submission(db, submission)
-        version_definition = version.definition_json if version else form.definition_json
-        field = get_training_selection_field(version_definition or {})
-        if field is None or not field.get("enabled", True):
-            abort(404)
-        # Selection-stage settings come from the submission's FormVersion, while
-        # the concrete operational catalog is managed independently on Form.
-        current_catalog_field = get_training_selection_field(form.definition_json or {})
-        if current_catalog_field is not None:
-            field = deepcopy(field)
-            field["catalog"] = deepcopy(current_catalog_field.get("catalog") or [])
-        decision = str(
-            submission.officer_decision or submission.acceptance_required or ""
-        ).strip().lower()
-        if (
-            decision not in {"tak", "accepted"}
-            or str(submission.declaration_generated or "").strip().lower() != "tak"
-            or str(submission.declaration_signed or "").strip().lower() != "tak"
-            or str(submission.declaration_signature_valid or "").strip().lower() != "tak"
-        ):
-            abort(403)
-
+        if request.method == "POST":
+            require_public_csrf()
+            # Serialize with recruitment/catalog changes and document signing.
+            db.refresh(form, with_for_update=True)
+            db.refresh(submission, with_for_update=True)
         services = get_services()
+        version = services.form_version_service.resolve_for_submission(db, submission)
+        definition = version.definition_json if version else form.definition_json
+        field = services.submission_training_service.selection_field(form, definition or {})
+        if field is None:
+            abort(404)
+
         availability = TrainingAvailabilityService(
             services.submission_repository
         ).availability_for_field(
@@ -414,74 +406,62 @@ def training_selection(submission_id: str):
         error = None
         status_code = 200
         if request.method == "POST":
-            require_public_csrf()
-            if not form.training_selection_open:
+            if not services.submission_training_service.can_select(form, submission, field):
                 error = "Wybór szkoleń dla tego formularza został zamknięty."
                 status_code = 409
             else:
                 try:
-                    services.submission_training_service.save(
+                    services.submission_training_service.save_public(
                         db,
+                        form,
                         submission,
                         field,
                         request.form.getlist(str(field.get("name") or "selected_trainings")),
                         availability=availability,
+                        definition=definition or {},
+                        document_workflow=services.document_service.document_workflow,
                     )
                     db.commit()
-                    flash("Wybór szkoleń został zapisany. Możesz przejść do umów.", "success")
+                    flash("Wybór szkoleń został zapisany.", "success")
                     return redirect(
                         url_for(
                             "documents.documents_to_sign",
                             submission_id=submission.submission_id,
+                            token=token,
                         )
                     )
-                except TrainingSelectionError as exc:
+                except ValueError as exc:
                     db.rollback()
                     error = str(exc)
                     status_code = 400
 
-        selection_view = services.submission_training_service.selection_view(
-            db,
-            submission,
-            field,
-            availability,
-            form=form,
-        )
-        summary = selection_view["summary"]
-        catalog = selection_view["catalog"]
-        db.commit()
-        currency = str(field.get("currency") or "PLN")
-        return (
-            render_template(
-                "training_selection.html",
-                submission=submission,
-                form=form,
-                field=field,
-                catalog=catalog,
-                selection_open=bool(form.training_selection_open),
-                summary=summary,
-                limit_total_formatted=format_price_pln(summary["limit_total"], currency)
-                if summary["limit_total"] is not None
-                else None,
-                limit_used_formatted=format_price_pln(summary["limit_used"], currency),
-                limit_remaining_formatted=format_price_pln(summary["limit_remaining"], currency)
-                if summary["limit_remaining"] is not None
-                else None,
-                limit_locked_formatted=format_price_pln(summary["limit_locked"], currency),
-                limit_pending_formatted=format_price_pln(summary["limit_pending"], currency),
-                limit_remaining_after_selection_formatted=format_price_pln(
-                    summary["limit_remaining_after_selection"], currency
-                ) if summary["limit_remaining_after_selection"] is not None else None,
-                error=error,
-                token=token,
-                action_url=url_for(
-                    "documents.training_selection",
-                    submission_id=submission.submission_id,
-                    token=token,
-                ),
-            ),
-            status_code,
-        )
+        view = services.submission_training_service.public_view(db, form, submission, field, availability)
+        return render_template("training_selection.html", **view, error=error, token=token,
+            action_url=url_for("documents.training_selection", submission_id=submission.submission_id, token=token)), status_code
+
+
+def _public_training_picker(submission_id, credential):
+    if not current_app.config.get("DATABASE_URL") or not credential:
+        return None
+    services = get_services()
+    with services.submission_repository.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
+        if submission is None:
+            return None
+        form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        if form is None:
+            return None
+        version = services.form_version_service.resolve_for_submission(db, submission)
+        field = services.submission_training_service.selection_field(form, version.definition_json if version else form.definition_json)
+        if field is None:
+            return None
+        availability = TrainingAvailabilityService(services.submission_repository).availability_for_field(
+            form_slug=form.slug, field=field, current_submission_id=submission_id)
+        view = services.submission_training_service.public_view(db, form, submission, field, availability)
+        # Keep only plain view data beyond the read session.
+        view["submission"] = {"submission_id": submission_id}
+        return {**view, "token": credential, "error": None,
+            "action_url": url_for("documents.training_selection", submission_id=submission_id, token=credential)}
 
 
 @bp.get("/nextcloud-assets/<path:asset_path>")
@@ -511,7 +491,7 @@ def upload_signed_declaration(slug: str, submission_id: str):
     require_public_csrf()
     submission = access.submission
     if not submission["can_sign_documents"]:
-        flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
+        flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
         return redirect(documents_to_sign_url(submission_id))
 
     try:
@@ -550,7 +530,7 @@ def declaration_form(slug: str, submission_id: str):
     access = require_participant_submission_access(submission_id, slug=slug)
     submission = access.submission
     if not submission["can_sign_documents"]:
-        flash("Wniosek nie został zaakceptowany przez urzędnika.", "error")
+        flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
         return redirect(documents_to_sign_url(submission_id))
 
     form_config = get_form_config(slug, submission_id)
@@ -944,11 +924,107 @@ def show_result(slug: str, submission_id: str):
         "signed_pdf_filename": signed_pdf_filename if signed_exists else "",
         "signed_pdf_url": None,
         "upload_url": "",
-        "can_continue": False,
+        "can_continue": True,
+        "participant_credential": access.credential,
         "form_title": form_config["title"],
         "verification": verification,
     }
     return render_template("result.html", result=result)
+
+
+@bp.get("/document-steps/<slug>/<submission_id>/<step_id>/download/<filename>")
+def download_document_step(slug, submission_id, step_id, filename):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        content = get_services().document_service.document_workflow.download(access.submission, definition, step_id, filename)
+    except ValueError:
+        abort(404)
+    response = send_file(BytesIO(content), mimetype="application/pdf", as_attachment=True, download_name=filename)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@bp.post("/document-steps/<slug>/<submission_id>/<step_id>/upload")
+def upload_document_step(slug, submission_id, step_id):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        result = get_services().document_service.document_workflow.upload(access.submission, definition, step_id,
+            request.files.get("document_pdf"), instance=request.form.get("instance", ""))
+        flash(result.get("message") or ("Dokument został przyjęty." if result["is_valid"] else "Nie udało się zakończyć weryfikacji dokumentu."), "success" if result["is_valid"] else "error")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception:
+        logger.exception("Błąd obsługi etapu dokumentowego")
+        flash("Nie udało się zakończyć obsługi dokumentu. Spróbuj ponownie.", "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.post("/document-steps/<slug>/<submission_id>/<step_id>/retry")
+def retry_document_step(slug, submission_id, step_id):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    row = access.submission["row"]
+    if (row.get("workflow_stage") or row.get("workflow_step")) != step_id:
+        abort(409)
+    try:
+        get_services().workflow_service.run_automatic_steps(row, definition)
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception:
+        logger.exception("Błąd przygotowania dokumentu etapu")
+        flash("Nie udało się przygotować dokumentu. Spróbuj ponownie.", "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+def _render_document_fields(submission, document_step, credential, *, values=None, errors=None):
+    from services.training_service import parse_training_snapshots
+    definition = deepcopy(document_step["form_definition"])
+    picker = _public_training_picker(submission["submission_id"], credential)
+    field_values = dict(values if values is not None else document_step["values"])
+    for field in definition["fields"]:
+        if values is None and field.get("name") in field_values.get("data_json", {}):
+            field_values[field["name"]] = field_values["data_json"][field["name"]]
+        if field.get("type") == "training_selection":
+            if picker:
+                field["catalog"] = picker["catalog"]
+                field["readonly"] = not picker["selection_open"]
+                if values is None:
+                    field_values[field["name"]] = ",".join(item["id"] for item in picker["summary"]["items"])
+            selected = parse_training_snapshots(field_values.get(field["name"]))
+            if selected:
+                field_values[field["name"]] = ",".join(item["id"] for item in selected)
+    return render_template("form_page.html", form_definition=definition, slug=submission["form_slug"],
+        form_action=url_for("documents.save_document_step_fields", slug=submission["form_slug"],
+            submission_id=submission["submission_id"], step_id=document_step["step_id"], token=credential),
+        document_mode=True, document_status=document_step["status"], document_instruction=document_step.get("instruction") or {},
+        document_back_url=documents_to_sign_url(submission["submission_id"], credential),
+        values=field_values, errors=errors or {}, form_error="Popraw wskazane pola." if errors else "")
+
+
+@bp.post("/document-steps/<slug>/<submission_id>/<step_id>/fields")
+def save_document_step_fields(slug, submission_id, step_id):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    service = get_services().document_service.document_workflow
+    try:
+        result = service.save_fields(access.submission, definition, step_id, request.form,
+            generate=request.form.get("document_action") != "save")
+        if not result.success:
+            view = service.view(access.submission["row"], definition)
+            return _render_document_fields(access.submission, view, access.credential, values=result.values, errors=result.errors), 400
+        flash("Dane dokumentu zostały zapisane.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(documents_to_sign_url(submission_id, access.credential)), 303
+    except Exception:
+        logger.exception("Nie udało się przygotować dokumentu po zapisie pól")
+        flash("Nie udało się przygotować dokumentu. Sprawdź zapisane dane i spróbuj ponownie.", "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
 
 
 def build_documents_to_sign_result(
@@ -960,7 +1036,14 @@ def build_documents_to_sign_result(
 ) -> dict:
     services = get_services()
     form_config = get_form_config(submission["form_slug"], submission_id) or {}
+    training_picker = _public_training_picker(submission_id, access_token)
     row = submission["row"]
+    document_step = services.document_service.document_workflow.view(row, form_config)
+    completed_document_files = services.document_service.document_workflow.completed_files(row, form_config)
+    if document_step:
+        return {"document_step": document_step, "status": document_step["status"], "submission_id": submission_id,
+                "form_title": submission["form_title"], "form_slug": submission["form_slug"], "access_token": access_token,
+                "completed_document_files": completed_document_files, "training_picker": training_picker}
     if requires_additional_fields(form_config, row):
         result = services.document_service.document_view_service.build_additional_fields_result(
             submission_id=submission_id,
@@ -977,6 +1060,7 @@ def build_documents_to_sign_result(
             additional_values=additional_values,
         )
         result["access_token"] = access_token
+        result["training_picker"] = training_picker
         return result
 
     declaration = build_existing_declaration_result(services, submission, form_config)
@@ -1047,6 +1131,9 @@ def build_documents_to_sign_result(
         available_filenames=documents_view.get("available_filenames", set()),
     )
     result["access_token"] = access_token
+    result["training_picker"] = training_picker
+    result["completed_document_files"] = completed_document_files
+    result["form_slug"] = submission["form_slug"]
     training_field = get_training_selection_field(form_config)
     result["training_selection_url"] = (
         url_for(
@@ -1055,7 +1142,6 @@ def build_documents_to_sign_result(
             token=access_token,
         )
         if access_token
-        and result.get("declaration_signature_valid")
         and training_field
         and training_field.get("enabled", True)
         else ""
@@ -1086,7 +1172,12 @@ def documents_to_sign():
         submission_id = request.args.get("submission_id", "").strip()
         access_token = participant_credential()
         if submission_id:
-            access = require_participant_submission_access(submission_id)
+            access = resolve_participant_submission_access(submission_id)
+            if access is None:
+                return render_template(
+                    "documents_to_sign.html", submission_id="", acceptance_value="",
+                    errors={}, result=None, access_token="", access_denied=True,
+                ), 404
             submission = access.submission
             access_token = access.credential
             errors = {}
@@ -1103,6 +1194,8 @@ def documents_to_sign():
                     errors["submission_id"] = "Nie udało się przygotować dokumentów do podpisania."
                     status_code = 500
 
+            if result and result.get("document_step", {}).get("form_definition"):
+                return _render_document_fields(submission, result["document_step"], access_token), status_code
             return render_template(
                 "documents_to_sign.html",
                 submission_id=submission_id,
@@ -1163,6 +1256,8 @@ def documents_to_sign():
             access_token=access_token,
         ), 500
 
+    if result and result.get("document_step", {}).get("form_definition"):
+        return _render_document_fields(submission, result["document_step"], access_token)
     return render_template(
         "documents_to_sign.html",
         submission_id=submission_id,

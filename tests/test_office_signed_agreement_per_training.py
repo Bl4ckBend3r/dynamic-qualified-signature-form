@@ -27,11 +27,13 @@ def _verified_service(storage):
     return OfficeSignedAgreementService(
         storage,
         verifier=lambda payload: {
+            "is_signed": True,
             "validation_status": "VALID",
             "cryptographically_valid": True,
-            "integrity_valid": True,
+            "integrity_ok": True,
             "trusted": True,
             "revocation_status": "good",
+            "signature_type": "qualified",
         },
     )
 

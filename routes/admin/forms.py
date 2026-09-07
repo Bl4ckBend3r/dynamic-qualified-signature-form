@@ -374,7 +374,7 @@ def decision_types():
         for form in forms:
             draft = version_service.editable_draft(db, form.id)
             workflow = (draft.definition_json or {}).get("workflow") if draft else {}
-            form_rows.append({"form": form, "draft": draft, "steps": [item for item in (workflow or {}).get("steps", []) if isinstance(item, dict)]})
+            form_rows.append({"form": form, "draft": draft, "steps": [item for item in (workflow or {}).get("steps", []) if isinstance(item, dict)], "assignments": (workflow or {}).get("decision_types", [])})
         return render_template("admin/forms/decision_types.html", catalog=catalog, form_rows=form_rows)
 
 
@@ -392,7 +392,10 @@ def decision_type_assign(decision_type_id: int):
             return redirect(url_for("admin.decision_types"))
         try:
             current_app.extensions["services"].decision_definition_service.assign_to_draft(
-                draft, definition, step_id=request.form.get("step_id", ""), target_step=request.form.get("target_step", "")
+                draft, definition, step_id=request.form.get("step_id", ""), target_step=request.form.get("target_step", ""),
+                require_reason=request.form.get("require_reason") == "on",
+                sort_order=parse_int(request.form.get("sort_order"), definition.sort_order),
+                scope=request.form.get("scope", "both"), remove=request.form.get("action") == "remove",
             )
             current_app.extensions["services"].form_version_service.apply_to_legacy_editor(db, form, draft.definition_json)
             db.commit()
@@ -700,6 +703,8 @@ def forms_upload():
         return _render_forms_upload_error("fields"), 400
     try:
         form_definition = parse_uploaded_form_definition(uploaded_file.read(), uploaded_file.filename)
+        if not isinstance(form_definition.get("workflow"), dict):
+            form_definition = current_app.extensions["services"].form_config_service.build_new_draft_workflow(form_definition)
         form_definition = normalize_admin_form_definition(form_definition)
         validation_errors = validate_admin_form_config(form_definition)
         if validation_errors:
@@ -814,7 +819,15 @@ def form_edit(form_id: int):
         if version_service.has_versions(db, form.id) and not editable_version:
             flash("Opublikowana konfiguracja jest niezmienna. Utwórz z niej nową wersję roboczą.", "info")
             return redirect(url_for("admin.form_versions", form_id=form.id))
+        current_definition = deepcopy((editable_version.definition_json if editable_version else form.definition_json) or {})
+        form.workflow_editor_definition = current_definition
         form.editable_version_id = editable_version.id if editable_version else None
+        form.workflow_editor_fields = (
+            (editable_version.definition_json if editable_version else form.definition_json) or {}
+        ).get("fields", [])
+        form.workflow_editor_documents = current_app.extensions["services"].form_config_service.normalize_form_config(
+            (editable_version.definition_json if editable_version else form.definition_json) or {}
+        ).get("documents", [])
         form.workflow_ids_locked = bool(
             db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)).scalar()
         )
@@ -832,16 +845,16 @@ def form_edit(form_id: int):
                 instruction_config = _instruction_config_from_admin_form(
                     request.form,
                     existing=form.user_instruction_config,
-                    workflow=(form.definition_json or {}).get("workflow") or {},
+                    workflow=current_definition.get("workflow") or {},
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
                 updated_definition = build_form_definition_from_admin_form(
-                    form.definition_json or {},
+                    current_definition,
                     request.form,
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
                 current_training_field = TrainingCatalogService.get_training_field(
-                    form.definition_json or {}
+                    current_definition
                 )
                 updated_training_settings = TrainingCatalogService.get_training_field(
                     updated_definition
@@ -855,7 +868,7 @@ def form_edit(form_id: int):
                         updated_training_settings,
                     )
                 training_catalog_changed = (
-                    get_declaration_training_field(form.definition_json or {})
+                    get_declaration_training_field(current_definition)
                     != get_declaration_training_field(updated_definition)
                 )
                 updated_workflow = updated_definition.get("workflow") or {}
@@ -901,7 +914,7 @@ def form_edit(form_id: int):
                     updated_definition,
                     training_catalog_actions,
                 ) = TrainingCatalogService().reconcile_definition(
-                    form.definition_json or {},
+                    current_definition,
                     updated_definition,
                     used_training_ids=used_training_ids,
                     removal_reasons=reason_by_id,
@@ -922,7 +935,7 @@ def form_edit(form_id: int):
             except HTTPException:
                 raise
             except Exception as exc:
-                updated_definition = normalize_admin_form_definition(form.definition_json or {})
+                updated_definition = normalize_admin_form_definition(current_definition)
                 validation_errors = [str(exc) or "Niepoprawne dane formularza."]
                 active_tab = _tab_for_form_error(validation_errors, active_tab, request.form)
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
@@ -988,13 +1001,13 @@ def form_edit(form_id: int):
                     users=users,
                     assigned_user_ids=assigned_user_ids,
                     logos=logos,
-                    training_field=get_declaration_training_field(form.definition_json or {}),
+                    training_field=get_declaration_training_field(current_definition),
                     instruction_statuses=instruction_statuses,
                     validation_errors=[],
                     active_tab="basic",
                     trigger_descriptions=TRIGGER_DESCRIPTIONS,
                     **_workflow_editor_context(
-                        (form.definition_json or {}).get("workflow") or {},
+                        current_definition.get("workflow") or {},
                         instruction_config=form.user_instruction_config,
                     ),
                 ), 400
@@ -1027,7 +1040,9 @@ def form_edit(form_id: int):
                     overbooked.append(
                         f"{training.get('name') or training.get('id')}: limit {capacity}, zajęte {occupied}"
                     )
-            if g.admin_user.role == ROLE_SUPER_ADMIN and request.form.get("use_form_definition_json") == "on":
+            if editable_version or (g.admin_user.role == ROLE_SUPER_ADMIN and request.form.get("use_form_definition_json") == "on"):
+                # The next snapshot reads FormField. Refresh that editor mirror
+                # from the validated draft, including remapped stage availability.
                 sync_form_fields(db, form, updated_definition)
             selected_logo_id = parse_optional_int(request.form.get("logo_id"))
             if selected_logo_id and not can_select_logo(db, g.admin_user, selected_logo_id):
@@ -1057,13 +1072,13 @@ def form_edit(form_id: int):
                         users=users,
                         assigned_user_ids=assigned_user_ids,
                         logos=logos,
-                        training_field=get_declaration_training_field(form.definition_json or {}),
+                        training_field=get_declaration_training_field(current_definition),
                         trigger_descriptions=TRIGGER_DESCRIPTIONS,
                         instruction_statuses=instruction_statuses,
                         validation_errors=[],
                         active_tab="documents",
                         **_workflow_editor_context(
-                            (form.definition_json or {}).get("workflow") or {},
+                            current_definition.get("workflow") or {},
                             instruction_config=form.user_instruction_config,
                         ),
                     ), 400
@@ -1094,7 +1109,7 @@ def form_edit(form_id: int):
             return redirect(url_for("admin.form_edit", form_id=form.id, tab=active_tab))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
-        form.definition_json = normalize_admin_form_definition(form.definition_json or {})
+        form.definition_json = normalize_admin_form_definition(current_definition)
         return render_template(
             "admin/forms/edit.html",
             form=form,
@@ -1102,7 +1117,7 @@ def form_edit(form_id: int):
             users=users,
             assigned_user_ids=assigned_user_ids,
             logos=logos,
-            training_field=get_declaration_training_field(form.definition_json or {}),
+            training_field=get_declaration_training_field(current_definition),
             training_occupancy=TrainingAvailabilityService(
                 current_app.extensions["services"].submission_repository
             ).occupied_counts(form_slug=form.slug),
@@ -1111,8 +1126,9 @@ def form_edit(form_id: int):
             validation_errors=[],
             active_tab=active_tab,
             **_workflow_editor_context(
-                (form.definition_json or {}).get("workflow") or {},
+                current_definition.get("workflow") or {},
                 instruction_config=form.user_instruction_config,
+                draft_definition=current_definition if active_tab == "workflow" else None,
             ),
             **_agreement_docx_editor_context(form, fields),
             **_declaration_editor_context(form, fields),
@@ -2070,6 +2086,8 @@ def _normalize_form_editor_tab(value: str | None, role: str) -> str:
 
 def _tab_for_form_error(errors: list[str], fallback: str, form_data) -> str:
     text = " ".join(errors).lower()
+    if fallback == "workflow" and ("etap" in text or "workflow.steps" in text):
+        return "workflow"
     if (
         form_data.get("workflow_use_advanced_json") == "on"
         or form_data.get("use_form_definition_json") == "on"
@@ -2148,6 +2166,7 @@ def _workflow_editor_context(
     *,
     workflow_json: str | None = None,
     instruction_config: dict | None = None,
+    draft_definition: dict | None = None,
 ) -> dict:
     normalizer = WorkflowConfigNormalizer()
     normalized = normalizer.normalize(workflow)
@@ -2170,12 +2189,32 @@ def _workflow_editor_context(
         if instruction:
             step["description"] = instruction.get("description") or ""
             step["next_action"] = instruction.get("next_action") or ""
+    converted = False
+    editor_fields = (draft_definition or {}).get("fields")
+    if draft_definition is not None:
+        from services.workflow_config_service import collapse_draft_document_stages
+        prepared_definition = collapse_draft_document_stages({**draft_definition, "workflow": normalized})
+        prepared = prepared_definition["workflow"]
+        editor_fields = prepared_definition.get("fields", [])
+        converted = prepared["steps"] != normalized["steps"]
+        if converted:
+            normalized = prepared
+            normalized["document_stage_conversion"] = True
     instruction_view = reconcile_instruction_config(instruction_view, normalized)
     existing_statuses = [step.get("status") for step in normalized.get("steps", [])]
+    with db_session_factory()() as catalog_db:
+        decision_catalog = [
+            {"definition_id": item.id, "code": item.code, "label": item.label, "semantic_category": item.semantic_category,
+             "description": item.description, "sort_order": item.sort_order}
+            for item in current_app.extensions["services"].decision_definition_service.list_catalog(catalog_db, include_inactive=False)
+        ]
     for decision in normalized.get("decision_settings", []):
         existing_statuses.extend((decision.get("yes_status"), decision.get("no_status")))
     return {
         "workflow_builder": normalized,
+        "workflow_documents_converted": converted,
+        "workflow_converted_fields": editor_fields,
+        "workflow_decision_catalog": decision_catalog,
         "workflow_json": workflow_json if workflow_json is not None else format_json(normalized),
         "workflow_statuses": workflow_status_options(existing_statuses),
         "workflow_advanced_elements": normalizer.advanced_elements(normalized),

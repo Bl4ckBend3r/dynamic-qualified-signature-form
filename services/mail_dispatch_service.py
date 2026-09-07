@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from html import escape
 import logging
 import mimetypes
@@ -19,6 +21,7 @@ from services.footer_logo_service import (
 )
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
+from services.mail_recipient_service import MailRecipientResolver
 from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
 from services.training_availability_service import TrainingAvailabilityService
 
@@ -42,6 +45,7 @@ class MailDispatchResult:
     subject: str = ""
     error_message: str = ""
     log: Any | None = None
+    deliveries: tuple = ()
 
     @property
     def sent(self) -> bool:
@@ -67,6 +71,58 @@ class MailDispatchService:
         self.smtp_sender = smtp_sender
         self.mail_settings_service = mail_settings_service
         self.mail_footer_resolver = mail_footer_resolver or MailFooterResolver()
+
+    def dispatch_workflow_decision_event(self, *, db, form, submission, decision, actor_id=None, group_config=None, step_config=None):
+        """Consume a configured decision event; all automatic delivery stays here."""
+        from sqlalchemy import select
+        from models import EmailLog, SubmissionDecision
+
+        definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+        workflow = definition.get("workflow") or {}
+        item_event = decision is not None
+        if workflow.get("flow_mode") == "explicit":
+            step = step_config or next((s for s in workflow.get("steps", []) if s.get("id") == decision.workflow_step), {})
+            config = step.get("decision_email") or {}
+            enabled = config.get("enabled", False)
+        else:
+            config = (group_config or {}).get("decision_email") or {}
+            enabled = config.get("automatic", False)
+        if not enabled:
+            return None
+        template_type = str(config.get("template_type") or "repeatable_item_decision")
+        template = self.select_template(list(form.mail_templates), submission, template_type)
+        participant = dict(decision.participant_snapshot_json or {}) if item_event else {}
+        recipient = str(participant.get("email") or "") if item_event else str(submission.email or "")
+        if item_event:
+            already_sent = db.execute(select(EmailLog.id).where(
+                EmailLog.item_decision_id == decision.id, EmailLog.to_email == recipient,
+                EmailLog.template_id == getattr(template, "id", None), EmailLog.status == "sent",
+                EmailLog.administrator_message.is_(None),
+            )).scalars().first()
+            if already_sent:
+                return None
+        context = {"participant": participant, "submission_id": submission.submission_id,
+                   "form_name": submission.form_name,
+                   "workflow_step": decision.workflow_step if item_event else (step_config or {}).get("id"),
+                   "decision_code": decision.decision_code if item_event else submission.officer_decision,
+                   "decision_label": decision.decision_label if item_event else submission.officer_decision,
+                   "decision_comment": decision.comment if item_event else submission.officer_decision_reason}
+        if item_event:
+            context["decision_date"] = decision.decided_at
+        else:
+            decision_id = db.execute(select(SubmissionDecision.id).where(SubmissionDecision.submission_id == submission.id)
+                .order_by(SubmissionDecision.id.desc())).scalars().first()
+        result = self.dispatch_to_submission(db=db, form=form, submission=submission, template=template,
+            to_email=recipient, event_type=template_type, sent_by_id=actor_id, extra_context=context,
+            recipient_source=config.get("recipient_source"),
+            event_id=f"item_decision:{decision.id}" if item_event else f"submission_decision:{decision_id}" if decision_id else "",
+            record_uuid=decision.item_id if item_event else "", group_key=decision.group_key if item_event else "",
+            participant_snapshot=participant if item_event else None, item_decision_id=decision.id if item_event else None)
+        if item_event and result.log:
+            result.log.repeatable_group_key = decision.group_key
+            result.log.repeatable_item_id = decision.item_id
+            result.log.item_decision_id = decision.id
+        return result
 
     def render_template(self, template: str | None, context: dict[str, Any] | None = None) -> str:
         if not template:
@@ -339,6 +395,13 @@ class MailDispatchService:
             )
             current_app.logger.warning("mail_skipped reason=smtp_not_configured form_id=%s", getattr(form, "id", None))
             return MailDispatchResult("skipped", recipient, subject, "Brak konfiguracji SMTP.", log)
+        log = self.log_email(
+            db, form=form, submission=submission, template=template, footer=footer,
+            to_email=recipient, subject=subject, sent_by_id=sent_by_id, status="pending",
+            event_type=event_type, html_body=html_body, text_body=text_body,
+        )
+        if log is not None and callable(getattr(db, 'flush', None)):
+            db.flush()
         try:
             sender(
                 **smtp_config,
@@ -349,45 +412,24 @@ class MailDispatchService:
                 inline_images=inline_images or [],
                 attachments=attachments or [],
             )
-            log = self.log_email(
-                db,
-                form=form,
-                submission=submission,
-                template=template,
-                footer=footer,
-                to_email=recipient,
-                subject=subject,
-                sent_by_id=sent_by_id,
-                status="sent",
-                event_type=event_type,
-                html_body=html_body,
-                text_body=text_body,
-            )
+            if log is not None:
+                log.status = "sent"
             return MailDispatchResult("sent", recipient, subject, log=log)
         except Exception as exc:
             error_message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            credential = getattr(submission, 'access_token', None)
+            if credential:
+                error_message = error_message.replace(credential, '[redacted]')
             metrics = current_app.extensions.get("observability_metrics")
             if metrics is not None:
                 metrics.operation_failures.labels(operation="mail_dispatch", kind="smtp").inc()
-            current_app.logger.exception(
-                "mail_dispatch_failed",
+            current_app.logger.error(
+                "mail_dispatch_failed error=%s", type(exc).__name__,
                 extra={"event": "mail_dispatch_failed", "operation": "mail_dispatch", "form_id": getattr(form, "id", None)},
             )
-            log = self.log_email(
-                db,
-                form=form,
-                submission=submission,
-                template=template,
-                footer=footer,
-                to_email=recipient,
-                subject=subject,
-                sent_by_id=sent_by_id,
-                status="failed",
-                event_type=event_type,
-                error_message=error_message,
-                html_body=html_body,
-                text_body=text_body,
-            )
+            if log is not None:
+                log.status = "failed"
+                log.error_message = error_message
             return MailDispatchResult("failed", recipient, subject, error_message, log)
 
     def dispatch_to_submission(
@@ -407,7 +449,28 @@ class MailDispatchService:
         extra_context: dict[str, Any] | None = None,
         logo_url_builder=None,
         attachments: list | None = None,
+        recipient_source: dict | None = None,
+        event_id: str = "",
+        record_uuid: str = "",
+        group_key: str = "",
+        participant_snapshot: dict | None = None,
+        item_decision_id: int | None = None,
+        force_send: bool = False,
     ) -> MailDispatchResult:
+        if bool(record_uuid) != bool(group_key) or (participant_snapshot is not None and not record_uuid):
+            return MailDispatchResult('failed', error_message='Zdarzenie osoby wymaga grupy i UUID odbiorcy.')
+        version = getattr(submission, "form_version", None)
+        definition = (version.definition_json if version else getattr(form, "definition_json", {})) or {}
+        sources = [recipient_source] if recipient_source is not None else MailRecipientResolver.configured_sources(
+            definition, event_type, template, step_id=str((extra_context or {}).get("workflow_step") or getattr(submission, "workflow_stage", "") or ""))
+        if record_uuid and sources is None:
+            sources = [{"type": "repeatable_group", "group": group_key}]
+        if sources is not None:
+            return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
+                definition=definition, sources=sources, event_type=event_type, event_id=event_id,
+                record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot,
+                item_decision_id=item_decision_id, sent_by_id=sent_by_id, extra_context=extra_context,
+                subject_template=subject_template, force_send=force_send)
         footer = self.mail_footer_resolver.resolve(
             db,
             mail_type=event_type,
@@ -494,8 +557,6 @@ class MailDispatchService:
             workflow = ((form_definition or {}).get("workflow") or {}) if form else {}
             if form is None or not workflow.get("send_email_notifications"):
                 return MailDispatchResult("skipped", error_message="Powiadomienia formularza są wyłączone.")
-            if not str(submission.email or "").strip():
-                return MailDispatchResult("skipped", error_message="Brak odbiorcy.")
             duplicate = db.execute(
                 select(EmailLog.id).where(
                     EmailLog.submission_id == submission.id,
@@ -503,8 +564,6 @@ class MailDispatchService:
                     EmailLog.status.in_(("sent", "queued")),
                 )
             ).first()
-            if duplicate:
-                return MailDispatchResult("skipped", error_message="Wiadomość dla tego zdarzenia została już wysłana.")
             template = db.execute(
                 select(MailTemplate)
                 .where(
@@ -516,12 +575,20 @@ class MailDispatchService:
             ).scalars().first()
             if template is None:
                 return MailDispatchResult("skipped", error_message="Brak aktywnego szablonu correction_accepted.")
+            sources = MailRecipientResolver.configured_sources(form_definition or {}, 'correction_accepted', template,
+                step_id=submission.workflow_stage or submission.workflow_step)
+            if sources is None:
+                if not str(submission.email or '').strip():
+                    return MailDispatchResult('skipped', error_message='Brak odbiorcy.')
+                if duplicate:
+                    return MailDispatchResult('skipped', error_message='Wiadomość dla tego zdarzenia została już wysłana.')
             result = self.dispatch_to_submission(
                 db=db,
                 form=form,
                 submission=submission,
                 template=template,
                 event_type="correction_accepted",
+                event_id=f"correction:{submission.correction_completed_at.isoformat()}",
                 files=self.submission_repository.list_submission_files(submission_id),
             )
             self._commit_email_log(db)
@@ -562,6 +629,16 @@ class MailDispatchService:
                     error_message="Brak aktywnego szablonu submission_received.",
                     log=log,
                 )
+            definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
+            for event in ('submission_created', 'submission_received'):
+                sources = MailRecipientResolver.configured_sources(definition, event, template, step_id=submission.workflow_stage or submission.workflow_step)
+                if sources is not None:
+                    return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
+                        definition=definition, sources=sources, event_type=event, event_id='submission_created')
+            if any(isinstance(field, dict) and field.get("type") == "repeatable_group"
+                   and (field.get("submission_confirmation") or {}).get("enabled")
+                   for field in definition.get("fields") or []):
+                return self._dispatch_repeatable_confirmations(db, form, submission, template, definition)
             if not str(submission.email or "").strip():
                 log = self.log_email(
                     db,
@@ -576,12 +653,6 @@ class MailDispatchService:
                 form,
                 submission,
                 [],
-                status_url=url_for(
-                    "documents.documents_to_sign",
-                    submission_id=submission.submission_id,
-                    token=submission.access_token,
-                    _external=True,
-                ),
                 platform_url=url_for("public_forms.index", _external=True),
                 submission_date=submission.created_at,
             )
@@ -668,6 +739,126 @@ class MailDispatchService:
                 result.log.text_body = "[redacted: resumable draft link]"
             self._commit_email_log(db)
             return result
+
+    def _dispatch_repeatable_confirmations(self, db, form, submission, template, definition) -> MailDispatchResult:
+        sources = [{"type": "repeatable_group", "group": field["name"],
+                    "email_field": field["submission_confirmation"].get("email_field")}
+                   for field in definition.get("fields", []) if field.get("type") == "repeatable_group"
+                   and (field.get("submission_confirmation") or {}).get("enabled")]
+        return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
+            definition=definition, sources=sources, event_type="submission_created", event_id="submission_created",
+            legacy_confirmation=True)
+
+    def _record_mail_context(self, recipient, submission, form, definition, extra_context):
+        from services.public_submission_status_service import build_readonly_submission_status
+        person = dict(recipient.participant)
+        status = build_readonly_submission_status({
+            'process_status': submission.process_status, 'workflow_stage': submission.workflow_stage,
+            'workflow_step': submission.workflow_step, 'document_states': submission.document_states,
+        }, form_config=definition)['status_label']
+        context = self.build_context_for_submission(form, submission, participant=person,
+            can_access_submission=recipient.can_access_submission, definition=definition)
+        context.update({
+            'form_title': form.title or form.name,
+            'current_status': status, 'status_label': status, 'process_status_label': status,
+            'platform_url': url_for('public_forms.index', _external=True),
+        })
+        # Event metadata is explicit. Never merge the submission or arbitrary extra_context.
+        allowed = {'workflow_step', 'decision_code', 'decision_label', 'decision_comment', 'decision_date',
+                   'document_id', 'document_label', 'document_type', 'action_label', 'step_label',
+                   'due_at', 'overdue_by', 'overdue_hours', 'trigger_event'}
+        context.update({key: value for key, value in (extra_context or {}).items() if key in allowed and not isinstance(value, (dict, list, tuple))})
+        if not recipient.can_access_submission and submission.access_token:
+            context = {key: value.replace(submission.access_token, '[redacted]') if isinstance(value, str) else value for key, value in context.items()}
+            context['participant'] = {key: value.replace(submission.access_token, '[redacted]') for key, value in person.items()}
+        return context
+
+    def _dispatch_record_notifications(self, *, db, form, submission, template, definition, sources,
+            event_type, event_id='', record_uuid='', group_key='', participant_snapshot=None,
+            item_decision_id=None, sent_by_id=None, extra_context=None, subject_template='',
+            force_send=False, legacy_confirmation=False):
+        from sqlalchemy import or_, select
+        from models import EmailLog, FormSubmission, MailTemplate
+        from form_loader import EMAIL_REGEX
+
+        if template is None or getattr(template, 'is_active', True) is False:
+            return MailDispatchResult('skipped', error_message='Brak aktywnego szablonu maila.')
+        if bool(record_uuid) != bool(group_key):
+            return MailDispatchResult('failed', error_message='Zdarzenie osoby wymaga grupy i UUID.')
+        try:
+            recipients = MailRecipientResolver().resolve(submission, definition, sources,
+                people_service=current_app.extensions['services'].decision_definition_service,
+                record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot)
+        except ValueError as exc:
+            return MailDispatchResult('failed', error_message=str(exc))
+        template_kind = 'form' if isinstance(template, MailTemplate) else 'platform'
+        template_content = {field: getattr(template, field, '') for field in (
+            'name', 'subject', 'html_body', 'text_body', 'body_html', 'body_text', 'content_html', 'content_text', 'content_title',
+            'content_intro', 'instruction_html', 'instruction_text', 'footer_note', 'show_process_status', 'use_platform_layout', 'mail_type')}
+        frozen_template = SimpleNamespace(**template_content)
+        template_revision = sha256(json.dumps(template_content, sort_keys=True, default=str).encode()).hexdigest()
+        template_key = f'{template_kind}:{getattr(template, "id", "fallback")}:{template_revision}'
+        occurrence = str(event_id or f'{submission.workflow_stage or submission.workflow_step}:{submission.process_status}')
+        submission_pk = submission.id
+        results = []
+        # Persist the domain event before SMTP; each attempt then commits independently.
+        # SMTP acceptance followed by a process crash before commit remains inherently ambiguous.
+        db.commit()
+        for recipient in recipients:
+            if db.get_bind().dialect.name == 'sqlite':
+                db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+            db.execute(select(FormSubmission.id).where(FormSubmission.id == submission_pk).with_for_update()).scalar_one()
+            identity = [submission_pk, event_type, occurrence, recipient.group_key, recipient.record_uuid,
+                        recipient.email, template_key, subject_template]
+            marker = json.dumps({'idempotency_key': sha256(json.dumps(identity).encode()).hexdigest(),
+                'event_id': occurrence, 'template': template_key}, sort_keys=True)
+            matches = [EmailLog.administrator_message == marker]
+            if legacy_confirmation:
+                matches.append(EmailLog.administrator_message == f'confirmation_template:platform:{template.id}')
+            already_sent = db.execute(select(EmailLog.id).where(
+                EmailLog.submission_id == submission_pk, EmailLog.event_type == event_type,
+                EmailLog.repeatable_group_key == recipient.group_key, EmailLog.repeatable_item_id == recipient.record_uuid,
+                EmailLog.to_email == recipient.email, EmailLog.status == 'sent', or_(*matches),
+            )).first()
+            if already_sent and not force_send:
+                db.commit()
+                continue
+            log_template = template if isinstance(template, MailTemplate) else None
+            try:
+                if not EMAIL_REGEX.fullmatch(recipient.email):
+                    raise ValueError('Niepoprawny adres e-mail odbiorcy.')
+                context = self._record_mail_context(recipient, submission, form, definition, extra_context)
+                if getattr(frozen_template, 'show_process_status', True) is False:
+                    context.update(current_status='', status_label='', process_status_label='')
+                footer = self.mail_footer_resolver.resolve(db, mail_type=event_type, form=form, submission=submission)
+                logo_url, footer_images = self.footer_logo_for_email(db, footer)
+                layout = self._layout_for_db(db)
+                if footer:
+                    layout = {**layout, 'footer_html': ''}
+                result = self.dispatch_raw(event_type=event_type, recipient=recipient.email,
+                    subject=self.render_subject(subject_template or frozen_template.subject, context),
+                    html_body=render_platform_mail_html(frozen_template, context, footer_html=self.build_footer(footer, logo_url=logo_url), layout=layout),
+                    text_body=render_platform_mail_text(frozen_template, context), context=context, db=db, form=form,
+                    submission=submission, template=log_template, footer=footer, sent_by_id=sent_by_id,
+                    inline_images=self._inline_images_from_layout(layout) + footer_images)
+            except Exception as exc:
+                log = self.log_email(db, form=form, submission=submission, template=log_template, to_email=recipient.email,
+                    sent_by_id=sent_by_id, event_type=event_type, status='failed', error_message=type(exc).__name__)
+                result = MailDispatchResult('failed', recipient.email, error_message=type(exc).__name__, log=log)
+            if result.log is not None:
+                result.log.repeatable_group_key = recipient.group_key
+                result.log.repeatable_item_id = recipient.record_uuid
+                result.log.item_decision_id = item_decision_id
+                result.log.administrator_message = marker
+                if submission.access_token:
+                    for field in ('html_body', 'text_body', 'subject', 'error_message'):
+                        setattr(result.log, field, str(getattr(result.log, field) or '').replace(submission.access_token, '[redacted]'))
+            db.commit()
+            results.append(result)
+        status = 'failed' if any(result.status == 'failed' for result in results) else 'sent' if any(result.sent for result in results) else 'skipped'
+        only = results[0] if len(results) == 1 else None
+        return MailDispatchResult(status, recipient=only.recipient if only else '', subject=only.subject if only else '',
+            error_message=only.error_message if only else '', log=only.log if only else None, deliveries=tuple(results))
 
     def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
         message = str(evaluation.get("user_message") or "").strip() or (
@@ -845,6 +1036,12 @@ class MailDispatchService:
     ):
         if db is None:
             return None
+        credential = getattr(submission, 'access_token', None)
+        if credential:
+            subject, html_body, text_body, error_message = (
+                str(value or '').replace(credential, '[redacted]')
+                for value in (subject, html_body, text_body, error_message)
+            )
         try:
             from models import EmailLog
 

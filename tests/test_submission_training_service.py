@@ -49,13 +49,15 @@ def make_submission(db):
     return submission
 
 
-def test_selection_is_available_only_after_acceptance_and_valid_declaration(db):
-    form = Form(slug="sample", name="Sample", training_selection_open=True)
+def test_selection_is_independent_of_acceptance_and_declaration(db):
+    form = Form(slug="sample", name="Sample", training_selection_open=True, definition_json={"documents": [{"id": "declaration", "fields": [{**FIELD, "type": "training_selection"}]}]})
     submission = make_submission(db)
 
     assert SubmissionTrainingService.can_select(form, submission) is True
     submission.declaration_signature_valid = "Nie"
-    assert SubmissionTrainingService.can_select(form, submission) is False
+    submission.officer_decision = ""
+    submission.declaration_signed = ""
+    assert SubmissionTrainingService.can_select(form, submission) is True
     submission.declaration_signature_valid = "Tak"
     form.training_selection_open = False
     assert SubmissionTrainingService.can_select(form, submission) is False

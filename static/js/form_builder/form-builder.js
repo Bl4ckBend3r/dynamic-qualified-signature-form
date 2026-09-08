@@ -2,6 +2,7 @@ import { initializeFieldPalette } from "./field-palette.js";
 import { renderCanvas } from "./form-canvas.js";
 import { initializePropertiesPanel } from "./properties-panel.js";
 import { initializeDragAndDrop } from "./drag-and-drop.js";
+import { initializePanelPositioning } from "./panel-positioning.js";
 import {
   readBuilderConfig,
   serializeFields,
@@ -27,6 +28,7 @@ if (builder) {
   const panel = builder.querySelector("[data-properties-panel]");
   const stateInput = builder.querySelector("[data-builder-state]");
   const status = builder.querySelector("[data-builder-status]");
+  const positionPanels = initializePanelPositioning(builder);
 
   const FIELD_LABELS = {
     text: "Tekst",
@@ -632,6 +634,7 @@ if (builder) {
       `${fields.length} ${fields.length === 1 ? "pole" : "pól"}`;
 
     stateInput.value = JSON.stringify(serializeFields(fields));
+    positionPanels();
   };
 
   const addFieldFromPalette = (type) => {
@@ -695,6 +698,7 @@ if (builder) {
       builder
         .querySelectorAll("[data-builder-mode]")
         .forEach((item) => item.classList.toggle("is-active", item === button));
+      positionPanels();
     }),
   );
 

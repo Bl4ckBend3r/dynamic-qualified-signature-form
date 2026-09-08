@@ -1,5 +1,6 @@
 import json
 import zipfile
+from copy import deepcopy
 from io import BytesIO
 
 import pytest
@@ -9,7 +10,7 @@ pytest.importorskip("sqlalchemy")
 
 from database import create_engine, create_session_factory
 from form_loader import FIELD_STAGE_INITIAL
-from models import Base, Form
+from models import Base, Form, FormField
 from services.admin_form_service import (
     apply_training_selection_from_admin_form,
     build_definition_from_docx,
@@ -171,6 +172,127 @@ def test_detect_form_fields_includes_document_fields():
     )
 
     assert [field["name"] for field in fields] == ["main", "document_field"]
+
+
+def test_detect_form_fields_prefers_main_fields_and_skips_training_selection():
+    availability = [
+        {"step": "submission", "visible": True, "editable": True, "required": True},
+        {"step": "officer_review", "visible": False, "editable": False, "required": False},
+    ]
+    canonical = {
+        "type": "checkbox",
+        "name": "deklaracja_18_lat",
+        "required": True,
+        "availability": availability,
+    }
+    fields = detect_form_fields(
+        {
+            "fields": [canonical],
+            "documents": [
+                {
+                    "id": "declaration",
+                    "fields": [
+                        {"type": "checkbox", "name": "deklaracja_18_lat"},
+                        {"type": "text", "name": "current_document_only"},
+                        {"type": "training_selection", "name": "selected_trainings"},
+                    ],
+                }
+            ],
+            "process": {
+                "documents": {
+                    "declaration": {
+                        "fields": [
+                            {"type": "checkbox", "name": "deklaracja_18_lat"},
+                            {"type": "text", "name": "legacy_document_only"},
+                            {"type": "training_selection", "name": "selected_trainings"},
+                        ]
+                    }
+                }
+            },
+        }
+    )
+
+    assert [field.get("name") for field in fields] == [
+        "deklaracja_18_lat",
+        "current_document_only",
+        "legacy_document_only",
+    ]
+    assert fields[0] == canonical
+    assert fields[0]["availability"] == availability
+
+
+def test_sync_form_fields_keeps_main_availability_with_three_json_copies(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'deduplicated-fields.db'}"
+    Base.metadata.create_all(create_engine(database_url))
+    session_factory = create_session_factory(database_url)
+    availability = [
+        {"step": "submission", "visible": True, "editable": True, "required": True},
+        {"step": "officer_review", "visible": False, "editable": False, "required": False},
+    ]
+    declaration_field_names = (
+        "deklaracja_18_lat",
+        "deklaracja_lubuskie",
+        "deklaracja_wlasna_inicjatywa",
+        "deklaracja_brak_dzialalnosci",
+        "deklaracja_brak_ksztalcenia",
+        "deklaracja_obszar_wiejski",
+        "deklaracja_niepelnosprawnosc",
+        "deklaracja_umiejetnosci_podstawowe",
+        "deklaracja_grupa_niekorzystna",
+        "deklaracja_zgoda_wizerunek",
+        "deklaracja_prawdziwosc_danych",
+    )
+    canonical_fields = [
+        {
+            "type": "checkbox",
+            "name": name,
+            "required": True,
+            "availability": availability,
+        }
+        for name in declaration_field_names
+    ]
+    duplicate_fields = [
+        {"type": "checkbox", "name": name}
+        for name in declaration_field_names
+    ]
+    definition = {
+        "fields": canonical_fields,
+        "workflow": {
+            "initial_step": "submission",
+            "steps": [{"id": "submission"}, {"id": "officer_review"}],
+        },
+        "documents": [
+            {
+                "id": "declaration",
+                "fields": [
+                    *deepcopy(duplicate_fields),
+                    {"type": "training_selection", "name": "selected_trainings"},
+                ],
+            }
+        ],
+        "process": {
+            "documents": {
+                "declaration": {
+                    "fields": [
+                        *deepcopy(duplicate_fields),
+                        {"type": "training_selection", "name": "selected_trainings"},
+                    ]
+                }
+            }
+        },
+    }
+
+    with session_factory() as db:
+        form = Form(slug="deduplicated", name="Test", title="Test", definition_json=definition)
+        db.add(form)
+        db.flush()
+        sync_form_fields(db, form, definition)
+        db.flush()
+
+        stored = db.query(FormField).filter_by(form_id=form.id).all()
+        assert {field.name for field in stored} == set(declaration_field_names)
+        assert all(field.availability_json == availability for field in stored)
+        assert all(field.required is True for field in stored)
 
 
 def test_normalize_field_stage_falls_back_to_initial():

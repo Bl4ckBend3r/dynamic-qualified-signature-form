@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from sqlalchemy import select
+
 from models import Form, FormField
 from services.field_availability_service import FieldAvailabilityService
 
@@ -140,6 +142,8 @@ def serialize_builder_fields(
     result = []
 
     for field in fields:
+        if field.type == "training_selection":
+            continue
         config = deepcopy(
             configs.get(field.name, {})
         )
@@ -223,8 +227,22 @@ def apply_builder_state(
     if len(state) > 250:
         raise FormBuilderError("Formularz może zawierać maksymalnie 250 pól.")
 
-    all_fields = {field.id: field for field in form.fields if field.id is not None}
-    fields_by_name = {field.name: field for field in form.fields}
+    db.flush()
+    stored_fields = list(
+        db.execute(
+            select(FormField)
+            .where(FormField.form_id == form.id)
+            .order_by(FormField.id.asc())
+        ).scalars()
+    )
+    all_fields = {
+        field.id: field
+        for field in stored_fields
+        if field.id is not None
+    }
+    fields_by_name: dict[str, FormField] = {}
+    for stored_field in stored_fields:
+        fields_by_name.setdefault(stored_field.name, stored_field)
     original_definition = deepcopy(form.definition_json or {})
     original_configs = {
         str(item.get("name")): deepcopy(item)
@@ -273,6 +291,8 @@ def apply_builder_state(
             if field is None:
                 field = FormField(form_id=form.id, name=name)
                 db.add(field)
+                stored_fields.append(field)
+                fields_by_name[name] = field
 
         seen_names.add(name)
         field.active = True
@@ -435,10 +455,12 @@ def apply_builder_state(
         else:
             config.pop("document_label", None)
 
-    for field in form.fields:
+    for field in stored_fields:
         if field not in saved_fields:
             field.active = False
 
+    removed_canonical_names = set(original_configs) - seen_names
+    _remove_document_field_copies(original_definition, removed_canonical_names)
     original_definition["fields"] = saved_configs
     if document_labels:
         original_definition["document_field_labels"] = document_labels
@@ -447,6 +469,35 @@ def apply_builder_state(
     form.definition_json = original_definition
     db.flush()
     return FormBuilderResult(saved_fields, document_labels)
+
+
+def _remove_document_field_copies(definition: dict, removed_names: set[str]) -> None:
+    if not removed_names:
+        return
+
+    document_collections = [definition.get("documents")]
+    process = definition.get("process") or {}
+    if isinstance(process, dict):
+        document_collections.append(process.get("documents"))
+
+    for documents in document_collections:
+        if isinstance(documents, dict):
+            iterable = documents.values()
+        elif isinstance(documents, list):
+            iterable = documents
+        else:
+            iterable = []
+        for document in iterable:
+            if not isinstance(document, dict) or not isinstance(document.get("fields"), list):
+                continue
+            document["fields"] = [
+                field
+                for field in document["fields"]
+                if not (
+                    isinstance(field, dict)
+                    and str(field.get("name") or "").strip() in removed_names
+                )
+            ]
 
 
 def _normalize_options(field_type: str, value: Any) -> list:

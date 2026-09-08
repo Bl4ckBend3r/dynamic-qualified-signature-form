@@ -74,6 +74,26 @@ def test_existing_form_opens_with_default_and_saved_widths(tmp_path):
         assert state[1]["width"] == "full"
 
 
+def test_builder_serialization_excludes_specialized_training_selection(tmp_path):
+    factory, form_id = builder_form(tmp_path)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        training_field = FormField(
+            form_id=form.id,
+            name="selected_trainings",
+            label="Wybierz szkolenia",
+            type="training_selection",
+            required=False,
+            sort_order=99,
+            active=True,
+        )
+        db.add(training_field)
+        db.flush()
+
+        state = serialize_builder_fields(form, [*form.fields, training_field])
+        assert "selected_trainings" not in {field["name"] for field in state}
+
+
 def test_builder_round_trip_add_delete_change_type_label_order_width_and_preserve_extensions(tmp_path):
     factory, form_id = builder_form(tmp_path)
     with factory() as db:
@@ -174,6 +194,43 @@ def test_omitting_field_marks_it_inactive_without_deleting_history(tmp_path):
         zgoda = next(field for field in form.fields if field.name == "zgoda")
         assert zgoda.active is False
         assert zgoda.id is not None
+
+
+def test_builder_deactivates_duplicates_missing_from_state_with_cached_relationship(tmp_path):
+    factory, form_id = builder_form(tmp_path)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        cached_fields = list(form.fields)
+        imie = next(field for field in cached_fields if field.name == "imie")
+        duplicate = FormField(
+            form_id=form.id,
+            name="zgoda",
+            label="Historyczny duplikat zgody",
+            type="checkbox",
+            required=False,
+            sort_order=99,
+            active=True,
+        )
+        db.add(duplicate)
+        db.flush()
+        assert duplicate not in form.fields
+
+        state = serialize_builder_fields(form, [imie])
+        apply_builder_state(
+            db,
+            form,
+            state,
+            field_types=FIELD_TYPES,
+            availability_definition=form.definition_json,
+        )
+        db.flush()
+
+        zgoda_rows = db.query(FormField).filter_by(
+            form_id=form.id,
+            name="zgoda",
+        ).all()
+        assert len(zgoda_rows) == 2
+        assert all(not field.active for field in zgoda_rows)
 
 
 def test_builder_rejects_name_change_for_existing_field(tmp_path):

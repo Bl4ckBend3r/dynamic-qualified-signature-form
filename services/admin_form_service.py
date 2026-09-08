@@ -950,12 +950,38 @@ def sync_form_fields(db, form: Form, form_definition: dict) -> None:
         order += 1
 
 def detect_form_fields(form_definition: dict) -> list[dict]:
-    fields = list(form_definition.get("fields") or [])
-    documents = ((form_definition.get("process") or {}).get("documents") or form_definition.get("documents") or {})
-    if isinstance(documents, dict):
-        for document in documents.values():
+    fields: list[dict] = []
+    seen_names: set[str] = set()
+
+    def append_fields(candidates) -> None:
+        for field in candidates or []:
+            if not isinstance(field, dict):
+                continue
+            if field.get("type") == "training_selection":
+                continue
+            name = str(field.get("name") or "").strip()
+            if name:
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+            fields.append(field)
+
+    def append_document_fields(documents) -> None:
+        if isinstance(documents, dict):
+            iterable = documents.values()
+        elif isinstance(documents, list):
+            iterable = documents
+        else:
+            iterable = []
+        for document in iterable:
             if isinstance(document, dict):
-                fields.extend(document.get("fields") or [])
+                append_fields(document.get("fields"))
+
+    append_fields(form_definition.get("fields"))
+    append_document_fields(form_definition.get("documents"))
+    process = form_definition.get("process") or {}
+    if isinstance(process, dict):
+        append_document_fields(process.get("documents"))
     return fields
 
 

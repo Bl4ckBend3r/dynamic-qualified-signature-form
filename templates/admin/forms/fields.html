@@ -9,15 +9,22 @@
     </div>
     <div class="admin-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
-        <a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Ustawienia</a>
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=editable_version.id if editable_version else None) }}">Ustawienia</a>
     </div>
 </div>
+{% if editable_version %}
+<div class="admin-alert admin-alert-info" data-editor-form-version="{{ editable_version.id }}">
+    <strong>Edytujesz wersję {{ editable_version.version_label }}</strong>
+    <span>Status: wersja robocza · ID {{ editable_version.id }}</span>
+</div>
+{% endif %}
 {% set active_tab = 'fields' %}
 {% include "admin/forms/_tabs.html" %}
 
 <form method="post" class="form-builder" data-form-builder>
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="action" value="builder_save">
+    {% if editable_version %}<input type="hidden" name="form_version_id" value="{{ editable_version.id }}">{% endif %}
     <input type="hidden" name="builder_state" data-builder-state>
     <div hidden aria-hidden="true">
         {% for field in fields %}
@@ -55,12 +62,17 @@
 <script type="application/json" data-builder-workflow-steps>{{ workflow_steps|tojson }}</script>
 <script type="module" src="{{ url_for('static', filename='js/form_builder/form-builder.js') }}"></script>
 <script>
-const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id)|tojson }};
+const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id, form_version_id=editable_version.id if editable_version else None)|tojson }};
+const navigateToEditorTab = (tabName) => {
+    const url = new URL(editFormUrl, window.location.origin);
+    url.searchParams.set("tab", tabName);
+    window.location.href = url.toString();
+};
 document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
-    tab.addEventListener("click", () => { window.location.href = `${editFormUrl}?tab=${encodeURIComponent(tab.dataset.formTabTarget)}`; });
+    tab.addEventListener("click", () => navigateToEditorTab(tab.dataset.formTabTarget));
 });
 document.querySelector("[data-form-tab-select]")?.addEventListener("change", (event) => {
-    if (event.target.value !== "fields") window.location.href = `${editFormUrl}?tab=${encodeURIComponent(event.target.value)}`;
+    if (event.target.value !== "fields") navigateToEditorTab(event.target.value);
 });
 </script>
 {% endblock %}

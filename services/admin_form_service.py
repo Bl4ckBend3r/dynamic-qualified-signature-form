@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 from uuid import uuid4
+from sqlalchemy import select
 
 from form_loader import (
     FIELD_STAGE_INITIAL,
@@ -851,37 +852,81 @@ def humanize_field_name(name: str) -> str:
 
 
 def sync_form_fields(db, form: Form, form_definition: dict) -> None:
-    existing_fields = {field.name: field for field in form.fields}
-    for field in existing_fields.values():
-        field.active = False
+    db.flush()
+
+    stored_fields = db.execute(
+        select(FormField)
+        .where(FormField.form_id == form.id)
+        .order_by(FormField.id.asc())
+    ).scalars().all()
+
+    # Legacy FormField jest jedynie adapterem aktualnie edytowanej wersji.
+    # Dezaktywujemy wszystkie istniejące rekordy, również ewentualne
+    # historyczne duplikaty powstałe przez starszą implementację.
+    existing_fields: dict[str, FormField] = {}
+
+    for stored_field in stored_fields:
+        stored_field.active = False
+
+        # Zachowujemy najstarszy rekord jako kanoniczny dla danej nazwy.
+        # Ewentualne duplikaty pozostają nieaktywne.
+        existing_fields.setdefault(stored_field.name, stored_field)
+
     current_section = ""
     order = 0
+
     for field in detect_form_fields(form_definition):
         if field.get("type") == "section":
             current_section = field.get("label", "")
             continue
+
         name = field.get("name")
         if not name:
             continue
-        form_field = existing_fields.get(name) or FormField(form_id=form.id, name=name)
+
+        form_field = existing_fields.get(name)
+
+        if form_field is None:
+            form_field = FormField(
+                form_id=form.id,
+                name=name,
+            )
+            existing_fields[name] = form_field
+
         form_field.label = field.get("label", name)
         form_field.type = field.get("type", "text")
         form_field.required = bool(field.get("required"))
         form_field.options = field.get("options") or []
         form_field.default_value = str(field.get("default", ""))
-        classification = str(field.get("data_classification") or field.get("sensitivity") or "normal").strip()
+
+        classification = str(
+            field.get("data_classification")
+            or field.get("sensitivity")
+            or "normal"
+        ).strip()
+
         if classification not in {"normal", "personal", "sensitive"}:
-            raise ValueError(f"Pole {name} ma nieprawidłową klasyfikację danych.")
+            raise ValueError(
+                f"Pole {name} ma nieprawidłową klasyfikację danych."
+            )
+
         form_field.data_classification = classification
         form_field.section = current_section
-        normalized_field = FieldAvailabilityService().normalize_field(field, form_definition)
-        form_field.availability_json = normalized_field.get("availability") or []
+
+        normalized_field = FieldAvailabilityService().normalize_field(
+            field,
+            form_definition,
+        )
+
+        form_field.availability_json = (
+            normalized_field.get("availability") or []
+        )
         form_field.stage = normalize_field_stage(field.get("stage"))
         form_field.sort_order = order
         form_field.active = True
+
         db.add(form_field)
         order += 1
-
 
 def detect_form_fields(form_definition: dict) -> list[dict]:
     fields = list(form_definition.get("fields") or [])

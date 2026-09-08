@@ -10,7 +10,8 @@
     <div class="admin-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Lista formularzy</a>
         {% if versions|selectattr('status', 'equalto', 'draft')|list %}
-            <a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj wersję roboczą</a>
+            {% set active_draft = versions|selectattr('status', 'equalto', 'draft')|first %}
+            <a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=active_draft.id) }}">Edytuj wersję roboczą</a>
             <a class="admin-button-secondary" href="{{ url_for('admin.form_checklists', form_id=form.id) }}">Checklisty weryfikacyjne</a>
         {% endif %}
     </div>
@@ -54,7 +55,7 @@
             <td class="actions-column">
                 <a class="admin-button-secondary compact" href="{{ url_for('admin.form_version_preview', form_id=form.id, version_id=version.id) }}">Podgląd</a>
                 {% if can_manage and version.status == 'draft' %}
-                    <a class="admin-button-secondary compact" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
+                    <a class="admin-button-secondary compact" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=version.id) }}">Edytuj</a>
                     <form method="post" action="{{ url_for('admin.form_version_publish', form_id=form.id, version_id=version.id) }}" class="admin-form compact">
                         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                         <label><span>Opis zmian</span><textarea name="change_summary" rows="2" required>{{ version.change_summary }}</textarea></label>

@@ -50,12 +50,28 @@ class FormVersionService:
             ).scalar()
         )
 
-    def editable_draft(self, db, form_id: int) -> FormVersion | None:
+    def editable_draft(
+        self,
+        db,
+        form_id: int,
+        *,
+        version_id: int | None = None,
+    ) -> FormVersion | None:
+        query = select(FormVersion).where(
+            FormVersion.form_id == form_id,
+            FormVersion.status == FORM_VERSION_DRAFT,
+        )
+        if version_id is not None:
+            query = query.where(FormVersion.id == version_id)
         return db.execute(
-            select(FormVersion)
-            .where(FormVersion.form_id == form_id, FormVersion.status == FORM_VERSION_DRAFT)
-            .order_by(FormVersion.version_major.desc(), FormVersion.version_minor.desc())
+            query.order_by(FormVersion.version_major.desc(), FormVersion.version_minor.desc())
         ).scalars().first()
+
+    def materialize_editor_mirror(self, db, form: Form, version: FormVersion) -> None:
+        """Load one exact draft into the legacy Form/FormField editor adapter."""
+        if version.form_id != form.id or version.status != FORM_VERSION_DRAFT:
+            raise FormVersionError("Edytor może załadować wyłącznie wskazaną wersję roboczą formularza.")
+        self.apply_to_legacy_editor(db, form, deepcopy(version.definition_json or {}))
 
     def resolve_published(self, db, form_id: int) -> FormVersion | None:
         return db.execute(
@@ -213,8 +229,15 @@ class FormVersionService:
             ComplianceService().stage_form_version(db, form, version, actor_id=actor_id)
         return version
 
-    def sync_draft_from_legacy(self, db, form: Form, *, actor_id: int | None = None) -> FormVersion | None:
-        draft = self.editable_draft(db, form.id)
+    def sync_draft_from_legacy(
+        self,
+        db,
+        form: Form,
+        *,
+        actor_id: int | None = None,
+        version_id: int | None = None,
+    ) -> FormVersion | None:
+        draft = self.editable_draft(db, form.id, version_id=version_id)
         if not draft:
             return None
         db.flush()

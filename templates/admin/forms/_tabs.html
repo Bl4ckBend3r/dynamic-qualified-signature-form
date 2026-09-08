@@ -1,19 +1,127 @@
+{% set editor_version_id = form.editable_version_id|default(none) %}
+
 <nav class="admin-form-tabs" role="tablist" aria-label="Obszary konfiguracji formularza" data-form-tabs-nav>
-    <a role="tab" data-form-external-tab href="{{ url_for('admin.form_versions', form_id=form.id) }}" class="admin-form-tab">Wersje</a>
-    <a role="tab" data-form-external-tab href="{{ url_for('admin.form_checklists', form_id=form.id) }}" class="admin-form-tab">Checklisty weryfikacyjne</a>
-    <button type="button" role="tab" data-form-tab-target="basic" aria-controls="form-tab-basic" aria-selected="{{ 'true' if active_tab == 'basic' else 'false' }}" class="admin-form-tab{% if active_tab == 'basic' %} is-active{% endif %}">Podstawowe</button>
-    <a role="tab" data-form-external-tab href="{{ url_for('admin.form_fields', form_id=form.id) }}" aria-selected="{{ 'true' if active_tab == 'fields' else 'false' }}" class="admin-form-tab{% if active_tab == 'fields' %} is-active{% endif %}">Pola formularza</a>
-    <button type="button" role="tab" data-form-tab-target="trainings" aria-controls="form-tab-trainings" aria-selected="{{ 'true' if active_tab == 'trainings' else 'false' }}" class="admin-form-tab{% if active_tab == 'trainings' %} is-active{% endif %}">Szkolenia</button>
-    <button type="button" role="tab" data-form-tab-target="declaration" aria-controls="form-tab-declaration" aria-selected="{{ 'true' if active_tab == 'declaration' else 'false' }}" class="admin-form-tab{% if active_tab == 'declaration' %} is-active{% endif %}">Deklaracja</button>
-    <button type="button" role="tab" data-form-tab-target="agreement" aria-controls="form-tab-agreement" aria-selected="{{ 'true' if active_tab == 'agreement' else 'false' }}" class="admin-form-tab{% if active_tab == 'agreement' %} is-active{% endif %}">Umowa</button>
-    <button type="button" role="tab" data-form-tab-target="workflow" aria-controls="form-tab-workflow" aria-selected="{{ 'true' if active_tab == 'workflow' else 'false' }}" class="admin-form-tab{% if active_tab == 'workflow' %} is-active{% endif %}">Workflow</button>
-    <button type="button" role="tab" data-form-tab-target="instructions" aria-controls="form-tab-instructions" aria-selected="{{ 'true' if active_tab == 'instructions' else 'false' }}" class="admin-form-tab{% if active_tab == 'instructions' %} is-active{% endif %}">Instrukcje</button>
-    <button type="button" role="tab" data-form-tab-target="emails" aria-controls="form-tab-emails" aria-selected="{{ 'true' if active_tab == 'emails' else 'false' }}" class="admin-form-tab{% if active_tab == 'emails' %} is-active{% endif %}">E-mail</button>
-    <button type="button" role="tab" data-form-tab-target="documents" aria-controls="form-tab-documents" aria-selected="{{ 'true' if active_tab == 'documents' else 'false' }}" class="admin-form-tab{% if active_tab == 'documents' %} is-active{% endif %}">Regulaminy i dokumenty</button>
-    <button type="button" role="tab" data-form-tab-target="appearance" aria-controls="form-tab-appearance" aria-selected="{{ 'true' if active_tab == 'appearance' else 'false' }}" class="admin-form-tab{% if active_tab == 'appearance' %} is-active{% endif %}">Logo i wygląd</button>
+    <a role="tab"
+       data-form-external-tab
+       href="{{ url_for('admin.form_versions', form_id=form.id) }}"
+       class="admin-form-tab">
+        Wersje
+    </a>
+
+    <a role="tab"
+       data-form-external-tab
+       href="{{ url_for('admin.form_checklists', form_id=form.id) }}"
+       class="admin-form-tab">
+        Checklisty weryfikacyjne
+    </a>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="basic"
+            aria-controls="form-tab-basic"
+            aria-selected="{{ 'true' if active_tab == 'basic' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'basic' %} is-active{% endif %}">
+        Podstawowe
+    </button>
+
+    <a role="tab"
+       data-form-external-tab
+       href="{% if editor_version_id %}{{ url_for('admin.form_fields', form_id=form.id, form_version_id=editor_version_id) }}{% else %}{{ url_for('admin.form_fields', form_id=form.id) }}{% endif %}"
+       aria-selected="{{ 'true' if active_tab == 'fields' else 'false' }}"
+       class="admin-form-tab{% if active_tab == 'fields' %} is-active{% endif %}">
+        Pola formularza
+    </a>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="trainings"
+            aria-controls="form-tab-trainings"
+            aria-selected="{{ 'true' if active_tab == 'trainings' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'trainings' %} is-active{% endif %}">
+        Szkolenia
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="declaration"
+            aria-controls="form-tab-declaration"
+            aria-selected="{{ 'true' if active_tab == 'declaration' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'declaration' %} is-active{% endif %}">
+        Deklaracja
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="agreement"
+            aria-controls="form-tab-agreement"
+            aria-selected="{{ 'true' if active_tab == 'agreement' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'agreement' %} is-active{% endif %}">
+        Umowa
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="workflow"
+            aria-controls="form-tab-workflow"
+            aria-selected="{{ 'true' if active_tab == 'workflow' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'workflow' %} is-active{% endif %}">
+        Workflow
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="instructions"
+            aria-controls="form-tab-instructions"
+            aria-selected="{{ 'true' if active_tab == 'instructions' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'instructions' %} is-active{% endif %}">
+        Instrukcje
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="emails"
+            aria-controls="form-tab-emails"
+            aria-selected="{{ 'true' if active_tab == 'emails' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'emails' %} is-active{% endif %}">
+        E-mail
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="documents"
+            aria-controls="form-tab-documents"
+            aria-selected="{{ 'true' if active_tab == 'documents' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'documents' %} is-active{% endif %}">
+        Regulaminy i dokumenty
+    </button>
+
+    <button type="button"
+            role="tab"
+            data-form-tab-target="appearance"
+            aria-controls="form-tab-appearance"
+            aria-selected="{{ 'true' if active_tab == 'appearance' else 'false' }}"
+            class="admin-form-tab{% if active_tab == 'appearance' %} is-active{% endif %}">
+        Logo i wygląd
+    </button>
+
     {% if g.admin_user.role == 'super_admin' %}
-        <button type="button" role="tab" data-form-tab-target="permissions" aria-controls="form-tab-permissions" aria-selected="{{ 'true' if active_tab == 'permissions' else 'false' }}" class="admin-form-tab{% if active_tab == 'permissions' %} is-active{% endif %}">Uprawnienia</button>
-        <button type="button" role="tab" data-form-tab-target="advanced" aria-controls="form-tab-advanced" aria-selected="{{ 'true' if active_tab == 'advanced' else 'false' }}" class="admin-form-tab{% if active_tab == 'advanced' %} is-active{% endif %}">Ustawienia zaawansowane</button>
+        <button type="button"
+                role="tab"
+                data-form-tab-target="permissions"
+                aria-controls="form-tab-permissions"
+                aria-selected="{{ 'true' if active_tab == 'permissions' else 'false' }}"
+                class="admin-form-tab{% if active_tab == 'permissions' %} is-active{% endif %}">
+            Uprawnienia
+        </button>
+
+        <button type="button"
+                role="tab"
+                data-form-tab-target="advanced"
+                aria-controls="form-tab-advanced"
+                aria-selected="{{ 'true' if active_tab == 'advanced' else 'false' }}"
+                class="admin-form-tab{% if active_tab == 'advanced' %} is-active{% endif %}">
+            Ustawienia zaawansowane
+        </button>
     {% endif %}
 </nav>
 
@@ -21,7 +129,7 @@
     <span>Obszar konfiguracji</span>
     <select data-form-tab-select>
         <option value="basic" {% if active_tab == 'basic' %}selected{% endif %}>Podstawowe</option>
-        <option value="fields">Pola formularza</option>
+        <option value="fields" {% if active_tab == 'fields' %}selected{% endif %}>Pola formularza</option>
         <option value="trainings" {% if active_tab == 'trainings' %}selected{% endif %}>Szkolenia</option>
         <option value="declaration" {% if active_tab == 'declaration' %}selected{% endif %}>Deklaracja</option>
         <option value="agreement" {% if active_tab == 'agreement' %}selected{% endif %}>Umowa</option>
@@ -30,6 +138,10 @@
         <option value="emails" {% if active_tab == 'emails' %}selected{% endif %}>E-mail</option>
         <option value="documents" {% if active_tab == 'documents' %}selected{% endif %}>Regulaminy i dokumenty</option>
         <option value="appearance" {% if active_tab == 'appearance' %}selected{% endif %}>Logo i wygląd</option>
-        {% if g.admin_user.role == 'super_admin' %}<option value="permissions" {% if active_tab == 'permissions' %}selected{% endif %}>Uprawnienia</option><option value="advanced" {% if active_tab == 'advanced' %}selected{% endif %}>Ustawienia zaawansowane</option>{% endif %}
+
+        {% if g.admin_user.role == 'super_admin' %}
+            <option value="permissions" {% if active_tab == 'permissions' %}selected{% endif %}>Uprawnienia</option>
+            <option value="advanced" {% if active_tab == 'advanced' %}selected{% endif %}>Ustawienia zaawansowane</option>
+        {% endif %}
     </select>
 </label>

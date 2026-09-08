@@ -12,7 +12,7 @@
     </div>
     <div class="admin-actions">
         <a class="admin-button-secondary" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wróć do wersji</a>
-        {% if version.status == 'draft' %}<a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj draft</a>{% endif %}
+        {% if version.status == 'draft' %}<a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=version.id) }}">Edytuj draft</a>{% endif %}
     </div>
 </div>
 

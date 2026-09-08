@@ -215,16 +215,47 @@ def _set_field_availability(field: FormField, availability: list[dict], definiti
     field.stage = first_visible
 
 
-def _editable_form_version(db, form: Form) -> FormVersion | None:
+def _requested_editor_version_id() -> int | None:
+    raw_value = request.form.get("form_version_id") or request.args.get("form_version_id")
+    if raw_value in (None, ""):
+        return None
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        abort(409, description="Nieprawidłowy identyfikator wersji formularza.")
+
+def _form_editor_url(
+    form_id: int,
+    *,
+    tab: str | None = None,
+    version_id: int | None = None,
+) -> str:
+    resolved_version_id = (
+        version_id
+        if version_id is not None
+        else _requested_editor_version_id()
+    )
+
+    values = {"form_id": form_id}
+
+    if tab:
+        values["tab"] = tab
+
+    if resolved_version_id is not None:
+        values["form_version_id"] = resolved_version_id
+
+    return url_for("admin.form_edit", **values)
+
+def _editable_form_version(db, form: Form, *, materialize: bool = False) -> FormVersion | None:
     service = current_app.extensions["services"].form_version_service
     if not service.has_versions(db, form.id):
         return None
-    draft = service.editable_draft(db, form.id)
+    requested_version_id = _requested_editor_version_id()
+    draft = service.editable_draft(db, form.id, version_id=requested_version_id)
     if not draft:
         abort(409, description="Opublikowane i archiwalne wersje są tylko do odczytu. Najpierw utwórz wersję roboczą.")
-    requested_version_id = request.form.get("form_version_id")
-    if requested_version_id and str(draft.id) != str(requested_version_id):
-        abort(409, description="Próba zapisu nieaktualnej albo nieedytowalnej wersji formularza.")
+    if materialize:
+        service.materialize_editor_mirror(db, form, draft)
     return draft
 
 
@@ -233,6 +264,7 @@ def _sync_editable_form_version(db, form: Form) -> FormVersion | None:
         db,
         form,
         actor_id=g.admin_user.id,
+        version_id=_requested_editor_version_id(),
     )
 
 
@@ -538,13 +570,14 @@ def form_version_clone(form_id: int, version_id: int):
                 bump=str(request.form.get("bump") or "minor"),
             )
             draft_label = draft.version_label
+            draft_id = draft.id
             db.commit()
         except FormVersionError as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.form_versions", form_id=form.id))
     flash(f"Utworzono wersję roboczą {draft_label}.", "success")
-    return redirect(url_for("admin.form_edit", form_id=form_id))
+    return redirect(url_for("admin.form_edit", form_id=form_id, form_version_id=draft_id))
 
 
 @bp.post("/forms/<int:form_id>/versions/<int:version_id>/publish")
@@ -774,11 +807,15 @@ def forms_upload():
         db.add(form)
         db.flush()
         sync_form_fields(db, form, form_definition)
-        current_app.extensions["services"].form_version_service.create_initial_version(
-            db,
-            form,
-            actor_id=g.admin_user.id,
-            status=FORM_VERSION_DRAFT,
+        initial_version = (
+            current_app.extensions["services"]
+            .form_version_service
+            .create_initial_version(
+                db,
+                form,
+                actor_id=g.admin_user.id,
+                status=FORM_VERSION_DRAFT,
+            )
         )
         db.add(FormPermission(user_id=g.admin_user.id, form_id=form.id, can_manage=True))
         if g.admin_user.role != ROLE_SUPER_ADMIN:
@@ -793,7 +830,13 @@ def forms_upload():
         db.commit()
         form_id = form.id
     flash("Formularz został wgrany, a pola zostały wykryte.", "success")
-    return redirect(url_for("admin.form_fields", form_id=form_id))
+    return redirect(
+        url_for(
+            "admin.form_fields",
+            form_id=form_id,
+            form_version_id=initial_version.id,
+        )
+    )
 
 
 def _render_forms_upload_error(active_tab: str):
@@ -815,13 +858,21 @@ def form_edit(form_id: int):
         required_permission = "can_edit_workflow" if active_tab in {"workflow", "instructions"} else "can_edit_form"
         form = ensure_form_access(db, form_id, permission=required_permission)
         version_service = current_app.extensions["services"].form_version_service
-        editable_version = version_service.editable_draft(db, form.id)
+        requested_version_id = _requested_editor_version_id()
+        editable_version = version_service.editable_draft(
+            db, form.id, version_id=requested_version_id
+        )
         if version_service.has_versions(db, form.id) and not editable_version:
+            if requested_version_id is not None:
+                abort(409, description="Opublikowane i archiwalne wersje są tylko do odczytu. Najpierw utwórz wersję roboczą.")
             flash("Opublikowana konfiguracja jest niezmienna. Utwórz z niej nową wersję roboczą.", "info")
             return redirect(url_for("admin.form_versions", form_id=form.id))
+        if editable_version:
+            version_service.materialize_editor_mirror(db, form, editable_version)
         current_definition = deepcopy((editable_version.definition_json if editable_version else form.definition_json) or {})
         form.workflow_editor_definition = current_definition
         form.editable_version_id = editable_version.id if editable_version else None
+        form.editable_version_label = editable_version.version_label if editable_version else ""
         form.workflow_editor_fields = (
             (editable_version.definition_json if editable_version else form.definition_json) or {}
         ).get("fields", [])
@@ -1106,7 +1157,12 @@ def form_edit(form_id: int):
                     + ". Istniejący uczestnicy pozostali bez zmian.",
                     "warning",
                 )
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab=active_tab))
+            return redirect(url_for(
+                "admin.form_edit",
+                form_id=form.id,
+                tab=active_tab,
+                form_version_id=editable_version.id if editable_version else None,
+            ))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
         form.definition_json = normalize_admin_form_definition(current_definition)
@@ -1141,7 +1197,13 @@ def declaration_docx_template_upload(form_id: int):
     uploaded = request.files.get("declaration_docx_template")
     if not uploaded or not uploaded.filename:
         flash("Wybierz plik DOCX z szablonem deklaracji.", "error")
-        return redirect(url_for("admin.form_edit", form_id=form_id, tab="declaration"))
+        return redirect(
+            _form_editor_url(
+                form.id,
+                tab="declaration",
+                version_id=editable_version.id if editable_version else None,
+            )
+        )
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         editable_version = _editable_form_version(db, form)
@@ -1160,7 +1222,13 @@ def declaration_docx_template_upload(form_id: int):
             )
         except (DocxTemplateParseError, ValueError) as exc:
             flash(str(exc), "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="declaration",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         workflow = dict(definition.get("workflow") or {})
         imported_builder = metadata.pop("builder_document", None)
         workflow["declaration_docx_template"] = metadata
@@ -1176,7 +1244,13 @@ def declaration_docx_template_upload(form_id: int):
             flash("DOCX zapisano, ale wymaga poprawy nieznanych zmiennych: " + ", ".join(metadata["unknown_variables"]), "warning")
         else:
             flash("Szablon DOCX zapisano i ustawiono jako aktywne źródło deklaracji.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        return redirect(
+        _form_editor_url(
+            form.id,
+            tab="declaration",
+            version_id=editable_version.id if editable_version else None,
+        )
+    )
 
 
 @bp.post("/forms/<int:form_id>/declaration-template/builder")
@@ -1273,11 +1347,23 @@ def declaration_docx_import_builder(form_id: int):
             parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
         except ValueError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="declaration",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         document = normalize_document_builder_document(parsed.builder_document or {}, "declaration")
         if not document.get("blocks"):
             flash("Tego szablonu DOCX nie można przekonwertować do kreatora.", "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="declaration",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         errors = validate_document_builder_document(
             document,
             active_fields_for_form(db, form.id),
@@ -1295,7 +1381,13 @@ def declaration_docx_import_builder(form_id: int):
         _sync_editable_form_version(db, form)
         db.commit()
         flash("Szablon Word zaimportowano do wersji roboczej kreatora deklaracji.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="declaration",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.get("/forms/<int:form_id>/declaration-template/docx")
@@ -1328,7 +1420,13 @@ def declaration_docx_template_delete(form_id: int):
         _sync_editable_form_version(db, form)
         db.commit()
         flash("Szablon DOCX deklaracji został usunięty.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="declaration"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="declaration",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.get("/forms/<int:form_id>/declaration-template/docx/sample")
@@ -1381,10 +1479,20 @@ def agreement_docx_template_upload(form_id: int):
     uploaded = request.files.get("agreement_docx_template")
     if not uploaded or not uploaded.filename:
         flash("Wybierz plik DOCX z szablonem umowy.", "error")
-        return redirect(url_for("admin.form_edit", form_id=form_id, tab="agreement"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
-        editable_version = _editable_form_version(db, form)
+        editable_version = _editable_form_version(
+    db,
+    form,
+    materialize=True,
+)
         fields = active_fields_for_form(db, form.id)
         try:
             metadata = current_app.extensions["services"].agreement_docx_template_service.upload(
@@ -1397,7 +1505,13 @@ def agreement_docx_template_upload(form_id: int):
             )
         except (DocxTemplateParseError, ValueError) as exc:
             flash(str(exc), "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
         imported_builder = metadata.pop("builder_document", None)
@@ -1414,7 +1528,13 @@ def agreement_docx_template_upload(form_id: int):
             flash("DOCX zapisano, ale wymaga poprawy nieznanych zmiennych: " + ", ".join(metadata["unknown_variables"]), "warning")
         else:
             flash("Szablon DOCX zapisano i ustawiono jako aktywne źródło umowy.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.post("/forms/<int:form_id>/agreement-template/builder")
@@ -1492,11 +1612,23 @@ def agreement_docx_import_builder(form_id: int):
             parsed = current_app.extensions["services"].agreement_docx_template_service.parse_stored_template(metadata)
         except ValueError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         document = parsed.builder_document
         if not document:
             flash("Tego szablonu DOCX nie można przekonwertować do kreatora.", "error")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+            return redirect(
+                _form_editor_url(
+                    form.id,
+                    tab="agreement",
+                    version_id=editable_version.id if editable_version else None,
+                )
+            )
         errors = validate_agreement_builder_document(document, active_fields_for_form(db, form.id))
         if errors:
             flash("Import DOCX wymaga poprawy: " + " ".join(error.message for error in errors), "warning")
@@ -1513,7 +1645,13 @@ def agreement_docx_import_builder(form_id: int):
         _sync_editable_form_version(db, form)
         db.commit()
         flash("Szablon Word zaimportowano do wersji roboczej kreatora.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.get("/forms/<int:form_id>/agreement-template/docx")
@@ -1548,7 +1686,13 @@ def agreement_docx_template_delete(form_id: int):
         _sync_editable_form_version(db, form)
         db.commit()
         flash("Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML.", "success")
-        return redirect(url_for("admin.form_edit", form_id=form.id, tab="agreement"))
+        return redirect(
+    _form_editor_url(
+        form.id,
+        tab="agreement",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.get("/forms/<int:form_id>/agreement-template/docx/sample")
@@ -2233,7 +2377,13 @@ def form_repair_agreement_confirmation(form_id: int):
         workflow, changed = repair_agreement_confirmation_path(definition.get("workflow") or {})
         if not changed:
             flash("Ścieżka podpisu urzędu jest już poprawna albo potwierdzenie podpisu nie jest wymagane.", "info")
-            return redirect(url_for("admin.form_edit", form_id=form.id, tab="workflow"))
+            return redirect(
+    _form_editor_url(
+        form.id,
+        tab="workflow",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
         definition["workflow"] = WorkflowConfigNormalizer().normalize(workflow)
         form.definition_json = definition
         form.user_instruction_config = reconcile_instruction_config(
@@ -2243,7 +2393,13 @@ def form_repair_agreement_confirmation(form_id: int):
         _sync_editable_form_version(db, form)
         db.commit()
     flash("Naprawiono ścieżkę podpisu urzędu. Dodano lub uaktywniono wymagany etap.", "success")
-    return redirect(url_for("admin.form_edit", form_id=form_id, tab="workflow"))
+    return redirect(
+    _form_editor_url(
+        form.id,
+        tab="workflow",
+        version_id=editable_version.id if editable_version else None,
+    )
+)
 
 
 @bp.post("/forms/<int:form_id>/share-link/regenerate")
@@ -2330,7 +2486,13 @@ def form_training_selection_toggle(form_id: int):
         else "Nabór na szkolenia został zamknięty. Istniejące wybory pozostają bez zmian.",
         "success",
     )
-    return redirect(url_for("admin.form_edit", form_id=form_id, tab="trainings"))
+    return redirect(
+    _form_editor_url(
+        form_id,
+        tab="trainings",
+    )
+)
+    
 
 
 @bp.route("/forms/<int:form_id>/fields", methods=["GET", "POST"])
@@ -2338,10 +2500,16 @@ def form_training_selection_toggle(form_id: int):
 def form_fields(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
+        editable_version = _editable_form_version(db, form, materialize=True)
+        editor_version_id = editable_version.id if editable_version else None
+        fields_url = lambda: url_for(
+            "admin.form_fields", form_id=form.id, form_version_id=editor_version_id
+        )
+        form.editable_version_id = editable_version.id if editable_version else None
+        form.editable_version_label = editable_version.version_label if editable_version else ""
         fields = active_fields_for_form(db, form.id)
         availability_definition, workflow_steps = _field_workflow_context(form)
         if request.method == "POST":
-            _editable_form_version(db, form)
             action = request.form.get("action", "save")
             if action == "builder_save":
                 try:
@@ -2356,23 +2524,23 @@ def form_fields(form_id: int):
                 except (json.JSONDecodeError, FormBuilderError) as exc:
                     db.rollback()
                     flash(str(exc) or "Nie udało się odczytać danych edytora.", "error")
-                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                    return redirect(fields_url())
                 _sync_editable_form_version(db, form)
                 db.commit()
                 flash("Układ i pola formularza zostały zapisane.", "success")
-                return redirect(url_for("admin.form_fields", form_id=form.id))
+                return redirect(fields_url())
             if action == "add":
                 field_name = normalize_slug(request.form.get("new_name", "")).replace("-", "_")
                 if not field_name:
                     flash("Podaj nazwę pola.", "error")
-                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                    return redirect(fields_url())
                 try:
                     new_availability = _availability_from_form(
                         request.form, "new_", availability_definition, workflow_steps
                     )
                 except ValueError as exc:
                     flash(str(exc), "error")
-                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                    return redirect(fields_url())
                 existing = db.execute(
                     select(FormField).where(FormField.form_id == form.id, FormField.name == field_name)
                 ).scalar_one_or_none()
@@ -2409,7 +2577,7 @@ def form_fields(form_id: int):
                 _sync_editable_form_version(db, form)
                 db.commit()
                 flash("Pole formularza zostało dodane.", "success")
-                return redirect(url_for("admin.form_fields", form_id=form.id))
+                return redirect(fields_url())
             if action.startswith("delete:"):
                 field_id = parse_optional_int(action.split(":", 1)[1])
                 field = db.get(FormField, field_id) if field_id else None
@@ -2419,7 +2587,7 @@ def form_fields(form_id: int):
                 _sync_editable_form_version(db, form)
                 db.commit()
                 flash("Pole zostało ukryte. Dane historyczne pozostają w zgłoszeniach.", "success")
-                return redirect(url_for("admin.form_fields", form_id=form.id))
+                return redirect(fields_url())
 
             for field in fields:
                 prefix = f"field_{field.id}_"
@@ -2432,7 +2600,7 @@ def form_fields(form_id: int):
                     )
                 except ValueError as exc:
                     flash(f"{field.label or field.name}: {exc}", "error")
-                    return redirect(url_for("admin.form_fields", form_id=form.id))
+                    return redirect(fields_url())
                 _set_field_availability(field, availability, availability_definition)
                 field.sort_order = parse_int(request.form.get(prefix + "sort_order"), field.sort_order)
                 field.options = parse_field_options(field.type, request.form.get(prefix + "options", ""))
@@ -2448,7 +2616,7 @@ def form_fields(form_id: int):
             _sync_editable_form_version(db, form)
             db.commit()
             flash("Pola formularza zostały zapisane.", "success")
-            return redirect(url_for("admin.form_fields", form_id=form.id))
+            return redirect(fields_url())
         definition_fields_by_name = {
             str(item.get("name")): item
             for item in (form.definition_json or {}).get("fields", [])
@@ -2472,6 +2640,7 @@ def form_fields(form_id: int):
         return render_template(
             "admin/forms/fields.html",
             form=form,
+            editable_version=editable_version,
             fields=fields,
             builder_fields=serialize_builder_fields(form, fields),
             layout_widths=LAYOUT_WIDTHS,

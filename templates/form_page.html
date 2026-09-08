@@ -27,10 +27,13 @@ endblock %} {% block content %}
     >
       <img class="form-logo" src="{{ form_definition.logo_url }}" alt="" />
     </div>
-    {% endif %}
-    {% if form_definition.project_logo_url %}
+    {% endif %} {% if form_definition.project_logo_url %}
     <div class="form-project-logo-row">
-      <img class="form-project-logo" src="{{ form_definition.project_logo_url }}" alt="Logo projektu" />
+      <img
+        class="form-project-logo"
+        src="{{ form_definition.project_logo_url }}"
+        alt="Logo projektu"
+      />
     </div>
     {% endif %} {% if form_definition.description %}
     <p class="form-description">{{ form_definition.description }}</p>
@@ -38,11 +41,14 @@ endblock %} {% block content %}
   </div>
 
   {% if document_mode %}
-  <p role="status" data-composite-document data-substate="collect_data">{{ document_status.message }}</p>
-  {% if document_instruction.description %}<div>{{ document_instruction.description|trusted_html }}</div>{% endif %}
-  {% if document_instruction.next_action %}<div>{{ document_instruction.next_action|trusted_html }}</div>{% endif %}
-  {% endif %}
-  {% if correction_mode %}
+  <p role="status" data-composite-document data-substate="collect_data">
+    {{ document_status.message }}
+  </p>
+  {% if document_instruction.description %}
+  <div>{{ document_instruction.description|trusted_html }}</div>
+  {% endif %} {% if document_instruction.next_action %}
+  <div>{{ document_instruction.next_action|trusted_html }}</div>
+  {% endif %} {% endif %} {% if correction_mode %}
   <div class="alert alert-warning" role="status">
     <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
     {% if correction_message %}
@@ -72,7 +78,11 @@ endblock %} {% block content %}
     <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}" />
     {% if form_version_token %}
     <input type="hidden" name="form_version_id" value="{{ form_version_id }}" />
-    <input type="hidden" name="form_version_token" value="{{ form_version_token }}" />
+    <input
+      type="hidden"
+      name="form_version_token"
+      value="{{ form_version_token }}"
+    />
     {% endif %} {% if correction_mode %}<input
       type="hidden"
       name="token"
@@ -85,10 +95,14 @@ endblock %} {% block content %}
     {% endif %} {% for field in form_definition.fields %} {% if field.type ==
     "section" %}
     <section class="form-section">
-      {% set section_label = field.label|striptags|trim|lower|replace(' / ', '/') %}
-      {% if section_label in ['dane kandydata', 'dane kandydatki', 'dane kandydata/kandydatki'] %}
+      {% set section_label = field.label|striptags|trim|lower|replace(' / ',
+      '/') %} {% if section_label in ['dane kandydata', 'dane kandydatki', 'dane
+      kandydata/kandydatki'] %}
       <h3>Twoje dane</h3>
-      {% elif section_label in ['status kandydata', 'status kandydatki', 'status kandydata/kandydatki', 'status kandydata i dane dodatkowe', 'status kandydatki i dane dodatkowe', 'status kandydata/kandydatki i dane dodatkowe'] %}
+      {% elif section_label in ['status kandydata', 'status kandydatki', 'status
+      kandydata/kandydatki', 'status kandydata i dane dodatkowe', 'status
+      kandydatki i dane dodatkowe', 'status kandydata/kandydatki i dane
+      dodatkowe'] %}
       <h3>Twój status</h3>
       {% else %}
       <h3>{{ field.label|trusted_html }}</h3>
@@ -98,19 +112,47 @@ endblock %} {% block content %}
     {% elif field.type == "training_selection" and document_mode %}
     <fieldset class="form-section" data-document-trainings>
       <legend>{{ field.label }}</legend>
-      {% if field.readonly %}<p role="status">Wybór szkoleń jest zamknięty.</p>{% endif %}
-      {% set selected_ids = (values.get(field.name, '') or '').split(',') %}
-      {% for training in field.catalog %}
+      {% if field.readonly %}
+      <p role="status">Wybór szkoleń jest zamknięty.</p>
+      {% endif %} {% set selected_ids = (values.get(field.name, '') or
+      '').split(',') %} {% for training in field.catalog %}
       <label class="checkbox-item">
-        <input type="checkbox" name="{{ field.name }}" value="{{ training.id }}" {% if training.id in selected_ids %}checked{% endif %} {% if field.readonly or training.is_locked or not training.active %}disabled{% endif %}>
-        <span>{{ training.name }} — {{ training.price_formatted }}{% for date in training.dates %} · {{ date.label }}{% endfor %}</span>
+        <input
+          type="checkbox"
+          name="{{ field.name }}"
+          value="{{ training.id }}"
+          {%
+          if
+          training.id
+          in
+          selected_ids
+          %}checked{%
+          endif
+          %}
+          {%
+          if
+          field.readonly
+          or
+          training.is_locked
+          or
+          not
+          training.active
+          %}disabled{%
+          endif
+          %}
+        />
+        <span
+          >{{ training.name }} — {{ training.price_formatted }}{% for date in
+          training.dates %} · {{ date.label }}{% endfor %}</span
+        >
         {% if training.is_locked %}<span>Wybór zablokowany</span>{% endif %}
       </label>
-      {% if training.id in selected_ids and (field.readonly or training.is_locked or not training.active) %}
-      <input type="hidden" name="{{ field.name }}" value="{{ training.id }}">
+      {% if training.id in selected_ids and (field.readonly or
+      training.is_locked or not training.active) %}
+      <input type="hidden" name="{{ field.name }}" value="{{ training.id }}" />
+      {% endif %} {% endfor %} {% if errors.get(field.name) %}
+      <p class="error-text" role="alert">{{ errors[field.name] }}</p>
       {% endif %}
-      {% endfor %}
-      {% if errors.get(field.name) %}<p class="error-text" role="alert">{{ errors[field.name] }}</p>{% endif %}
     </fieldset>
     {% elif field.type == "static_text" %}
     <div class="static-text">{{ field.label|trusted_html }}</div>
@@ -133,13 +175,23 @@ endblock %} {% block content %}
       endif
       %}
     >
-      {% if field.type != "checkbox" %}
-      <label for="{{ field.name }}">
-        {{ field.label|trusted_html }} {% if field.required %}
-        <span class="required required-marker" aria-hidden="true">*</span>
+     {% if field.type != "checkbox" %}
+            <label for="{{ field.name }}">
+                {{ field.label|trusted_html }}
+                {% if field.required %}
+                    <span class="required required-marker" aria-hidden="true">*</span>
+                {% endif %}
+            </label>
+        {% elif (field.options or [])|length > 1 %}
+            <div class="field-group-label" id="{{ field.name }}-group-label">
+                {{ field.label|trusted_html }}
+                {% if field.required %}
+                    <span class="required required-marker" aria-hidden="true">*</span>
+                {% endif %}
+            </div>
         {% endif %}
-      </label>
-      {% endif %} {% if field.type == "repeatable_group" %}
+
+        {% if field.type == "repeatable_group" %}
       <div
         class="repeatable-group"
         data-repeatable-group="{{ field.name }}"
@@ -172,36 +224,30 @@ endblock %} {% block content %}
 
       {% elif field.type == "file" %}
 
-<div class="attachment-dropzone" data-attachment-dropzone>
-    <input
-        class="attachment-input {% if has_error %}has-error{% endif %}"
-        type="file"
-        id="{{ field.name }}"
-        name="{{ field.name }}"
-        accept="{% for extension in field.allowed_extensions %}.{{ extension|lower|replace('.', '') }}{% if not loop.last %},{% endif %}{% endfor %}"
-        {% if field.max_files|int > 1 %}multiple{% endif %}
-        {% if field.required and not field.required_if %}required aria-required="true"{% endif %}
-        {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-    >
+      <div class="attachment-dropzone" data-attachment-dropzone>
+        <input
+    class="attachment-input {% if has_error %}has-error{% endif %}"
+    type="file"
+    id="{{ field.name }}"
+    name="{{ field.name }}"
+    accept="{% for extension in field.allowed_extensions %}.{{ extension|lower|replace('.', '') }}{% if not loop.last %},{% endif %}{% endfor %}"
+    {% if field.max_files|int > 1 %}multiple{% endif %}
+    {% if field.required and not field.required_if %}required aria-required="true"{% endif %}
+    {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
+>
 
-    <button
-        type="button"
-        class="btn-secondary"
-        data-attachment-select
-    >
-        Wybierz {{ 'pliki' if field.max_files|int > 1 else 'plik' }}
-    </button>
+        <button type="button" class="btn-secondary" data-attachment-select>
+          Wybierz {{ 'pliki' if field.max_files|int > 1 else 'plik' }}
+        </button>
 
-    <span>lub przeciągnij i upuść tutaj</span>
+        <span>lub przeciągnij i upuść tutaj</span>
 
-    <small>
-        Dozwolone: {{ field.allowed_extensions|join(', ') }}
-        · maks. {{ field.max_size_mb }} MB
-        {% if field.max_files|int > 1 %}
-            · do {{ field.max_files }} plików
-        {% endif %}
-    </small>
-</div>
+        <small>
+          Dozwolone: {{ field.allowed_extensions|join(', ') }} · maks. {{
+          field.max_size_mb }} MB {% if field.max_files|int > 1 %} · do {{
+          field.max_files }} plików {% endif %}
+        </small>
+      </div>
       {% if field.description %}
       <div class="field-description">{{ field.description|trusted_html }}</div>
       {% endif %}
@@ -222,11 +268,13 @@ endblock %} {% block content %}
         data-field-type="{{ field.type }}"
         value="{{ value }}"
         placeholder="{{ field.placeholder }}"
-        {% if field.type in ['tel', 'phone'] or field.name|lower == 'telefon' %}
-            pattern="(?:\+48\s?)?[0-9]{3}\s?[0-9]{3}\s?[0-9]{3}"
-            title="Podaj poprawny numer telefonu."
-            inputmode="tel"
-            {% endif %}
+        {% if field.type in ['tel', 'phone'] or field.name|lower == "telefon" %}
+        pattern="(?:\+48\s?)?[0-9]{3}\s?[0-9]{3}\s?[0-9]{3}"
+        title="Podaj poprawny numer telefonu."
+        inputmode="tel"
+        {%
+        endif
+        %}
         {%
         if
         field.readonly
@@ -286,60 +334,104 @@ endblock %} {% block content %}
       >
 
       {% elif field.type == "select" %}
-<select
-    class="{% if has_error %}has-error{% endif %}"
-    id="{{ field.name }}"
-    name="{{ field.name }}"
-    data-field-name="{{ field.name }}"
-    data-field-type="{{ field.type }}"
-    {% if field.required %}required aria-required="true"{% endif %}
-    {% if field.readonly %}disabled{% endif %}
-    {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
->
-    <option value="">-- wybierz --</option>
+      <select
+        class="{% if has_error %}has-error{% endif %}"
+        id="{{ field.name }}"
+        name="{{ field.name }}"
+        data-field-name="{{ field.name }}"
+        data-field-type="{{ field.type }}"
+        {%
+        if
+        field.required
+        %}required
+        aria-required="true"
+        {%
+        endif
+        %}
+        {%
+        if
+        field.readonly
+        %}disabled{%
+        endif
+        %}
+        {%
+        if
+        has_error
+        %}aria-invalid="true"
+        aria-describedby="{{ field.name }}-error"
+        {%
+        endif
+        %}
+      >
+        <option value="">-- wybierz --</option>
 
-    {% for option in field.options %}
-    <option
-        value="{{ option|option_value }}"
-        {% if value == (option|option_value) %}selected{% endif %}
-    >
-        {{ option|option_label }}
-    </option>
-    {% endfor %}
-</select>
+        {% for option in field.options %}
+        <option
+            value="{{ option|option_value }}"
+            {% if value == (option|option_value) %}selected{% endif %}
+        >
+            {{ option|option_label }}
+        </option>
+        {% endfor %}
+      </select>
 
-{% elif field.type == "radio" %}
-{% if field.description %}
-<div class="field-description">
-    {{ field.description|trusted_html }}
-</div>
-{% endif %}
+      {% elif field.type == "radio" %} {% if field.description %}
+      <div class="field-description">{{ field.description|trusted_html }}</div>
+      {% endif %}
 
-<div class="option-list">
-    {% for option in field.options %}
-    <label class="option-item">
-        <input
+      <div class="option-list">
+        {% for option in field.options %}
+        <label class="option-item">
+          <input
             class="{% if has_error %}has-error{% endif %}"
             type="radio"
             name="{{ field.name }}"
             data-field-name="{{ field.name }}"
             data-field-type="{{ field.type }}"
             value="{{ option|option_value }}"
-            {% if value == (option|option_value) %}checked{% endif %}
-            {% if field.required %}required aria-required="true"{% endif %}
-            {% if field.readonly %}disabled{% endif %}
-            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-        >
-        <span>{{ option|option_label|trusted_html }}</span>
-    </label>
-    {% endfor %}
-</div>
+            {% if value == (option|option_value) %}
+            checked{%
+            endif
+            %}
+            {%
+            if
+            field.required
+            %}required
+            aria-required="true"
+            {%
+            endif
+            %}
+            {%
+            if
+            field.readonly
+            %}disabled{%
+            endif
+            %}
+            {%
+            if
+            has_error
+            %}aria-invalid="true"
+            aria-describedby="{{ field.name }}-error"
+            {%
+            endif
+            %}
+          />
+          <span>{{ option|option_label|trusted_html }}</span>
+        </label>
+        {% endfor %}
+      </div>
 
-{% elif field.type == "checkbox" %}
-<div class="option-list">
-    {% for option in field.options %}
-    <label class="checkbox-item">
-        <input
+      {% elif field.type == "checkbox" %}
+      <div
+    class="option-list"
+    {% if (field.options or [])|length > 1 %}
+        role="group"
+        aria-labelledby="{{ field.name }}-group-label"
+    {% endif %}
+>
+        {% for option in field.options %}
+        <label class="checkbox-item">
+          <input
             class="{% if has_error %}has-error{% endif %}"
             type="checkbox"
             id="{{ field.name }}_{{ loop.index }}"
@@ -347,11 +439,31 @@ endblock %} {% block content %}
             data-field-name="{{ field.name }}"
             data-field-type="{{ field.type }}"
             value="{{ option|option_value }}"
-            {% if value == (option|option_value) %}checked{% endif %}
-            {% if field.required %}required aria-required="true"{% endif %}
-            {% if field.readonly %}disabled{% endif %}
-            {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
-        >
+            {% if value == (option|option_value) %}
+            checked{%
+            endif
+            %}
+            {%
+            if
+            field.required
+            %}required
+            aria-required="true"
+            {% endif %}
+            {%
+            if
+            field.readonly
+            %}disabled{%
+            endif
+            %}
+            {%
+            if
+            has_error
+            %}aria-invalid="true"
+            aria-describedby="{{ field.name }}-error"
+            {%
+            endif
+            %}
+          />
           <span>
             {% if form_definition.regulation_url and "regulamin" in
             (field.name|string|lower) %} Akceptuję
@@ -380,8 +492,15 @@ endblock %} {% block content %}
     {% endif %} {% endfor %}
 
     <div class="submit-row">
-      {% if document_mode %}<button type="submit" name="document_action" value="save" class="btn-secondary">Zapisz dane</button>{% endif %}
-      {% if draft_enabled and not correction_mode and not draft_mode %}
+      {% if document_mode %}<button
+        type="submit"
+        name="document_action"
+        value="save"
+        class="btn-secondary"
+      >
+        Zapisz dane</button
+      >{% endif %} {% if draft_enabled and not correction_mode and not
+      draft_mode %}
       <button
         type="submit"
         class="btn-secondary"
@@ -397,7 +516,8 @@ endblock %} {% block content %}
         >Wersja robocza jest aktywna.</span
       >{% endif %}
       <button type="submit" class="btn-primary">
-        {{ form_definition.submit_label if document_mode else "Wyślij poprawione zgłoszenie" if correction_mode else "Wyślij" }}
+        {{ form_definition.submit_label if document_mode else "Wyślij poprawione
+        zgłoszenie" if correction_mode else "Wyślij" }}
       </button>
     </div>
     {% if draft_mode %}

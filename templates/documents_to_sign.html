@@ -227,8 +227,23 @@
                                 {% set value = result.additional_values.get(field.name, field.default) %}
                                 {% set has_error = result.additional_errors.get(field.name) %}
                                 <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
-                                    {% if field.type != "checkbox" %}
-                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</label>
+                                   {% if field.type != "checkbox" %}
+                                        <label for="additional_{{ field.name }}">
+                                            {{ field.label|trusted_html }}
+                                            {% if field.required %}
+                                                <span class="required required-marker" aria-hidden="true">*</span>
+                                            {% endif %}
+                                        </label>
+                                    {% elif (field.options or [])|length > 1 %}
+                                        <div
+                                            class="field-group-label"
+                                            id="additional_{{ field.name }}-group-label"
+                                        >
+                                            {{ field.label|trusted_html }}
+                                            {% if field.required %}
+                                                <span class="required required-marker" aria-hidden="true">*</span>
+                                            {% endif %}
+                                        </div>
                                     {% endif %}
                                     {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
                                         <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required aria-required="true"{% endif %}>
@@ -248,7 +263,14 @@
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
-                                        <div class="option-list">
+                                        {% elif field.type == "checkbox" %}
+                                        <div
+                                            class="option-list"
+                                            {% if (field.options or [])|length > 1 %}
+                                                role="group"
+                                                aria-labelledby="additional_{{ field.name }}-group-label"
+                                            {% endif %}
+                                        >
                                             {% for option in field.options %}
                                                 <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</span></label>
                                             {% endfor %}

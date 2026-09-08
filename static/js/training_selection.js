@@ -1,4 +1,32 @@
 document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-training-picker], [data-document-trainings]").forEach(scope => {
+        const groupedInputs = [...scope.querySelectorAll('input[type="checkbox"][data-selection-group]')];
+        if (!groupedInputs.length) return;
+
+        groupedInputs.forEach(input => {
+            if (!input.dataset.trainingBaseDisabled) {
+                input.dataset.trainingBaseDisabled = input.disabled ? "true" : "false";
+            }
+        });
+
+        const updateSelectionGroups = () => {
+            const selectedGroups = new Set(
+                groupedInputs
+                    .filter(input => input.checked && input.dataset.selectionGroup.trim())
+                    .map(input => input.dataset.selectionGroup.trim().toLocaleLowerCase("pl-PL"))
+            );
+
+            groupedInputs.forEach(input => {
+                const group = input.dataset.selectionGroup.trim().toLocaleLowerCase("pl-PL");
+                const blockedByGroup = Boolean(group) && !input.checked && selectedGroups.has(group);
+                input.disabled = input.dataset.trainingBaseDisabled === "true" || blockedByGroup;
+            });
+        };
+
+        groupedInputs.forEach(input => input.addEventListener("change", updateSelectionGroups));
+        updateSelectionGroups();
+    });
+
     document.querySelectorAll("[data-training-disclosure]").forEach(disclosure => {
         const toggle = disclosure.querySelector("[data-training-disclosure-toggle]");
         const panel = disclosure.querySelector("[data-training-disclosure-panel]");

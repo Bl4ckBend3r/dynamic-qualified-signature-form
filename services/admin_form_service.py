@@ -504,6 +504,9 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
 
 def parse_training_catalog(form_data) -> list[dict]:
     catalog = []
+    selection_groups = form_data.getlist("training_item_selection_group")
+    selection_group_choices = form_data.getlist("training_item_selection_group_choice")
+    new_selection_groups = form_data.getlist("training_item_selection_group_new")
     item_ids = form_data.getlist("training_item_id")
     names = form_data.getlist("training_item_name")
     prices = form_data.getlist("training_item_price")
@@ -528,9 +531,27 @@ def parse_training_catalog(form_data) -> list[dict]:
         item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
         training_id = item_id or f"trn_{uuid4().hex}"
         capacity = parse_required_capacity(capacities[index] if index < len(capacities) else "")
+        legacy_selection_group = str(
+            selection_groups[index] if index < len(selection_groups) else ""
+        ).strip()
+        if index < len(selection_group_choices):
+            selection_group_choice = str(selection_group_choices[index] or "").strip()
+            if selection_group_choice == "__new__":
+                selection_group = str(
+                    new_selection_groups[index]
+                    if index < len(new_selection_groups)
+                    else ""
+                ).strip()
+                if not selection_group:
+                    raise ValueError("Podaj nazwę nowej grupy powiązanych szkoleń.")
+            else:
+                selection_group = selection_group_choice
+        else:
+            selection_group = legacy_selection_group
         item = {
             "id": training_id,
             "name": clean_name,
+            "selection_group": selection_group,
             "price": decimal_price_to_storage(
                 prices[index] if index < len(prices) else ""
             ),

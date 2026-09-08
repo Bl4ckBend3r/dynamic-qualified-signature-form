@@ -110,11 +110,13 @@ def training_management(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, permission="can_view_submissions")
         trainings = _training_service().list_trainings(db, form)
+        training_field = TrainingCatalogService.get_training_field(form)
         return render_template(
             "admin/trainings/index.html",
             form=form,
             trainings=trainings,
-            training_field=TrainingCatalogService.get_training_field(form),
+            training_field=training_field,
+            selection_groups=TrainingCatalogService.selection_groups(training_field),
             can_edit_catalog=has_permission(db, "can_edit_form", form=form),
             open_training_id=str(request.args.get("open") or "").strip(),
             open_create=request.args.get("create") == "1",

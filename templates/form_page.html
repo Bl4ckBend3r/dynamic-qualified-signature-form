@@ -1,5 +1,7 @@
 {% extends "base.html" %} {% block title %}{{ form_definition.title }}{%
-endblock %} {% block content %}
+endblock %}
+{% block extra_js %}<script src="{{ url_for('static', filename='js/training_selection.js') }}" defer></script>{% endblock %}
+{% block content %}
 
 <div class="back-link">
   {% if document_mode %}
@@ -121,6 +123,8 @@ endblock %} {% block content %}
           type="checkbox"
           name="{{ field.name }}"
           value="{{ training.id }}"
+          data-selection-group="{{ training.selection_group or '' }}"
+          data-training-base-disabled="{{ 'true' if field.readonly or training.is_locked or not training.active else 'false' }}"
           {%
           if
           training.id

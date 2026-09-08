@@ -301,6 +301,75 @@ def test_training_catalog_can_be_created_without_changing_form_version(admin_app
         assert saved.training_name_snapshot == "Nowe szkolenie"
 
 
+def test_training_catalog_inline_editor_saves_existing_and_new_selection_groups(admin_app, admin_client):
+    user_id = create_user(admin_app)
+    definition = _training_management_definition()
+    catalog = definition["documents"][0]["fields"][0]["catalog"]
+    catalog[0]["selection_group"] = "Pierwsza pomoc"
+    form_id = create_form(
+        admin_app,
+        slug="training_selection_groups",
+        user_id=user_id,
+        definition_json=definition,
+    )
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    existing_group_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(
+            csrf_token=token,
+            training_item_id="",
+            training_item_name="Pierwsza pomoc — drugi termin",
+            training_item_selection_group_choice="Pierwsza pomoc",
+        ),
+    )
+    new_group_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(
+            csrf_token=token,
+            training_item_id="",
+            training_item_name="Excel — drugi termin",
+            training_item_selection_group_choice="__new__",
+            training_item_selection_group_new="Excel — alternatywne terminy",
+        ),
+    )
+    missing_name_response = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(
+            csrf_token=token,
+            training_item_id="",
+            training_item_name="Niepoprawne szkolenie",
+            training_item_selection_group_choice="__new__",
+            training_item_selection_group_new="",
+        ),
+        follow_redirects=True,
+    )
+
+    assert existing_group_response.status_code == 302
+    assert new_group_response.status_code == 302
+    assert missing_name_response.status_code == 200
+    assert "Podaj nazwę nowej grupy powiązanych szkoleń." in missing_name_response.get_data(as_text=True)
+
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        form = db.get(Form, form_id)
+        stored_catalog = form.definition_json["documents"][0]["fields"][0]["catalog"]
+        groups_by_name = {
+            item["name"]: item.get("selection_group", "")
+            for item in stored_catalog
+        }
+        assert groups_by_name["Pierwsza pomoc — drugi termin"] == "Pierwsza pomoc"
+        assert groups_by_name["Excel — drugi termin"] == "Excel — alternatywne terminy"
+        assert "Niepoprawne szkolenie" not in groups_by_name
+
+    page_html = admin_client.get(
+        f"/admin/forms/{form_id}/training-management"
+    ).get_data(as_text=True)
+    assert '<option value="Pierwsza pomoc" selected>' in page_html
+    assert '<option value="Excel — alternatywne terminy" selected>' in page_html
+
+
 def test_training_catalog_can_be_updated_inline_with_stable_id(admin_app, admin_client):
     user_id = create_user(admin_app)
     form_id = create_form(admin_app, slug="training_inline_edit", user_id=user_id, definition_json=_training_management_definition())

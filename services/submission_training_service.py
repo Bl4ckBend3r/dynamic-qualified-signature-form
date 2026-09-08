@@ -382,6 +382,26 @@ class SubmissionTrainingService:
         ]
         if unavailable:
             raise TrainingSelectionError(f"Brak wolnych miejsc dla szkolenia: {unavailable[0]}.")
+        group_validation_items = []
+        protected_groups: set[str] = set()
+        for key in protected:
+            training = catalog.get(key)
+            group = str((training or {}).get("selection_group") or "").strip()
+            normalized_group = group.casefold()
+            if training and normalized_group not in protected_groups:
+                group_validation_items.append(training)
+                if normalized_group:
+                    protected_groups.add(normalized_group)
+        group_validation_items.extend(
+            catalog[key]
+            for key in selected - protected
+            if key in catalog
+        )
+        selection_group_error = TrainingCatalogService.selection_group_error(
+            group_validation_items
+        )
+        if selection_group_error:
+            raise TrainingSelectionError(selection_group_error)
         total = sum(
             (
                 parse_decimal_price(

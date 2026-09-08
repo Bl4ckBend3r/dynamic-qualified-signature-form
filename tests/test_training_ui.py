@@ -17,6 +17,7 @@ def test_declaration_template_contains_no_training_picker_ui():
 
 def test_public_training_picker_uses_full_training_cards():
     template = Path("templates/training_selection.html").read_text(encoding="utf-8") + Path("templates/partials/training_picker.html").read_text(encoding="utf-8")
+    script = Path("static/js/training_selection.js").read_text(encoding="utf-8")
 
     assert "training-card-list" in template
     assert "training-card__price" in template
@@ -31,6 +32,11 @@ def test_public_training_picker_uses_full_training_cards():
     assert "Zapisz wybór szkoleń" in template
     assert "training_selection.css" in template
     assert "training_selection.js" in template
+    assert "data-selection-group" in template
+    assert "data-training-base-disabled" in template
+    assert "updateSelectionGroups" in script
+    assert 'trainingBaseDisabled === "true" || blockedByGroup' in script
+    assert 'data-selection-group="{{ training.selection_group or \'\' }}"' in template
 
 
 def test_public_agreement_cards_render_actions_from_per_training_state():
@@ -236,6 +242,20 @@ def test_admin_training_list_is_an_accessible_inline_editor():
     assert "data-remove-inline-training-date" in template
     assert "onclick=" not in template
     assert 'closest("[data-training-toggle]")' in template
+    assert 'name="training_item_selection_group_choice"' in template
+    assert 'name="training_item_selection_group_new"' in template
+    assert "Brak powiązania" in template
+    assert "+ Dodaj nową grupę" in template
+    assert "data-selection-group-choice" in template
+    assert "newInput.required = creatingGroup" in template
+
+
+def test_document_training_picker_uses_the_same_group_locking_script():
+    template = Path("templates/form_page.html").read_text(encoding="utf-8")
+
+    assert "data-selection-group" in template
+    assert "data-training-base-disabled" in template
+    assert "js/training_selection.js" in template
 
 
 def test_admin_training_detail_has_operational_cards_and_one_initial_survey_question():

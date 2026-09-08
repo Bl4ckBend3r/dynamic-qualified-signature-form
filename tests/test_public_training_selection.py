@@ -100,6 +100,29 @@ def test_current_catalog_and_versioned_limit_checked_on_post(picker_env):
     assert env.row()["selected_trainings"] == before
 
 
+def test_forged_post_with_two_trainings_from_one_selection_group_is_rejected(picker_env):
+    env = picker_env
+    with env.repo.session_factory() as db:
+        form = db.get(Form, env.form_id)
+        definition = deepcopy(form.definition_json)
+        catalog = definition["documents"][0]["fields"][1]["catalog"]
+        for training in catalog:
+            training["selection_group"] = "Pierwsza pomoc"
+        form.definition_json = definition
+        db.commit()
+
+    before = env.row()["selected_trainings"]
+    response = env.post(["course-a", "course-b"])
+
+    assert response.status_code == 400
+    assert "Możesz wybrać tylko jeden termin szkolenia „Pierwsza pomoc”." in response.text
+    assert env.row()["selected_trainings"] == before
+
+    page = env.client.get(env.status_url)
+    doc = html.fromstring(page.text)
+    assert len(doc.xpath('//input[@data-selection-group="Pierwsza pomoc"]')) == 2
+
+
 @pytest.mark.parametrize("status,locked", [("locked", True), ("agreement_signed_by_office", False)])
 def test_locked_training_and_signed_history_survive_other_changes(picker_env, status, locked):
     env = picker_env

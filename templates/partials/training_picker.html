@@ -152,6 +152,8 @@
                                 name="{{ field.get('name') or 'selected_trainings' }}"
                                 value="{{ training.id }}"
                                 data-training-price="{{ training.price or 0 }}"
+                                data-selection-group="{{ training.selection_group or '' }}"
+                                data-training-base-disabled="{{ 'true' if input_disabled else 'false' }}"
                                 data-training-locked="{{ 'true' if is_locked else 'false' }}"
                                 data-training-default-status="{{ training.participant_status_label }}"
                                 {% if is_selected %}checked{% endif %}

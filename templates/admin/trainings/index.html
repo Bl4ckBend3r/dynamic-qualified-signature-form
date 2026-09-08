@@ -1,6 +1,22 @@
 {% extends "admin/base.html" %}
 {% block title %}Szkolenia — {{ form.name }}{% endblock %}
 {% block content %}
+{% macro selection_group_editor(current_group='') %}
+    <label>
+        <span>Powiązane szkolenia</span>
+        <select name="training_item_selection_group_choice" data-selection-group-choice>
+            <option value="" {% if not current_group %}selected{% endif %}>Brak powiązania</option>
+            {% for group in selection_groups %}
+                <option value="{{ group }}" {% if group|lower == current_group|lower %}selected{% endif %}>{{ group }}</option>
+            {% endfor %}
+            <option value="__new__">+ Dodaj nową grupę</option>
+        </select>
+    </label>
+    <label data-selection-group-new-field hidden>
+        <span>Nazwa nowej grupy</span>
+        <input name="training_item_selection_group_new" data-selection-group-new>
+    </label>
+{% endmacro %}
 <div class="admin-page-title training-page-title">
     <div>
         <p class="admin-eyebrow">Operacje · {{ form.name }}</p>
@@ -23,11 +39,12 @@
         <input type="hidden" name="training_item_id" value="">
         <input type="hidden" name="training_active_present" value="1">
         <div class="training-edit-grid">
-            <label><span>Nazwa szkolenia *</span><input name="training_item_name" required></label>
+            <label><span>Nazwa szkolenia</span><input name="training_item_name" required></label>
             <label><span>Cena / koszt</span><input type="number" name="training_item_price" value="0.00" min="0" step="0.01"></label>
-            <label><span>Waluta *</span><input name="training_item_currency" value="{{ (training_field or {}).get('currency', 'PLN') }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
-            <label><span>Liczba miejsc *</span><input type="number" name="training_item_capacity" min="0" step="1" required></label>
+            <label><span>Waluta</span><input name="training_item_currency" value="{{ (training_field or {}).get('currency', 'PLN') }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
+            <label><span>Liczba miejsc</span><input type="number" name="training_item_capacity" min="0" step="1" required></label>
             <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ trainings|length + 1 }}" min="0" step="1"></label>
+            {{ selection_group_editor() }}
             <label class="training-check"><input type="checkbox" name="training_item_active" value="0" checked><span>Aktywne i dostępne dla nowych wyborów</span></label>
             <label class="training-field-wide"><span>Opis</span><textarea name="training_item_description" rows="4"></textarea></label>
             <label class="training-field-wide"><span>Komentarz administratora</span><textarea name="training_item_admin_comment" rows="3"></textarea></label>
@@ -87,11 +104,12 @@
                     <input type="hidden" name="training_item_id" value="{{ training.id }}">
                     <input type="hidden" name="training_active_present" value="1">
                     <div class="training-edit-grid">
-                        <label><span>Nazwa szkolenia *</span><input name="training_item_name" value="{{ training.name }}" required></label>
-                        <label><span>Cena / koszt *</span><input type="number" name="training_item_price" value="{{ training.price }}" min="0" step="0.01" required></label>
-                        <label><span>Waluta *</span><input name="training_item_currency" value="{{ training.currency or 'PLN' }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
-                        <label><span>Liczba miejsc *</span><input type="number" name="training_item_capacity" value="{{ training.capacity if training.capacity is not none else '' }}" min="0" step="1" required></label>
+                        <label><span>Nazwa szkolenia </span><input name="training_item_name" value="{{ training.name }}" required></label>
+                        <label><span>Cena / koszt</span><input type="number" name="training_item_price" value="{{ training.price }}" min="0" step="0.01" required></label>
+                        <label><span>Waluta </span><input name="training_item_currency" value="{{ training.currency or 'PLN' }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
+                        <label><span>Liczba miejsc </span><input type="number" name="training_item_capacity" value="{{ training.capacity if training.capacity is not none else '' }}" min="0" step="1" required></label>
                         <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ training.sort_order or loop.index }}" min="0" step="1"></label>
+                        {{ selection_group_editor(training.selection_group or '') }}
                         <label class="training-check"><input type="checkbox" name="training_item_active" value="0" {% if training.get('active', true) %}checked{% endif %}><span>Aktywne i dostępne dla nowych wyborów</span></label>
                         <label class="training-field-wide"><span>Opis</span><textarea name="training_item_description" rows="4">{{ training.description or '' }}</textarea></label>
                         <label class="training-field-wide"><span>Komentarz administratora</span><textarea name="training_item_admin_comment" rows="3">{{ training.admin_comment or '' }}</textarea></label>
@@ -110,7 +128,7 @@
                                 <div class="training-date-card__heading"><h4>Termin <span data-inline-date-number>{{ loop.index }}</span></h4><button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button></div>
                                 <input type="hidden" name="training_date_training_index" value="0">
                                 <div class="training-date-grid">
-                                    <label><span>Data rozpoczęcia *</span><input type="date" name="training_date_start_date" value="{{ date.start_date or '' }}" required></label>
+                                    <label><span>Data rozpoczęcia </span><input type="date" name="training_date_start_date" value="{{ date.start_date or '' }}" required></label>
                                     <label><span>Data zakończenia</span><input type="date" name="training_date_end_date" value="{{ date.end_date or '' }}"></label>
                                     <label><span>Godzina rozpoczęcia</span><input type="time" name="training_date_start_time" value="{{ date.start_time or '' }}"></label>
                                     <label><span>Godzina zakończenia</span><input type="time" name="training_date_end_time" value="{{ date.end_time or '' }}"></label>
@@ -146,7 +164,7 @@
         <div class="training-date-card__heading"><h4>Termin <span data-inline-date-number></span></h4><button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button></div>
         <input type="hidden" name="training_date_training_index" value="0">
         <div class="training-date-grid">
-            <label><span>Data rozpoczęcia *</span><input type="date" name="training_date_start_date" required></label>
+            <label><span>Data rozpoczęcia</span><input type="date" name="training_date_start_date" required></label>
             <label><span>Data zakończenia</span><input type="date" name="training_date_end_date"></label>
             <label><span>Godzina rozpoczęcia</span><input type="time" name="training_date_start_time"></label>
             <label><span>Godzina zakończenia</span><input type="time" name="training_date_end_time"></label>
@@ -162,6 +180,24 @@
     const dateTemplate = document.querySelector("[data-inline-training-date-template]");
     const createPanel = document.querySelector("[data-training-create-panel]");
     const createToggle = document.querySelector("[data-training-create-toggle]");
+    const syncSelectionGroupEditor = (choice) => {
+        const form = choice.closest("form");
+        const newField = form?.querySelector("[data-selection-group-new-field]");
+        const newInput = form?.querySelector("[data-selection-group-new]");
+        const creatingGroup = choice.value === "__new__";
+        if (newField) newField.hidden = !creatingGroup;
+        if (newInput) {
+            newInput.required = creatingGroup;
+            if (!creatingGroup) newInput.value = "";
+        }
+    };
+    document.querySelectorAll("[data-selection-group-choice]").forEach((choice) => {
+        syncSelectionGroupEditor(choice);
+        choice.addEventListener("change", () => syncSelectionGroupEditor(choice));
+        choice.closest("form")?.addEventListener("reset", () => {
+            window.setTimeout(() => syncSelectionGroupEditor(choice), 0);
+        });
+    });
     const setExpanded = (row, expanded) => {
         const toggle = row?.querySelector("[data-training-toggle]");
         const panel = row?.querySelector("[data-training-panel]");

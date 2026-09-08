@@ -4,6 +4,7 @@ from werkzeug.datastructures import MultiDict
 
 from services.admin_form_service import parse_training_catalog
 from services.training_catalog_service import TrainingCatalogService
+from services.training_service import normalize_training_catalog, normalize_training_snapshot
 
 
 def training_field(**overrides):
@@ -44,6 +45,125 @@ def training_field(**overrides):
         ],
     }
     return {**field, **overrides}
+
+
+def grouped_training(training_id: str, group: str = "") -> dict:
+    return {
+        "id": training_id,
+        "name": training_id,
+        "selection_group": group,
+        "price": "100.00",
+        "currency": "PLN",
+        "capacity": 10,
+        "active": True,
+        "dates": [],
+    }
+
+
+def training_form_data(**overrides) -> MultiDict:
+    data = {
+        "training_item_id": "training-1",
+        "training_item_name": "Pierwsza pomoc",
+        "training_item_price": "100",
+        "training_item_currency": "PLN",
+        "training_item_capacity": "10",
+        "training_item_sort_order": "1",
+        "training_item_active": "0",
+        "training_active_present": "1",
+    }
+    data.update(overrides)
+    return MultiDict(data)
+
+
+def test_selection_group_rejects_two_trainings_from_the_same_group_case_insensitively():
+    field = training_field(catalog=[
+        grouped_training("first-aid-1", "Pierwsza pomoc"),
+        grouped_training("first-aid-2", "PIERWSZA POMOC"),
+    ])
+
+    selected, error = TrainingCatalogService().select_trainings(
+        field, {"first-aid-1", "first-aid-2"}
+    )
+
+    assert {item["id"] for item in selected} == {"first-aid-1", "first-aid-2"}
+    assert error == "Możesz wybrać tylko jeden termin szkolenia „PIERWSZA POMOC”."
+
+
+def test_selection_group_allows_different_groups_and_ungrouped_trainings():
+    different_groups = training_field(catalog=[
+        grouped_training("first-aid", "Pierwsza pomoc"),
+        grouped_training("excel", "Excel"),
+    ])
+    ungrouped = training_field(catalog=[
+        grouped_training("first-aid-1"),
+        grouped_training("first-aid-2"),
+    ])
+
+    assert TrainingCatalogService().select_trainings(
+        different_groups, {"first-aid", "excel"}
+    )[1] is None
+    assert TrainingCatalogService().select_trainings(
+        ungrouped, {"first-aid-1", "first-aid-2"}
+    )[1] is None
+
+
+def test_training_group_parser_supports_existing_new_and_legacy_values():
+    existing = parse_training_catalog(training_form_data(
+        training_item_selection_group_choice="Pierwsza pomoc"
+    ))[0]
+    created = parse_training_catalog(training_form_data(
+        training_item_selection_group_choice="__new__",
+        training_item_selection_group_new="  Alternatywne terminy  ",
+    ))[0]
+    legacy = parse_training_catalog(training_form_data(
+        training_item_selection_group="Starsza grupa"
+    ))[0]
+
+    assert existing["selection_group"] == "Pierwsza pomoc"
+    assert created["selection_group"] == "Alternatywne terminy"
+    assert legacy["selection_group"] == "Starsza grupa"
+
+
+def test_training_group_parser_rejects_empty_new_group_name():
+    import pytest
+
+    with pytest.raises(ValueError, match="Podaj nazwę nowej grupy powiązanych szkoleń"):
+        parse_training_catalog(training_form_data(
+            training_item_selection_group_choice="__new__",
+            training_item_selection_group_new="  ",
+        ))
+
+
+def test_selection_group_survives_normalization_snapshot_and_catalog_versioning():
+    source = grouped_training("first-aid", "Pierwsza pomoc")
+    normalized = normalize_training_catalog(training_field(catalog=[source]))[0]
+    snapshot = normalize_training_snapshot(source)
+    built_snapshot = TrainingCatalogService.build_snapshot(source)
+    changed = {**source, "selection_group": "Pierwsza pomoc — weekend"}
+
+    definition, _ = TrainingCatalogService().reconcile_definition(
+        definition_with_catalog([source]),
+        definition_with_catalog([changed]),
+        used_training_ids=set(),
+    )
+    versioned = TrainingCatalogService.get_training_field(definition)["catalog"][0]
+
+    assert normalized["selection_group"] == "Pierwsza pomoc"
+    assert snapshot["selection_group"] == "Pierwsza pomoc"
+    assert built_snapshot["selection_group"] == "Pierwsza pomoc"
+    assert versioned["selection_group"] == "Pierwsza pomoc — weekend"
+    assert versioned["version"] == 2
+
+
+def test_selection_groups_are_unique_case_insensitively():
+    field = training_field(catalog=[
+        grouped_training("a", "Pierwsza pomoc"),
+        grouped_training("b", "pierwsza POMOC"),
+        grouped_training("c", "Excel"),
+        grouped_training("d"),
+    ])
+
+    assert TrainingCatalogService.selection_groups(field) == ["Excel", "Pierwsza pomoc"]
 
 
 def test_catalog_reads_definition_json_and_returns_full_admin_data():

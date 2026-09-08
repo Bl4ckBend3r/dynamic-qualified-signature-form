@@ -72,6 +72,9 @@ def normalize_training_catalog(field: Mapping[str, Any] | None, *, active_only: 
             {
                 "id": training_id,
                 "name": name,
+                "selection_group": str(
+                    item.get("selection_group") or ""
+                ).strip(),
                 "price": storage_price,
                 "price_formatted": format_price_pln(storage_price, item.get("currency") or currency),
                 "currency": str(item.get("currency") or currency).strip() or DEFAULT_CURRENCY,
@@ -204,6 +207,9 @@ def normalize_training_snapshot(item: Mapping[str, Any]) -> dict:
     return {
         "id": str(item.get("id") or item.get("training_id") or item.get("value") or name).strip(),
         "name": name,
+        "selection_group": str(
+            item.get("selection_group") or ""
+        ).strip(),
         "price": decimal_price_to_storage(price),
         "price_formatted": format_price_pln(price, currency),
         "currency": currency,

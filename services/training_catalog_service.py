@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from services.training_service import (
     LOW_SEATS_THRESHOLD,
@@ -125,6 +125,10 @@ class TrainingCatalogService:
         if field.get("required") and not selected:
             return [], "Wybierz co najmniej jedno szkolenie."
 
+        selection_group_error = self.selection_group_error(selected)
+        if selection_group_error:
+            return selected, selection_group_error
+
         maximum = self.financial_limit(field)
         total = sum(
             (
@@ -139,6 +143,30 @@ class TrainingCatalogService:
                 f"{format_price_pln(maximum, field.get('currency'))}."
             )
         return selected, None
+
+    @staticmethod
+    def selection_groups(field: Mapping[str, Any] | None) -> list[str]:
+        groups: dict[str, str] = {}
+        for training in (field or {}).get("catalog") or []:
+            if not isinstance(training, Mapping):
+                continue
+            group = str(training.get("selection_group") or "").strip()
+            if group:
+                groups.setdefault(group.casefold(), group)
+        return sorted(groups.values(), key=str.casefold)
+
+    @staticmethod
+    def selection_group_error(trainings: Iterable[Mapping[str, Any]]) -> str | None:
+        selected_groups: set[str] = set()
+        for training in trainings:
+            group = str(training.get("selection_group") or "").strip()
+            if not group:
+                continue
+            normalized_group = group.casefold()
+            if normalized_group in selected_groups:
+                return f"Możesz wybrać tylko jeden termin szkolenia „{group}”."
+            selected_groups.add(normalized_group)
+        return None
 
     def validate_field(self, field: Mapping[str, Any] | None) -> list[str]:
         if not field or not field.get("enabled", True):
@@ -397,6 +425,9 @@ class TrainingCatalogService:
                 or training.get("training_name")
                 or training.get("label")
                 or ""
+            ).strip(),
+            "selection_group": str(
+                training.get("selection_group") or ""
             ).strip(),
             "price": str(
                 training.get("price")

@@ -374,7 +374,11 @@ def test_public_get_requires_published_and_post_stays_on_rendered_version(tmp_pa
     response = client.get("/form/public-version")
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    token = re.search(r'name="form_version_token" value="([^"]+)"', html).group(1)
+    token = re.search(
+        r'name="form_version_token"[^>]*value="([^"]+)"',
+        html,
+        flags=re.DOTALL,
+    ).group(1)
 
     with Session.begin() as db:
         form = db.execute(select(Form).where(Form.slug == "public-version")).scalar_one()

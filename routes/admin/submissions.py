@@ -392,6 +392,7 @@ def submission_detail(form_id: int, submission_pk: int):
             decisions=decision_history.get("decisions") or [],
             can_review_agreement=can_review_agreement,
             form_config=submission_form_config,
+            events=workflow_history.get("events") or [],
         )
         can_view_sensitive_data = services.permission_service.has_permission(
             db, g.admin_user, "can_view_sensitive_data", form=form

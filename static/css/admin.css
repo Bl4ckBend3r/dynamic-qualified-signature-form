@@ -4208,3 +4208,90 @@ html:has(body.agreement-builder-window), body.agreement-builder-window { width: 
 .workflow-document-editor summary { cursor: pointer; }
 .workflow-document-editor textarea { width: 100%; min-width: 0; }
 .workflow-document-editor details label { display: block; margin-top: .5rem; }
+
+/* Submission detail: use the admin tokens and keep operational controls compact. */
+.admin-container:has(.admin-submission-detail) {
+    width: min(1400px, calc(100% - (2 * var(--admin-space-5))));
+}
+.admin-submission-detail { font-size: 1rem; line-height: 1.55; overflow-wrap: anywhere; }
+.admin-submission-detail h2 { font-size: 1.25rem; line-height: 1.35; }
+.admin-submission-detail h3 { font-size: 1.1rem; line-height: 1.4; }
+.admin-submission-detail h4 { font-size: 1rem; margin: 0 0 var(--admin-space-3); }
+.admin-submission-detail small { font-size: .875rem; }
+.admin-submission-title { align-items: flex-start; gap: var(--admin-space-5); }
+.admin-submission-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--admin-space-3); margin-top: var(--admin-space-3); }
+.admin-submission-id { margin: var(--admin-space-2) 0; font-size: .875rem; }
+.admin-submission-meta { display: flex; flex-wrap: wrap; gap: var(--admin-space-2) var(--admin-space-4); }
+.admin-submission-detail .admin-badge { font-size: .875rem; white-space: normal; }
+.admin-submission-detail .admin-submission-status { padding: var(--admin-space-2) var(--admin-space-4); font-size: 1rem; }
+.admin-submission-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, .8fr); gap: var(--admin-space-5); align-items: start; }
+.admin-submission-main, .admin-submission-sidebar { min-width: 0; display: grid; gap: var(--admin-space-5); }
+.admin-submission-layout .admin-section { margin: 0; }
+.admin-submission-detail .admin-card { box-shadow: none; }
+.admin-submission-detail .admin-section-heading { flex-wrap: wrap; gap: var(--admin-space-3); }
+.admin-submission-detail .admin-form { gap: var(--admin-space-3); }
+.admin-submission-detail :is(.admin-button, .admin-button-secondary, .admin-button-danger) {
+    width: auto; max-width: 100%; justify-self: start; white-space: normal; font-size: .9375rem;
+}
+.admin-submission-detail .admin-form > :is(button, .admin-actions) { margin-top: var(--admin-space-1); }
+.admin-submission-detail :is(input:not([type="checkbox"]):not([type="hidden"]), select, textarea) {
+    width: 100%; min-width: 0; max-width: 100%; font: inherit; padding: var(--admin-space-2) var(--admin-space-3);
+    border: 1px solid var(--border); border-radius: 8px;
+}
+.admin-submission-detail :is(input:not([type="checkbox"]):not([type="hidden"]), select) { min-height: 42px; }
+.admin-submission-detail textarea { min-height: 100px; resize: vertical; }
+.admin-submission-detail label:not(.admin-check) { display: grid; gap: var(--admin-space-2); font-size: .9375rem; }
+.admin-submission-detail :is(input, select, textarea, button, a, summary):focus-visible { outline: 3px solid var(--navy); outline-offset: 3px; }
+.admin-submission-detail .admin-form-grid { gap: var(--admin-space-3); }
+.admin-submission-sidebar #assignment label:has([name="due_at"], [name="assignment_reason"]) { grid-column: 1 / -1; }
+.admin-submission-detail .admin-workflow-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: var(--admin-space-2) var(--admin-space-3); }
+.admin-submission-detail .admin-form label .required-marker { display: inline; margin: 0; }
+.admin-submission-detail .admin-required-note { padding: 0; border: 0; background: transparent; color: var(--text); font-size: .875rem; }
+.admin-submission-document + .admin-submission-document { margin-top: var(--admin-space-5); padding-top: var(--admin-space-5); border-top: 1px solid var(--border); }
+.admin-document-fields { display: grid; gap: var(--admin-space-5); grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.admin-document-fields .admin-form { align-content: start; }
+.admin-document-fields .admin-form > label { margin: 0; }
+.admin-submission-sidebar #assignment > form + form { margin-top: var(--admin-space-3); }
+.admin-submission-document .admin-section-heading h3 { margin: 0; }
+.admin-sla-list { list-style: none; margin: 0; padding: 0; }
+.admin-sla-list li { display: grid; justify-items: start; gap: var(--admin-space-2); padding: var(--admin-space-3) 0; }
+.admin-sla-list li + li { border-top: 1px solid var(--border); }
+.admin-submission-sidebar .admin-internal-note-search { display: flex; flex-wrap: wrap; align-items: end; gap: var(--admin-space-2); }
+.admin-submission-sidebar .admin-internal-note-search label { flex: 1 1 100%; }
+.admin-submission-sidebar .admin-internal-note-form { margin: var(--admin-space-4) 0; }
+.admin-submission-sidebar .admin-internal-note__header { flex-wrap: wrap; font-size: .875rem; }
+.admin-submission-sidebar .admin-internal-note { padding: var(--admin-space-3) 0; border-width: 0 0 1px; border-radius: 0; }
+.admin-submission-sidebar .admin-internal-note--important { padding: var(--admin-space-3); border-left: 3px solid var(--gold-dark); }
+.admin-submission-record { margin-top: var(--admin-space-5); }
+.admin-workflow-timeline { list-style: none; margin: 0; padding: 0; }
+.admin-workflow-timeline .admin-workflow-section { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--admin-space-3); padding: var(--admin-space-4) 0; border: 0; opacity: 1; }
+.admin-workflow-section:not(:last-child)::before { content: ''; position: absolute; left: 15px; top: 48px; bottom: -16px; width: 2px; background: var(--border); }
+.admin-workflow-marker { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border); color: var(--navy); background: var(--surface); font-weight: 800; }
+.admin-workflow-section--completed .admin-workflow-marker { color: var(--success); border-color: var(--success); }
+.admin-workflow-section--blocked .admin-workflow-marker { color: var(--danger); border-color: var(--danger); }
+.admin-workflow-section[aria-current="step"] .admin-workflow-step-content { background: var(--surface-alt); border-left: 3px solid var(--navy); padding: var(--admin-space-3); border-radius: 8px; }
+.admin-workflow-section[aria-current="step"] .admin-workflow-marker { background: var(--navy); color: var(--surface); border-color: var(--navy); }
+.admin-workflow-step-content { min-width: 0; padding: var(--admin-space-2) var(--admin-space-3); }
+.admin-workflow-step-content h3 { margin: 0; }
+.admin-workflow-toggle { display: flex; align-items: baseline; justify-content: space-between; gap: var(--admin-space-3); width: 100%; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--navy); font: inherit; font-weight: 750; text-align: left; cursor: pointer; }
+.admin-workflow-toggle-label { font-size: .875rem; flex-shrink: 0; text-decoration: underline; }
+.admin-workflow-step-status, .admin-workflow-step-action, .admin-workflow-step-meta { margin: var(--admin-space-2) 0 0; }
+.admin-workflow-step-meta { font-size: .875rem; }
+.admin-workflow-step-overview { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--admin-space-3); }
+.admin-workflow-panel { margin-top: var(--admin-space-4); border-top: 1px solid var(--border); padding-top: var(--admin-space-3); }
+.admin-workflow-panel[hidden] { display: none; }
+.admin-workflow-panel .admin-form { max-width: 600px; }
+@media (max-width: 1199px) {
+    .admin-submission-layout { grid-template-columns: minmax(0, 1fr); }
+    .admin-submission-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+    .admin-submission-sidebar #internal-notes { grid-column: 1 / -1; }
+}
+@media (max-width: 767px) {
+    .admin-container:has(.admin-submission-detail) { width: calc(100% - (2 * var(--admin-space-4))); }
+    .admin-submission-sidebar, .admin-document-fields, .admin-submission-detail .admin-form-grid { grid-template-columns: minmax(0, 1fr); }
+    .admin-submission-title { flex-wrap: wrap; }
+    .admin-submission-detail .admin-workflow-summary { grid-template-columns: minmax(0, 1fr); }
+    .admin-submission-detail .admin-workflow-summary dd { margin-bottom: var(--admin-space-2); }
+    .admin-workflow-timeline .admin-workflow-section { gap: var(--admin-space-2); }
+    .admin-workflow-step-content { padding-right: 0; }
+}

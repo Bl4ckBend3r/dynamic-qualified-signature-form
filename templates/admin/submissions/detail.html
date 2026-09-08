@@ -1,23 +1,165 @@
 {% extends "admin/base.html" %}
 {% block title %}Zgłoszenie{% endblock %}
+{% macro application_decision_form() %}
+                <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                    <input type="hidden" name="next" value="{{ request.path }}">
+                    <label><span>Decyzja o zaakceptowaniu wniosku</span>
+                        <select name="officer_decision" required>
+                            <option value="">Wybierz decyzję</option>
+                            {% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                        <textarea name="officer_decision_reason" rows="3"></textarea>
+                    </label>
+                    <button class="admin-button" type="submit">Zapisz decyzję</button>
+                </form>
+{% endmacro %}
 {% block content %}
-{% if composite_document %}
-<section class="admin-card admin-section" data-office-document-step>
-    <h2>{{ composite_document.label }}</h2><p>{{ composite_document.status.message }}</p>
-    {% for file in composite_document.files %}
-        {% if file.filename %}<p><a class="admin-button-secondary" href="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id, filename=file.filename) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
-        {% if file.can_upload %}<form method="post" enctype="multipart/form-data" action="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id) }}">
-            <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="instance" value="{{ file.instance }}">
-            <label>Dokument z podpisem urzędu<input type="file" name="document_pdf" accept="application/pdf,.pdf" required></label>
-            <button class="admin-button" type="submit">Wgraj dokument z podpisem urzędu</button>
-        </form>{% endif %}
-    {% endfor %}
-</section>
-{% endif %}
+<div class="admin-submission-detail">
+<header class="admin-page-title admin-submission-title">
+    <div>
+        <h1>Zgłoszenie</h1>
+        <p class="admin-submission-id"><code>{{ submission.submission_id }}</code></p>
+        <div class="admin-submission-meta">
+            {% if can_view_sensitive_data and (submission.imiona or submission.nazwisko) %}<strong>{{ submission.imiona or '' }} {{ submission.nazwisko or '' }}</strong>{% endif %}
+            <span>{{ submission.form_name or form.name }}</span>
+            {% if submission.created_at %}<span>Złożono: {{ submission.created_at|business_datetime('%d.%m.%Y, %H:%M') }}</span>{% endif %}
+        </div>
+        <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>
+        {% for section in workflow_view.sections %}{% if section.is_current %}<a href="#workflow-step-{{ loop.index }}">Przejdź do aktualnego etapu</a>{% endif %}{% endfor %}</div>
+    </div>
+    <div class="admin-row-actions">
+        <button type="button" class="admin-button-secondary admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="submission-page-actions">Akcje <span aria-hidden="true">▾</span></button>
+        <div id="submission-page-actions" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
+            <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Lista zgłoszeń</a>
+            {% if can_send_email %}<a role="menuitem" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
+            {% if can_edit_workflow and rollback_options %}<button role="menuitem" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
+            {% if can_return_for_correction and not workflow_view.explicit_flow and submission.process_status != 'RETURNED_FOR_CORRECTION' %}<button role="menuitem" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
+        </div>
+    </div>
+</header>
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
-<div class="admin-page-title admin-submission-title"><div><p class="admin-eyebrow">Szczegóły zgłoszenia</p><h1>Zgłoszenie <code>{{ submission.submission_id }}</code></h1></div><p><strong>Widoczny status:</strong> <span class="admin-badge">{{ status_label(submission.process_status) }}</span></p></div>
+<div class="admin-submission-layout">
+<div class="admin-submission-main">
+<section class="admin-card admin-section" id="submission-documents" aria-labelledby="submission-documents-title">
+    <h2 id="submission-documents-title">Dokumenty</h2>
+    {% if composite_document %}
+    <div data-office-document-step>
+        {% for file in composite_document.files %}
+        <article class="admin-submission-document" id="submission-document-{{ loop.index }}">
+            <header class="admin-section-heading"><h3>{{ composite_document.label }}</h3><span class="admin-badge">{{ 'Podpis urzędu złożony' if file.signed else composite_document.status.message }}</span></header>
+            <p>{{ file.label }}</p>
+            <div class="admin-document-fields">
+                <div><h4>Dokument uczestnika</h4>
+                {% if file.filename %}<a class="admin-button-secondary" href="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id, filename=file.filename) }}">Pobierz: {{ file.label }}</a>{% else %}<p>Dokument nie jest jeszcze dostępny.</p>{% endif %}</div>
+                {% if file.can_upload %}<form class="admin-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id) }}" data-required-note="false">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="instance" value="{{ file.instance }}">
+                    <label for="office-document-{{ loop.index }}"><span>Dokument z podpisem urzędu <span class="required-marker" aria-hidden="true">*</span></span></label>
+                    <input id="office-document-{{ loop.index }}" type="file" name="document_pdf" accept="application/pdf,.pdf" required aria-required="true" aria-describedby="office-document-help-{{ loop.index }}">
+                    <small id="office-document-help-{{ loop.index }}">* Pole wymagane. Wybierz podpisany plik PDF.</small>
+                    <button class="admin-button" type="submit">Wgraj dokument z podpisem urzędu</button>
+                </form>{% endif %}
+            </div>
+        </article>
+        {% else %}<h3>{{ composite_document.label }}</h3><p>{{ composite_document.status.message }}</p>{% endfor %}
+    </div>
+    {% elif not files and not participant_training_view %}<p>Brak dostępnych dokumentów.</p>{% endif %}
+            {% if workflow_view.can_review_agreement and can_manage_documents %}
+                <section class="admin-submission-document">
+                    <h3>Umowa podpisana przez urząd</h3>
+                    <p><strong>Folder podpisanych umów przez urząd:</strong> {{ office_signed_agreement_view.folder }}/</p>
+                    <p><strong>Oczekiwana nazwa pliku:</strong> {{ office_signed_agreement_view.expected_filename or "Brak danych" }}</p>
+                    <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <label class="admin-check"><input type="checkbox" name="send_notification" checked><span>Wyślij znalezione umowy do uczestnika</span></label>
+                        <button class="admin-button" type="submit">Sprawdź wszystkie umowy podpisane przez urząd dla tego zgłoszenia</button>
+                    </form>
+                </section>
+                <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form" onsubmit="return confirm('Potwierdzasz podpisanie umowy przez urząd. Jeśli pozostawisz zaznaczoną opcję, uczestnik otrzyma e-mail.');">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                    <label><span>Umowa podpisana przez urząd</span>
+                        <select name="agreement_decision" required>
+                            <option value="">Wybierz decyzję</option>
+                            <option value="accepted">Tak</option>
+                            <option value="rejected">Nie</option>
+                            <option value="correction">Do poprawy</option>
+                        </select>
+                        <small>Zaznacz, czy umowa została podpisana po stronie urzędu i może zakończyć proces.</small>
+                    </label>
+                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                        <textarea name="agreement_decision_reason" rows="3"></textarea>
+                    </label>
+                    <label class="admin-check">
+                        <input type="checkbox" name="send_notification" checked>
+                        <span>Wyślij powiadomienie do użytkownika</span>
+                    </label>
+                    <button class="admin-button" type="submit">Potwierdź podpisanie umowy przez urząd</button>
+                </form>
+            {% endif %}
+    {% if participant_training_view %}<p><a class="admin-button-secondary" href="#submission-trainings">Dokumenty i podpisy szkoleń uczestnika</a></p>{% endif %}
+<details><summary>Metadane dokumentów Nextcloud ({{ files|length }})</summary>
+<div class="admin-table-wrap"><table class="admin-table">
+    <thead><tr><th>Nazwa</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th><th>Walidacja</th></tr></thead>
+    <tbody>{% for file in files %}
+        <tr><td>{{ file.filename }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td><td>{{ (file.signature_validation_result or {}).get('validation_status') or file.signature_status or '—' }}{% if (file.signature_validation_result or {}).get('reason') %}<br><small>{{ file.signature_validation_result.get('reason') }}</small>{% endif %}</td></tr>
+    {% else %}
+        <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
+    {% endfor %}</tbody>
+</table></div>
+</details>
+</section>
+<section class="admin-card admin-section" id="submission-workflow" aria-labelledby="submission-workflow-title">
+<h2 id="submission-workflow-title">Workflow zgłoszenia</h2>
+<ol class="admin-workflow-timeline">
+    {% for section in workflow_view.sections %}
+        {% set section_status = composite_document.status.message if composite_document and section.key == composite_document.step_id else section.status %}
+        <li class="admin-workflow-section admin-workflow-section--{{ section.state }}" {% if section.is_current %}aria-current="step"{% endif %} data-workflow-step="{{ section.key }}" id="workflow-step-{{ loop.index }}">
+            <span class="admin-workflow-marker" aria-hidden="true">{{ '!' if section.state == 'blocked' else '✓' if section.state == 'completed' else '●' if section.is_current else '○' }}</span>
+            <div class="admin-workflow-step-content">
+            <h3><button type="button" class="admin-workflow-toggle" data-workflow-toggle aria-expanded="true" aria-controls="workflow-panel-{{ loop.index }}" data-initial-expanded="{{ 'true' if section.is_current else 'false' }}">
+                <span>{{ section.title }}</span><span class="admin-workflow-toggle-label">Zwiń</span>
+            </button></h3>
+            <div class="admin-workflow-step-overview"><p class="admin-workflow-step-status"><span class="admin-badge{% if section.state == 'blocked' %} admin-badge-danger{% elif section.state == 'completed' %} admin-badge-success{% endif %}">{{ 'Aktualny etap' if section.is_current else 'Zakończony' if section.state == 'completed' else 'Zablokowany' if section.state == 'blocked' else 'Oczekujący' }}</span> {{ section_status }}</p>
+            {% if section.updated_at %}<p class="admin-workflow-step-meta"><time>{{ section.updated_at|business_datetime('%d.%m.%Y, %H:%M') }}</time></p>{% endif %}
+            </div>
+            {% if section.is_current and section.action != section_status %}<p class="admin-workflow-step-action">{{ section.action }}</p>{% endif %}
+            <div id="workflow-panel-{{ loop.index }}" class="admin-workflow-panel">
+            <dl class="admin-workflow-summary">
+                <dt>Status</dt><dd>{{ section_status }}</dd>
+                <dt>Ostatnia decyzja</dt><dd>{{ section.decision }}</dd>
+                <dt>Data aktualizacji</dt><dd>{{ section.updated_at|business_datetime("%d.%m.%Y, %H:%M") if section.updated_at else "—" }}</dd>
+                <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
+            </dl>
+
+            {% if section.can_decide and workflow_view.can_edit_application_decision and can_make_decision %}
+                {{ application_decision_form() }}
+            {% endif %}
+
+            {% if composite_document and section.key == composite_document.step_id %}<a class="admin-button-secondary" href="#submission-documents">Przejdź do dokumentu</a>{% endif %}
+
+            {% if section.is_current %}{% if workflow_view.officer_action and can_make_decision %}
+<form method="post" action="{{ url_for('admin.workflow_complete_action', form_id=form.id, submission_pk=submission.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="workflow_step" value="{{ workflow_view.officer_action.id }}">
+    <p>{{ workflow_view.officer_action.admin_label }}</p>
+    <button class="admin-button" type="submit">Zakończ akcję i przejdź dalej</button>
+</form>
+{% endif %}
+{% endif %}
+            </div></div>
+        </li>
+    {% endfor %}
+</ol>
+{% if workflow_view.can_edit_application_decision and can_make_decision and not workflow_view.sections|selectattr('can_decide')|list %}
+    <h3>Decyzja</h3>{{ application_decision_form() }}
+{% endif %}
+</section>
+</div>
+<aside class="admin-submission-sidebar" aria-label="Obsługa sprawy">
 <section class="admin-card admin-section" id="assignment">
-    <div class="admin-section-heading"><div><h2>Prowadzący sprawę</h2><p>Bieżący właściciel, priorytet i termin sprawy.</p></div></div>
+    <h2>Prowadzący sprawę</h2>
     <dl class="admin-workflow-summary"><dt>Prowadzący</dt><dd>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</dd><dt>Priorytet</dt><dd>{{ priority_labels.get(submission.priority, submission.priority) }}</dd><dt>Termin</dt><dd>{{ submission.due_at|business_datetime('%d.%m.%Y, %H:%M') if submission.due_at else "Bez terminu" }}</dd></dl>
     {% if can_assign_submissions %}<form method="post" action="{{ url_for('admin.submission_assignment_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
@@ -26,6 +168,82 @@
     </form>{% endif %}
     {% if can_claim_submission and submission.assigned_to_user_id != g.admin_user.id and (not submission.assigned_to_user_id or can_assign_submissions) %}<form method="post" action="{{ url_for('admin.submission_assignment_claim', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary" type="submit">Przejmij sprawę</button></form>{% endif %}
 </section>
+<section class="admin-card admin-section" id="workflow-sla" aria-labelledby="workflow-sla-title">
+    <div class="admin-section-heading"><div><h2 id="workflow-sla-title">Terminy etapów i SLA</h2></div></div>
+    <ul class="admin-sla-list">
+    {% for item in deadline_history if item.row.status == 'active' %}
+        <li><strong>{{ workflow_view.step_labels.get(item.row.workflow_step, item.row.workflow_step) }}</strong><time>{{ item.row.due_at|business_datetime('%d.%m.%Y, %H:%M') }}</time><span class="admin-badge">{{ {'active':'Aktywny','due_soon':'Termin blisko','overdue':'Po terminie'}.get(item.view.state, item.view.state) }}</span></li>
+    {% else %}<li>Brak aktywnych terminów SLA.</li>{% endfor %}
+    </ul>
+    {% if deadline_history %}<details><summary>Historia terminów ({{ deadline_history|length }})</summary>
+    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Etap</th><th>Odpowiedzialność</th><th>Wejście</th><th>Termin</th><th>Zakończenie</th><th>Stan</th><th>Czas</th></tr></thead><tbody>
+    {% for item in deadline_history %}{% set deadline = item.row %}<tr>
+        <td>{{ workflow_view.step_labels.get(deadline.workflow_step, deadline.workflow_step) }}</td><td>{{ 'Uczestnik' if deadline.actor_type == 'participant' else 'Urząd' }}</td>
+        <td>{{ deadline.entered_at.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ deadline.due_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ deadline.completed_at.strftime('%d.%m.%Y %H:%M') if deadline.completed_at else '—' }}</td>
+        <td><span class="admin-badge">{{ {'active':'Aktywny','due_soon':'Termin blisko','overdue':'Po terminie','completed':'Zakończony','cancelled':'Anulowany'}.get(item.view.state, item.view.state) }}</span>{% if item.view.overdue_seconds %}<br><small>{{ (item.view.overdue_seconds / 3600)|round(1) }} h po terminie</small>{% endif %}</td>
+        <td>{{ item.duration_hours }} h</td>
+    </tr>{% endfor %}
+    </tbody></table></div>
+    </details>{% endif %}
+</section>
+{% if can_view_internal_notes %}
+<section class="admin-card admin-section" id="internal-notes" aria-labelledby="internal-notes-title">
+    <div class="admin-section-heading">
+        <div><h2 id="internal-notes-title">Notatki wewnętrzne</h2><p>Widoczne wyłącznie dla uprawnionych urzędników. Nie są wysyłane uczestnikowi.</p></div>
+    </div>
+    <form method="get" action="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-search">
+        <label><span>Szukaj w aktywnych notatkach</span><input type="search" name="notes_q" value="{{ notes_search }}" maxlength="200"></label>
+        <button class="admin-button-secondary" type="submit">Szukaj</button>
+        {% if notes_search %}<a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#internal-notes">Wyczyść</a>{% endif %}
+    </form>
+    {% if can_add_internal_notes %}
+    <form method="post" action="{{ url_for('admin.submission_internal_note_create', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-form" data-required-note="false">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <label><span>Dodaj notatkę</span><textarea name="content" rows="4" maxlength="5000" required aria-required="true" placeholder="Treść notatki. Użyj @login lub @adres@example.org, aby oznaczyć użytkownika."></textarea></label>
+        <label class="admin-check"><input type="checkbox" name="is_important"><span>Oznacz jako ważną</span></label>
+        <button class="admin-button" type="submit">Dodaj notatkę</button>
+    </form>
+    {% endif %}
+    <h3>Historia notatek</h3>
+    <div class="admin-internal-notes">
+    {% for note in internal_notes %}
+        <article class="admin-internal-note{% if note.is_important %} admin-internal-note--important{% endif %}{% if note.archived_at %} admin-internal-note--archived{% endif %}">
+            <header class="admin-internal-note__header">
+                <div><strong>{{ note.author.email }}</strong> · <time datetime="{{ note.created_at.isoformat() }}">{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</time>{% if note.edited_at %} · poprawiono {{ note.edited_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}</div>
+                {% if note.is_important %}<span class="admin-badge admin-internal-note__important">Ważna</span>{% endif %}
+            </header>
+            {% if note.archived_at %}
+                <p class="admin-alert admin-alert-info">Notatka została ukryta przez {{ note.archived_by.email if note.archived_by else 'użytkownika systemu' }} dnia {{ note.archived_at.strftime('%d.%m.%Y %H:%M') }}.</p>
+            {% else %}
+                <p class="admin-internal-note__content">{{ note.content }}</p>
+                {% if note.mentions %}<p class="admin-internal-note__mentions"><strong>Wzmianki:</strong> {% for mention in note.mentions %}<span class="admin-badge">@{{ mention.mentioned_user.email }}</span>{% endfor %}</p>{% endif %}
+                {% if can_manage_internal_notes %}
+                <details class="admin-internal-note__edit"><summary>Popraw lub archiwizuj</summary>
+                    <form method="post" action="{{ url_for('admin.submission_internal_note_edit', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" class="admin-form">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <label><span>Treść poprawiona</span><textarea name="content" rows="4" maxlength="5000" required>{{ note.content }}</textarea></label>
+                        <label class="admin-check"><input type="checkbox" name="is_important" {% if note.is_important %}checked{% endif %}><span>Oznacz jako ważną</span></label>
+                        <button class="admin-button-secondary" type="submit">Zapisz poprawkę</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin.submission_internal_note_archive', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" data-admin-confirm-message="Ukryć tę notatkę? Treść pozostanie w historii audytowej.">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-button-secondary" type="submit">Archiwizuj</button>
+                    </form>
+                </details>
+                {% endif %}
+            {% endif %}
+            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at.strftime('%d.%m.%Y %H:%M') }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
+        </article>
+    {% else %}<p>{{ 'Nie znaleziono notatek.' if notes_search else 'Brak notatek wewnętrznych.' }}</p>{% endfor %}
+    </div>
+</section>
+{% endif %}
+</aside>
+</div>
+<div class="admin-submission-record">
+
+
 {% if repeatable_groups %}
 <section id="repeatable-decisions">
   <h2>Osoby objęte wnioskiem</h2>
@@ -64,71 +282,6 @@
   {% endfor %}
 </section>
 {% endif %}
-<section class="admin-card admin-section" id="workflow-sla" aria-labelledby="workflow-sla-title">
-    <div class="admin-section-heading"><div><h2 id="workflow-sla-title">Terminy etapów i SLA</h2><p>Terminy liczone od wejścia do etapu; zakończone rekordy pozostają w historii.</p></div></div>
-    {% if deadline_history %}
-    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Etap</th><th>Odpowiedzialność</th><th>Wejście</th><th>Termin</th><th>Zakończenie</th><th>Stan</th><th>Czas</th></tr></thead><tbody>
-    {% for item in deadline_history %}{% set deadline = item.row %}<tr>
-        <td>{{ deadline.workflow_step }}</td><td>{{ 'Uczestnik' if deadline.actor_type == 'participant' else 'Urząd' }}</td>
-        <td>{{ deadline.entered_at.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ deadline.due_at.strftime('%d.%m.%Y %H:%M') }}</td>
-        <td>{{ deadline.completed_at.strftime('%d.%m.%Y %H:%M') if deadline.completed_at else '—' }}</td>
-        <td><span class="admin-badge">{{ {'active':'Aktywny','due_soon':'Termin blisko','overdue':'Po terminie','completed':'Zakończony','cancelled':'Anulowany'}.get(item.view.state, item.view.state) }}</span>{% if item.view.overdue_seconds %}<br><small>{{ (item.view.overdue_seconds / 3600)|round(1) }} h po terminie</small>{% endif %}</td>
-        <td>{{ item.duration_hours }} h</td>
-    </tr>{% endfor %}
-    </tbody></table></div>
-    {% else %}<p>Ten etap nie ma zapisanej instancji SLA.</p>{% endif %}
-</section>
-{% if can_view_internal_notes %}
-<section class="admin-card admin-section" id="internal-notes" aria-labelledby="internal-notes-title">
-    <div class="admin-section-heading">
-        <div><h2 id="internal-notes-title">Notatki wewnętrzne</h2><p>Widoczne wyłącznie dla uprawnionych urzędników. Nie są wysyłane uczestnikowi.</p></div>
-    </div>
-    <form method="get" action="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-search">
-        <label><span>Szukaj w aktywnych notatkach</span><input type="search" name="notes_q" value="{{ notes_search }}" maxlength="200"></label>
-        <button class="admin-button-secondary" type="submit">Szukaj</button>
-        {% if notes_search %}<a class="admin-button-secondary" href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#internal-notes">Wyczyść</a>{% endif %}
-    </form>
-    {% if can_add_internal_notes %}
-    <form method="post" action="{{ url_for('admin.submission_internal_note_create', form_id=form.id, submission_pk=submission.id) }}" class="admin-form admin-internal-note-form">
-        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-        <label><span>Nowa notatka</span><textarea name="content" rows="4" maxlength="5000" required aria-required="true" placeholder="Treść notatki. Użyj @login lub @adres@example.org, aby oznaczyć użytkownika."></textarea></label>
-        <label class="admin-check"><input type="checkbox" name="is_important"><span>Oznacz jako ważną</span></label>
-        <button class="admin-button" type="submit">Dodaj notatkę</button>
-    </form>
-    {% endif %}
-    <div class="admin-internal-notes">
-    {% for note in internal_notes %}
-        <article class="admin-internal-note{% if note.is_important %} admin-internal-note--important{% endif %}{% if note.archived_at %} admin-internal-note--archived{% endif %}">
-            <header class="admin-internal-note__header">
-                <div><strong>{{ note.author.email }}</strong> · <time datetime="{{ note.created_at.isoformat() }}">{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</time>{% if note.edited_at %} · poprawiono {{ note.edited_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}</div>
-                {% if note.is_important %}<span class="admin-badge admin-internal-note__important">Ważna</span>{% endif %}
-            </header>
-            {% if note.archived_at %}
-                <p class="admin-alert admin-alert-info">Notatka została ukryta przez {{ note.archived_by.email if note.archived_by else 'użytkownika systemu' }} dnia {{ note.archived_at.strftime('%d.%m.%Y %H:%M') }}.</p>
-            {% else %}
-                <p class="admin-internal-note__content">{{ note.content }}</p>
-                {% if note.mentions %}<p class="admin-internal-note__mentions"><strong>Wzmianki:</strong> {% for mention in note.mentions %}<span class="admin-badge">@{{ mention.mentioned_user.email }}</span>{% endfor %}</p>{% endif %}
-                {% if can_manage_internal_notes %}
-                <details class="admin-internal-note__edit"><summary>Popraw lub archiwizuj</summary>
-                    <form method="post" action="{{ url_for('admin.submission_internal_note_edit', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" class="admin-form">
-                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                        <label><span>Treść poprawiona</span><textarea name="content" rows="4" maxlength="5000" required>{{ note.content }}</textarea></label>
-                        <label class="admin-check"><input type="checkbox" name="is_important" {% if note.is_important %}checked{% endif %}><span>Oznacz jako ważną</span></label>
-                        <button class="admin-button-secondary" type="submit">Zapisz poprawkę</button>
-                    </form>
-                    <form method="post" action="{{ url_for('admin.submission_internal_note_archive', form_id=form.id, submission_pk=submission.id, note_id=note.id) }}" data-admin-confirm-message="Ukryć tę notatkę? Treść pozostanie w historii audytowej.">
-                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                        <button class="admin-button-secondary" type="submit">Archiwizuj</button>
-                    </form>
-                </details>
-                {% endif %}
-            {% endif %}
-            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at.strftime('%d.%m.%Y %H:%M') }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
-        </article>
-    {% else %}<p>{{ 'Nie znaleziono notatek.' if notes_search else 'Brak notatek wewnętrznych.' }}</p>{% endfor %}
-    </div>
-</section>
-{% endif %}
 {% if blocked_agreement_view.is_blocked %}
 <section class="admin-card admin-blocked-agreement" aria-labelledby="blocked-agreement-title">
     <h2 id="blocked-agreement-title">Umowa zablokowana</h2>
@@ -153,14 +306,14 @@
 </section>
 {% endif %}
 {% if can_edit_workflow and rollback_options %}
-    {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
+
     <dialog class="admin-modal admin-modal-backdrop" id="rollback-stage-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-stage-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_stage_rollback', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
             <header class="admin-modal__header"><h2 id="rollback-stage-title">Cofnij etap zgłoszenia</h2></header>
             <div class="admin-modal__body">
                 <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
-                <p><strong>Aktualny status:</strong> {{ status_label(submission.process_status) }}</p>
+                <p><strong>Aktualny status:</strong> {{ workflow_view.status_label }}</p>
                 <p class="admin-alert admin-alert-warning">Cofnięcie etapu może wymagać ponownego wykonania czynności przez użytkownika. Tej operacji nie należy wykonywać bez uzasadnienia.</p>
                 <label>
                     <span>Docelowy etap/status <span class="required-marker" aria-hidden="true">*</span></span>
@@ -181,7 +334,7 @@
     </dialog>
 {% endif %}
 {% if can_return_for_correction and not workflow_view.explicit_flow and submission.process_status != "RETURNED_FOR_CORRECTION" %}
-    {% if not blocked_agreement_view.is_blocked %}<button class="admin-button-secondary" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
+
     <dialog class="admin-modal admin-modal-backdrop" id="return-for-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title" data-admin-modal>
         <form method="post" action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" class="admin-modal__surface admin-form">
             <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
@@ -282,79 +435,6 @@
     {% endfor %}
 </section>
 {% endif %}
-<h2>Workflow zgłoszenia</h2>
-{% if workflow_view.officer_action and can_make_decision %}
-<form method="post" action="{{ url_for('admin.workflow_complete_action', form_id=form.id, submission_pk=submission.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-    <input type="hidden" name="workflow_step" value="{{ workflow_view.officer_action.id }}">
-    <p>{{ workflow_view.officer_action.admin_label }}</p>
-    <button class="admin-button" type="submit">Zakończ akcję i przejdź dalej</button>
-</form>
-{% endif %}
-<div class="admin-workflow-grid">
-    {% for section in workflow_view.sections %}
-        <section class="admin-card admin-workflow-section admin-workflow-section--{{ section.state }}">
-            <h3>{{ section.title }}</h3>
-            <dl class="admin-workflow-summary">
-                <dt>Status</dt><dd>{{ section.status }}</dd>
-                <dt>Ostatnia decyzja</dt><dd>{{ section.decision }}</dd>
-                <dt>Data aktualizacji</dt><dd>{{ section.updated_at or "-" }}</dd>
-                <dt>Aktualna wymagana akcja</dt><dd>{{ section.action }}</dd>
-            </dl>
-
-            {% if section.key == "application" and workflow_view.can_edit_application_decision and can_make_decision %}
-                <form method="post" action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form">
-                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                    <input type="hidden" name="next" value="{{ request.path }}">
-                    <label><span>Decyzja o zaakceptowaniu wniosku</span>
-                        <select name="officer_decision" required>
-                            <option value="">Wybierz decyzję</option>
-                            {% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}
-                        </select>
-                    </label>
-                    <label><span>Uzasadnienie decyzji negatywnej</span>
-                        <textarea name="officer_decision_reason" rows="3"></textarea>
-                    </label>
-                    <button class="admin-button" type="submit">Zapisz decyzję</button>
-                </form>
-            {% endif %}
-
-            {% if section.key == "agreement" and workflow_view.can_review_agreement and can_manage_documents %}
-                <section class="admin-alert admin-alert-info">
-                    <h4>Umowa podpisana przez urząd</h4>
-                    <p><strong>Folder podpisanych umów przez urząd:</strong> {{ office_signed_agreement_view.folder }}/</p>
-                    <p><strong>Oczekiwana nazwa pliku:</strong> {{ office_signed_agreement_view.expected_filename or "Brak danych" }}</p>
-                    <form method="post" action="{{ url_for('admin.check_office_signed_agreement', form_id=form.id, submission_pk=submission.id) }}">
-                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                        <label class="admin-check"><input type="checkbox" name="send_notification" checked><span>Wyślij znalezione umowy do uczestnika</span></label>
-                        <button class="admin-button" type="submit">Sprawdź wszystkie umowy podpisane przez urząd dla tego zgłoszenia</button>
-                    </form>
-                </section>
-                <form method="post" action="{{ url_for('admin.beneficiary_agreement_decision_update', form_id=form.id, submission_pk=submission.id) }}" class="admin-form" onsubmit="return confirm('Potwierdzasz podpisanie umowy przez urząd. Jeśli pozostawisz zaznaczoną opcję, uczestnik otrzyma e-mail.');">
-                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                    <label><span>Umowa podpisana przez urząd</span>
-                        <select name="agreement_decision" required>
-                            <option value="">Wybierz decyzję</option>
-                            <option value="accepted">Tak</option>
-                            <option value="rejected">Nie</option>
-                            <option value="correction">Do poprawy</option>
-                        </select>
-                        <small>Zaznacz, czy umowa została podpisana po stronie urzędu i może zakończyć proces.</small>
-                    </label>
-                    <label><span>Uzasadnienie decyzji negatywnej</span>
-                        <textarea name="agreement_decision_reason" rows="3"></textarea>
-                    </label>
-                    <label class="admin-check">
-                        <input type="checkbox" name="send_notification" checked>
-                        <span>Wyślij powiadomienie do użytkownika</span>
-                    </label>
-                    <button class="admin-button" type="submit">Potwierdź podpisanie umowy przez urząd</button>
-                </form>
-            {% endif %}
-        </section>
-    {% endfor %}
-</div>
-{% if can_send_email %}<div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a></div>{% endif %}
 {% if detail_view.qualification %}
 <section class="admin-card admin-detail-card">
     <div class="admin-section-heading"><div><h2>Warunki kwalifikujące</h2><p>Wynik automatycznej oceny warunków formularza.</p></div></div>
@@ -451,8 +531,8 @@
         </dl>
     </section>
 {% endfor %}
-<section class="admin-card">
-    <h3>Szkolenia uczestnika</h3>
+<section class="admin-card" id="submission-trainings">
+    <h2>Szkolenia uczestnika</h2>
     {% if participant_training_view %}
         <p>
             <strong>Zablokowane umowami:</strong> {{ participant_training_view.limit_used_formatted }}
@@ -542,37 +622,6 @@
         </table></div>
     </details>
 {% endif %}
-{% set submission_workflow = (form.definition_json or {}).get("workflow", {}) %}
-{% set submission_steps = submission_workflow.get("steps", []) %}
-{% set active_workflow_stage = submission.workflow_stage or submission.workflow_step %}
-{% if submission_steps %}
-<section class="admin-card submission-workflow-map">
-    <div class="admin-section-heading">
-        <div>
-            <h2>Pozycja zgłoszenia w workflow</h2>
-            <p>Aktywny etap, ukończona ścieżka i dostępne przejścia według konfiguracji formularza.</p>
-        </div>
-        <span class="workflow-status-badge">{{ active_workflow_stage or "Etap nierozpoznany" }}</span>
-    </div>
-    <div class="submission-workflow-map__track" role="img" aria-label="Schemat workflow zgłoszenia">
-        {% for step in submission_steps if step.get("active", True) %}
-            {% set is_active = step.get("id") == active_workflow_stage %}
-            <article class="submission-workflow-node{% if is_active %} is-active{% endif %}{% if step.get('final') %} is-final{% endif %}{% if step.get('rejected') %} is-rejected{% endif %}">
-                <small>{{ step.get("status") }}</small>
-                <strong>{{ step.get("admin_label") or step.get("label") or step.get("id") }}</strong>
-                {% if is_active %}
-                    <span>Aktualny etap</span>
-                    {% if step.get("next") %}<small>Dalej: {{ step.get("next") }}</small>{% endif %}
-                    {% for decision, target in (step.get("decisions") or {}).items() %}
-                        <small>{{ decision }} → {{ target }}</small>
-                    {% endfor %}
-                {% endif %}
-            </article>
-            {% if not loop.last %}<span class="submission-workflow-map__arrow" aria-hidden="true">→</span>{% endif %}
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
 <h2>Historia workflow</h2>
 <p><small>Źródło: {{ workflow_history.source }}</small></p>
 <div class="admin-card admin-table-wrap"><table class="admin-table">
@@ -624,16 +673,20 @@
         <tr><td colspan="5">Brak decyzji.</td></tr>
     {% endfor %}</tbody>
 </table></div>
-<h2>Dokumenty Nextcloud</h2>
-<div class="admin-card admin-table-wrap"><table class="admin-table">
-    <thead><tr><th>Nazwa</th><th>Typ</th><th>Rozmiar</th><th>Podpis</th><th>Walidacja</th></tr></thead>
-    <tbody>{% for file in files %}
-        <tr><td>{{ file.filename }}</td><td>{{ file.mime_type }}</td><td>{{ file.size_bytes }}</td><td>{{ "Tak" if file.signed else "Nie" }}</td><td>{{ (file.signature_validation_result or {}).get('validation_status') or file.signature_status or '—' }}{% if (file.signature_validation_result or {}).get('reason') %}<br><small>{{ file.signature_validation_result.get('reason') }}</small>{% endif %}</td></tr>
-    {% else %}
-        <tr><td colspan="5">Brak metadanych dokumentow.</td></tr>
-    {% endfor %}</tbody>
-</table></div>
+</div>
+</div>
 <script>
+document.querySelectorAll('[data-workflow-toggle]').forEach((toggle) => {
+    const panel = document.getElementById(toggle.getAttribute('aria-controls'));
+    const setExpanded = (expanded) => {
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.querySelector('.admin-workflow-toggle-label').textContent = expanded ? 'Zwiń' : 'Rozwiń';
+        panel.hidden = !expanded;
+    };
+    setExpanded(toggle.dataset.initialExpanded === 'true');
+    toggle.addEventListener('click', () => setExpanded(toggle.getAttribute('aria-expanded') !== 'true'));
+});
+
 document.querySelectorAll('[data-item-decision]').forEach((form) => {
     const decision = form.querySelector('[name="decision_code"]');
     const comment = form.querySelector('[name="comment"]');

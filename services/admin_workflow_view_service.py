@@ -4,8 +4,10 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping
 
 from services.beneficiary_agreement_service import can_edit_application_decision
+from services.documents.document_workflow_service import document_step_status
 from services.process_service import ProcessStatus
-from services.status_catalog import get_status_label
+from services.status_catalog import get_status_label, is_final_status, is_rejected_status
+from services.workflow_service import workflow_status_label
 
 
 APPLICATION_TARGETS = {
@@ -41,6 +43,7 @@ def build_admin_workflow_view(
     decisions: Iterable[Mapping[str, Any]] = (),
     can_review_agreement: bool = False,
     form_config: Mapping[str, Any] | None = None,
+    events: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     status = str(getattr(submission, "process_status", "") or "")
     decisions = list(decisions)
@@ -99,7 +102,20 @@ def build_admin_workflow_view(
     workflow = (form_config or {}).get("workflow") or {}
     current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", ""))
     step = next((s for s in workflow.get("steps", []) if s.get("id") == current), {})
+    if workflow.get("steps"):
+        sections = _configured_sections(submission, workflow, list(events), decisions)
+    else:
+        for section in sections:
+            section["is_current"] = section["state"] == "current"
+            section["can_decide"] = section["key"] == "application"
+    badge_class = "admin-badge-danger" if step.get("rejected") or is_rejected_status(status) else (
+        "admin-badge-success" if step.get("final") or is_final_status(status) else ""
+    )
     return {
+        "status_badge_class": badge_class,
+        "status_label": workflow_status_label(status, form_config or {}),
+        "step_labels": {item.get("id"): item.get("admin_label") or item.get("label") or item.get("id")
+                        for item in workflow.get("steps", [])},
         "explicit_flow": workflow.get("flow_mode") == "explicit",
         "officer_action": step if workflow.get("flow_mode") == "explicit" and step.get("stage_type") == "officer_action" else None,
         "sections": sections,
@@ -108,6 +124,61 @@ def build_admin_workflow_view(
         "application_decision": application_decision,
         "agreement_decision": agreement_decision,
     }
+
+
+def _configured_sections(submission, workflow, events, decisions):
+    """Present the saved graph and observed path; order alone never proves completion."""
+    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or "")
+    entered, departed = {}, {}
+    for event in events:
+        if event.get("new_step"):
+            entered[str(event["new_step"])] = event
+        if event.get("previous_step") and event.get("previous_step") != event.get("new_step"):
+            departed[str(event["previous_step"])] = event
+    sections = []
+    for step in workflow.get("steps", []):
+        if not step.get("active", True):
+            continue
+        key = str(step.get("id") or "")
+        is_current = key == current
+        visited = is_current or key in entered or key in departed
+        raw_status = str(getattr(submission, "process_status", "") if is_current else step.get("status") or "")
+        document_status = document_step_status(
+            {"document_states": getattr(submission, "document_states", {})}, step
+        ) if visited and step.get("document_lifecycle") == "composite" else None
+        blocked = visited and (step.get("rejected") or is_rejected_status(raw_status)
+                               or raw_status in AGREEMENT_BLOCKED_STATUSES or raw_status == "SIGNATURE_INVALID"
+                               or (document_status and document_status["variant"] == "danger"))
+        complete = (key in departed and not is_current) or (is_current and (
+            step.get("final") or step.get("stage_type") == "final"
+            or (workflow.get("flow_mode") != "explicit" and is_final_status(raw_status))
+        ))
+        state = "blocked" if blocked else "completed" if complete else "current" if is_current else "future"
+        event = departed.get(key) if not is_current else entered.get(key)
+        event = event or entered.get(key) or {}
+        decision = next((item for item in reversed(decisions) if item.get("workflow_step") == key), {})
+        action = "Etap oczekujący / poza dotychczasową ścieżką"
+        if is_current:
+            action = ("Proces zakończony" if complete else "Wymagana interwencja" if blocked else
+                      "Oczekiwanie na decyzję" if step.get("stage_type") == "decision" or step.get("requires_officer_action") or step.get("decisions") else
+                      "Wykonaj akcję urzędnika" if step.get("stage_type") == "officer_action" else
+                      "Sprawdź stan dokumentu" if step.get("stage_type") == "document" or step.get("document_id") else
+                      "Oczekiwanie na wykonanie akcji etapu")
+        elif complete:
+            action = "Etap zakończony"
+        status_label = step.get("user_label") or workflow_status_label(raw_status, {"workflow": workflow})
+        if document_status:
+            status_label = document_status["message"]
+            if is_current:
+                action = document_status["message"]
+        sections.append({
+            "key": key, "title": f"{len(sections) + 1}. {step.get('admin_label') or step.get('label') or key}",
+            "status": status_label if visited else "Oczekuje",
+            "decision": decision.get("decision_label") or decision.get("decision") or event.get("decision_code") or "Brak decyzji",
+            "updated_at": event.get("created_at"), "action": action, "state": state,
+            "is_current": is_current, "can_decide": is_current,
+        })
+    return sections
 
 
 def _workflow_allows_decision(submission, form_config: Mapping[str, Any]) -> bool:

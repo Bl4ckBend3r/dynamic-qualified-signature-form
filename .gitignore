@@ -81,6 +81,7 @@ tmp*/
 *.sqlite3
 *.db
 *.pid
+.tmp*
 
 # Local one-off QA helpers
 .codex_qa_*.py

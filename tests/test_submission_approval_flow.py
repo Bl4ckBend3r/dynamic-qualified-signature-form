@@ -110,14 +110,14 @@ def test_custom_item_options_require_reason_and_only_change_selected_uuid(admin_
         db.commit()
     login(admin_client)
     html = admin_client.get(f'/admin/forms/{form_id}/submissions/{pk}').get_data(as_text=True)
-    cards = html.split('<section id="repeatable-decisions">', 1)[1].split('id="workflow-sla"', 1)[0]
+    cards = html.split('<section id="repeatable-decisions">', 1)[1].split('<dialog', 1)[0]
     assert 'data-required-note="false"' in cards
-    assert 'Pola oznaczone' in cards
+    assert 'Pola oznaczone' not in cards
     assert 'Decyzja <span class="required-marker"' in cards
     for value in ('bilet_bezplatny', 'bilet_ze_znizka', 'brak_biletow_pula_wykorzystana', 'requires_correction'):
         assert f'value="{value}"' in cards
     assert 'IEG → WAW' in cards and '07:30' in cards
-    assert html.index('id="repeatable-decisions"') < html.index('id="workflow-sla"')
+    assert html.index('id="workflow-sla"') < html.index('id="repeatable-decisions"')
     assert '<dt>Imię</dt>' not in cards and '<dt>Nazwisko</dt>' not in cards
 
 

@@ -725,6 +725,10 @@ function bindBulkAgreementUpload() {
         if (!rows.length) return;
         submit.disabled = true;
         const payload = new FormData();
+        const csrfToken =
+            form.querySelector('input[name="csrf_token"]')?.value || "";
+
+        payload.append("csrf_token", csrfToken);
         rows.forEach((row, index) => {
             payload.append("signed_agreement_files", selectedFiles[index], selectedFiles[index].name);
             const status = row.querySelector("[data-bulk-agreement-status]"); status.textContent = "Wysyłanie"; status.className = "bulk-upload-status is-uploading";

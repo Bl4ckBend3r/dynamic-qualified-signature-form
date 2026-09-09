@@ -170,7 +170,9 @@ def _signed_pdf(tmp_path: Path) -> Path:
     return signed
 
 
-def test_real_cryptographic_pdf_signature_fails_closed_without_trust_configuration(tmp_path):
+def test_real_cryptographic_pdf_signature_fails_closed_without_trust_configuration(tmp_path, monkeypatch):
+    monkeypatch.delenv("SIGNATURE_TRUST_ROOTS", raising=False)
+    monkeypatch.delenv("SIGNATURE_INTERMEDIATE_CERTS", raising=False)
     result = verify_signed_pdf(_signed_pdf(tmp_path))
     assert result["signature_count"] == 1
     assert result["integrity_ok"] is False

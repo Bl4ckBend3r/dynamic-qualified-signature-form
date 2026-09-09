@@ -40,7 +40,7 @@ Pygments==2.20.0
 pyHanko==0.34.1
 pyhanko-certvalidator==0.30.2
 PyMySQL==1.2.0
-pypdf==6.15.0
+pypdf==6.16.1
 pyphen==0.17.2
 pytest==9.0.3
 pytest-cov==7.1.0

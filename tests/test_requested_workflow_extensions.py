@@ -156,6 +156,9 @@ def _signed_pdf(tmp_path: Path) -> Path:
         .not_valid_after(now + timedelta(days=30)).add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
+    (tmp_path / "signer-root.pem").write_bytes(
+        cert.public_bytes(serialization.Encoding.PEM)
+    )
     pfx = tmp_path / "signer.p12"
     pfx.write_bytes(pkcs12.serialize_key_and_certificates(b"signer", key, cert, None, serialization.BestAvailableEncryption(b"secret")))
     signer = signers.SimpleSigner.load_pkcs12(str(pfx), passphrase=b"secret")
@@ -181,8 +184,10 @@ def test_real_cryptographic_pdf_signature_fails_closed_without_trust_configurati
     assert result["reason_code"] == "CERTIFICATE_TRUST_CONFIGURATION_MISSING"
 
 
-def test_tampered_signed_pdf_is_invalid(tmp_path):
+def test_tampered_signed_pdf_is_invalid(tmp_path, monkeypatch):
     signed = _signed_pdf(tmp_path)
+    monkeypatch.setenv("SIGNATURE_TRUST_ROOTS", str(tmp_path / "signer-root.pem"))
+    monkeypatch.delenv("SIGNATURE_INTERMEDIATE_CERTS", raising=False)
     content = bytearray(signed.read_bytes())
     marker = content.find(b"Office signature regression")
     assert marker >= 0

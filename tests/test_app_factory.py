@@ -40,8 +40,31 @@ def test_create_app_rejects_default_secret_key_in_production(monkeypatch, form_d
     class ProductionConfig(Config):
         ENV = "production"
         TESTING = True
+        SECRET_KEY = "change-me-in-production"
+        SESSION_COOKIE_SECURE = True
+        AUTO_DB_MIGRATE = False
+        AUTO_CREATE_DB_SCHEMA = False
+        ALLOW_UNSCANNED_UPLOADS = False
 
     with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
+
+
+def test_create_app_rejects_insecure_session_cookie_in_production(form_definition):
+    import app as app_module
+    from testing_support import InMemoryStorage
+    from config import Config
+
+    class ProductionConfig(Config):
+        ENV = "production"
+        TESTING = True
+        SECRET_KEY = "production-test-secret-key"
+        SESSION_COOKIE_SECURE = False
+        AUTO_DB_MIGRATE = False
+        AUTO_CREATE_DB_SCHEMA = False
+        ALLOW_UNSCANNED_UPLOADS = False
+
+    with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE"):
         app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
 
 

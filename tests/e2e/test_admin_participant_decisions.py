@@ -486,7 +486,10 @@ def test_workflow_builder_collapsed_cards_decision_scope_and_stable_graph(admin_
             assert page.locator('[data-workflow-diagram] polygon').count() >= 1
             assert page.evaluate('buildWorkflowDiagramDecisions(collectWorkflow().steps, [])[0].outcomes.length') == 2
         assert page.locator('[data-workflow-diagram] .has-error').count() == 0
-        assert page.locator('.admin-required-note').count() == 0
+        required_note = page.locator('.admin-required-note')
+        assert required_note.count() == 1
+        assert "Pola oznaczone" in required_note.inner_text()
+        assert required_note.locator('[aria-hidden="true"]').count() == 1
         assert page.evaluate('WorkflowStageEditor.validate(collectWorkflow()).errors') == []
         page.locator('[data-refresh-workflow-preview]').click()
         assert page.locator('[data-workflow-diagram-wrap]').evaluate('el => el.scrollHeight <= el.clientHeight + 2')

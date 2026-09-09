@@ -3648,6 +3648,7 @@ a.admin-stat:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px
 
 @media (max-width: 1450px) {
     .admin-submission-filters__additional { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+    .admin-table--submissions { min-width: 1100px; }
 }
 
 @media (max-width: 900px) {

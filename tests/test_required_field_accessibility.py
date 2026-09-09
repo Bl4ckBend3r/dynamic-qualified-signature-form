@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 def read(path: str) -> str:
@@ -30,7 +31,7 @@ def test_required_markers_are_hidden_and_required_controls_are_exposed_accessibl
 
     for source in public_sources:
         assert 'aria-hidden="true">*</span>' in source
-        assert 'required aria-required="true"' in source
+        assert re.search(r'required\s+aria-required="true"', source)
 
     admin_base = read("templates/admin/base.html")
     assert 'field.setAttribute("aria-required", "true")' in admin_base

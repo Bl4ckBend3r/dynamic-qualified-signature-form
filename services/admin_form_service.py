@@ -4,6 +4,7 @@ import json
 import re
 import unicodedata
 import zipfile
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime
 from io import BytesIO
@@ -54,6 +55,19 @@ _DOCUMENT_BUILDER_WORKFLOW_KEYS = {
         "contract_template_updated_source",
     ),
 }
+
+
+def _form_getlist(form_data, key: str) -> list[Any]:
+    """Read a repeated form value from MultiDict or a plain mapping."""
+    getlist = getattr(form_data, "getlist", None)
+    if callable(getlist):
+        return list(getlist(key))
+    if not isinstance(form_data, Mapping) or key not in form_data:
+        return []
+    value = form_data.get(key)
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
 
 
 def _merge_document_builder_state(candidate: dict, current: dict) -> tuple[dict, dict[str, bool]]:
@@ -299,7 +313,7 @@ def build_form_definition_from_admin_form(
         if assignment_mode not in {"manual", "round_robin"}:
             raise ValueError("Nieprawidłowy tryb automatycznego przydzielania spraw.")
         eligible_users = [
-            int(item) for item in form_data.getlist("assignment_eligible_user_ids")
+            int(item) for item in _form_getlist(form_data, "assignment_eligible_user_ids")
             if str(item).isdigit()
         ]
         definition["assignment"] = {
@@ -399,7 +413,7 @@ def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]
         ("beneficiary_agreement_confirmed", "Po podpisaniu umowy przez urząd"),
         ("beneficiary_agreement_rejected", "Po skierowaniu umowy do poprawy"),
     )
-    submitted_ids = form_data.getlist("notification_id")
+    submitted_ids = _form_getlist(form_data, "notification_id")
     event_labels = dict(events)
     for event_id in [*existing_by_id, *submitted_ids]:
         if event_id:
@@ -504,22 +518,22 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
 
 def parse_training_catalog(form_data) -> list[dict]:
     catalog = []
-    selection_groups = form_data.getlist("training_item_selection_group")
-    selection_group_choices = form_data.getlist("training_item_selection_group_choice")
-    new_selection_groups = form_data.getlist("training_item_selection_group_new")
-    item_ids = form_data.getlist("training_item_id")
-    names = form_data.getlist("training_item_name")
-    prices = form_data.getlist("training_item_price")
-    currencies = form_data.getlist("training_item_currency")
-    capacities = form_data.getlist("training_item_capacity")
-    descriptions = form_data.getlist("training_item_description")
-    admin_comments = form_data.getlist("training_item_admin_comment")
-    low_comments = form_data.getlist("training_item_low_seats_comment")
+    selection_groups = _form_getlist(form_data, "training_item_selection_group")
+    selection_group_choices = _form_getlist(form_data, "training_item_selection_group_choice")
+    new_selection_groups = _form_getlist(form_data, "training_item_selection_group_new")
+    item_ids = _form_getlist(form_data, "training_item_id")
+    names = _form_getlist(form_data, "training_item_name")
+    prices = _form_getlist(form_data, "training_item_price")
+    currencies = _form_getlist(form_data, "training_item_currency")
+    capacities = _form_getlist(form_data, "training_item_capacity")
+    descriptions = _form_getlist(form_data, "training_item_description")
+    admin_comments = _form_getlist(form_data, "training_item_admin_comment")
+    low_comments = _form_getlist(form_data, "training_item_low_seats_comment")
     dates_by_training = parse_training_dates_from_form(form_data, len(names))
-    active_values = form_data.getlist("training_item_active")
+    active_values = _form_getlist(form_data, "training_item_active")
     active_indexes = {int(item) for item in active_values if str(item).isdigit()}
     default_active = form_data.get("training_active_present") != "1" and not active_values
-    sort_orders = form_data.getlist("training_item_sort_order")
+    sort_orders = _form_getlist(form_data, "training_item_sort_order")
     for index, name in enumerate(names):
         clean_name = str(name or "").strip()
         if not clean_name:
@@ -603,14 +617,14 @@ def parse_training_currency(value: Any) -> str:
 
 def parse_training_dates_from_form(form_data, training_count: int) -> list[list[dict]]:
     dates_by_training: list[list[dict]] = [[] for _ in range(training_count)]
-    training_indexes = form_data.getlist("training_date_training_index")
+    training_indexes = _form_getlist(form_data, "training_date_training_index")
     if training_indexes:
-        start_dates = form_data.getlist("training_date_start_date")
-        end_dates = form_data.getlist("training_date_end_date")
-        start_times = form_data.getlist("training_date_start_time")
-        end_times = form_data.getlist("training_date_end_time")
-        locations = form_data.getlist("training_date_location")
-        descriptions = form_data.getlist("training_date_description")
+        start_dates = _form_getlist(form_data, "training_date_start_date")
+        end_dates = _form_getlist(form_data, "training_date_end_date")
+        start_times = _form_getlist(form_data, "training_date_start_time")
+        end_times = _form_getlist(form_data, "training_date_end_time")
+        locations = _form_getlist(form_data, "training_date_location")
+        descriptions = _form_getlist(form_data, "training_date_description")
         for row_index, training_index_value in enumerate(training_indexes):
             try:
                 training_index = int(str(training_index_value).strip())
@@ -648,7 +662,7 @@ def parse_training_dates_from_form(form_data, training_count: int) -> list[list[
             dates.sort(key=lambda item: (item["start_date"], item.get("start_time") or ""))
         return dates_by_training
 
-    legacy_values = form_data.getlist("training_item_dates")
+    legacy_values = _form_getlist(form_data, "training_item_dates")
     for index in range(training_count):
         legacy_value = legacy_values[index] if index < len(legacy_values) else ""
         dates_by_training[index] = parse_training_dates_text(legacy_value)

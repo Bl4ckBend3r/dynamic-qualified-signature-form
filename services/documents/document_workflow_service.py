@@ -212,6 +212,17 @@ class DocumentWorkflowService:
                 or (submission.data_json or {}).get("_signed_declaration_snapshot")
                 or any(state.get("files") or state.get("data_confirmed") for state in declaration_states)):
             return
+        template_source = str(document.get("template_source") or "").strip().casefold()
+        has_template = bool(
+            str(document.get("template_html") or "").strip()
+            or str(document.get("template") or "").strip()
+            or (template_source == "builder" and document.get("builder_document"))
+            or (template_source == "docx" and document.get("template_metadata"))
+        )
+        if not has_template:
+            # A training-only form can carry the declaration document container
+            # without having a declaration template or generated file to retire.
+            return
         template = self.documents.resolve_document_template(document)
         parsed = current_app.jinja_env.parse(template or "")
         references = meta.find_undeclared_variables(parsed)

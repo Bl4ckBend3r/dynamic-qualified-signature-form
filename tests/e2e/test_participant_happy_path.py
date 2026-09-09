@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_authorized_result_preserves_status_link_without_session_storage(participant_page, live_server, e2e_environment, submit_participant_form):
+def test_authorized_result_does_not_leak_access_link_without_session_storage(participant_page, live_server, e2e_environment, submit_participant_form):
     page = participant_page
     public_id = submit_participant_form(page)
     token = e2e_environment.submission_snapshot(public_id)['access_token']
@@ -9,14 +9,9 @@ def test_authorized_result_preserves_status_link_without_session_storage(partici
     page.add_init_script("Object.defineProperty(window, 'sessionStorage', {get() {throw new Error('Storage disabled');}})")
     page.goto(f'{live_server}/result/participant-e2e/{public_id}?token={token}')
     link = page.get_by_role('link', name='Przejdź do dokumentów do podpisania')
-    assert link.count() == 1
-    assert token not in page.locator('body').inner_text()
-    with page.expect_response(f'**/api/submissions/{public_id}/acceptance-status') as received:
-        link.click()
-    assert received.value.status == 200
-    assert received.value.request.headers.get('authorization') == f'Bearer {token}'
-    assert page.locator('#submission_id').input_value() == public_id
-    assert page.locator('[data-public-current-status]').count() == 1
+    assert link.count() == 0
+    assert token not in page.content()
+    assert page.locator('input[name="access_token"]').count() == 0
 
 
 def test_status_navigation_is_readonly_and_does_not_use_participant_credential(participant_page, live_server, e2e_environment, submit_participant_form, tmp_path):

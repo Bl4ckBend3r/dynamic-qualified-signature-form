@@ -170,12 +170,13 @@ def _signed_pdf(tmp_path: Path) -> Path:
     return signed
 
 
-def test_real_cryptographic_pdf_signature_is_not_promoted_to_trusted_offline(tmp_path):
+def test_real_cryptographic_pdf_signature_fails_closed_without_trust_configuration(tmp_path):
     result = verify_signed_pdf(_signed_pdf(tmp_path))
     assert result["signature_count"] == 1
-    assert result["integrity_ok"] is True
-    assert result["cryptographically_valid"] is True
-    assert result["validation_status"] == "INDETERMINATE"
+    assert result["integrity_ok"] is False
+    assert result["cryptographically_valid"] is False
+    assert result["validation_status"] == "ERROR"
+    assert result["reason_code"] == "CERTIFICATE_TRUST_CONFIGURATION_MISSING"
 
 
 def test_tampered_signed_pdf_is_invalid(tmp_path):

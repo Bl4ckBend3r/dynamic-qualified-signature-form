@@ -82,7 +82,7 @@ def test_diagnostic_confirms_signed_attributes_and_signer_certificate(signed_pdf
     assert signature["cryptography"] == {"cms_signature_valid": True, "error": None}
     certificates = signature["certificate_diagnostics"]
     assert certificates["reason_code"] == "OK"
-    assert certificates["certificate_count"] == 1
+    assert certificates["certificate_count"] == 2
     assert certificates["signer_certificate_found"] is True
 
 

@@ -71,7 +71,7 @@
     <div class="download-links">
         {% if result.pdf_url %}<a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>{% endif %}
 
-        {% if result.can_continue|default(true) %}<a
+        {% if result.can_continue|default(true) and participant_credential %}<a
             class="btn-primary"
             href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=participant_credential) }}"
         >
@@ -124,7 +124,7 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow %}
+    {% if has_signature_flow and participant_credential %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Wgraj podpisany PDF</h3>

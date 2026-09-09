@@ -97,14 +97,10 @@ endblock %}
     {% endif %} {% for field in form_definition.fields %} {% if field.type ==
     "section" %}
     <section class="form-section">
-      {% set section_label = field.label|striptags|trim|lower|replace(' / ',
-      '/') %} {% if section_label in ['dane kandydata', 'dane kandydatki', 'dane
-      kandydata/kandydatki'] %}
+      {% set section_label = field.label|striptags|trim|lower|replace(' / ', '/') %}
+      {% if section_label in ['dane kandydata', 'dane kandydatki', 'dane kandydata/kandydatki'] %}
       <h3>Twoje dane</h3>
-      {% elif section_label in ['status kandydata', 'status kandydatki', 'status
-      kandydata/kandydatki', 'status kandydata i dane dodatkowe', 'status
-      kandydatki i dane dodatkowe', 'status kandydata/kandydatki i dane
-      dodatkowe'] %}
+      {% elif section_label in ['status kandydata', 'status kandydatki', 'status kandydata/kandydatki', 'status kandydata i dane dodatkowe', 'status kandydatki i dane dodatkowe', 'status kandydata/kandydatki i dane dodatkowe'] %}
       <h3>Twój status</h3>
       {% else %}
       <h3>{{ field.label|trusted_html }}</h3>

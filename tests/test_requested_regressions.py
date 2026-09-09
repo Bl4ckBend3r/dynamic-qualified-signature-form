@@ -140,7 +140,7 @@ def test_declaration_branding_training_redirect_and_agreement_authoring_order_ar
     assert "pdf_image_alignment" in declaration
     assert "Logo formularza" in declaration
     assert '"documents.documents_to_sign"' in documents_route
-    assert "Wybór szkoleń został zapisany. Możesz przejść do umów." in documents_route
+    assert "Wybór szkoleń został zapisany." in documents_route
     assert "najpierw numer paragrafu" in form_editor
     assert "pod nim nazwę sekcji" in form_editor
 

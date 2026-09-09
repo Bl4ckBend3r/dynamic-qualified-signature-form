@@ -36,6 +36,7 @@ def _database_at_0043(tmp_path, filename="training-management.db"):
     Table("form_versions", metadata, Column("id", Integer, primary_key=True), Column("form_id", Integer, ForeignKey("forms.id"), nullable=False))
     Table("form_submissions", metadata, Column("id", Integer, primary_key=True), Column("form_slug", String(255), nullable=False), Column("form_version_id", Integer, ForeignKey("form_versions.id"), nullable=True))
     Table("submission_trainings", metadata, Column("id", Integer, primary_key=True), Column("submission_id", Integer, ForeignKey("form_submissions.id"), nullable=False), Column("training_id", String(255), nullable=False))
+    Table("repeatable_group_item_decisions", metadata, Column("id", Integer, primary_key=True))
     metadata.create_all(engine)
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)

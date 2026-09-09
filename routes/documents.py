@@ -925,7 +925,9 @@ def show_result(slug: str, submission_id: str):
         "signed_pdf_url": None,
         "upload_url": "",
         "can_continue": True,
-        "participant_credential": access.credential,
+        # The result page is read-only and must not reflect a stored participant
+        # credential into HTML, links, hidden fields or browser storage.
+        "participant_credential": "",
         "form_title": form_config["title"],
         "verification": verification,
     }

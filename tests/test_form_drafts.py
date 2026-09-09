@@ -94,7 +94,13 @@ def draft_app(monkeypatch, Session):
 
 def create_draft(client):
     page = client.get("/form/draft-form")
-    version_token = re.search(r'name="form_version_token" value="([^"]+)"', page.get_data(as_text=True)).group(1)
+    token_input = re.search(
+        r'<input\b(?=[^>]*\bname="form_version_token")(?=[^>]*\bvalue="([^"]+)")[^>]*>',
+        page.get_data(as_text=True),
+        re.DOTALL,
+    )
+    assert token_input is not None
+    version_token = token_input.group(1)
     response = client.post("/form/draft-form/draft", data={"form_version_token": version_token, "email": "user@example.test", "note": "partial"})
     assert response.status_code == 302
     return response.headers["Location"].split("/draft/", 1)[1].split("?", 1)[0]

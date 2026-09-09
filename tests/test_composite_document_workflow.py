@@ -216,8 +216,9 @@ def test_real_document_signature_raw_bytes_idempotency_transition(composite_env,
     assert 'result=VALID_SIGNATURE' in caplog.text
     assert 'TEST COPE SZAFIR' not in caplog.text
     assert 'TEST Profil Zaufany' not in caplog.text
+    expected_backend = 'trusted_profile_minimal_cms' if provider == 'profil_zaufany' else 'pyhanko_pdf_cms'
     for expected in ['cryptographic_valid=True', 'document_integrity_valid=True', 'certificate_chain_valid=True',
-                     'timestamp_valid=None', f'detected_signature_type={provider}', 'verifier_backend=pyhanko_pdf_cms', 'provider_allowed=True']:
+                     'timestamp_valid=None', f'detected_signature_type={provider}', f'verifier_backend={expected_backend}', 'provider_allowed=True']:
         assert expected in caplog.text
     with env.repo.session_factory() as db:
         events = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.public_submission_id == env.public_id)).scalars().all()
@@ -606,10 +607,10 @@ def test_historical_document_nodes_are_not_converted(composite_env):
 def test_composite_recovery_reuses_generated_file_and_verified_signature(composite_env, monkeypatch):
     env = composite_env()
     save = env.repo.save_document_step
-    def interrupted_save(submission_id, step_id, state, token, event, actor='system'):
+    def interrupted_save(submission_id, step_id, state, token, event, actor='system', *, field_values=None):
         if event == 'DOCUMENT_GENERATED':
             raise RuntimeError('Interrupted after file persistence')
-        return save(submission_id, step_id, state, token, event, actor)
+        return save(submission_id, step_id, state, token, event, actor, field_values=field_values)
     monkeypatch.setattr(env.repo, 'save_document_step', interrupted_save)
     with pytest.raises(RuntimeError):
         env.enter()

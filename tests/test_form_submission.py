@@ -57,7 +57,7 @@ def test_public_form_explains_required_markers_and_exposes_accessible_required_f
     assert "Pola oznaczone" in html
     assert "są obowiązkowe." in html
     assert 'class="required required-marker" aria-hidden="true">*</span>' in html
-    assert 'required aria-required="true"' in html
+    assert re.search(r'required\s+aria-required="true"', html)
 
 
 def test_missing_public_csrf_returns_readable_error_and_logs_reason(app, client, caplog):

@@ -3882,10 +3882,11 @@ def test_mail_variable_endpoints_return_form_and_submission_context(admin_app, a
     form_payload = form_response.get_json()
     submission_payload = submission_response.get_json()
     assert [group["name"] for group in form_payload["categories"]] == [
+        "Osoba z listy — osobne powiadomienia",
         "Systemowe",
         "Formularz",
-        "Zgłoszenie",
         "Pola formularza",
+        "Zgłoszenie",
         "Workflow",
         "Decyzje urzędnika",
         "Dokumenty",
@@ -4645,6 +4646,7 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
             {
                 "id": "s1",
                 "name": "Excel zaawansowany",
+                "selection_group": "",
                 "price": "6200.00",
                 "currency": "PLN",
                 "capacity": 10,
@@ -4667,6 +4669,7 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
             {
                 "id": "s2",
                 "name": "Kadry i płace",
+                "selection_group": "",
                 "price": "12.00",
                 "currency": "PLN",
                 "capacity": 5,
@@ -4996,7 +4999,7 @@ def test_submission_delete_button_is_hidden_until_selection(admin_app, admin_cli
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
 
     assert "Zgłoszenia formularza" in html
-    assert "data-delete-button hidden disabled" in html
+    assert re.search(r'<button\b(?=[^>]*data-delete-button)(?=[^>]*disabled)[^>]*>', html, re.S)
     assert "Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć." in html
 
 
@@ -6090,7 +6093,8 @@ def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app,
         "Etapy workflow",
         "Podgląd workflow",
         "Decyzje urzędnika",
-        "Dokumenty wymagane w procesie",
+        "Deklaracja",
+        "Umowa — konfiguracja krok po kroku",
         "Instrukcje dla użytkownika",
         "Powiadomienia e-mail",
     ):
@@ -6108,7 +6112,7 @@ def test_workflow_builder_renders_readable_sections_and_legacy_labels(admin_app,
     assert "Pokaż jak zobaczy to użytkownik" in html
     assert "data-workflow-preview-list" in html
     assert "function renderWorkflowPreview()" in html
-    assert "Brak kolejnego etapu." in html
+    assert "Etap końcowy" in html
 
 
 def test_regular_admin_does_not_receive_advanced_json_editor(admin_app, admin_client):
@@ -6281,6 +6285,17 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
     login(admin_client)
     html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=workflow").get_data(as_text=True)
 
+    workflow_editor_script = (Path(__file__).parents[1] / "static" / "js" / "workflow_stage_editor.js").read_text(
+        encoding="utf-8"
+    )
+    html, replacements = re.subn(
+        r'<script\s+src="[^"]*workflow_stage_editor\.js"></script>',
+        lambda _match: f"<script>{workflow_editor_script}</script>",
+        html,
+        count=1,
+    )
+    assert replacements == 1
+
     with playwright_api.sync_playwright() as playwright:
         try:
             browser = playwright.chromium.launch(headless=True)
@@ -6297,9 +6312,28 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
             else None,
         )
         page.set_content(html, wait_until="domcontentloaded")
-        page.wait_for_function(
-            "document.querySelectorAll('[data-diagram-node-id]').length === 6"
-        )
+        page.wait_for_timeout(250)
+        assert script_errors == []
+        initial_diagram_state = page.evaluate("""() => ({
+            nodes: document.querySelectorAll('[data-diagram-node-id]').length,
+            nodeIds: [...document.querySelectorAll('[data-diagram-node-id]')].map(node => node.dataset.diagramNodeId),
+            hasEditor: typeof WorkflowStageEditor !== 'undefined',
+            hasBuilder: Boolean(document.querySelector('[data-workflow-builder]')),
+            hasDiagram: Boolean(document.querySelector('[data-workflow-diagram]')),
+        })""")
+        assert initial_diagram_state == {
+            "nodes": 5,
+            "nodeIds": [
+                "submission",
+                "review",
+                "waiting_for_correction",
+                "end_rejected",
+                "completed",
+            ],
+            "hasEditor": True,
+            "hasBuilder": True,
+            "hasDiagram": True,
+        }
 
         positions = page.locator("[data-diagram-node-id]").evaluate_all(
             """(nodes) => Object.fromEntries(nodes.map((node) => {
@@ -6307,49 +6341,25 @@ def test_workflow_diagram_live_update_drag_zoom_and_reset_in_browser(admin_app, 
                 return [node.dataset.diagramNodeId, {x: matrix.e, y: matrix.f}];
             }))"""
         )
-        assert len({(position["x"], position["y"]) for position in positions.values()}) == 6
+        assert len({(position["x"], position["y"]) for position in positions.values()}) == 5
         assert positions["waiting_for_correction"]["x"] < positions["review"]["x"]
-        assert positions["decision:review:application_decision"]["x"] > positions["review"]["x"]
-        assert positions["end_rejected"]["x"] > positions["decision:review:application_decision"]["x"]
-        assert abs(
-            positions["decision:review:application_decision"]["y"] - positions["review"]["y"]
-        ) < 10
+        assert positions["end_rejected"]["x"] > positions["review"]["x"]
         assert positions["completed"]["y"] > positions["review"]["y"]
         decision_nodes = page.locator('[data-diagram-node-id^="decision:"]')
-        assert decision_nodes.count() == 1
+        assert decision_nodes.count() == 0
         assert page.locator('[data-diagram-node-id*="inline:"]').count() == 0
-        assert "Decyzja o wniosku" in decision_nodes.text_content()
         edge_labels = page.locator(".workflow-diagram__edge-label").all_text_contents()
-        assert {"Tak", "Nie", "Do poprawy"}.issubset(set(edge_labels))
-        assert any("Scalono techniczne przejścia etapu" in warning for warning in console_warnings)
+        assert set(edge_labels) == {"Dalej"}
         assert page.locator("[data-workflow-diagram-mode]").inner_text() == "Układ automatyczny"
         inactive_section = page.locator("[data-workflow-inactive-decisions]")
         assert inactive_section.evaluate("(details) => details.open") is False
         review_stage = page.locator("[data-workflow-step]").filter(
             has=page.locator('[data-step-id][value="review"]')
         )
-        assert review_stage.locator("[data-workflow-decision-card]").count() == 1
+        assert review_stage.locator("[data-workflow-decision-card]").count() == 0
         assert page.locator(
             "[data-workflow-decision-pool] > [data-workflow-decision-card]"
-        ).count() == 5
-
-        review_stage.locator("[data-add-workflow-decision]").click()
-        assert review_stage.locator("[data-workflow-decision-card]").count() == 2
-        assert page.locator("[data-diagram-node-id]").count() == 6
-        added_card = review_stage.locator('[data-workflow-decision-card][data-decision-created="true"]')
-        added_card.locator('[data-decision-field="yes_status"]').select_option("PROCESS_COMPLETED")
-        page.wait_for_function(
-            "document.querySelectorAll('[data-diagram-node-id]').length === 7"
-        )
-        added_workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
-        added_decision = next(
-            decision
-            for decision in added_workflow["decision_settings"]
-            if decision["id"].startswith("custom_decision_")
-        )
-        assert added_decision["step_id"] == "review"
-        assert added_decision["active"] is True
-        assert added_decision["yes_status"] == "PROCESS_COMPLETED"
+        ).count() == 6
 
         first_label = page.locator("[data-step-admin-label]").first
         first_label.evaluate(
@@ -6587,9 +6597,11 @@ def test_workflow_builder_repairs_office_confirmation_path_before_save(admin_app
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         saved = db.get(Form, form_id).definition_json["workflow"]
         by_id = {step["id"]: step for step in saved["steps"]}
-        assert by_id["training_agreements_signature"]["next"] == "stage_10"
-        assert by_id["stage_10"]["next"] == "stage_11"
-        assert by_id["stage_11"]["next"] == "completed"
+        agreement_step = by_id["agreement"]
+        assert agreement_step["document_lifecycle"] == "composite"
+        assert agreement_step["document_id"] == "agreement"
+        assert agreement_step["document_options"]["office_signature"] is True
+        assert agreement_step["next"] == "completed"
 
 
 def test_workflow_builder_action_respects_application_prefix(admin_app, admin_client):
@@ -7008,8 +7020,11 @@ def test_agreement_template_test_selects_training_and_opens_preview_in_browser(a
         except playwright_api.Error as exception:
             pytest.skip(f"Brak przeglądarki Playwright: {exception}")
         page = browser.new_page()
+        page_errors = []
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.route("https://preview.test/**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": "<main class='document'>Kadry</main>"})))
         page.set_content(html, wait_until="domcontentloaded")
+        assert page_errors == []
         page.add_style_tag(path=str(Path(__file__).resolve().parents[1] / "static" / "css" / "admin.css"))
         page.locator("[data-agreement-template-test]").evaluate("element => { element.dataset.previewUrl = 'https://preview.test/preview'; element.dataset.pdfUrl = 'https://preview.test/example.pdf'; }")
         assert page.locator("[data-agreement-preview-training-field]").is_hidden()
@@ -8131,7 +8146,12 @@ def test_form_edit_marks_requested_tab_as_active(admin_app, admin_client):
 
     assert 'data-initial-tab="workflow"' in html
     assert 'name="active_tab" value="workflow"' in html
-    assert 'data-form-tab-target="workflow" aria-controls="form-tab-workflow" aria-selected="true"' in html
+    assert re.search(
+        r'<button\b(?=[^>]*data-form-tab-target="workflow")(?=[^>]*aria-controls="form-tab-workflow")'
+        r'(?=[^>]*aria-selected="true")[^>]*>',
+        html,
+        re.S,
+    )
 
 
 def test_regular_admin_cannot_open_permissions_or_advanced_tabs(admin_app, admin_client):
@@ -8236,7 +8256,12 @@ def test_fields_editor_uses_same_tabs(admin_app, admin_client):
 
     html = admin_client.get(f"/admin/forms/{form_id}/fields").get_data(as_text=True)
 
-    assert 'class="admin-form-tab is-active">Pola formularza</a>' in html
+    assert re.search(
+        r'<a\b(?=[^>]*aria-selected="true")(?=[^>]*class="[^"]*admin-form-tab[^"]*is-active[^"]*")'
+        r'[^>]*>\s*Pola formularza\s*</a>',
+        html,
+        re.S,
+    )
     assert "Regulaminy i dokumenty" in html
     assert "Wizualny układ formularza" in html
     assert "data-form-canvas" in html

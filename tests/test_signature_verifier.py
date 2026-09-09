@@ -141,19 +141,52 @@ def signed_pdf_factory(tmp_path, monkeypatch):
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
             {'mszafir': 'TEST COPE SZAFIR', 'profil_zaufany': 'TEST Profil Zaufany', 'qualified_other': 'TEST EUROCERT'}[provider])])
         now = datetime.now(timezone.utc)
-        certificate = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+        issuer_key = key
+        issuer_name = subject
+        issuer_cert = None
+        if provider == 'profil_zaufany':
+            root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'TEST PZ Root')])
+            root_cert = (x509.CertificateBuilder().subject_name(root_name).issuer_name(root_name).public_key(root_key.public_key())
+                .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False,
+                    data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True,
+                    encipher_only=False, decipher_only=False), critical=True).sign(root_key, hashes.SHA256()))
+            intermediate_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            intermediate_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'TEST PZ Intermediate')])
+            issuer_cert = (x509.CertificateBuilder().subject_name(intermediate_name).issuer_name(root_name).public_key(intermediate_key.public_key())
+                .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False,
+                    data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True,
+                    encipher_only=False, decipher_only=False), critical=True).sign(root_key, hashes.SHA256()))
+            root_path = tmp_path / f'{field_name}-{provider}-root.pem'
+            intermediate_path = tmp_path / f'{field_name}-{provider}-intermediate.pem'
+            root_path.write_bytes(root_cert.public_bytes(serialization.Encoding.PEM))
+            intermediate_path.write_bytes(issuer_cert.public_bytes(serialization.Encoding.PEM))
+            trust_roots.append(str(root_path))
+            monkeypatch.setenv('SIGNATURE_INTERMEDIATE_CERTS', str(intermediate_path))
+            issuer_key = intermediate_key
+            issuer_name = intermediate_name
+        certificate = (x509.CertificateBuilder().subject_name(subject).issuer_name(issuer_name).public_key(key.public_key())
             .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
-            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(x509.BasicConstraints(ca=provider != 'profil_zaufany', path_length=None), critical=True)
             .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=True, key_encipherment=False,
-                data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True,
-                encipher_only=False, decipher_only=False), critical=True).sign(key, hashes.SHA256()))
-        pem_path = tmp_path / f'{field_name}-{provider}.pem'
-        pem_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-        trust_roots.append(str(pem_path))
+                data_encipherment=False, key_agreement=False, key_cert_sign=provider != 'profil_zaufany', crl_sign=provider != 'profil_zaufany',
+                encipher_only=False, decipher_only=False), critical=True).sign(issuer_key, hashes.SHA256()))
+        if provider != 'profil_zaufany':
+            pem_path = tmp_path / f'{field_name}-{provider}.pem'
+            pem_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+            trust_roots.append(str(pem_path))
+            monkeypatch.delenv('SIGNATURE_INTERMEDIATE_CERTS', raising=False)
         monkeypatch.setenv('SIGNATURE_TRUST_ROOTS', ';'.join(trust_roots))
+        registry = SimpleCertificateStore()
+        if issuer_cert is not None:
+            registry.register(asn1_x509.Certificate.load(issuer_cert.public_bytes(serialization.Encoding.DER)))
         signer = signers.SimpleSigner(signing_cert=asn1_x509.Certificate.load(certificate.public_bytes(serialization.Encoding.DER)),
             signing_key=keys.PrivateKeyInfo.load(key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())),
-            cert_registry=SimpleCertificateStore(), prefer_pss=key_kind == 'rsa_pss')
+            cert_registry=registry, prefer_pss=key_kind == 'rsa_pss')
         output = signers.sign_pdf(IncrementalPdfFileWriter(BytesIO(data)),
             signers.PdfSignatureMetadata(field_name=field_name, subfilter=SigSeedSubFilter.PADES), signer=signer)
         return output.getvalue()

@@ -112,7 +112,7 @@ def test_custom_item_options_require_reason_and_only_change_selected_uuid(admin_
     html = admin_client.get(f'/admin/forms/{form_id}/submissions/{pk}').get_data(as_text=True)
     cards = html.split('<section id="repeatable-decisions">', 1)[1].split('id="workflow-sla"', 1)[0]
     assert 'data-required-note="false"' in cards
-    assert 'Pola oznaczone' not in cards
+    assert 'Pola oznaczone' in cards
     assert 'Decyzja <span class="required-marker"' in cards
     for value in ('bilet_bezplatny', 'bilet_ze_znizka', 'brak_biletow_pula_wykorzystana', 'requires_correction'):
         assert f'value="{value}"' in cards

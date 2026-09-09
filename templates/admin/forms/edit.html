@@ -20,6 +20,7 @@
 {% endif %}
 {% include "admin/forms/_tabs.html" %}
 <form method="post" enctype="multipart/form-data" class="admin-card admin-form admin-form-tabbed" data-required-note="false" data-form-tabbed data-initial-tab="{{ active_tab }}" data-fields-url="{{ url_for('admin.form_fields', form_id=form.id, form_version_id=form.editable_version_id) }}">
+    <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
     {% if form.editable_version_id %}<input type="hidden" name="form_version_id" value="{{ form.editable_version_id }}">{% endif %}
@@ -3035,6 +3036,7 @@ function addWorkflowDecisionToStage(stage) {
 }
 
 function syncWorkflowBuilder({forceInstructionValues = false} = {}) {
+    if (typeof WorkflowStageEditor === "undefined") return;
     const cards = Array.from(workflowStepList?.querySelectorAll("[data-workflow-step]") || []);
     cards.forEach(card => WorkflowStageEditor.initialize(card, workflowSource));
     cards.forEach((card) => {

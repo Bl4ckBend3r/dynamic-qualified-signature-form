@@ -12,14 +12,20 @@ def resolve_mail_links(form, submission, *, definition=None, can_access_submissi
                        documents_to_sign_url_builder=None, document_url_builder=None):
     """Resolve the existing mail URL aliases before rendering, for this recipient."""
     from flask import current_app, has_app_context, has_request_context, url_for
+    from werkzeug.routing import BuildError
     from services.documents.document_workflow_service import is_document_step
     links = {key: '' for key in ('status_url', 'public_status_url', 'participant_action_url',
                                  'podpisz_url', 'pobierz_url', 'document_url', 'correction_url')}
     if not submission:
         return links
     if has_request_context():
-        links['public_status_url'] = url_for('public_forms.public_status_page',
-            submission_id=submission.submission_id, _external=True)
+        try:
+            links['public_status_url'] = url_for('public_forms.public_status_page',
+                submission_id=submission.submission_id, _external=True)
+        except BuildError:
+            # Standalone service consumers can provide their own URL builders
+            # without registering the application's public blueprints.
+            pass
     links['status_url'] = links['public_status_url']
     if not can_access_submission or not getattr(submission, 'access_token', None):
         return links
@@ -28,8 +34,11 @@ def resolve_mail_links(form, submission, *, definition=None, can_access_submissi
     if documents_to_sign_url_builder:
         action_url = documents_to_sign_url_builder(submission)
     elif has_request_context():
-        action_url = url_for('documents.documents_to_sign', submission_id=submission.submission_id,
-                             token=submission.access_token, _external=True)
+        try:
+            action_url = url_for('documents.documents_to_sign', submission_id=submission.submission_id,
+                                 token=submission.access_token, _external=True)
+        except BuildError:
+            action_url = ''
     else:
         action_url = ''
     links.update(participant_action_url=action_url, podpisz_url=action_url)

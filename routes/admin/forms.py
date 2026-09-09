@@ -1604,7 +1604,7 @@ def agreement_builder_view(form_id: int):
 def agreement_docx_import_builder(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
-        _editable_form_version(db, form)
+        editable_version = _editable_form_version(db, form, materialize=True)
         definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
         metadata = workflow.get("contract_docx_template") or {}
@@ -2230,8 +2230,6 @@ def _normalize_form_editor_tab(value: str | None, role: str) -> str:
 
 def _tab_for_form_error(errors: list[str], fallback: str, form_data) -> str:
     text = " ".join(errors).lower()
-    if fallback == "workflow" and ("etap" in text or "workflow.steps" in text):
-        return "workflow"
     if (
         form_data.get("workflow_use_advanced_json") == "on"
         or form_data.get("use_form_definition_json") == "on"
@@ -2243,6 +2241,8 @@ def _tab_for_form_error(errors: list[str], fallback: str, form_data) -> str:
         return "agreement"
     if "szkol" in text or "training" in text:
         return "trainings"
+    if fallback == "workflow" and ("etap" in text or "workflow.steps" in text):
+        return "workflow"
     if "workflow" in text or "etap" in text or "status" in text or "decyzj" in text:
         return "workflow"
     if "mail" in text or "e-mail" in text or "smtp" in text:

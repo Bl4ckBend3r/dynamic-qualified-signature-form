@@ -100,12 +100,13 @@ global.window = {{
 }};
 global.document = {{
   getElementById(id) {{ return elements[id] || null; }},
+  querySelector() {{ return null; }},
   querySelectorAll() {{ return []; }},
 }};
 vm.runInThisContext({json.dumps(script)});
 console.log(JSON.stringify({{
-  localUrl: (window.APP_BASE_PATH = "", buildApiUrl("/api/submissions/abc/acceptance-status")),
-  prefixedUrl: (window.APP_BASE_PATH = "/aplikacja", buildApiUrl("/api/submissions/abc/acceptance-status")),
+  localUrl: (window.APP_BASE_PATH = "", window.location.pathname = "/do-podpisania", buildApiUrl("/api/submissions/abc/acceptance-status")),
+  prefixedUrl: (window.APP_BASE_PATH = "/aplikacja", window.location.pathname = "/aplikacja/do-podpisania", buildApiUrl("/api/submissions/abc/acceptance-status")),
   prefixedRelativeUrl: buildApiUrl("api/submissions/abc/acceptance-status"),
   alreadyPrefixedUrl: buildApiUrl("/aplikacja/api/submissions/abc/acceptance-status"),
   doubleSlashUrl: buildApiUrl("/api//submissions//abc//acceptance-status"),
@@ -113,11 +114,13 @@ console.log(JSON.stringify({{
 }}));
 """
     completed = subprocess.run(
-        [node, "-e", runner],
-        check=True,
+        [node],
+        input=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 0, completed.stderr
     urls = json.loads(completed.stdout)
 
     assert urls["localUrl"] == "/api/submissions/abc/acceptance-status"
@@ -159,24 +162,24 @@ function element() {{
     addEventListener() {{}},
   }};
 }}
-const instructionWindow = element();
-const formInstructionSection = element();
-const formInstructionContent = element();
-const instructionSteps = element();
-const nextActionSection = element();
-const nextActionContent = element();
-const instructionRestore = element();
+const instructionWindowElement = element();
+const formInstructionSectionElement = element();
+const formInstructionContentElement = element();
+const instructionStepsElement = element();
+const nextActionSectionElement = element();
+const nextActionContentElement = element();
+const instructionRestoreElement = element();
 const elements = {{
   "submission_id": {{ value: "", dataset: {{}}, addEventListener() {{}} }},
-  "user-instruction-window": instructionWindow,
-  "form-instruction-section": formInstructionSection,
-  "form-instruction-content": formInstructionContent,
-  "instruction-steps": instructionSteps,
-  "next-action-section": nextActionSection,
-  "next-action-content": nextActionContent,
+  "user-instruction-window": instructionWindowElement,
+  "form-instruction-section": formInstructionSectionElement,
+  "form-instruction-content": formInstructionContentElement,
+  "instruction-steps": instructionStepsElement,
+  "next-action-section": nextActionSectionElement,
+  "next-action-content": nextActionContentElement,
   "user-instruction-minimize": element(),
   "user-instruction-close": element(),
-  "user-instruction-restore": instructionRestore,
+  "user-instruction-restore": instructionRestoreElement,
 }};
 const storage = new Map();
 global.window = {{
@@ -191,15 +194,16 @@ global.window = {{
 }};
 global.document = {{
   getElementById(id) {{ return elements[id] || null; }},
+  querySelector() {{ return null; }},
   querySelectorAll() {{ return []; }},
   createElement() {{ return element(); }},
 }};
 vm.runInThisContext({json.dumps(script)});
 
 showUserInstruction({{ has_form_instruction: false, form_instruction: "", next_action: "" }}, "abc");
-const hiddenWithoutContent = instructionWindow.classList.contains("is-hidden");
+const hiddenWithoutContent = instructionWindowElement.classList.contains("is-hidden");
 showUserInstruction({{ has_form_instruction: false, form_instruction: "", next_action: "Poczekaj", process_status: "FORM_SUBMITTED", instruction_version: "empty-v1", instruction_steps: [] }}, "empty");
-const shownWithNextActionOnly = !instructionWindow.classList.contains("is-hidden");
+const shownWithNextActionOnly = !instructionWindowElement.classList.contains("is-hidden");
 showUserInstruction({{
   has_form_instruction: true,
   form_instruction: "<img src=x onerror=alert(1)>\\nKrok 2",
@@ -211,19 +215,19 @@ showUserInstruction({{
     {{ key: "declaration", label: "Deklaracja", completed: false, current: true }},
   ],
 }}, "abc");
-const shown = !instructionWindow.classList.contains("is-hidden");
-const safeTextBeforeChange = formInstructionContent.textContent;
-const currentStep = instructionSteps.children.find((item) => item.attributes["aria-current"] === "step");
+const shown = !instructionWindowElement.classList.contains("is-hidden");
+const safeTextBeforeChange = formInstructionContentElement.textContent;
+const currentStep = instructionStepsElement.children.find((item) => item.attributes["aria-current"] === "step");
 const currentStepIsSemanticAndStyled = Boolean(currentStep && currentStep.classList.contains("instruction-step--current"));
 minimizeInstruction();
-const minimized = instructionWindow.classList.contains("is-hidden") && !instructionRestore.classList.contains("is-hidden");
+const minimized = instructionWindowElement.classList.contains("is-hidden") && !instructionRestoreElement.classList.contains("is-hidden");
 restoreInstruction();
-const restored = !instructionWindow.classList.contains("is-hidden") && instructionRestore.classList.contains("is-hidden");
+const restored = !instructionWindowElement.classList.contains("is-hidden") && instructionRestoreElement.classList.contains("is-hidden");
 closeInstruction();
 showUserInstruction({{ has_form_instruction: true, form_instruction: "same", next_action: "same", process_status: "OFFICER_ACCEPTED", instruction_version: "v1", instruction_steps: [] }}, "abc");
-const stayedClosed = instructionWindow.classList.contains("is-hidden") && instructionRestore.classList.contains("is-hidden");
+const stayedClosed = instructionWindowElement.classList.contains("is-hidden") && instructionRestoreElement.classList.contains("is-hidden");
 showUserInstruction({{ has_form_instruction: true, form_instruction: "changed", next_action: "changed", process_status: "DECLARATION_WAITING_FOR_SIGNATURE", instruction_version: "v2", instruction_steps: [] }}, "abc");
-const reopenedAfterStatusChange = !instructionWindow.classList.contains("is-hidden");
+const reopenedAfterStatusChange = !instructionWindowElement.classList.contains("is-hidden");
 console.log(JSON.stringify({{
   hiddenWithoutContent,
   shownWithNextActionOnly,
@@ -234,16 +238,18 @@ console.log(JSON.stringify({{
   stayedClosed,
   reopenedAfterStatusChange,
   safeTextBeforeChange,
-  innerHtmlUntouched: formInstructionContent.innerHTML,
+  innerHtmlUntouched: formInstructionContentElement.innerHTML,
   closeKey: storage.get("instruction_closed_abc_OFFICER_ACCEPTED"),
 }}));
 """
     completed = subprocess.run(
-        [node, "-e", runner],
-        check=True,
+        [node],
+        input=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
 
     assert result == {
@@ -268,10 +274,12 @@ console.log(JSON.stringify({{
 def test_training_selection_uses_separate_full_width_screen():
     declaration = Path("templates/declaration_form.html").read_text(encoding="utf-8")
     template = Path("templates/training_selection.html").read_text(encoding="utf-8")
+    picker = Path("templates/partials/training_picker.html").read_text(encoding="utf-8")
     stylesheet = Path("static/css/training_selection.css").read_text(encoding="utf-8")
 
     assert "training_selection" not in declaration
-    assert "training-card-list" in template
-    assert "training-picker__submit-row" in template
+    assert 'include "partials/training_picker.html"' in template
+    assert "training-card-list" in picker
+    assert "training-picker__submit-row" in picker
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".training-picker__submit" in stylesheet

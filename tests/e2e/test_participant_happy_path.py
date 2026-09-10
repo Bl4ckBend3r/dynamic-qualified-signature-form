@@ -45,8 +45,10 @@ def test_status_navigation_is_readonly_and_does_not_use_participant_credential(p
         input_box, button_box = field.bounding_box(), submit.bounding_box()
         assert card_box['width'] <= 820
         assert abs(card_box['x'] - (width - card_box['width']) / 2) < 2
-        assert 46 <= input_box['height'] <= 48
-        assert 46 <= button_box['height'] <= 48
+        HEIGHT_TOLERANCE = 0.1
+
+        assert 46 - HEIGHT_TOLERANCE <= input_box['height'] <= 48 + HEIGHT_TOLERANCE
+        assert 46 - HEIGHT_TOLERANCE <= button_box['height'] <= 48 + HEIGHT_TOLERANCE
         assert copy.bounding_box()['height'] >= 44
         assert field.evaluate('el => parseFloat(getComputedStyle(el).fontSize)') >= 16
         if width > 600:

@@ -15,7 +15,7 @@ def _serve_project_page(page, html):
         if path == "/":
             route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
             return
-        asset = PROJECT_ROOT / path.lstrip("/").replace("/", "\\")
+        asset = PROJECT_ROOT / path.lstrip("/")
         if asset.is_file() and asset.suffix in {".js", ".css"}:
             content_type = "text/javascript" if asset.suffix == ".js" else "text/css"
             route.fulfill(

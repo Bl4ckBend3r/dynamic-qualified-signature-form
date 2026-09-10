@@ -8,12 +8,23 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from form_loader import build_consents_view, build_submission_view
-from services.document_service import DocumentType, build_document_pdf_context
+from services.document_service import (
+    DocumentType,
+    build_available_storage_filename,
+    build_document_pdf_context,
+    build_unique_collection_filenames,
+    build_unique_collection_numbers,
+)
+from services.agreement_context_service import (
+    build_training_agreement_value_context,
+    upgrade_training_agreement_total_placeholder,
+)
 from services.documents.document_storage_service import DocumentStorageService
 from services.documents.pdf_render_service import PdfRenderService
 from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.training_agreement_service import build_training_agreement_number
+from services.training_service import format_price_pln, parse_training_snapshots
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +42,7 @@ def build_training_agreement_filename(pattern: str, row: Mapping[str, Any], trai
         "last_name": normalize_training_id(last_name),
         "submission_id": normalize_training_id(row.get("submission_id", "")),
         "training_id": normalize_training_id(training.get("id", "")),
+        "training_name": normalize_training_id(training.get("name", "")),
         "agreement_sequence": sequence,
     }
     try:
@@ -56,8 +68,10 @@ def build_training_agreement_record(
         "training_id": training.get("id", ""),
         "training_name": training.get("name", ""),
         "training_price": training.get("price", ""),
+        "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
         "sequence": sequence,
         "number": agreement_number,
+        "agreement_number": agreement_number,
         "generated_at": generated_date,
         "filename": filename,
         "signed": False,
@@ -132,7 +146,7 @@ def generate_training_agreements_for_submission(
     if not form_definition:
         raise RuntimeError("Nie znaleziono definicji formularza dla umowy.")
 
-    selected_trainings = parse_selected_trainings(row)
+    selected_trainings = parse_training_snapshots(row.get("selected_trainings")) or parse_selected_trainings(row)
     if not selected_trainings:
         raise RuntimeError("Nie wybrano szkolen do wygenerowania umow.")
 
@@ -141,7 +155,15 @@ def generate_training_agreements_for_submission(
         return []
 
     resolved_date = generated_date or date.today().isoformat()
-    template_html = resolve_template_html(agreement_config.get("template", ""))
+    template_html = str(agreement_config.get("template_html") or "").strip()
+    if not template_html and agreement_config.get("template"):
+        template_html = resolve_template_html(agreement_config.get("template", "")) or ""
+    if not template_html:
+        raise RuntimeError("Brak szablonu umowy dla tego formularza.")
+    template_html = upgrade_training_agreement_total_placeholder(
+        template_html,
+        show_all_trainings_total=bool(agreement_config.get("show_all_trainings_total", True)),
+    )
     renderer = pdf_render_service or PdfRenderService()
     storage_service = document_storage_service or DocumentStorageService()
     metadata_service = submission_document_service or SubmissionDocumentService(
@@ -149,19 +171,50 @@ def generate_training_agreements_for_submission(
         storage=storage,
     )
     agreements = []
-
-    for index, training in enumerate(selected_trainings, start=1):
-        agreement_number = build_training_agreement_number(
-            submission_id,
-            index,
-            resolved_date,
-            agreement_config,
-        )
-        filename = build_training_agreement_filename(
+    base_filenames = [
+        build_training_agreement_filename(
             agreement_config.get("filename_pattern", ""),
             row,
             training,
             index,
+        )
+        for index, training in enumerate(selected_trainings, start=1)
+    ]
+    filenames = build_unique_collection_filenames(base_filenames)
+    agreement_numbers = build_unique_collection_numbers(
+        [
+            build_training_agreement_number(
+                submission_id,
+                index,
+                resolved_date,
+                agreement_config,
+            )
+            for index in range(1, len(selected_trainings) + 1)
+        ]
+    )
+
+    for index, (training, filename, agreement_number) in enumerate(
+        zip(selected_trainings, filenames, agreement_numbers, strict=True),
+        start=1,
+    ):
+        agreement_value_context = build_training_agreement_value_context(
+            selected_trainings,
+            training,
+        )
+        filename = build_available_storage_filename(
+            storage_service=storage_service,
+            storage=storage,
+            slug=slug,
+            filename=filename,
+            document_type=None,
+            signed=False,
+        )
+        agreement_record = build_training_agreement_record(
+            training=training,
+            sequence=index,
+            agreement_number=agreement_number,
+            generated_date=resolved_date,
+            filename=filename,
         )
         render_row = {
             **row,
@@ -169,23 +222,40 @@ def generate_training_agreements_for_submission(
             "training_id": training.get("id", ""),
             "training_name": training.get("name", ""),
             "training_price": training.get("price", ""),
+            "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
+            "agreement_sequence": index,
             "agreement_number": agreement_number,
+            "generated_date": resolved_date,
             "agreement_generated_at": resolved_date,
+            "selected_trainings": [training],
+            "selected_trainings_normalized": [training],
+            "training_agreement": agreement_record,
+            "agreement": agreement_record,
+            "training_agreements": [agreement_record],
+            **agreement_value_context,
         }
         context = build_document_pdf_context(
             form_definition=form_definition,
             submission_id=submission_id,
             row=render_row,
-            submission_view=build_submission_view(form_definition, row),
-            consents_view=build_consents_view(form_definition, row),
+            submission_view=build_submission_view(form_definition, render_row),
+            consents_view=build_consents_view(form_definition, render_row),
             pdf_image_url=resolve_pdf_image_url(form_definition),
             document_type=DocumentType.AGREEMENT,
         )
         context.update(
             {
                 "training": training,
+                "selected_trainings": [training],
+                "selected_trainings_normalized": [training],
+                "training_agreement": agreement_record,
+                "agreement": agreement_record,
+                "training_agreements": [agreement_record],
+                "agreement_sequence": index,
                 "agreement_number": agreement_number,
                 "agreement_generated_at": resolved_date,
+                "training_price_formatted": training.get("price_formatted") or format_price_pln(training.get("price"), training.get("currency")),
+                **agreement_value_context,
             }
         )
         agreement_bytes = renderer.render_document_pdf_bytes(
@@ -194,7 +264,7 @@ def generate_training_agreements_for_submission(
             template_html=template_html,
             context=context,
         )
-        storage_service.save_pdf(
+        storage_path = storage_service.save_pdf(
             storage=storage,
             slug=slug,
             filename=filename,
@@ -202,7 +272,7 @@ def generate_training_agreements_for_submission(
             document_type=None,
             signed=False,
         )
-        metadata_service.record_generated_document(
+        recorded = metadata_service.record_generated_document(
             submission_id=submission_id,
             form_slug=slug,
             filename=filename,
@@ -211,24 +281,30 @@ def generate_training_agreements_for_submission(
             document_type=SubmissionDocumentType.TRAINING_AGREEMENT,
             agreement_number=agreement_number,
             training_key=str(training.get("id") or f"training_{index}"),
+            storage_path=storage_path,
             storage=storage,
         )
-        agreements.append(
-            build_training_agreement_record(
-                training=training,
-                sequence=index,
-                agreement_number=agreement_number,
-                generated_date=resolved_date,
-                filename=filename,
-            )
+        logger.info(
+            "Training agreement generated public_submission_id=%s internal_submission_id=%s "
+            "filename=%s document_type=%s storage_path=%s file_saved=%s submission_file_created=%s.",
+            submission_id,
+            row.get("id", ""),
+            filename,
+            SubmissionDocumentType.TRAINING_AGREEMENT,
+            storage_path,
+            True,
+            recorded,
         )
+        if getattr(submission_repository, "supports_file_metadata", False) and not recorded:
+            raise RuntimeError(f"Nie udalo sie zapisac metadanych wygenerowanej umowy: {filename}")
+        agreements.append(agreement_record)
 
     updates = {
         "agreement_generated": "Tak",
         "agreement_filename": agreements[0]["filename"] if agreements else "",
         "agreement_generated_at": resolved_date,
         "training_agreements": serialize_json_list(agreements),
-        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_SIGNATURE.value,
+        "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
     }
     storage.update_csv_row_by_submission_id(slug, submission_id, updates)
     row.update(updates)

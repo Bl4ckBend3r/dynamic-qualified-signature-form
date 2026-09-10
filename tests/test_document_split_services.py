@@ -95,7 +95,12 @@ class FakeDocumentService:
         return b"%PDF delegated"
 
     def get_document_by_id(self, form_config, document_id):
-        return {"id": document_id, "repeat_over": "selected_trainings", "repeat_item_alias": "training"}
+        return {
+            "id": document_id,
+            "repeat_over": "selected_trainings",
+            "repeat_item_alias": "training",
+            "template_html": "<main class=\"document\">Umowa</main>",
+        }
 
     def generate_documents_for_collection(self, *args, **kwargs):
         self.generated_collections.append((args, kwargs))
@@ -249,7 +254,15 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
         submission_service=SimpleNamespace(
             build_signed_pdf_filename=lambda slug, submission_id: f"{slug}-{submission_id}-signed.pdf"
         ),
-        verifier=lambda path: {"is_signed": True, "is_szafir_signature": True},
+        verifier=lambda path: {
+            "is_signed": True,
+            "is_szafir_signature": True,
+            "signature_type": "mszafir",
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "trusted": True,
+            "validation_status": "VALID",
+        },
     )
     uploaded_file = SimpleNamespace(
         filename="signed.pdf",
@@ -270,6 +283,33 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
     assert repository.updated == [("abc", {"signed_pdf_filename": "sample-abc-signed.pdf"})]
     assert repository.recorded[0][1]["filename"] == "sample-abc-signed.pdf"
     assert repository.recorded[0][1]["signed"] is True
+
+
+def test_document_signing_service_rejects_indeterminate_trust(tmp_path):
+    signing_service = DocumentSigningService(
+        storage=DummyStorage(),
+        submission_repository=DummyRepository(metadata=None),
+        submission_service=SimpleNamespace(build_signed_pdf_filename=lambda slug, submission_id: "signed.pdf"),
+        verifier=lambda path: {
+            "is_signed": True,
+            "signature_type": "mszafir",
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "trusted": False,
+            "validation_status": "INDETERMINATE",
+            "reason_code": "TRUST_STATUS_INDETERMINATE",
+        },
+    )
+    uploaded_file = SimpleNamespace(
+        filename="signed.pdf",
+        mimetype="application/pdf",
+        read=lambda: b"%PDF-1.4\nsigned",
+    )
+
+    with pytest.raises(ValueError, match="zweryfikować"):
+        signing_service.upload_signed_submission_pdf(
+            slug="sample", submission_id="abc", uploaded_file=uploaded_file, temp_dir=tmp_path
+        )
 
 
 def test_document_signing_service_delegates_declaration_and_agreement_uploads():
@@ -322,13 +362,28 @@ def test_declaration_flow_saves_additional_fields_and_legacy_status():
     assert repository.updated[0][1]["process_status"] == "additional_fields_completed"
 
 
-def test_declaration_flow_generates_pdf_with_current_training_selection():
+def test_declaration_flow_generates_pdf_without_training_selection():
     repository = DummyRepository(metadata=None)
     document_service = FakeDocumentService()
     submission = {
         "submission_id": "abc",
         "form_slug": "sample",
         "row": {"selected_trainings": json.dumps([{"id": "old", "name": "Stare", "price": 3000}])},
+    }
+    declaration_config = {
+        "id": "declaration",
+        "enabled": True,
+        "fields": [
+            {
+                "type": "training_selection",
+                "name": "selected_trainings",
+                "required": True,
+                "catalog": [
+                    {"id": "s1", "name": "Szkolenie 1", "price": 6200},
+                    {"id": "s2", "name": "Szkolenie 2", "price": 800},
+                ],
+            }
+        ],
     }
     form_config = {
         "documents": [
@@ -339,11 +394,7 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
                     {
                         "type": "training_selection",
                         "name": "selected_trainings",
-                        "required": True,
-                        "catalog": [
-                            {"id": "s1", "name": "Szkolenie 1", "price": 6200},
-                            {"id": "s2", "name": "Szkolenie 2", "price": 800},
-                        ],
+                        "catalog": [{"id": "stale", "name": "Nieaktualne szkolenie", "price": 1}],
                     }
                 ],
             }
@@ -354,7 +405,7 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
         submission_id="abc",
         submission=submission,
         form_config=form_config,
-        declaration_config=form_config["documents"][0],
+        declaration_config=declaration_config,
         form_data=SimpleNamespace(getlist=lambda name: ["s1", "s2"], keys=lambda: ["selected_trainings"], get=lambda name: ""),
         rules_service=SimpleNamespace(apply_rules=lambda row, config, data: {}),
         submission_repository=repository,
@@ -368,14 +419,9 @@ def test_declaration_flow_generates_pdf_with_current_training_selection():
 
     assert result.success is True
     context_extra = document_service.generated_documents[0][1]["context_extra"]
-    assert json.loads(context_extra["selected_trainings"]) == [
-        {"id": "s1", "name": "Szkolenie 1", "price": 6200.0},
-        {"id": "s2", "name": "Szkolenie 2", "price": 800.0},
-    ]
-    assert json.loads(document_service.generated_documents[0][0][0]["row"]["selected_trainings"]) == [
-        {"id": "s1", "name": "Szkolenie 1", "price": 6200.0},
-        {"id": "s2", "name": "Szkolenie 2", "price": 800.0},
-    ]
+    assert context_extra["selected_trainings"] == []
+    assert context_extra["selected_trainings_normalized"] == []
+    assert repository.updated[0][1].get("selected_trainings") is None
 
 
 def test_agreement_flow_generates_collection_with_today_by_default():
@@ -407,6 +453,176 @@ def test_agreement_flow_blocks_generation_until_declaration_is_signed():
 
     assert result.success is False
     assert result.error_code == "declaration_signature_required"
+
+
+def test_agreement_flow_generates_only_new_training_and_preserves_previous_agreement():
+    document_service = FakeDocumentService()
+    updates = []
+    document_service.submission_repository = SimpleNamespace(
+        update=lambda submission_id, values: updates.append((submission_id, values)) or True
+    )
+    document_service.generate_documents_for_collection = lambda *args, **kwargs: [
+        {"id": "excel", "training_id": "excel", "filename": "excel.pdf"}
+    ]
+    previous = {
+        "id": "python",
+        "training_id": "python",
+        "filename": "python.pdf",
+        "signed_filename": "python-signed.pdf",
+        "signature_valid": True,
+    }
+    submission = {
+        "submission_id": "abc",
+        "form_slug": "sample",
+        "row": {
+            "declaration_signature_valid": "Tak",
+            "selected_trainings": json.dumps([
+                {"id": "python", "name": "Python"},
+                {"id": "excel", "name": "Excel"},
+            ]),
+            "training_agreements": json.dumps([previous]),
+        },
+    }
+
+    result = AgreementFlowService().generate_training_agreements(
+        submission=submission,
+        form_config={"documents": []},
+        document_service=document_service,
+    )
+
+    assert [item["id"] for item in result.agreements] == ["python", "excel"]
+    assert result.agreements[0]["signed_filename"] == "python-signed.pdf"
+    assert updates[0][0] == "abc"
+    assert [item["id"] for item in json.loads(updates[0][1]["training_agreements"])] == ["python", "excel"]
+
+
+def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_trainings=None, row_extra=None):
+    row = {
+        "officer_decision": "TAK",
+        "acceptance_required": "TAK",
+        "declaration_required": "Tak",
+        "declaration_signature_valid": "Tak",
+        "agreement_required": "Tak",
+        "agreement_generated": "Tak",
+        "agreement_filename": items[0]["filename"],
+        "training_agreements": json.dumps(items),
+        "selected_trainings": json.dumps(selected_trainings) if selected_trainings is not None else None,
+        "process_status": process_status,
+        **(row_extra or {}),
+    }
+    return DocumentViewService().build_documents_to_sign_result(
+        submission_id="abc",
+        submission={"submission_id": "abc", "form_slug": "sample", "form_title": "Sample", "row": row},
+        form_config={},
+        declaration={"enabled": False},
+        process_state=SimpleNamespace(status=SimpleNamespace(value=process_status), can_generate_agreement=False),
+        current_step=process_status,
+        available_actions=[],
+        documents_view={"documents": []},
+        download_url_builder=lambda filename, signed=False: f"/{'signed' if signed else 'generated'}/{filename}",
+        declaration_upload_url=None,
+        generate_agreement_url="/generate",
+        agreement_upload_url_builder=lambda agreement_id: f"/upload/{agreement_id}",
+        agreement_upload_url="/upload",
+        agreement_required=True,
+        agreement_template_configured=True,
+        status_labeler=lambda status, form: status,
+        available_filenames={
+            item.get(key) for item in items for key in ("filename", "signed_filename", "office_signed_filename") if item.get(key)
+        },
+    )
+
+
+def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and_office_states():
+    generated = _agreement_view_for([
+        {"id": "generated", "filename": "generated.pdf", "participant_status": "agreement_generated"}
+    ])["training_agreements"][0]
+    assert generated["state_title"] == "Umowa do podpisania"
+    assert generated["download_label"] == "Pobierz umowę PDF"
+    assert generated["can_upload"] is False
+
+    downloaded = _agreement_view_for([
+        {"id": "downloaded", "filename": "downloaded.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True}
+    ], process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE")["training_agreements"][0]
+    assert downloaded["state_title"] == "Umowa oczekuje na podpis"
+    assert downloaded["status_label"] == "Umowa oczekuje na podpis beneficjenta"
+    assert downloaded["download_label"] == "Pobierz ponownie umowę PDF"
+    assert downloaded["can_upload"] is True
+
+    uploaded = _agreement_view_for([
+        {"id": "uploaded", "filename": "uploaded.pdf", "signed_filename": "uploaded-signed.pdf", "participant_status": "agreement_waiting_for_office_signature", "signature_valid": True, "is_locked": True}
+    ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")["training_agreements"][0]
+    assert uploaded["state_title"] == "Podpisana umowa została wgrana"
+    assert uploaded["status_label"] == "Umowa oczekuje na podpis urzędu"
+    assert uploaded["can_upload"] is False
+    assert uploaded["signed_url"] == "/signed/uploaded-signed.pdf"
+
+    office = _agreement_view_for([
+        {"id": "office", "filename": "office.pdf", "signed_filename": "office-beneficiary.pdf", "office_signed_filename": "office-final.pdf", "participant_status": "agreement_signed_by_office", "signature_valid": True, "is_locked": True}
+    ], process_status="AGREEMENT_SIGNED_BY_OFFICE")["training_agreements"][0]
+    assert office["state_title"] == "Umowa została podpisana przez urząd"
+    assert office["status_label"] == "Umowa podpisana przez urząd"
+    assert office["final_url"] == "/signed/office-final.pdf"
+
+
+def test_multiple_training_agreements_keep_independent_actions():
+    result = _agreement_view_for([
+        {"id": "locked", "filename": "locked.pdf", "signed_filename": "locked-signed.pdf", "participant_status": "agreement_uploaded_by_beneficiary", "signature_valid": True, "is_locked": True},
+        {"id": "open", "filename": "open.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True},
+    ], process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE")
+    states = {item["id"]: item for item in result["training_agreements"]}
+
+    assert states["locked"]["can_upload"] is False
+    assert states["locked"]["beneficiary_uploaded"] is True
+    assert states["locked"]["status_label"] == "Podpisana umowa wgrana"
+    assert states["open"]["can_upload"] is True
+    assert states["open"]["state_title"] == "Umowa oczekuje na podpis"
+    assert [item["id"] for item in result["uploadable_training_agreements"]] == ["open"]
+
+
+def test_signed_training_does_not_hide_generation_for_new_selected_training():
+    result = _agreement_view_for(
+        [{
+            "id": "python",
+            "training_id": "python",
+            "training_name": "Python",
+            "filename": "python.pdf",
+            "signed_filename": "python-signed.pdf",
+            "participant_status": "agreement_uploaded_by_beneficiary",
+            "signature_valid": True,
+            "is_locked": True,
+        }],
+        process_status="AGREEMENT_SIGNED_BY_OFFICE",
+        selected_trainings=[
+            {"id": "python", "name": "Python"},
+            {"id": "excel", "name": "Excel"},
+        ],
+        row_extra={
+            "agreement_signature_valid": "Tak",
+            "agreement_blocked": "Tak",
+        },
+    )
+    states = {item["training_id"]: item for item in result["training_agreements"]}
+
+    assert result["can_generate_agreement"] is True
+    assert states["python"]["beneficiary_uploaded"] is True
+    assert states["excel"]["state"] == "selected"
+    assert states["excel"]["state_title"] == "Umowa do wygenerowania"
+    assert states["excel"]["can_generate"] is True
+
+
+def test_unselected_unsigned_training_agreement_is_hidden_from_public_items():
+    result = _agreement_view_for(
+        [
+            {"id": "python", "training_id": "python", "filename": "python.pdf", "participant_status": "unselected"},
+            {"id": "excel", "training_id": "excel", "filename": "excel.pdf", "participant_status": "agreement_waiting_for_beneficiary_signature", "agreement_downloaded": True},
+        ],
+        selected_trainings=[{"id": "excel", "name": "Excel"}],
+        process_status="AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    )
+
+    assert [item["id"] for item in result["agreement_items"]] == ["excel"]
+    assert [item["id"] for item in result["uploadable_training_agreements"]] == ["excel"]
 
 
 def test_document_storage_uses_legacy_filename_fallback_only_without_metadata(caplog):

@@ -60,6 +60,7 @@ def build_filename_from_pattern(pattern: str, row: Mapping[str, Any], fallback: 
         "participant_name": sanitize_filename_part(build_participant_name(row), "Uczestnik"),
         "submission_id": sanitize_filename_part(row.get("submission_id"), "wniosek"),
         "training_id": sanitize_filename_part(row.get("training_id"), "szkolenie"),
+        "training_name": sanitize_filename_part(row.get("training_name"), "szkolenie"),
         "agreement_sequence": sanitize_filename_part(row.get("agreement_sequence"), "1"),
         "generated_date": sanitize_filename_part(row.get("generated_date") or row.get("agreement_generated_at"), "data"),
     }
@@ -106,7 +107,14 @@ def document_type_directory(document_type: str | None, signed: bool | None = Non
     signature_dir = "podpisane" if signed else "niepodpisane"
     if document_type in {"declaration", "deklaracja"}:
         return f"deklaracja/{signature_dir}"
-    if document_type in {"agreement", "training_agreement", "umowa", "umowy"}:
+    if document_type in {
+        "agreement",
+        "training_agreement",
+        "signed_agreement",
+        "signed_training_agreement",
+        "umowa",
+        "umowy",
+    }:
         return f"umowy/{signature_dir}"
     return ""
 

@@ -1,136 +1,277 @@
 {% extends "admin/base.html" %}
-{% block title %}Zgloszenia{% endblock %}
+{% block title %}Zgłoszenia{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">{{ form.name }}</p>
-        <h1>Zgloszenia formularza</h1>
+        <h1>Zgłoszenia formularza</h1>
     </div>
-    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
+    {% if can_export_data %}<a class="admin-button-secondary" href="{{ url_for('admin.submissions_export', form_id=form.id) }}">Eksportuj CSV</a>{% endif %}
 </div>
-<form method="get" class="admin-card admin-filters">
-    <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
-    <select name="status">
-        <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
-            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
-        {% endfor %}
-    </select>
-    <select name="field">
-        <option value="">Pole do filtrowania</option>
-        {% for field_name, field_label in filter_fields %}
-            <option value="{{ field_name }}" {% if filters.get('field') == field_name %}selected{% endif %}>{{ field_label }}</option>
-        {% endfor %}
-    </select>
-    <select name="operator">
-        {% for value, label in [("contains", "zawiera"), ("equals", "rowna sie"), ("not_contains", "nie zawiera"), ("not_equals", "rozne od"), ("empty", "puste"), ("not_empty", "niepuste"), ("date_range", "od-do dla dat")] %}
-            <option value="{{ value }}" {% if filters.get('operator', 'contains') == value %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-    </select>
-    <input name="value" value="{{ filters.get('value', '') }}" placeholder="Wartosc od">
-    <input name="value_to" value="{{ filters.get('value_to', '') }}" placeholder="Wartosc do">
-    <select name="sort">
-        {% for option in ["created_at", "process_status", "officer_decision", "nazwisko", "email", "submission_id"] %}
-            <option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>
-        {% endfor %}
-        {% for field in fields %}
-            <option value="{{ field.name }}" {% if filters.get('sort') == field.name %}selected{% endif %}>{{ field.name }}</option>
-        {% endfor %}
-    </select>
-    <select name="direction">
-        <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
-        <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
-    </select>
-    <button class="admin-button-secondary" type="submit">Filtruj</button>
+<div class="admin-filter-summary admin-submissions-summary"><span>Znaleziono: <strong>{{ pagination.total }}</strong></span></div>
+{% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
+{% set advanced_filter_active = filters.get('field') or filters.get('value') or filters.get('value_to') or filters.get('sort') not in (none, '', 'created_at') or filters.get('direction') not in (none, '', 'desc') or filters.get('checklist_status') or filters.get('queue') or filters.get('assignee') or filters.get('priority') %}
+<form id="submission-advanced-filters" method="get" class="admin-card admin-submission-filters">
+    <div class="admin-submission-filters__primary">
+        <label class="admin-submission-search"><span class="visually-hidden">Szukaj</span><input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj" aria-label="Szukaj zgłoszeń"></label>
+        <label><span class="visually-hidden">Status</span><select name="status" aria-label="Status"><option value="">Wszystkie statusy</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+        <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
+        <label><span>Data do</span><input type="date" name="date_to" value="{{ filters.get('date_to', '') }}"></label>
+        <div class="admin-filter-actions"><button class="admin-button" type="submit">Filtruj</button><a class="admin-button-secondary" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Wyczyść</a></div>
+    </div>
+    <details class="admin-filter-more" {% if advanced_filter_active %}open{% endif %} data-advanced-filters>
+        <summary aria-expanded="{{ 'true' if advanced_filter_active else 'false' }}" aria-controls="submission-additional-filters">Więcej filtrów</summary>
+        <div id="submission-additional-filters" class="admin-submission-filters__additional">
+            <label><span>Pole formularza</span><select name="field"><option value="">Pole do filtrowania</option>{% for field_name, field_label in filter_fields %}<option value="{{ field_name }}" {% if filters.get('field') == field_name %}selected{% endif %}>{{ field_label }}</option>{% endfor %}</select></label>
+            <label><span>Operator</span><select name="operator">{% for value, label in [("contains", "zawiera"), ("equals", "równa się"), ("not_contains", "nie zawiera"), ("not_equals", "różne od"), ("empty", "puste"), ("not_empty", "niepuste"), ("date_range", "od–do dla dat")] %}<option value="{{ value }}" {% if filters.get('operator', 'contains') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+            <label><span>Wartość od</span><input name="value" value="{{ filters.get('value', '') }}"></label>
+            <label><span>Wartość do</span><input name="value_to" value="{{ filters.get('value_to', '') }}"></label>
+            <label><span>Sortowanie</span><select name="sort">{% for option in ["created_at", "process_status", "officer_decision", "nazwisko", "email", "submission_id"] %}<option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>{% endfor %}{% for field in fields %}<option value="{{ field.name }}" {% if filters.get('sort') == field.name %}selected{% endif %}>{{ field.name }}</option>{% endfor %}</select></label>
+            <label><span>Kierunek</span><select name="direction"><option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Malejąco</option><option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Rosnąco</option></select></label>
+            <label><span>Stan checklisty</span><select name="checklist_status"><option value="">Każdy stan checklisty</option><option value="incomplete" {% if filters.get('checklist_status') == 'incomplete' %}selected{% endif %}>Checklista niekompletna</option><option value="blocking_failure" {% if filters.get('checklist_status') == 'blocking_failure' %}selected{% endif %}>Kryterium blokujące: NIE</option><option value="ready" {% if filters.get('checklist_status') == 'ready' %}selected{% endif %}>Gotowe do decyzji</option></select></label>
+            <label><span>Kolejka</span><select name="queue">{% for value, label in [("", "Wszystkie kolejki"), ("mine", "Moje sprawy"), ("unassigned", "Nieprzydzielone"), ("overdue", "Po terminie przydziału"), ("sla_overdue", "SLA po terminie"), ("sla_today", "SLA dzisiaj"), ("sla_24h", "SLA ≤ 24h"), ("sla_48h", "SLA ≤ 48h"), ("requiring_decision", "Wymagające decyzji"), ("waiting_office_signature", "Oczekujące na podpis urzędu")] %}<option value="{{ value }}" {% if filters.get('queue') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+            <label><span>Prowadzący</span><select name="assignee"><option value="">Każdy prowadzący</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Nieprzydzielone</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></label>
+            <label><span>Priorytet</span><select name="priority"><option value="">Każdy priorytet</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></label>
+        </div>
+    </details>
 </form>
+<form id="submission-column-filters" method="get"><input type="hidden" name="sort" value="{{ filters.get('sort', 'created_at') }}"><input type="hidden" name="direction" value="{{ filters.get('direction', 'desc') }}"></form>
+{% macro sortable(label, field) -%}<a class="admin-sort-link" href="{{ sort_urls[field] }}">{{ label }}{% if filters.get('sort', 'created_at') == field %}<span class="admin-sort-indicator">{{ '↑' if filters.get('direction') == 'asc' else '↓' }}</span>{% endif %}</a>{%- endmacro %}
 <form id="bulk-mail-form" method="post" action="{{ url_for('admin.submissions_mail_selected', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="compose" value="1">
 </form>
-<div class="admin-bulk-actions">
-    <label class="admin-check">
-        <input type="checkbox" id="select-all-submissions">
-        <span>Zaznacz wszystkie na stronie</span>
-    </label>
-    <div class="admin-actions">
-        <button class="admin-button-secondary" type="submit" form="bulk-mail-form">Wyslij mail do zaznaczonych</button>
-        <button class="admin-button" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>
+<form id="bulk-office-agreements-form" method="post" action="{{ url_for('admin.check_office_signed_agreements_bulk', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div data-office-agreement-selection></div>
+</form>
+<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div data-delete-selection></div>
+</form>
+{% if can_assign_submissions %}<form id="bulk-assignment-form" method="post" action="{{ url_for('admin.submissions_assignment_update', form_id=form.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="next" value="{{ request.full_path }}"><div data-assignment-selection></div>
+</form>{% endif %}
+{% set can_select_rows = can_make_decision or can_send_email or can_sign_office_agreement or can_assign_submissions or not read_only %}
+{% if can_select_rows %}<div class="admin-bulk-actions admin-submission-bulk" aria-label="Akcje dla zaznaczonych zgłoszeń">
+    <span class="admin-submission-bulk__count" aria-live="polite">Zaznaczono: <strong data-selected-count>0</strong></span>
+    <div class="admin-submission-bulk__controls">
+        {% if can_assign_submissions %}<select name="assigned_to_user_id" form="bulk-assignment-form" aria-label="Prowadzący"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select><input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany" aria-label="Powód zmiany prowadzącego"><button class="admin-button-secondary compact" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz</button>{% endif %}
+        {% if can_send_email %}<button class="admin-button-secondary compact" type="submit" form="bulk-mail-form" data-mail-button disabled>Wyślij mail</button>{% endif %}
+        {% if can_sign_office_agreement %}<button class="admin-button-secondary compact" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź podpisy urzędu</button>{% endif %}
+        {% if can_sign_office_agreement and can_send_email %}<label class="admin-check admin-submission-bulk__notification"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>{% endif %}
+        {% if can_make_decision %}<button class="admin-button compact" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>{% endif %}
     </div>
-</div>
+    {% if not read_only %}<details class="admin-submission-bulk__more"><summary class="admin-button-secondary compact">Więcej</summary><button class="admin-button-danger compact" type="submit" form="bulk-delete-form" data-delete-button disabled>Usuń zaznaczone</button></details>{% endif %}
+</div>{% endif %}
 <form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div class="admin-card admin-table-wrap">
-        <table class="admin-table">
+        <table class="admin-table admin-table--submissions admin-table--responsive">
             <thead>
                 <tr>
-                    <th>Wybierz</th>
-                    <th>ID</th>
-                    <th>Data</th>
-                    <th>Nazwisko</th>
-                    <th>Email</th>
-                    {% for field in fields[:6] %}
-                        <th>{{ field.label or field.name }}</th>
-                    {% endfor %}
-                    <th>Status</th>
-                    <th>Decyzja urzednika</th>
-                    <th>Akcje</th>
+                    {% if can_select_rows %}<th scope="col" class="col-select"><input type="checkbox" id="select-all-submissions" aria-label="Zaznacz wszystkie zgłoszenia na stronie" title="Zaznacz wszystkie na stronie"></th>{% endif %}
+                    <th scope="col" class="col-id">{{ sortable('ID', 'submission_id') }}</th>
+                    <th scope="col" class="col-person">{{ sortable('Osoba', 'full_name') }}</th>
+                    <th scope="col" class="col-contact">Kontakt</th>
+                    <th scope="col" class="col-date">{{ sortable('Data złożenia', 'created_at') }}</th>
+                    <th scope="col" class="col-form">{{ sortable('Formularz', 'form_slug') }}</th>
+                    <th scope="col" class="col-assignee">Prowadzący</th>
+                    <th scope="col" class="col-priority">Priorytet / termin</th>
+                    <th scope="col" class="col-status">{{ sortable('Status', 'process_status') }}</th>
+                    <th scope="col" class="col-workflow">{{ sortable('Etap workflow', 'workflow_stage') }}</th>
+                    <th scope="col" class="col-decision">Decyzja</th>
+                    <th scope="col" class="actions-column col-actions">Akcje</th>
+                </tr>
+                <tr class="admin-column-filters">
+                    {% if can_select_rows %}<th></th>{% endif %}
+                    <th><a class="admin-sort-link" href="{{ sort_urls.submission_id }}" aria-label="Sortuj po ID">↕</a><input form="submission-column-filters" name="submission_id" value="{{ filters.get('submission_id', '') }}" aria-label="Filtruj po ID"></th>
+                    <th><a class="admin-sort-link" href="{{ sort_urls.full_name }}" aria-label="Sortuj po imieniu i nazwisku">↕</a><input form="submission-column-filters" name="full_name" value="{{ filters.get('full_name', '') }}" aria-label="Filtruj po imieniu i nazwisku"></th>
+                    <th><div class="admin-contact-filters"><input form="submission-column-filters" name="email" value="{{ filters.get('email', '') }}" aria-label="Filtruj po e-mailu" placeholder="E-mail"><input form="submission-column-filters" name="telefon" value="{{ filters.get('telefon', '') }}" aria-label="Filtruj po telefonie" placeholder="Telefon"></div></th>
+                    <th><div class="admin-date-filter"><input form="submission-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Data od"><input form="submission-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Data do"></div></th>
+                    <th></th>
+                    <th><select form="submission-column-filters" name="assignee"><option value="">Każdy</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Brak</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></th>
+                    <th><select form="submission-column-filters" name="priority"><option value="">Każdy</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></th>
+                    <th><select form="submission-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></th>
+                    <th><input form="submission-column-filters" name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" aria-label="Filtruj po etapie workflow"></th>
+                    <th></th>
+                    <th class="actions-column"><button class="admin-button-secondary compact" type="submit" form="submission-column-filters">Filtruj</button></th>
                 </tr>
             </thead>
             <tbody>{% for submission in submissions %}
                 <tr>
-                    <td>
+                    {% if can_select_rows %}<td class="col-select">
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
-                        <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" form="bulk-mail-form">
-                    </td>
-                    <td><code>{{ submission.submission_id }}</code></td>
-                    <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
-                    <td>{{ submission.nazwisko or "-" }}</td>
-                    <td>{{ submission.email or "-" }}</td>
-                    {% for field in fields[:6] %}
-                        <td>{{ submission_value(submission, field.name) or "-" }}</td>
-                    {% endfor %}
+                        <input class="submission-check" type="checkbox" name="submission_ids" value="{{ submission.submission_id }}" data-submission-pk="{{ submission.id }}" form="bulk-mail-form" aria-label="Zaznacz zgłoszenie {{ submission.submission_id }}">
+                    </td>{% endif %}
+                    <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
+                    <td class="admin-person-cell">{{ (((submission.imiona or submission_value(submission, 'imie') or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if can_view_sensitive_data else "Dane ukryte" }}</td>
+                    <td class="admin-contact-cell">{% if can_view_sensitive_data %}<span>{{ submission.email or "-" }}</span><span>{{ submission.telefon or "-" }}</span>{% else %}<span>Dane ukryte</span>{% endif %}</td>
+                    <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
+                    <td class="admin-form-name-cell">{{ form.name }}</td>
+                    <td class="admin-assignee-cell">{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
+                    <td class="admin-priority-cell"><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
                     <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
+                    <td>{{ status_label(submission.workflow_stage or submission.workflow_step) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
                     <td>
-                        <div class="admin-decision-controls">
-                            <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
-                                {% for value, label in officer_decisions %}
-                                    <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            <input
-                                name="officer_decision_reason_{{ submission.id }}"
-                                class="admin-decision-reason"
-                                value="{{ submission.officer_decision_reason }}"
-                                placeholder="Powod"
-                            >
-                        </div>
+                        {% if can_make_decision and can_edit_application_decision(submission) %}
+                            <div class="admin-decision-controls">
+                                <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
+                                    {% for value, label in officer_decisions %}
+                                        <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                <input
+                                    name="officer_decision_reason_{{ submission.id }}"
+                                    class="admin-decision-reason"
+                                    value="{{ submission.officer_decision_reason }}"
+                                    placeholder="Powód"
+                                >
+                            </div>
+                        {% elif submission.officer_decision %}
+                            <span class="admin-badge">{{ "Wniosek zaakceptowany" if submission.officer_decision|lower in ["accepted", "tak"] else "Wniosek odrzucony" }}</span>
+                        {% else %}
+                            <span>Etap zakończony</span>
+                        {% endif %}
                     </td>
-                    <td>
-                        <div class="admin-actions">
-                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
-                            <a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+                    <td class="actions-column">
+                        <div class="admin-action-dropdown">
+                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="submission-actions-{{ submission.id }}">Akcje</button>
+                            <div id="submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
+                            {% if can_edit_workflow and submission.process_status not in ['FORM_SUBMITTED', 'WAITING_FOR_OFFICER_DECISION'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#rollback-stage-dialog">Cofnij etap</a>{% endif %}
+                            {% if can_make_decision and can_edit_application_decision(submission) %}
+                                <button type="button" class="admin-link-button" data-quick-decision="accepted" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Zaakceptuj</button>
+                                <button type="button" class="admin-link-button" data-quick-decision="rejected" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Odrzuć</button>
+                                {% if can_return_for_correction %}<button type="button" class="admin-link-button" data-quick-decision="correction" data-action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" data-submission-id="{{ submission.submission_id }}">Wyślij do poprawy</button>{% endif %}
+                            {% endif %}
+                            {% if submission.process_status in ['DECLARATION_READY', 'DECLARATION_WAITING_FOR_SIGNATURE'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wygeneruj deklarację</a>{% endif %}
+                            {% if submission.process_status in ['DECLARATION_SIGNED', 'DECLARATION_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź podpis</a>{% endif %}
+                            {% if submission.process_status == 'TRAINING_SELECTION_OPEN' %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wybierz szkolenia</a>{% endif %}
+                            {% if submission.process_status in ['AGREEMENT_READY', 'AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wygeneruj umowę</a>{% endif %}
+                            {% if submission.process_status in ['AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE', 'AGREEMENT_SIGNED_BY_OFFICE', 'AGREEMENT_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź umowę podpisaną przez urząd</a>{% endif %}
+                            {% if can_send_email %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#correspondence">Pokaż korespondencję</a>
+                            </div>
                         </div>
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="{{ 9 + fields[:6]|length }}">Brak zgloszen.</td></tr>
+                <tr><td colspan="{{ 12 if can_select_rows else 11 }}">Brak zgłoszeń.</td></tr>
             {% endfor %}</tbody>
         </table>
     </div>
-    <div class="admin-bulk-actions admin-bulk-actions-bottom">
-        <span></span>
-        <button class="admin-button" type="submit">Zapisz decyzje</button>
-    </div>
 </form>
+<nav class="admin-pagination" aria-label="Paginacja zgłoszeń">
+    <span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span>
+    <div class="admin-pagination__links">
+        {% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+        {% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+    </div>
+</nav>
+{% if can_make_decision or can_return_for_correction %}
+<dialog class="admin-modal admin-modal-backdrop" id="quick-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-decision-title" data-admin-modal>
+    <form method="post" class="admin-modal__surface admin-form" id="quick-decision-form">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <input type="hidden" name="officer_decision" id="quick-decision-value">
+        <input type="hidden" name="send_email" value="on" id="quick-decision-send-email" disabled>
+        <header class="admin-modal__header"><h2 id="quick-decision-title">Potwierdź decyzję</h2></header>
+        <div class="admin-modal__body">
+            <p id="quick-decision-message"></p>
+            <label id="quick-decision-reason-wrap"><span>Uzasadnienie <span class="required-marker">*</span></span><textarea name="officer_decision_reason" id="quick-decision-reason" rows="4"></textarea></label>
+        </div>
+        <footer class="admin-modal__footer"><button type="button" class="admin-button-secondary" data-admin-modal-close>Anuluj</button><button type="submit" class="admin-button" id="quick-decision-submit">Potwierdź</button></footer>
+    </form>
+</dialog>
+{% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const selectAll = document.getElementById("select-all-submissions");
     const checks = document.querySelectorAll(".submission-check");
+    const selectedCount = document.querySelector("[data-selected-count]");
+    const deleteForm = document.getElementById("bulk-delete-form");
+    const deleteButton = document.querySelector("[data-delete-button]");
+    const deleteSelection = document.querySelector("[data-delete-selection]");
+    const mailButton = document.querySelector("[data-mail-button]");
+    const officeAgreementButton = document.querySelector("[data-office-agreement-button]");
+    const officeAgreementSelection = document.querySelector("[data-office-agreement-selection]");
+    const assignmentButton = document.querySelector("[data-assignment-button]");
+    const assignmentSelection = document.querySelector("[data-assignment-selection]");
+
+    function syncDeleteButton() {
+        const selected = Array.from(checks).filter(item => item.checked);
+        if (selectedCount) selectedCount.textContent = String(selected.length);
+        if (selectAll) {
+            selectAll.checked = checks.length > 0 && selected.length === checks.length;
+            selectAll.indeterminate = selected.length > 0 && selected.length < checks.length;
+        }
+        if (deleteButton) {
+            deleteButton.disabled = selected.length === 0;
+        }
+        if (mailButton) mailButton.disabled = selected.length === 0;
+        if (deleteSelection) {
+            deleteSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_pk_ids";
+                input.value = item.dataset.submissionPk || "";
+                deleteSelection.appendChild(input);
+            });
+        }
+        if (officeAgreementButton) officeAgreementButton.disabled = selected.length === 0;
+        if (officeAgreementSelection) {
+            officeAgreementSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_ids";
+                input.value = item.value;
+                officeAgreementSelection.appendChild(input);
+            });
+        }
+        if (assignmentButton) assignmentButton.disabled = selected.length === 0;
+        if (assignmentSelection) {
+            assignmentSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_pk_ids";
+                input.value = item.dataset.submissionPk || "";
+                assignmentSelection.appendChild(input);
+            });
+        }
+    }
+
     if (selectAll) {
         selectAll.addEventListener("change", function () {
             checks.forEach(item => { item.checked = selectAll.checked; });
+            syncDeleteButton();
         });
     }
+    checks.forEach(item => item.addEventListener("change", syncDeleteButton));
+    syncDeleteButton();
+    if (deleteForm) {
+        deleteForm.addEventListener("submit", function (event) {
+            const selected = Array.from(checks).filter(item => item.checked);
+            if (!selected.length) {
+                event.preventDefault();
+                return;
+            }
+        });
+    }
+
+    document.querySelectorAll("[data-advanced-filters]").forEach(details => {
+        const summary = details.querySelector("summary[aria-expanded]");
+        if (!summary) return;
+        details.addEventListener("toggle", function () {
+            summary.setAttribute("aria-expanded", details.open ? "true" : "false");
+        });
+    });
 
     function syncReason(select) {
         const controls = select.closest(".admin-decision-controls");
@@ -149,6 +290,26 @@ document.addEventListener("DOMContentLoaded", function () {
         syncReason(select);
         select.addEventListener("change", function () {
             syncReason(select);
+        });
+    });
+
+    const quickDialog = document.getElementById("quick-decision-dialog");
+    const quickForm = document.getElementById("quick-decision-form");
+    document.querySelectorAll("[data-quick-decision]").forEach(button => {
+        button.addEventListener("click", function () {
+            const decision = button.dataset.quickDecision;
+            const needsReason = decision === "rejected" || decision === "correction";
+            quickForm.action = button.dataset.action;
+            document.getElementById("quick-decision-value").value = decision;
+            document.getElementById("quick-decision-reason-wrap").hidden = !needsReason;
+            document.getElementById("quick-decision-reason").required = needsReason;
+            document.getElementById("quick-decision-reason").name = decision === "correction" ? "reason" : "officer_decision_reason";
+            document.getElementById("quick-decision-value").disabled = decision === "correction";
+            document.getElementById("quick-decision-send-email").disabled = decision !== "correction";
+            document.getElementById("quick-decision-reason").value = "";
+            document.getElementById("quick-decision-message").textContent = `Zgłoszenie ${button.dataset.submissionId}: ${button.textContent.trim()}?`;
+            document.getElementById("quick-decision-title").textContent = button.textContent.trim();
+            quickDialog.showModal();
         });
     });
 });

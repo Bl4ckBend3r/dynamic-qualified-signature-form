@@ -1,17 +1,27 @@
 {% extends "base.html" %}
 
-{% block title %}Zgłosznie zapisane{% endblock %}
+{% block title %}Potwierdzamy Twoje zgłoszenie{% endblock %}
 
 {% block content %}
 {% set signature = result.signature if result.signature is defined and result.signature else {} %}
 {% set signature_mode = signature.mode if signature.mode is defined else "none" %}
 {% set has_signature_flow = signature_mode != "none" %}
+{% set participant_credential = result.participant_credential|default(result.access_token|default('')) %}
 
 <div class="card result-card">
     <div class="card-header">
-        <h2>Zgłosznie zapisane</h2>
-        <p>Formularz został przetworzony.</p>
+        <h2>Potwierdzamy Twoje zgłoszenie</h2>
+        <p>Zapisaliśmy Twoje zgłoszenie.</p>
     </div>
+
+    {% if result.auto_rejected|default(false) %}
+    <div class="result-box result-box--error" role="alert">
+        <p><strong>Zgłoszenie zostało odrzucone automatycznie.</strong></p>
+        <p>{{ result.qualification_message }}</p>
+    </div>
+    {% elif result.qualification_message|default('') %}
+    <div class="result-box result-box--completed" role="status"><p>{{ result.qualification_message }}</p></div>
+    {% endif %}
 
     <div class="result-grid">
         <div class="result-item">
@@ -21,7 +31,7 @@
 
         <div class="result-item">
             <span class="result-label">Identyfikator zgłoszenia</span>
-            <span class="result-value">{{ result.submission_id }}</span>
+            <span class="result-value" data-testid="submission-id">{{ result.submission_id }}</span>
         </div>
 
         {% if has_signature_flow %}
@@ -59,14 +69,14 @@
     </div>
 
     <div class="download-links">
-        <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
+        {% if result.pdf_url %}<a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>{% endif %}
 
-        <a
+        {% if result.can_continue|default(true) and participant_credential %}<a
             class="btn-primary"
-            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id) }}"
+            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=participant_credential) }}"
         >
             Przejdź do dokumentów do podpisania
-        </a>
+        </a>{% endif %}
 
         {% if has_signature_flow and result.signed_pdf_url %}
             <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>
@@ -114,13 +124,15 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow %}
+    {% if has_signature_flow and participant_credential %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Wgraj podpisany PDF</h3>
         </div>
 
         <form method="post" action="{{ result.upload_url }}" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            <input type="hidden" name="access_token" value="{{ participant_credential }}">
             <div class="form-row width-full">
                 <label for="signed_pdf">Podpisany plik PDF</label>
                 <input type="file" id="signed_pdf" name="signed_pdf" accept="application/pdf" required>
@@ -172,4 +184,19 @@
         <a href="{{ url_for('public_forms.index') }}">Powrót do formularza</a>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{% set credential = result.participant_credential|default(result.access_token|default('')) %}
+{% if credential %}
+<script>
+    try {
+        sessionStorage.setItem(
+            `participant-access:${window.APP_BASE_PATH}:` + {{ result.submission_id|tojson }},
+            {{ credential|tojson }}
+        );
+        sessionStorage.setItem(`participant-last-submission:${window.APP_BASE_PATH}`, {{ result.submission_id|tojson }});
+    } catch (_) { /* The credential-bearing link still works if storage is unavailable. */ }
+</script>
+{% endif %}
 {% endblock %}

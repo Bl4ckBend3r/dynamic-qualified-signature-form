@@ -1,0 +1,11 @@
+{% extends "admin/base.html" %}
+{% block title %}Kalendarze SLA{% endblock %}
+{% block content %}
+<div class="admin-page-title"><div><p class="admin-eyebrow">Workflow</p><h1>Kalendarze dni roboczych</h1></div><form method="post"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="action" value="new"><button class="admin-button" type="submit">Dodaj kalendarz</button></form></div>
+<div class="admin-card"><nav class="admin-actions">{% for item in calendars %}<a class="admin-button-secondary" href="{{ url_for('admin.business_calendars', id=item.id) }}">{{ item.name }}</a>{% else %}<p>Brak kalendarzy. Bez wskazania kalendarza SLA używa poniedziałku–piątku.</p>{% endfor %}</nav></div>
+{% if calendar %}<form method="post" class="admin-card admin-form"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="calendar_id" value="{{ calendar.id }}">
+<label><span>Nazwa</span><input name="name" value="{{ calendar.name }}" maxlength="255" required></label><label><span>Strefa czasowa</span><input name="timezone_name" value="{{ calendar.timezone_name }}" maxlength="64" required></label>
+<fieldset><legend>Dni weekendowe</legend>{% for value, label in [(0,'Poniedziałek'),(1,'Wtorek'),(2,'Środa'),(3,'Czwartek'),(4,'Piątek'),(5,'Sobota'),(6,'Niedziela')] %}<label class="admin-check"><input type="checkbox" name="weekend_days" value="{{ value }}" {% if value in calendar.weekend_days %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}</fieldset>
+<label><span>Dni wolne — po jednym wierszu: RRRR-MM-DD|Nazwa</span><textarea name="holidays" rows="10">{% for holiday in calendar.holidays %}{{ holiday.holiday_date.isoformat() }}|{{ holiday.name }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea></label><label class="admin-check"><input type="checkbox" name="active" {% if calendar.active %}checked{% endif %}><span>Aktywny</span></label><button class="admin-button" type="submit">Zapisz kalendarz</button></form>{% endif %}
+{% endblock %}

@@ -1,0 +1,354 @@
+{% extends "admin/base.html" %}
+{% block title %}Checklisty weryfikacyjne{% endblock %}
+
+{% block content %}
+<div class="admin-page-header">
+    <div>
+        <h1>Checklisty weryfikacyjne</h1>
+        <p>
+            {{ form.name }}
+            {% if version %} · wersja {{ version.version_label }}{% endif %}
+        </p>
+    </div>
+
+    <a class="admin-button-secondary"
+       href="{{ url_for('admin.form_versions', form_id=form.id) }}">
+        Wersje formularza
+    </a>
+</div>
+
+{% if not draft %}
+<p class="admin-alert admin-alert-info">
+    Pokazano konfigurację opublikowaną tylko do odczytu.
+    Sklonuj wersję, aby ją zmienić.
+</p>
+{% endif %}
+
+{% for checklist in checklists %}
+<section class="admin-card">
+
+    <form method="post" class="admin-form">
+        <input type="hidden"
+               name="csrf_token"
+               value="{{ admin_csrf_token() }}">
+
+        <input type="hidden"
+               name="checklist_id"
+               value="{{ checklist.id }}">
+
+        <h2>{{ checklist.name }}</h2>
+
+        <div class="admin-form-grid">
+            <label>
+                <span>Nazwa</span>
+                <input
+                    name="name"
+                    value="{{ checklist.name }}"
+                    required
+                    {% if not draft %}disabled{% endif %}
+                >
+            </label>
+
+            <label>
+                <span>Etap workflow</span>
+                <select
+                    name="workflow_step"
+                    required
+                    {% if not draft %}disabled{% endif %}
+                >
+                    {% for step in workflow_steps %}
+                    <option
+                        value="{{ step.id }}"
+                        {% if step.id == checklist.workflow_step %}selected{% endif %}
+                    >
+                        {{ step.admin_label or step.user_label or step.id }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                <span>Pozycja</span>
+                <input
+                    type="number"
+                    name="position"
+                    value="{{ checklist.position }}"
+                    {% if not draft %}disabled{% endif %}
+                >
+            </label>
+
+            <label class="admin-check">
+                <input
+                    type="checkbox"
+                    name="active"
+                    {% if checklist.active %}checked{% endif %}
+                    {% if not draft %}disabled{% endif %}
+                >
+                <span>Aktywna</span>
+            </label>
+        </div>
+
+        {% if draft %}
+        <button
+            class="admin-button"
+            type="submit"
+            name="action"
+            value="update_checklist"
+        >
+            Zapisz checklistę
+        </button>
+
+        <button
+            class="admin-button-danger"
+            type="submit"
+            name="action"
+            value="delete_checklist"
+            formnovalidate
+        >
+            Usuń checklistę
+        </button>
+        {% endif %}
+    </form>
+
+
+    {% for item in checklist.items %}
+    <form method="post" class="admin-form admin-card">
+
+        <input type="hidden"
+               name="csrf_token"
+               value="{{ admin_csrf_token() }}">
+
+        <input type="hidden"
+               name="item_id"
+               value="{{ item.id }}">
+
+        <strong>{{ item.key }}</strong>
+
+        <label>
+            <span>Treść kryterium</span>
+            <input
+                name="label"
+                value="{{ item.label }}"
+                required
+                {% if not draft %}disabled{% endif %}
+            >
+        </label>
+
+        <label>
+            <span>Opis</span>
+            <textarea
+                name="description"
+                rows="2"
+                {% if not draft %}disabled{% endif %}
+            >{{ item.description }}</textarea>
+        </label>
+
+        <label>
+            <span>Pozycja</span>
+            <input
+                type="number"
+                name="position"
+                value="{{ item.position }}"
+                {% if not draft %}disabled{% endif %}
+            >
+        </label>
+
+        <div class="admin-modal__checks">
+            {% for field, label, checked in [
+                ('blocking', 'Blokuje akceptację', item.blocking),
+                ('required', 'Wymagane', item.required),
+                ('document_required', 'Wymaga dokumentu', item.document_required),
+                ('allow_not_applicable', 'Dopuszcza Nie dotyczy', item.allow_not_applicable),
+                ('sensitive', 'Dane wrażliwe', item.sensitive)
+            ] %}
+            <label class="admin-check">
+                <input
+                    type="checkbox"
+                    name="{{ field }}"
+                    {% if checked %}checked{% endif %}
+                    {% if not draft %}disabled{% endif %}
+                >
+                <span>{{ label }}</span>
+            </label>
+            {% endfor %}
+        </div>
+
+        {% if draft %}
+        <button
+            class="admin-button"
+            type="submit"
+            name="action"
+            value="update_item"
+        >
+            Zapisz kryterium
+        </button>
+
+        <button
+            class="admin-button-danger"
+            type="submit"
+            name="action"
+            value="delete_item"
+            formnovalidate
+        >
+            Usuń
+        </button>
+        {% endif %}
+    </form>
+
+    {% else %}
+    <p>Brak kryteriów.</p>
+    {% endfor %}
+
+
+    {% if draft %}
+    <details>
+        <summary>Dodaj kryterium</summary>
+
+        <form method="post" class="admin-form">
+            <input
+                type="hidden"
+                name="csrf_token"
+                value="{{ admin_csrf_token() }}"
+            >
+
+            <input
+                type="hidden"
+                name="action"
+                value="add_item"
+            >
+
+            <input
+                type="hidden"
+                name="checklist_id"
+                value="{{ checklist.id }}"
+            >
+
+            <label>
+                <span>Klucz</span>
+                <input
+                    name="key"
+                    pattern="[A-Za-z0-9_-]+"
+                    required
+                >
+            </label>
+
+            <label>
+                <span>Treść</span>
+                <input name="label" required>
+            </label>
+
+            <label>
+                <span>Opis</span>
+                <textarea name="description"></textarea>
+            </label>
+
+            <label>
+                <span>Pozycja</span>
+                <input
+                    type="number"
+                    name="position"
+                    value="{{ checklist.items|length }}"
+                >
+            </label>
+
+            <div class="admin-modal__checks">
+
+                <label class="admin-check">
+                    <input type="checkbox" name="required" checked>
+                    <span>Wymagane</span>
+                </label>
+
+                <label class="admin-check">
+                    <input type="checkbox" name="blocking">
+                    <span>Blokujące</span>
+                </label>
+
+                <label class="admin-check">
+                    <input type="checkbox" name="document_required">
+                    <span>Wymaga dokumentu</span>
+                </label>
+
+                <label class="admin-check">
+                    <input
+                        type="checkbox"
+                        name="allow_not_applicable"
+                        checked
+                    >
+                    <span>Dopuszcza Nie dotyczy</span>
+                </label>
+
+                <label class="admin-check">
+                    <input type="checkbox" name="sensitive">
+                    <span>Dane wrażliwe</span>
+                </label>
+
+            </div>
+
+            <button class="admin-button" type="submit">
+                Dodaj kryterium
+            </button>
+        </form>
+    </details>
+    {% endif %}
+
+</section>
+
+{% else %}
+<p class="admin-alert admin-alert-info">
+    Brak checklist dla tej wersji.
+</p>
+{% endfor %}
+
+
+{% if draft %}
+<section class="admin-card">
+    <h2>Nowa checklista</h2>
+
+    <form method="post" class="admin-form">
+        <input
+            type="hidden"
+            name="csrf_token"
+            value="{{ admin_csrf_token() }}"
+        >
+
+        <input
+            type="hidden"
+            name="action"
+            value="create_checklist"
+        >
+
+        <label>
+            <span>Nazwa</span>
+            <input name="name" required>
+        </label>
+
+        <label>
+            <span>Etap workflow</span>
+            <select name="workflow_step" required>
+                <option value="">Wybierz etap</option>
+
+                {% for step in workflow_steps %}
+                <option value="{{ step.id }}">
+                    {{ step.admin_label or step.user_label or step.id }}
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            <span>Pozycja</span>
+            <input
+                type="number"
+                name="position"
+                value="{{ checklists|length }}"
+            >
+        </label>
+
+        <button class="admin-button" type="submit">
+            Utwórz checklistę
+        </button>
+    </form>
+</section>
+{% endif %}
+
+{% endblock %}

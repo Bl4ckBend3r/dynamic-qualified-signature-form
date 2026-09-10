@@ -1,0 +1,565 @@
+@page {
+    size: A4;
+    /* Margins are owned by the Playwright PDF renderer. Do not set them here. */
+    background: #ffffff;
+}
+
+html,
+body {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    background: #ffffff !important;
+}
+
+.document,
+.document * {
+    box-sizing: border-box;
+}
+
+.document {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* The builder adds this class only inside its iframe. The A4 box keeps the
+   same 174 mm content width as the PDF renderer; zoom scales the outer page. */
+html.agreement-preview-document,
+html.agreement-preview-document body {
+    width: 210mm;
+    min-width: 210mm;
+    max-width: 210mm;
+    min-height: 297mm;
+}
+
+html.agreement-preview-document body {
+    box-sizing: border-box;
+    padding: 18mm 18mm 20mm;
+    overflow: visible;
+}
+
+.document,
+.document--declaration,
+.document--agreement,
+.document--form,
+.document table,
+.document td,
+.document th,
+.document p,
+.document li,
+.document div,
+.document span {
+    font-family: "DejaVuSans", Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+    color: #181818;
+    background: #ffffff !important;
+    text-align: justify;
+    text-justify: inter-word;
+}
+
+.document *,
+.document--declaration *,
+.document--agreement *,
+.document--form * {
+    box-shadow: none;
+}
+
+.document h1,
+.document h2,
+.document h3,
+.document strong,
+.document b,
+.document th,
+.document .section-title,
+.document .paragraph-title,
+.document .statement-status,
+.document .field-label,
+.document .label,
+.document .consent-title {
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-weight: normal;
+}
+
+.document strong,
+.document b,
+.document .document-bold {
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-weight: 700;
+}
+
+.document h1 {
+    margin: 0 0 16pt;
+    font-size: 15pt;
+    line-height: 1.3;
+    color: #001f5b;
+    text-align: center;
+    font-weight: 700;
+}
+
+.document h2 {
+    margin: 0 0 18px;
+    font-size: 13px;
+    line-height: 1.35;
+    color: #001f5b;
+    text-align: center;
+}
+
+.document h3 {
+    margin: 18px 0 12px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #001f5b;
+    text-transform: uppercase;
+    text-align: left;
+}
+
+.document h3.center {
+    text-align: center !important;
+}
+
+.document p,
+.document-paragraph {
+    max-width: 100%;
+    margin: 0 0 8pt;
+    line-height: 1.45;
+    orphans: 3;
+    widows: 3;
+}
+
+.document--docx { width: 100%; }
+.document--docx .document-paragraph { margin: 0 0 8pt; line-height: 1.45; widows: 3; orphans: 3; }
+.document--docx .document-paragraph--empty { min-height: 4pt; margin-bottom: 2pt; }
+.document .document-align-left { text-align: left !important; text-justify: auto; }
+.document .document-align-center { text-align: center !important; text-justify: auto; }
+.document .document-align-right { text-align: right !important; text-justify: auto; }
+.document .document-align-justify { text-align: justify !important; }
+.document .document-bold { font-family: "DejaVuSans-Bold", Arial, sans-serif; font-weight: 700; }
+.document .document-regular { font-family: "DejaVuSans", Arial, sans-serif; font-weight: 400; }
+.document .document-italic { font-style: italic; }
+.document .document-underline, .document .document-inline-underline, .document .document-text-underline { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .12em; }
+.document--docx h1, .document--docx h2, .document--docx h3, .document-section-number, .document-section-title { break-after: avoid; page-break-after: avoid; }
+.document--docx .document-table--docx tr { break-inside: avoid; page-break-inside: avoid; }
+.document .document-list { max-width: 100%; margin: 6pt 0 12pt; padding-left: 0; list-style: none; }
+.document .document-list__item { display: grid; grid-template-columns: 24pt minmax(0, 1fr); gap: 4pt; max-width: 100%; margin: 0 0 5pt var(--document-list-indent, 0mm); padding: 0; text-align: justify; line-height: 1.4; overflow-wrap: anywhere; break-inside: avoid; page-break-inside: avoid; }
+.document .document-list__marker { text-align: right; white-space: nowrap; }
+.document .document-list__content { min-width: 0; }
+
+.document-section-number,
+.document .document-section-number {
+    margin: 16pt 0 4pt;
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-size: 11pt;
+    font-weight: normal;
+    text-align: center;
+}
+
+.document-section-title,
+.document .document-section-title {
+    margin: 0 0 10pt;
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-size: 10.5pt;
+    font-weight: normal;
+    text-align: center;
+}
+
+.document-section,
+.document .document-section {
+    margin: 0 0 10pt;
+}
+
+.document-party,
+.document .document-party {
+    margin: 10pt 0;
+}
+
+.document-party__label,
+.document .document-party__label {
+    font-family: "DejaVuSans-Bold", Arial, sans-serif;
+    font-weight: 700;
+}
+
+.document-table,
+.document .document-table {
+    width: 100%;
+    margin: 10pt 0 14pt;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 9.5pt;
+}
+
+.document-table th,
+.document-table td,
+.document .document-table th,
+.document .document-table td {
+    padding: 6pt 8pt;
+    border: 1px solid #aaa;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.document img,
+.document svg,
+.document canvas {
+    max-width: 100%;
+}
+
+.document-table th,
+.document .document-table th {
+    background: #f3f3f3 !important;
+    color: #181818;
+    font-weight: 700;
+    text-align: left;
+}
+
+.document .document-criteria-table { margin-top: 10pt; font-size: 9pt; }
+.document .document-criteria-table tr { break-inside: avoid; page-break-inside: avoid; }
+.document .document-criteria-table__number { width: 7%; text-align: center; }
+.document .document-criteria-table__criterion { width: auto; }
+.document .document-criteria-table__choice { width: 11%; text-align: center; vertical-align: middle; }
+.document .document-criteria-table__other { width: 23%; }
+.document .document-criteria-table__other-value { display: flex; align-items: center; gap: 5pt; }
+.document .document-checkbox { display: inline-flex; align-items: center; justify-content: center; width: 11pt; height: 11pt; border: 1pt solid #181818; font-family: "DejaVuSans-Bold", Arial, sans-serif; font-size: 9pt; font-weight: 700; line-height: 1; }
+
+.document-signature,
+.document .document-signature,
+.avoid-break,
+.document .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.document-signature,
+.document .document-signature {
+    margin-top: 28px;
+    min-height: 34mm;
+}
+
+.document-footer,
+.document .document-footer {
+    margin-top: 18px;
+    font-size: 9px;
+    color: #4b5563;
+}
+
+.page-break,
+.document .page-break {
+    break-before: page;
+    page-break-before: always;
+}
+
+.document ol {
+    margin: 6px 0 12px 18px;
+    padding: 0;
+}
+
+.document li {
+    margin-bottom: 5pt;
+}
+
+.center {
+    text-align: center !important;
+}
+
+.meta {
+    margin: 12px 0 16px;
+}
+
+.note,
+.footer-note,
+.small {
+    font-size: 10px;
+    color: #374151;
+}
+
+.footer-note,
+.small {
+    margin-top: 16px;
+}
+
+.pdf-logo-header,
+.header-image {
+    display: none !important;
+}
+
+.pdf-logo-footer,
+.document-logo-footer,
+.document-logo-header,
+.form-header-image {
+    position: fixed;
+    left: 18mm;
+    right: 18mm;
+    bottom: 8mm;
+    width: auto;
+    height: 18mm;
+    margin: 0;
+    padding: 0;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+    z-index: 10;
+}
+
+.pdf-logo-row,
+.document-logo-strip,
+.form-header-image {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 18mm;
+    min-height: 0;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+}
+
+.pdf-logo-area,
+.document-logo-strip__logos,
+.form-header-image > img {
+    display: block;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    background: #ffffff !important;
+}
+
+.pdf-logo-image,
+.form-header-image > img,
+.document-logo-strip__logos img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: 16mm;
+    object-fit: contain;
+    object-position: left center;
+    border-radius: 0;
+    margin: 0;
+}
+
+.document-logo,
+.document .document-logo {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    max-height: 28mm;
+    object-fit: contain;
+    margin: 0 auto 10mm;
+}
+
+.trusted-signature-placeholder,
+.document-trusted-signature-slot {
+    display: none !important;
+}
+
+.trusted-signature-placeholder *,
+.document-trusted-signature-slot * {
+    color: transparent;
+    font-size: 0;
+    line-height: 0;
+}
+
+.section-title {
+    margin: 18px 0 6px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #001f5b;
+    text-align: center !important;
+    text-justify: auto;
+}
+
+.paragraph-title,
+.document .paragraph-title,
+.document .section-title .paragraph-title,
+.document--agreement .section-title .paragraph-title,
+.document--declaration .section-title .paragraph-title,
+.document--form .section-title .paragraph-title {
+    display: block;
+    width: 100%;
+    margin: 4px 0 10px;
+    font-size: 11px;
+    line-height: 1.3;
+    text-align: center !important;
+    text-justify: auto;
+}
+
+.line {
+    display: inline-block;
+    min-width: 180px;
+    border-bottom: 1px dotted #111827;
+}
+
+.long-line {
+    display: inline-block;
+    min-width: 320px;
+    border-bottom: 1px dotted #111827;
+}
+
+.criteria-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 10px;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.criteria-table th,
+.criteria-table td {
+    border: 1px solid #9ca3af;
+    padding: 8px 8px;
+    vertical-align: middle;
+    background: #ffffff !important;
+}
+
+.criteria-table th {
+    background: #ffffff !important;
+    text-align: center;
+}
+
+.criteria-table .number {
+    width: 34px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.criteria-table .answer {
+    width: 42px;
+    text-align: center;
+    font-size: 14px;
+    line-height: 1;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.statement {
+    margin-bottom: 12px;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+}
+
+.statement-status {
+    margin-top: 4px;
+    font-size: 11px;
+    text-align: left;
+}
+
+.signature-section,
+.signature-table {
+    width: 100%;
+    margin-top: 34px;
+    border-collapse: collapse;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+}
+
+.signature-table td {
+    width: 50%;
+    text-align: center;
+    vertical-align: bottom;
+    padding-top: 26px;
+    background: #ffffff !important;
+}
+
+.signature-line {
+    display: block;
+    margin: 0 18px;
+    padding-top: 5px;
+    border-top: 1px dotted #111827;
+    text-align: center;
+    font-size: 10px;
+}
+
+.document-title,
+.document-subtitle,
+.document-meta,
+.document-eyebrow,
+.subsection-title,
+.field-label,
+.field-value,
+.signature-block,
+.choice-item,
+.choice-label {
+    text-align: left;
+}
+
+.document-header .document-title,
+.document-header .document-subtitle,
+.document-header .document-meta,
+.document-header .document-eyebrow {
+    text-align: center;
+}
+
+@media print {
+    html,
+    body,
+    .document,
+    .document--declaration,
+    .document--agreement,
+    .document--form {
+        background: #ffffff !important;
+    }
+
+    .pdf-logo-header,
+    .header-image {
+        display: none !important;
+    }
+
+    .pdf-logo-footer,
+    .document-logo-footer,
+    .document-logo-header,
+    .document-logo-strip,
+    .form-header-image {
+        position: fixed;
+        left: 18mm;
+        right: 18mm;
+        bottom: 8mm;
+        height: 18mm;
+        page-break-inside: avoid;
+    }
+
+    .pdf-logo-row,
+    .document-logo-strip,
+    .form-header-image {
+        height: 18mm;
+        min-height: 0;
+    }
+
+    .pdf-logo-image,
+    .form-header-image > img,
+    .document-logo-strip__logos img {
+        height: 16mm;
+    }
+}
+
+@media (max-width: 700px) {
+    .pdf-logo-footer,
+    .document-logo-footer,
+    .document-logo-header,
+    .form-header-image {
+        position: static;
+        width: 100%;
+        height: auto;
+    }
+
+    .pdf-logo-image,
+    .form-header-image > img,
+    .document-logo-strip__logos img {
+        height: auto;
+    }
+}
+.document-section { page-break-after: avoid; break-after: avoid; }
+.document-signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 18mm; margin-top: 24mm; page-break-inside: avoid; break-inside: avoid; }
+.document-signature { text-align: center; }
+.document-signature__line { height: 14mm; border-bottom: 1px dotted #222; }
+.document-signature__label { margin-top: 2mm; font-size: 9pt; }
+.document-participant-data, .document-project-info { display: grid; gap: 6pt; max-width: 100%; margin: 10pt 0 14pt; padding: 10pt 12pt; border: 1px solid #b8b8b8; page-break-inside: avoid; break-inside: avoid; }
+.document-participant-data__row, .document-project-info__row { display: grid; grid-template-columns: 42mm 1fr; gap: 4mm; }
+.document-participant-data__row > span, .document-project-info__row > span { color: #444; font-weight: 700; }
+.document-participant-data__row > strong, .document-project-info__row > strong { min-width: 0; overflow-wrap: anywhere; }
+.document-project-info__logo { display: block; max-width: 65mm; max-height: 28mm; margin: 0 auto 4mm; object-fit: contain; }
+.document-training-table tfoot th, .document-training-table tfoot td { font-weight: 700; }
+.document-page-break { display: block; height: 0; page-break-after: always; break-after: page; }

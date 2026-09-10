@@ -13,26 +13,26 @@
         </a>
 
         <nav class="site-nav" aria-label="Nawigacja główna">
-    <a
-        href="{{ url_for('public_forms.index') }}"
-        class="{% if request.endpoint == 'public_forms.index' %}is-active{% endif %}"
-    >
-        Strona główna
-    </a>
+            <a
+                href="{{ url_for('public_forms.index') }}"
+                class="{% if request.endpoint == 'public_forms.index' %}is-active{% endif %}"
+            >
+                Strona główna
+            </a>
 
-    <a
-        href="{{ url_for('documents.documents_to_sign') }}"
-        class="{% if request.endpoint == 'documents.documents_to_sign' %}is-active{% endif %}"
-    >
-        Do Podpisania
-    </a>
+            <a
+                href="{{ url_for('public_forms.public_status_page') }}"
+                class="{% if request.endpoint == 'public_forms.public_status_page' %}is-active{% endif %}"
+            >
+                Sprawdź status
+            </a>
 
-    <a
-        href="#"
-        class="{% if request.endpoint == 'contact' %}is-active{% endif %}"
-    >
-        Kontakt
-    </a>
-</nav>
+            <a
+                href="{{ url_for('public_forms.contact_page') }}"
+                class="{% if request.endpoint == 'public_forms.contact_page' %}is-active{% endif %}"
+            >
+                Kontakt
+            </a>
+        </nav>
     </div>
 </header>

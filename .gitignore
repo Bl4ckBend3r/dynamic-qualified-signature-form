@@ -1,9 +1,96 @@
-forms/sample_form.json
-output/
+# Local configuration and virtual environments
+.env
+.env.*
+!.env.example
 .venv/
 
+# Python and test caches
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.tox/
+.nox/
+.pytest-tmp-*
+
+# Coverage output
 .coverage
-tmp/
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime-generated data
+# `data/` is the legacy runtime location; new local runtime data belongs in
+# `storage/`, `output/`, `uploads/` or `tmp/`.
+data/
+docs/admin
+docs/archive
+docs/agent
+docs/database
+docs/deployment
+docs/forms
+docs/mail
+docs/nextcloud
+docs/reports
+docs/setup
+docs/testing
+docs/workflow
+docs/archive/*
+!docs/archive/FRONTEND_SPLIT_PLAN.md
+!docs/archive/LEGACY_REMOVAL_CHECKLIST.md
+!docs/archive/LEGACY_REMOVAL_MIGRATION_PLAN.md
+!docs/archive/LEGACY_APP_RETIREMENT_PLAN.md
+!docs/archive/LEGACY_DEPENDENCIES.md
+!docs/archive/MIGRATION_PLAN.md
+!docs/archive/REPO_CLEANUP_PLAN.md
+!docs/database/
+docs/database/*
+docs/P3_OPERATIONS.md
+!docs/database/P4_SCHEMA_CHECK.md
+storage/*
+!storage/.gitkeep
+!storage/archive/
+storage/archive/*
+!storage/archive/.gitkeep
+scripts/qa
+output/*
+!output/.gitkeep
+!output/archive/
+output/archive/*
+!output/archive/.gitkeep
+uploads/*
+!uploads/.gitkeep
+!uploads/archive/
+uploads/archive/*
+!uploads/archive/.gitkeep
+tmp/*
+!tmp/.gitkeep
+!tmp/archive/
+tmp/archive/*
+!tmp/archive/.gitkeep
+.test-tmp*
+tmp*/
+.pytest-*
+*.log
+*.bak
+*.old
+*.tmp
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+.tmp*
+
+# Local one-off QA helpers
+.codex_qa_*.py
+.codex
+.agents
+agent.py
+local_agent.py
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+
+AGENTS.md

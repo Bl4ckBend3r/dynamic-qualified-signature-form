@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 
-from models import Logo
+from models import Form, Logo, MailFooter, SiteFooter, SystemMailSettings
 from services.logo_service import (
     create_logo_from_upload,
     list_logos_for_admin,
@@ -11,7 +11,7 @@ from services.logo_service import (
 )
 from services.upload_validation import UploadValidationError
 
-from . import ROLE_SUPER_ADMIN, bp, db_session_factory, login_required, role_required
+from . import bp, db_session_factory, has_permission, login_required, permission_required
 
 
 @bp.route("/logos", methods=["GET", "POST"])
@@ -19,7 +19,7 @@ from . import ROLE_SUPER_ADMIN, bp, db_session_factory, login_required, role_req
 def logos_list():
     with db_session_factory()() as db:
         if request.method == "POST":
-            if g.admin_user.role != ROLE_SUPER_ADMIN:
+            if not has_permission(db, "can_manage_site"):
                 abort(403)
             uploaded_file = request.files.get("logo_file")
             if not uploaded_file or not uploaded_file.filename:
@@ -43,13 +43,17 @@ def logos_list():
             flash("Logo zostalo dodane.", "success")
             return redirect(url_for("admin.logos_list"))
 
-        logos = list_logos_for_admin(db, g.admin_user)
-        return render_template("admin/logos/list.html", logos=logos)
+        logos = list_logos_for_admin(db, g.admin_user, manage_all=has_permission(db, "can_manage_site"))
+        logo_usage = {
+            logo.id: db.query(Form).filter(Form.logo_id == logo.id).count()
+            for logo in logos
+        }
+        return render_template("admin/logos/list.html", logos=logos, logo_usage=logo_usage)
 
 
 @bp.post("/logos/<int:logo_id>/toggle")
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def logo_toggle(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id) or abort(404)
@@ -62,7 +66,7 @@ def logo_toggle(logo_id: int):
 
 @bp.route("/logos/<int:logo_id>/edit", methods=["GET", "POST"])
 @login_required
-@role_required(ROLE_SUPER_ADMIN)
+@permission_required("can_manage_site")
 def logo_edit(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id)
@@ -85,7 +89,41 @@ def logo_edit(logo_id: int):
 def logo_asset(logo_id: int):
     with db_session_factory()() as db:
         logo = db.get(Logo, logo_id)
-        logo_path = logo_asset_path_for_user(logo, g.admin_user)
+        logo_path = logo_asset_path_for_user(logo, g.admin_user, manage_all=has_permission(db, "can_manage_site"))
         if not logo_path:
             abort(404)
         return send_file(logo_path, mimetype=logo.mime_type or None)
+
+
+@bp.post("/logos/<int:logo_id>/delete")
+@login_required
+@permission_required("can_manage_site")
+def logo_delete(logo_id: int):
+    with db_session_factory()() as db:
+        logo = db.get(Logo, logo_id) or abort(404)
+        forms_count = db.query(Form).filter(Form.logo_id == logo.id).count()
+        footers_count = db.query(MailFooter).filter(MailFooter.logo_id == logo.id).count()
+        site_footers_count = db.query(SiteFooter).filter(SiteFooter.logo_id == logo.id).count()
+        if (forms_count or footers_count or site_footers_count) and request.form.get("detach") != "1":
+            flash(
+                f"Logo jest przypisane do {forms_count} formularzy, {footers_count} stopek mailowych "
+                f"i {site_footers_count} stopek strony. Potwierdź bezpieczne odpięcie.",
+                "warning",
+            )
+            return redirect(url_for("admin.logos_list"))
+        db.query(Form).filter(Form.logo_id == logo.id).update({Form.logo_id: None}, synchronize_session=False)
+        db.query(MailFooter).filter(MailFooter.logo_id == logo.id).update({MailFooter.logo_id: None}, synchronize_session=False)
+        db.query(SiteFooter).filter(SiteFooter.logo_id == logo.id).update({SiteFooter.logo_id: None}, synchronize_session=False)
+        for settings in db.query(SystemMailSettings).all():
+            layout = dict(settings.layout_config or {})
+            if layout.get("logo_id") == logo.id:
+                layout["logo_id"] = None
+                settings.layout_config = layout
+        db.delete(logo)
+        db.commit()
+    flash(
+        f"Logo zostało usunięte i odpięte od {forms_count} formularzy, "
+        f"{footers_count} stopek mailowych i {site_footers_count} stopek strony.",
+        "success",
+    )
+    return redirect(url_for("admin.logos_list"))

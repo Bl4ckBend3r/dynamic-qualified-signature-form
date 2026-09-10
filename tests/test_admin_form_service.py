@@ -1,15 +1,18 @@
 import json
 import zipfile
+from copy import deepcopy
 from io import BytesIO
 
 import pytest
+from werkzeug.datastructures import MultiDict
 
 pytest.importorskip("sqlalchemy")
 
 from database import create_engine, create_session_factory
 from form_loader import FIELD_STAGE_INITIAL
-from models import Base, Form
+from models import Base, Form, FormField
 from services.admin_form_service import (
+    apply_training_selection_from_admin_form,
     build_definition_from_docx,
     build_definition_from_html,
     build_form_definition_from_admin_form,
@@ -17,11 +20,15 @@ from services.admin_form_service import (
     form_has_additional_fields,
     normalize_admin_form_definition,
     normalize_field_stage,
+    parse_training_dates_from_form,
+    parse_training_catalog,
     parse_workflow_json,
+    parse_training_dates_text,
     parse_uploaded_form_definition,
     sync_form_fields,
     validate_admin_form_config,
 )
+from services.training_catalog_service import TrainingCatalogService
 
 
 def test_build_definition_from_html_detects_basic_fields():
@@ -81,6 +88,81 @@ def test_parse_workflow_json_requires_object():
         parse_workflow_json("[]", {})
 
 
+def test_form_editor_preserves_catalog_even_when_legacy_marker_is_posted():
+    definition = {
+        "title": "Form",
+        "fields": [],
+        "documents": [
+            {
+                "id": "declaration",
+                "fields": [
+                    {
+                        "type": "training_selection",
+                        "name": "selected_trainings",
+                        "enabled": True,
+                        "currency": "PLN",
+                        "catalog": [
+                            {
+                                "id": "old-training",
+                                "name": "Stare szkolenie",
+                                "price": "100.00",
+                                "capacity": 10,
+                                "active": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    updated = apply_training_selection_from_admin_form(
+        definition,
+        MultiDict(
+            [
+                ("training_selection_enabled", "on"),
+                ("training_selection_currency", "PLN"),
+                ("training_catalog_present", "1"),
+            ]
+        ),
+    )
+
+    training_field = next(
+        field
+        for field in updated["documents"][0]["fields"]
+        if field.get("type") == "training_selection"
+    )
+    assert training_field["catalog"] == definition["documents"][0]["fields"][0]["catalog"]
+
+
+def test_training_catalog_rejects_invalid_currency_on_backend():
+    with pytest.raises(ValueError, match="trzyliterowym kodem"):
+        parse_training_catalog(
+            MultiDict(
+                [
+                    ("training_item_name", "Excel"),
+                    ("training_item_price", "100"),
+                    ("training_item_currency", "PL12"),
+                    ("training_item_capacity", "10"),
+                    ("training_item_active", "0"),
+                    ("training_active_present", "1"),
+                ]
+            )
+        )
+
+
+def test_legacy_form_without_training_module_remains_without_training_field():
+    definition = {"title": "Legacy", "fields": [{"name": "email", "type": "email"}]}
+
+    updated = build_form_definition_from_admin_form(
+        definition,
+        MultiDict([("training_catalog_present", "1")]),
+    )
+
+    assert [field["name"] for field in updated["fields"]] == ["email"]
+    assert TrainingCatalogService.get_training_field(updated) is None
+
+
 def test_detect_form_fields_includes_document_fields():
     fields = detect_form_fields(
         {
@@ -90,6 +172,127 @@ def test_detect_form_fields_includes_document_fields():
     )
 
     assert [field["name"] for field in fields] == ["main", "document_field"]
+
+
+def test_detect_form_fields_prefers_main_fields_and_skips_training_selection():
+    availability = [
+        {"step": "submission", "visible": True, "editable": True, "required": True},
+        {"step": "officer_review", "visible": False, "editable": False, "required": False},
+    ]
+    canonical = {
+        "type": "checkbox",
+        "name": "deklaracja_18_lat",
+        "required": True,
+        "availability": availability,
+    }
+    fields = detect_form_fields(
+        {
+            "fields": [canonical],
+            "documents": [
+                {
+                    "id": "declaration",
+                    "fields": [
+                        {"type": "checkbox", "name": "deklaracja_18_lat"},
+                        {"type": "text", "name": "current_document_only"},
+                        {"type": "training_selection", "name": "selected_trainings"},
+                    ],
+                }
+            ],
+            "process": {
+                "documents": {
+                    "declaration": {
+                        "fields": [
+                            {"type": "checkbox", "name": "deklaracja_18_lat"},
+                            {"type": "text", "name": "legacy_document_only"},
+                            {"type": "training_selection", "name": "selected_trainings"},
+                        ]
+                    }
+                }
+            },
+        }
+    )
+
+    assert [field.get("name") for field in fields] == [
+        "deklaracja_18_lat",
+        "current_document_only",
+        "legacy_document_only",
+    ]
+    assert fields[0] == canonical
+    assert fields[0]["availability"] == availability
+
+
+def test_sync_form_fields_keeps_main_availability_with_three_json_copies(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'deduplicated-fields.db'}"
+    Base.metadata.create_all(create_engine(database_url))
+    session_factory = create_session_factory(database_url)
+    availability = [
+        {"step": "submission", "visible": True, "editable": True, "required": True},
+        {"step": "officer_review", "visible": False, "editable": False, "required": False},
+    ]
+    declaration_field_names = (
+        "deklaracja_18_lat",
+        "deklaracja_lubuskie",
+        "deklaracja_wlasna_inicjatywa",
+        "deklaracja_brak_dzialalnosci",
+        "deklaracja_brak_ksztalcenia",
+        "deklaracja_obszar_wiejski",
+        "deklaracja_niepelnosprawnosc",
+        "deklaracja_umiejetnosci_podstawowe",
+        "deklaracja_grupa_niekorzystna",
+        "deklaracja_zgoda_wizerunek",
+        "deklaracja_prawdziwosc_danych",
+    )
+    canonical_fields = [
+        {
+            "type": "checkbox",
+            "name": name,
+            "required": True,
+            "availability": availability,
+        }
+        for name in declaration_field_names
+    ]
+    duplicate_fields = [
+        {"type": "checkbox", "name": name}
+        for name in declaration_field_names
+    ]
+    definition = {
+        "fields": canonical_fields,
+        "workflow": {
+            "initial_step": "submission",
+            "steps": [{"id": "submission"}, {"id": "officer_review"}],
+        },
+        "documents": [
+            {
+                "id": "declaration",
+                "fields": [
+                    *deepcopy(duplicate_fields),
+                    {"type": "training_selection", "name": "selected_trainings"},
+                ],
+            }
+        ],
+        "process": {
+            "documents": {
+                "declaration": {
+                    "fields": [
+                        *deepcopy(duplicate_fields),
+                        {"type": "training_selection", "name": "selected_trainings"},
+                    ]
+                }
+            }
+        },
+    }
+
+    with session_factory() as db:
+        form = Form(slug="deduplicated", name="Test", title="Test", definition_json=definition)
+        db.add(form)
+        db.flush()
+        sync_form_fields(db, form, definition)
+        db.flush()
+
+        stored = db.query(FormField).filter_by(form_id=form.id).all()
+        assert {field.name for field in stored} == set(declaration_field_names)
+        assert all(field.availability_json == availability for field in stored)
+        assert all(field.required is True for field in stored)
 
 
 def test_normalize_field_stage_falls_back_to_initial():
@@ -112,6 +315,196 @@ def test_build_form_definition_from_admin_form_updates_workflow():
     assert definition["workflow"]["initial_step"] == "submitted"
     assert definition["workflow"]["requires_declaration"] is True
     assert definition["workflow"]["declaration_template_html"] == "<p>Deklaracja</p>"
+
+
+def test_build_form_definition_saves_round_robin_assignment_config():
+    form_data = MultiDict([
+        ("assignment_mode", "round_robin"),
+        ("assignment_eligible_user_ids", "12"),
+        ("assignment_eligible_user_ids", "15"),
+        ("assignment_eligible_user_ids", "12"),
+    ])
+    definition = build_form_definition_from_admin_form({"title": "Form", "fields": []}, form_data)
+    assert definition["assignment"] == {"mode": "round_robin", "eligible_users": [12, 15]}
+
+
+def test_build_form_definition_saves_multiple_qualification_conditions():
+    conditions = [
+        {
+            "id": "age",
+            "field_name": "wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "18",
+            "failure_action": "auto_reject",
+            "user_message": "Wymagany wiek to 18 lat.",
+            "officer_message": "Kandydat jest niepełnoletni.",
+            "is_active": True,
+        },
+        {
+            "id": "region",
+            "field_name": "wojewodztwo",
+            "operator": "equals",
+            "expected_value": "lubuskie",
+            "failure_action": "auto_reject",
+            "is_active": True,
+        },
+    ]
+    definition = build_form_definition_from_admin_form(
+        {
+            "title": "Form",
+            "fields": [
+                {"name": "wiek", "label": "Wiek", "type": "number"},
+                {"name": "wojewodztwo", "label": "Województwo", "type": "text"},
+            ],
+        },
+        {
+            "qualification_conditions_enabled": "on",
+            "qualification_conditions_json": json.dumps(conditions),
+        },
+    )
+
+    qualification = definition["qualification_conditions"]
+    assert qualification["enabled"] is True
+    assert [item["id"] for item in qualification["conditions"]] == ["age", "region"]
+    assert qualification["conditions"][0]["field_label"] == "Wiek"
+    assert qualification["conditions"][0]["officer_message"] == "Kandydat jest niepełnoletni."
+
+
+def test_build_form_definition_serializes_typed_qualification_values():
+    definition = build_form_definition_from_admin_form(
+        {
+            "title": "Form",
+            "fields": [
+                {"name": "wiek", "label": "Wiek", "type": "number"},
+                {
+                    "name": "tematy",
+                    "label": "Tematy",
+                    "type": "multi_select",
+                    "options": ["Excel", "Kadry"],
+                },
+                {"name": "uwagi", "label": "Uwagi", "type": "text"},
+            ],
+        },
+        {
+            "qualification_conditions_enabled": "on",
+            "qualification_conditions_json": json.dumps(
+                [
+                    {"field_name": "wiek", "operator": "equals", "expected_value": "18"},
+                    {"field_name": "tematy", "operator": "in", "expected_value": ["Excel", "Kadry"]},
+                    {"field_name": "uwagi", "operator": "is_not_empty", "expected_value": "ignored"},
+                ]
+            ),
+        },
+    )
+
+    conditions = definition["qualification_conditions"]["conditions"]
+    assert conditions[0]["expected_value"] == 18
+    assert conditions[1]["expected_value"] == ["Excel", "Kadry"]
+    assert conditions[2]["expected_value"] is None
+
+
+def test_build_form_definition_rejects_invalid_qualification_field():
+    with pytest.raises(ValueError, match="istniejące pole"):
+        build_form_definition_from_admin_form(
+            {"title": "Form", "fields": [{"name": "wiek", "type": "number"}]},
+            {
+                "qualification_conditions_enabled": "on",
+                "qualification_conditions_json": json.dumps([
+                    {"field_name": "unknown", "operator": "equals", "expected_value": "x"}
+                ]),
+            },
+        )
+
+
+def test_admin_contract_settings_create_generated_agreement_config():
+    definition = build_form_definition_from_admin_form(
+        {"title": "Form", "fields": []},
+        {
+            "workflow_json": '{"steps": []}',
+            "workflow_name": "Umowy",
+            "workflow_initial_step": "",
+            "requires_contract": "on",
+            "contract_template_html": "<main>Umowa {{ agreement_number }}</main>",
+            "contract_generation_mode": "single",
+            "contract_filename_pattern": "{first_name}_{last_name}-contract.pdf",
+            "contract_number_pattern": "U/{submission_id}/{generated_date}",
+        },
+    )
+
+    agreement = next(item for item in definition["documents"] if item["id"] == "agreement")
+    assert definition["workflow"]["managed_documents"] is True
+    assert agreement["enabled"] is True
+    assert agreement["template_html"] == "<main>Umowa {{ agreement_number }}</main>"
+    assert agreement["generation_mode"] == "per_training"
+    assert agreement["filename_pattern"] == "{first_name}_{last_name}-contract.pdf"
+    assert agreement["numbering"]["number_pattern"] == "U/{submission_id}/{generated_date}"
+
+
+@pytest.mark.parametrize("source", ["builder", "docx", "html"])
+def test_admin_document_template_sources_are_preserved_for_both_document_types(source):
+    definition = build_form_definition_from_admin_form(
+        {"title": "Form", "fields": []},
+        {
+            "workflow_json": '{"steps": []}',
+            "workflow_name": "Dokumenty",
+            "workflow_initial_step": "",
+            "requires_declaration": "on",
+            "requires_contract": "on",
+            "declaration_template_source": source,
+            "contract_template_source": source,
+        },
+    )
+
+    workflow = definition["workflow"]
+    assert workflow["declaration_template_source"] == source
+    assert workflow["contract_template_source"] == source
+
+
+def test_parse_training_dates_text_validates_and_sorts_dates():
+    dates = parse_training_dates_text(
+        "2026-09-10||10:00|12:00|Sala 2|Opis\n2026-08-01||||Sala 1|"
+    )
+
+    assert [date["start_date"] for date in dates] == ["2026-08-01", "2026-09-10"]
+    assert dates[1]["location"] == "Sala 2"
+
+
+def test_parse_training_dates_text_rejects_invalid_date_range():
+    with pytest.raises(ValueError, match="Data zakończenia"):
+        parse_training_dates_text("2026-09-10|2026-09-01||||")
+
+
+def test_parse_training_dates_from_readable_form_fields_groups_rows_by_training():
+    form_data = MultiDict(
+        [
+            ("training_date_training_index", "1"),
+            ("training_date_start_date", "2026-09-10"),
+            ("training_date_end_date", "2026-09-11"),
+            ("training_date_start_time", "09:00"),
+            ("training_date_end_time", "15:00"),
+            ("training_date_location", "Zielona Góra"),
+            ("training_date_description", "Warsztat"),
+            ("training_date_training_index", "0"),
+            ("training_date_start_date", "2026-08-01"),
+            ("training_date_end_date", ""),
+            ("training_date_start_time", ""),
+            ("training_date_end_time", ""),
+            ("training_date_location", "Online"),
+            ("training_date_description", ""),
+        ]
+    )
+
+    dates = parse_training_dates_from_form(form_data, 2)
+
+    assert dates[0][0]["start_date"] == "2026-08-01"
+    assert dates[1][0] == {
+        "start_date": "2026-09-10",
+        "end_date": "2026-09-11",
+        "start_time": "09:00",
+        "end_time": "15:00",
+        "location": "Zielona Góra",
+        "description": "Warsztat",
+    }
 
 
 def test_sync_form_fields_keeps_database_shape(tmp_path):

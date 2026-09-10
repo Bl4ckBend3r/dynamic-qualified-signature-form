@@ -4,10 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block extra_css %}{% endblock %}
+    <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
+<link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
 </head>
-<body>
+<body class="public-ui">
     <div class="page-shell">
         {% include "partials/header.html" %}
 
@@ -29,6 +32,9 @@
 
         {% include "partials/footer.html" %}
     </div>
+    <script>
+        window.APP_BASE_PATH = {{ app_base_path|tojson }};
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

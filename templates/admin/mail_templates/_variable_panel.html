@@ -1,0 +1,43 @@
+<aside
+    class="admin-card mail-variable-sidebar"
+    data-variable-panel
+    data-variable-storage-key="{{ variable_storage_key|default('admin-mail-variables-collapsed') }}"
+    aria-labelledby="{{ variable_heading_id|default('mail-variables-heading') }}"
+>
+    <button type="button" class="mail-variable-handle" data-variable-expand aria-label="Rozwiń panel zmiennych">Zmienne</button>
+    <div class="mail-variable-sidebar__content" data-variable-content>
+        <div class="admin-section-heading mail-variable-sidebar__heading">
+            <div>
+                <h2 id="{{ variable_heading_id|default('mail-variables-heading') }}">4. Dostępne zmienne</h2>
+                <p>Wstaw zmienną w miejscu kursora w ostatnio aktywnym polu.</p>
+            </div>
+            <button type="button" class="admin-button-secondary mail-variable-toggle" data-variable-collapse aria-expanded="true">Minimalizuj</button>
+        </div>
+        <label class="mail-variable-search">
+            <span class="admin-visually-hidden">Filtruj zmienne</span>
+            <input type="search" placeholder="Szukaj zmiennej lub opisu…" data-variable-filter>
+        </label>
+        <div class="mail-variable-groups">
+            {% for group in variable_catalog %}
+            <details class="mail-variable-group" open>
+                <summary>{{ group.category }} <span>{{ group.variables|length }}</span></summary>
+                <div class="mail-variable-list">
+                    {% for variable in group.variables %}
+                    <article class="mail-variable-row" data-variable-row data-variable-search="{{ variable.name }} {{ variable.label }} {{ variable.description }}">
+                        <div>
+                            <code>{{ variable.placeholder }}</code>
+                            <strong>{{ variable.label }}</strong>
+                            <small>{{ variable.description }}</small>
+                            <small>Przykład: {{ variable.example }}</small>
+                        </div>
+                        <button type="button" class="admin-button-secondary mail-variable-insert" data-insert-variable="{{ variable.placeholder }}">Wstaw</button>
+                    </article>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+        <p class="admin-empty-state mail-variable-empty" data-variable-empty hidden>Nie znaleziono pasujących zmiennych.</p>
+        <p class="mail-variable-feedback" data-variable-feedback aria-live="polite"></p>
+    </div>
+</aside>

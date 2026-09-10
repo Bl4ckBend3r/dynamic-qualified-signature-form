@@ -40,6 +40,7 @@ def test_logo_endpoints_are_registered_on_admin_blueprint():
     assert endpoints["admin.logo_toggle"] == "/admin/logos/<int:logo_id>/toggle"
     assert endpoints["admin.logo_edit"] == "/admin/logos/<int:logo_id>/edit"
     assert endpoints["admin.logo_asset"] == "/admin/logos/<int:logo_id>/asset"
+    assert endpoints["admin.logo_delete"] == "/admin/logos/<int:logo_id>/delete"
     with app.app_context():
         assert url_for("admin.logos_list") == "http://example.test/admin/logos"
         assert url_for("admin.logo_toggle", logo_id=1) == "http://example.test/admin/logos/1/toggle"

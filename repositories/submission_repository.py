@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class SubmissionRepository:
+    supports_file_metadata = False
+
     def create(self, submission: dict) -> str:
         raise NotImplementedError
 
@@ -154,6 +156,8 @@ class CsvSubmissionRepository(SubmissionRepository):
 class PostgresSubmissionRepository(SubmissionRepository):
     """Repository adapter for PostgreSQL-backed form_submissions."""
 
+    supports_file_metadata = True
+
     def __init__(self, database_url: str, session_factory=None, create_schema: bool = False) -> None:
         if session_factory is None:
             from database import create_engine, create_session_factory
@@ -180,7 +184,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
         submission["id"] = model.id
         logger.info(
-            "Zapisano zgloszenie %s do PostgreSQL. Pola zapisane: %s. Pola pominiete: %s.",
+            "Zapisano zgloszenie %s przez SQLAlchemy. Pola zapisane: %s. Pola pominiete: %s.",
             model.submission_id,
             ", ".join(meta["saved_fields"]),
             ", ".join(meta["skipped_fields"]) or "-",
@@ -239,9 +243,89 @@ class PostgresSubmissionRepository(SubmissionRepository):
         )
         return True
 
+    def claim_document_operation(self, submission_id: str, step_id: str, token: str) -> bool:
+        """A durable lease serializes document operations across workers without holding PDF I/O locks."""
+        import time
+        from sqlalchemy import select, update, or_
+        from models import FormSubmission
+        with self.session_factory() as db:
+            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
+            if not model or (model.workflow_stage or model.workflow_step) != step_id:
+                return False
+            states = dict(model.document_states or {})
+            prior = states.get("document_operation", "")
+            if prior and float(states.get("document_operation_until") or 0) > time.time():
+                return False
+            states.update(document_operation=token, document_operation_until=str(time.time() + 900))
+            operation = FormSubmission.document_states["document_operation"].as_string()
+            result = db.execute(update(FormSubmission).where(
+                FormSubmission.id == model.id,
+                FormSubmission.workflow_stage == model.workflow_stage,
+                FormSubmission.workflow_step == model.workflow_step,
+                operation == prior if prior else or_(operation.is_(None), operation == ""),
+            ).values(document_states=states).execution_options(synchronize_session=False))
+            db.commit()
+            return result.rowcount == 1
+
+    def update_if_workflow_step(self, submission_id, expected_step, updates):
+        """Compare-and-set protects action completion from two concurrent callers."""
+        from sqlalchemy import update, or_, and_
+        from models import FormSubmission
+        mapped, meta = build_submission_from_form(updates, include_metadata=True)
+        columns = {item.rsplit("->", 1)[1] for item in meta["saved_fields"] if "->" in item}
+        values = {key: mapped[key] for key in columns if key in mapped and key in FORM_SUBMISSION_COLUMNS and key != "id"}
+        with self.session_factory() as db:
+            result = db.execute(update(FormSubmission).where(FormSubmission.submission_id == submission_id,
+                or_(FormSubmission.workflow_stage == expected_step,
+                    and_(or_(FormSubmission.workflow_stage.is_(None), FormSubmission.workflow_stage == ""), FormSubmission.workflow_step == expected_step)),
+            ).values(**values))
+            db.commit()
+            return result.rowcount == 1
+
+    def save_document_step(self, submission_id, step_id, state, token, event, actor="system", *, field_values=None):
+        from copy import deepcopy
+        from sqlalchemy import select, update
+        from models import FormSubmission, SubmissionWorkflowEvent
+        with self.session_factory() as db:
+            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
+            if not model or (model.workflow_stage or model.workflow_step) != step_id:
+                return False
+            states = deepcopy(model.document_states or {})
+            states.setdefault("workflow_documents", {})[step_id] = deepcopy(state)
+            values = {"document_states": states}
+            if field_values is not None:
+                values["data_json"] = {**(model.data_json or {}), **deepcopy(field_values)}
+            result = db.execute(update(FormSubmission).where(FormSubmission.id == model.id,
+                FormSubmission.workflow_stage == model.workflow_stage, FormSubmission.workflow_step == model.workflow_step,
+                FormSubmission.document_states["document_operation"].as_string() == token,
+            ).values(**values).execution_options(synchronize_session=False))
+            if result.rowcount != 1:
+                db.rollback()
+                return False
+            db.add(SubmissionWorkflowEvent(submission_id=model.id, public_submission_id=submission_id, form_slug=model.form_slug,
+                previous_step=step_id, new_step=step_id, previous_status=model.process_status, new_status=model.process_status,
+                source=event, reason=event, actor_role=actor,
+                side_effects={"document_id": state.get("document_id"), "substate": state.get("substate")}))
+            db.commit()
+            return True
+
+    def release_document_operation(self, submission_id, token):
+        from sqlalchemy import select, update
+        from models import FormSubmission
+        with self.session_factory() as db:
+            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
+            if not model:
+                return
+            states = dict(model.document_states or {})
+            states.update(document_operation="", document_operation_until="0")
+            db.execute(update(FormSubmission).where(FormSubmission.id == model.id,
+                FormSubmission.document_states["document_operation"].as_string() == token,
+            ).values(document_states=states).execution_options(synchronize_session=False))
+            db.commit()
+
     def list_by_form(self, form_slug: str) -> list[dict]:
         from sqlalchemy import select
-        from models import FormSubmission
+        from models import FormSubmission, SubmissionTraining
 
         with self.session_factory() as session:
             rows = session.execute(
@@ -249,7 +333,24 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 .where(FormSubmission.form_slug == form_slug)
                 .order_by(FormSubmission.created_at.desc())
             ).scalars().all()
-            return [self._to_dict(row) for row in rows]
+            training_rows = session.execute(
+                select(SubmissionTraining)
+                .join(FormSubmission, FormSubmission.id == SubmissionTraining.submission_id)
+                .where(FormSubmission.form_slug == form_slug)
+            ).scalars().all()
+            by_submission: dict[int, list[dict]] = {}
+            for training in training_rows:
+                by_submission.setdefault(training.submission_id, []).append({
+                    "training_id": training.training_id,
+                    "status": training.status,
+                    "is_locked": bool(training.is_locked),
+                })
+            result = []
+            for row in rows:
+                item = self._to_dict(row)
+                item["_submission_trainings"] = by_submission.get(row.id, [])
+                result.append(item)
+            return result
 
     def find_by_pdf(self, form_slug: str, filename: str) -> dict | None:
         from sqlalchemy import or_, select
@@ -261,7 +362,8 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 select(SubmissionFile)
                 .where(SubmissionFile.form_slug == form_slug)
                 .where(SubmissionFile.filename == wanted)
-            ).scalar_one_or_none()
+                .order_by(SubmissionFile.id.desc())
+            ).scalars().first()
             if file_row:
                 return self.get_by_id(file_row.public_submission_id)
 
@@ -279,7 +381,33 @@ class PostgresSubmissionRepository(SubmissionRepository):
                     )
                 )
             ).scalar_one_or_none()
-            return self._to_dict(model) if model else None
+            if model:
+                return self._to_dict(model)
+
+            legacy_rows = session.execute(
+                select(FormSubmission).where(FormSubmission.form_slug == form_slug)
+            ).scalars().all()
+            for legacy_row in legacy_rows:
+                try:
+                    agreements = json.loads(str(legacy_row.training_agreements or ""))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(agreements, list):
+                    continue
+                known_filenames = {
+                    str(agreement.get(key) or "")
+                    for agreement in agreements
+                    if isinstance(agreement, dict)
+                    for key in ("filename", "signed_filename")
+                }
+                if wanted in known_filenames:
+                    logger.warning(
+                        "Legacy training_agreements filename lookup public_submission_id=%s filename=%s.",
+                        legacy_row.submission_id,
+                        wanted,
+                    )
+                    return self._to_dict(legacy_row)
+            return None
 
     def record_file(self, submission_id: str, metadata: dict) -> bool:
         from sqlalchemy import select
@@ -323,6 +451,13 @@ class PostgresSubmissionRepository(SubmissionRepository):
             file_row.signature_validation_result = metadata.get("signature_validation_result") or {}
             file_row.agreement_number = str(metadata.get("agreement_number") or "")
             file_row.training_key = str(metadata.get("training_key") or "")
+            file_row.field_key = str(metadata.get("field_key") or "")
+            file_row.attachment_version = metadata.get("attachment_version")
+            file_row.category = str(metadata.get("category") or "")
+            file_row.uploaded_by_source = str(metadata.get("uploaded_by_source") or "")
+            file_row.workflow_step_at_upload = str(metadata.get("workflow_step_at_upload") or "")
+            file_row.antivirus_status = str(metadata.get("antivirus_status") or "not_configured")
+            file_row.rejection_reason = str(metadata.get("rejection_reason") or "")
             file_row.generated_at = metadata.get("generated_at")
             file_row.signed_at = metadata.get("signed_at")
             if not existing:
@@ -330,9 +465,13 @@ class PostgresSubmissionRepository(SubmissionRepository):
             session.commit()
 
         logger.info(
-            "Zapisano metadane pliku %s dla zgloszenia %s w PostgreSQL.",
-            metadata.get("filename"),
+            "SubmissionFile zapisany public_submission_id=%s internal_submission_id=%s "
+            "filename=%s document_type=%s storage_path=%s.",
             wanted,
+            submission.id,
+            metadata.get("filename"),
+            metadata.get("document_type"),
+            metadata.get("storage_path"),
         )
         return True
 
@@ -494,6 +633,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
                     actor_email=str(event.get("actor_email") or ""),
                     actor_role=str(event.get("actor_role") or "system"),
                     reason=str(event.get("reason") or ""),
+                    decision_code=str(event.get("decision_code") or ""),
+                    user_message=str(event.get("user_message") or ""),
+                    side_effects=dict(event.get("side_effects") or {}),
                     source=str(event.get("source") or "system"),
                 )
             )

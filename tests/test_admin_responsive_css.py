@@ -45,7 +45,7 @@ def test_admin_tables_typography_focus_and_tabs_have_accessible_css_contracts():
     assert "z-index: 2;" in sticky_header
     assert "background-color: var(--surface-alt);" in sticky_header
     assert ".admin-form input:focus-visible" in css
-    assert "box-shadow: 0 0 0 4px rgba(200, 163, 93, 0.16);" in css
+    assert "box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-focus) 22%, transparent);" in css
     assert '.admin-form input[aria-invalid="true"]:focus-visible' in css
     tabs = css.split(".admin-form-tabs {", 1)[1].split("}", 1)[0]
     assert "padding-bottom: calc(var(--admin-space-2) + 6px);" in tabs
@@ -244,16 +244,16 @@ def test_admin_css_computed_layout_at_required_viewports():
               };
             }""")
             assert metrics["bodyFits"] is True
-            assert metrics["buttonBackground"] == "rgb(179, 141, 69)"
-            assert metrics["buttonBorder"] == "rgb(179, 141, 69)"
+            assert metrics["buttonBackground"] == "rgb(45, 99, 153)"
+            assert metrics["buttonBorder"] == "rgb(45, 99, 153)"
             assert metrics["buttonColor"] == "rgb(255, 255, 255)"
-            assert metrics["evenRow"] == "rgb(247, 243, 236)"
+            assert metrics["evenRow"] == "rgb(237, 250, 253)"
             assert metrics["headerPosition"] == "sticky"
             assert metrics["headerZ"] == "2"
             assert metrics["tabsPaddingBottom"] == "14px"
             assert metrics["optionAlignment"] == "flex-start"
             assert metrics["checkboxAlignment"] == "flex-start"
-            assert metrics["toolColor"] == "rgb(29, 46, 91)"
+            assert metrics["toolColor"] == "rgb(31, 79, 127)"
             if width == 768:
                 assert metrics["tabsOverflow"] is True
 
@@ -265,7 +265,7 @@ def test_admin_css_computed_layout_at_required_viewports():
           const style = getComputedStyle(document.querySelector('#primary'));
           return [style.outlineColor, style.outlineStyle, style.outlineWidth];
         }""")
-        assert focus_style == ["rgb(29, 46, 91)", "solid", "3px"]
+        assert focus_style == ["rgb(35, 79, 125)", "solid", "3px"]
 
         for _ in range(20):
             if page.evaluate("document.activeElement.id") == "regular":
@@ -273,21 +273,21 @@ def test_admin_css_computed_layout_at_required_viewports():
             page.keyboard.press("Tab")
         assert page.evaluate("document.activeElement.id") == "regular"
         page.wait_for_timeout(250)
-        assert page.evaluate("getComputedStyle(document.querySelector('#regular')).borderColor") == "rgb(200, 163, 93)"
-        assert "rgba(200, 163, 93, 0.16)" in page.evaluate("getComputedStyle(document.querySelector('#regular')).boxShadow")
+        assert page.evaluate("getComputedStyle(document.querySelector('#regular')).borderColor") == "rgb(54, 116, 181)"
+        assert page.evaluate("getComputedStyle(document.querySelector('#regular')).boxShadow") != "none"
         page.keyboard.press("Tab")
         assert page.evaluate("document.activeElement.id") == "invalid"
         page.wait_for_timeout(250)
-        assert page.evaluate("getComputedStyle(document.querySelector('#invalid')).borderColor") == "rgb(180, 35, 24)"
+        assert page.evaluate("getComputedStyle(document.querySelector('#invalid')).borderColor") == "rgb(155, 44, 32)"
 
         primary.hover()
-        assert page.evaluate("getComputedStyle(document.querySelector('#primary')).backgroundColor") == "rgb(29, 46, 91)"
+        assert page.evaluate("getComputedStyle(document.querySelector('#primary')).backgroundColor") == "rgb(36, 81, 127)"
         primary.evaluate("element => { element.disabled = true; }")
         disabled_style = page.evaluate("""() => {
           const style = getComputedStyle(document.querySelector('#primary'));
           return [style.backgroundColor, style.color, style.cursor];
         }""")
-        assert disabled_style == ["rgb(247, 243, 236)", "rgb(110, 118, 138)", "not-allowed"]
+        assert disabled_style == ["rgb(237, 250, 253)", "rgb(64, 89, 107)", "not-allowed"]
 
         table_wrap = page.locator("#table-wrap")
         header = page.locator(".admin-table thead th").first

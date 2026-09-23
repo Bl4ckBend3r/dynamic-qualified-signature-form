@@ -53,13 +53,13 @@
 }
 
 .training-picker__recruitment.is-open {
-    background: #e8f7ee;
-    color: #17643a;
+    background: var(--color-success-bg);
+    color: var(--color-success);
 }
 
 .training-picker__recruitment.is-closed {
-    background: #f3f4f6;
-    color: #5f6673;
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
 }
 
 .training-picker__notice,
@@ -71,16 +71,16 @@
 }
 
 .training-picker__notice {
-    border: 1px solid #d9dde5;
-    background: #f8f9fb;
-    color: #4b5563;
+    border: 1px solid var(--color-border);
+    background: var(--color-info-bg);
+    color: var(--color-info);
 }
 
 .training-picker__alert,
 .training-picker__limit-alert {
-    border: 1px solid #efb3ad;
-    background: #fff3f1;
-    color: #9b2c20;
+    border: 1px solid var(--color-danger);
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
     font-weight: 700;
 }
 
@@ -147,7 +147,7 @@
     border: 1px solid var(--border);
     border-radius: 18px;
     padding: 22px;
-    background: #fff;
+    background: var(--color-surface);
     box-shadow: 0 8px 24px rgba(21, 32, 52, .06);
     transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
@@ -158,8 +158,8 @@
 }
 
 .training-card.is-locked {
-    border-color: #8993a3;
-    background: #fafbfc;
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-muted);
 }
 
 .training-card.is-unavailable {
@@ -196,33 +196,33 @@
 
 .training-badge {
     padding: 7px 9px;
-    background: #edf0f4;
-    color: #4a5565;
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
 }
 
 .training-badge.is-active {
-    background: #e8f7ee;
-    color: #17643a;
+    background: var(--color-success-bg);
+    color: var(--color-success);
 }
 
 .training-badge.is-inactive {
-    background: #f3f4f6;
-    color: #68707d;
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
 }
 
 .training-badge.is-warning {
-    background: #fff2cf;
-    color: #7b5600;
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
 }
 
 .training-badge.is-participant {
-    background: #eef2ff;
-    color: #394b92;
+    background: var(--color-info-bg);
+    color: var(--color-info);
 }
 
 .training-card__description {
     margin: 16px 0 0;
-    color: #4b5563;
+    color: var(--color-text-muted);
     line-height: 1.65;
     overflow-wrap: anywhere;
 }
@@ -305,9 +305,9 @@
 }
 
 .training-card__comment {
-    border: 1px solid #ecd89f;
-    background: #fff9e9;
-    color: #6d530d;
+    border: 1px solid var(--color-warning);
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
 }
 
 .training-card__comment p {
@@ -315,9 +315,9 @@
 }
 
 .training-card__lock {
-    border: 1px solid #cbd2dc;
-    background: #eef1f5;
-    color: #3e4857;
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
     font-weight: 700;
 }
 
@@ -338,7 +338,7 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 10px 14px;
-    background: #fff;
+    background: var(--color-surface-raised);
     cursor: pointer;
 }
 

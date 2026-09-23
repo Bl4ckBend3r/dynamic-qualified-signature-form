@@ -30,7 +30,7 @@ def test_admin_modal_keeps_all_structural_surfaces_opaque():
         ".admin-modal__footer",
     ):
         rule = css.split(f"{selector} {{", 1)[1].split("}", 1)[0]
-        assert "background: #fff;" in rule
+        assert "background: var(--color-surface-raised);" in rule
 
 
 def test_agreement_preview_modal_keeps_a4_page_and_actions_inside_viewport():

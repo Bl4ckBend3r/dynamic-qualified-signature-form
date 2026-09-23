@@ -50,7 +50,7 @@
     padding: 24px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-soft);
+    background: var(--color-bg-subtle);
 }
 
 .status-page .status-result h2 {
@@ -62,9 +62,9 @@
     max-width: 100%;
     margin: 0;
     padding: 8px 12px;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
     font-size: 1rem;
     line-height: 1.5;
     white-space: normal;
@@ -104,9 +104,9 @@
 }
 
 .status-page .status-page__message--error {
-    color: var(--danger);
-    border-color: var(--danger);
-    background: var(--surface);
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+    background: var(--color-danger-bg);
 }
 
 @media (max-width: 600px) {

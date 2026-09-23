@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Admin{% endblock %} - {{ app_name }}</title>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/style.css') }}"
@@ -55,9 +56,9 @@
         z-index: 10000;
         min-width: 260px;
         padding: 8px;
-        background: #fff;
-        color: #0b285f;
-        border: 1px solid #d8cfbf;
+        background: var(--color-surface-raised);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
         border-radius: 10px;
         box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
       }
@@ -65,7 +66,7 @@
       .admin-nav-dropdown-menu a {
         display: block;
         padding: 10px 12px;
-        color: #0b285f;
+        color: var(--color-text);
         text-decoration: none;
         border-radius: 8px;
         white-space: nowrap;
@@ -73,7 +74,7 @@
 
       .admin-nav-dropdown-menu a:hover,
       .admin-nav-dropdown-menu a:focus-visible {
-        background: #c8a35c;
+        background: var(--color-surface-hover);
       }
     </style>
   </head>
@@ -85,6 +86,10 @@
             <span>Admin</span>
             <small>{{ app_name }}</small>
           </a>
+          <button class="theme-toggle theme-toggle--admin" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw">
+            <span class="theme-toggle__icon" data-theme-icon aria-hidden="true">☾</span>
+            <span data-theme-label>Ciemny</span>
+          </button>
           {% if g.admin_user %}
           <nav class="admin-nav" aria-label="Menu administracyjne">
             <a

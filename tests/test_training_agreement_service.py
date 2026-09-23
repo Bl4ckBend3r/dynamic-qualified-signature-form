@@ -1,11 +1,11 @@
 from werkzeug.datastructures import MultiDict
 
+from services.documents.declaration_flow_service import DeclarationFlowService
 from services.training_agreement_service import (
     build_training_agreement_number,
     extract_training_selection,
     get_training_selection_field,
 )
-from services.documents.declaration_flow_service import DeclarationFlowService
 
 
 def training_form_definition():
@@ -42,10 +42,15 @@ def test_extract_training_selection_matches_selected_catalog_items():
     selected, error = extract_training_selection(field, MultiDict([("selected_trainings", "python")]))
 
     assert error is None
-    assert selected == [{"id": "python", "name": "Python", "price": 1800.0}]
+    assert selected[0]["id"] == "python"
+    assert selected[0]["name"] == "Python"
+    assert selected[0]["price"] == "1800.00"
+    assert selected[0]["price_formatted"] == "1 800,00 zł"
+    assert selected[0]["capacity"] is None
+    assert selected[0]["dates"] == []
 
 
-def test_extract_training_selection_keeps_legacy_required_error():
+def test_extract_training_selection_keeps_required_error():
     field = get_training_selection_field(training_form_definition())
     selected, error = extract_training_selection(field, MultiDict())
 
@@ -53,7 +58,7 @@ def test_extract_training_selection_keeps_legacy_required_error():
     assert error == "Wybierz co najmniej jedno szkolenie."
 
 
-def test_extract_training_selection_keeps_legacy_limit_error():
+def test_extract_training_selection_keeps_limit_error():
     field = {
         **get_training_selection_field(training_form_definition()),
         "max_total_amount": 1000,
@@ -61,11 +66,26 @@ def test_extract_training_selection_keeps_legacy_limit_error():
     }
     selected, error = extract_training_selection(field, MultiDict([("selected_trainings", "excel")]))
 
-    assert selected == [{"id": "excel", "name": "Excel", "price": 1200.0}]
-    assert error == "Łączna wartość szkoleń przekracza limit 1000 PLN."
+    assert selected[0]["price"] == "1200.00"
+    assert error == "Łączna wartość szkoleń przekracza limit 1 000,00 zł."
 
 
-def test_declaration_form_places_training_selection_under_training_section():
+def test_extract_training_selection_skips_inactive_catalog_items():
+    field = {
+        **get_training_selection_field(training_form_definition()),
+        "catalog": [
+            {"id": "excel", "name": "Excel", "price": "1200.00", "active": False},
+            {"id": "python", "name": "Python", "price": "1800.00", "active": True},
+        ],
+    }
+
+    selected, error = extract_training_selection(field, MultiDict([("selected_trainings", "excel")]))
+
+    assert selected == []
+    assert error == "Wybierz co najmniej jedno szkolenie."
+
+
+def test_declaration_form_omits_training_selection():
     definition = DeclarationFlowService.build_declaration_form_definition(
         {
             "fields": [
@@ -78,8 +98,6 @@ def test_declaration_form_places_training_selection_under_training_section():
     )
 
     assert [field.get("name") or field.get("label") for field in definition["fields"]] == [
-        "Wybór szkoleń",
-        "selected_trainings",
         "Oświadczenia uczestnika",
         "osw_rodo",
     ]

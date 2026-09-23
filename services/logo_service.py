@@ -36,9 +36,9 @@ def list_active_logos(db) -> list[Logo]:
     return db.execute(select(Logo).where(Logo.active.is_(True)).order_by(Logo.name)).scalars().all()
 
 
-def list_logos_for_admin(db, user: User) -> list[Logo]:
+def list_logos_for_admin(db, user: User, *, manage_all: bool = False) -> list[Logo]:
     query = select(Logo).order_by(Logo.created_at.desc())
-    if user.role != ROLE_SUPER_ADMIN:
+    if user.role != ROLE_SUPER_ADMIN and not manage_all:
         query = query.where(Logo.active.is_(True))
     return db.execute(query).scalars().all()
 
@@ -91,8 +91,8 @@ def update_logo_metadata(logo: Logo, *, name: str, active: bool) -> Logo:
     return logo
 
 
-def logo_asset_path_for_user(logo: Logo | None, user: User) -> Path | None:
-    if not logo or (user.role != ROLE_SUPER_ADMIN and not logo.active):
+def logo_asset_path_for_user(logo: Logo | None, user: User, *, manage_all: bool = False) -> Path | None:
+    if not logo or (user.role != ROLE_SUPER_ADMIN and not manage_all and not logo.active):
         return None
     logo_path = Path(logo.storage_path)
     return logo_path if logo_path.exists() else None

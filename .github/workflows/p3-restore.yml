@@ -1,0 +1,106 @@
+name: P3 restore verification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 2 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  restore-test-postgresql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: forms_source_test
+          POSTGRES_USER: forms
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forms -d forms_source_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      SOURCE_DATABASE_URL: postgresql://forms:test-only-password@127.0.0.1:5432/forms_source_test
+      RESTORE_DATABASE_URL: postgresql://forms:test-only-password@127.0.0.1:5432/forms_restore_test
+      PGPASSWORD: test-only-password
+      P3_ALLOW_ISOLATED_RESTORE: "true"
+      FLASK_ENV: development
+      SMTP_HOST: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client libcairo2-dev libpango1.0-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - run: DATABASE_URL="$SOURCE_DATABASE_URL" alembic upgrade head
+      - run: python -m scripts.maintenance.seed_restore_fixture --database-url "$SOURCE_DATABASE_URL" --storage-root .p3/storage-source --expectations .p3/expectations.json
+      - run: python -m scripts.maintenance.backup_restore backup --database-url "$SOURCE_DATABASE_URL" --output-dir .p3/backup --storage-source .p3/storage-source
+      - run: createdb --host 127.0.0.1 --username forms forms_restore_test
+      - run: |
+          MANIFEST=$(find .p3/backup -name 'manifest-*.json' -print -quit)
+          python -m scripts.maintenance.backup_restore restore --manifest "$MANIFEST" --database-url "$RESTORE_DATABASE_URL" --storage-destination .p3/storage-restored
+      - run: DATABASE_URL="$RESTORE_DATABASE_URL" alembic upgrade head
+      - run: python -m scripts.maintenance.verify_restore_integrity --database-url "$RESTORE_DATABASE_URL" --storage-root .p3/storage-restored --expectations .p3/expectations.json
+      - run: P3_POSTGRES_TEST_URL="$RESTORE_DATABASE_URL" python -m pytest tests/test_training_concurrency_integration.py -q
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: restore-test-postgresql
+          path: .p3
+          retention-days: 7
+
+  restore-test-mariadb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: forms_source_test
+          MARIADB_USER: forms
+          MARIADB_PASSWORD: test-only-password
+          MARIADB_ROOT_PASSWORD: root-test-only-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      SOURCE_DATABASE_URL: mysql+pymysql://forms:test-only-password@127.0.0.1:3306/forms_source_test
+      RESTORE_DATABASE_URL: mysql+pymysql://forms:test-only-password@127.0.0.1:3306/forms_restore_test
+      P3_ALLOW_ISOLATED_RESTORE: "true"
+      FLASK_ENV: development
+      SMTP_HOST: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y mariadb-client libcairo2-dev libpango1.0-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - run: DATABASE_URL="$SOURCE_DATABASE_URL" alembic upgrade head
+      - run: python -m scripts.maintenance.seed_restore_fixture --database-url "$SOURCE_DATABASE_URL" --storage-root .p3/storage-source --expectations .p3/expectations.json
+      - run: python -m scripts.maintenance.backup_restore backup --database-url "$SOURCE_DATABASE_URL" --output-dir .p3/backup --storage-source .p3/storage-source
+      - run: mariadb --host 127.0.0.1 --user root -e "CREATE DATABASE forms_restore_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL ON forms_restore_test.* TO 'forms'@'%';"
+        env:
+          MYSQL_PWD: root-test-only-password
+      - run: |
+          MANIFEST=$(find .p3/backup -name 'manifest-*.json' -print -quit)
+          python -m scripts.maintenance.backup_restore restore --manifest "$MANIFEST" --database-url "$RESTORE_DATABASE_URL" --storage-destination .p3/storage-restored
+      - run: DATABASE_URL="$RESTORE_DATABASE_URL" alembic upgrade head
+      - run: python -m scripts.maintenance.verify_restore_integrity --database-url "$RESTORE_DATABASE_URL" --storage-root .p3/storage-restored --expectations .p3/expectations.json
+      - run: P3_MARIADB_TEST_URL="$RESTORE_DATABASE_URL" python -m pytest tests/test_training_concurrency_integration.py -q
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: restore-test-mariadb
+          path: .p3
+          retention-days: 7

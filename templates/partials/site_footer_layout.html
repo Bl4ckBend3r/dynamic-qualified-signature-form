@@ -1,0 +1,49 @@
+{% macro footer_contact(contact, documents) %}
+    {% if contact.address or contact.phones or contact.email or documents %}
+        <div class="site-footer__contact">
+            {% if contact.address %}<p>{{ contact.address|replace("\n", "<br>")|trusted_html }}</p>{% endif %}
+            {% if contact.phones %}
+                <p>{% for phone in contact.phones %}{% if phone.label %}{{ phone.label }} {% endif %}{{ phone.number }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+            {% endif %}
+            {% if contact.email %}<p>e-mail: <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>{% endif %}
+            {% if documents %}
+                <p>{% for document in documents %}<a href="{{ url_for('public_forms.service_document_page', document_type=document.type) }}">{{ document.title }}</a>{% endfor %}</p>
+            {% endif %}
+        </div>
+    {% endif %}
+{% endmacro %}
+
+{% macro render_site_footer(view, contact, documents, show_credit=true) %}
+<footer class="site-footer">
+    <div class="container site-footer__inner site-footer__inner--{{ view.logo_position }} site-footer__inner--layout-{{ view.layout }}"
+         data-site-footer data-logo-position="{{ view.logo_position }}" data-footer-layout="{{ view.layout }}">
+        {% set structural_logo = view.layout in ('left_logo_right_content', 'left_content_right_logo') %}
+        {% if view.logo_html and not structural_logo and view.logo_position == 'top' %}{{ view.logo_html }}{% endif %}
+
+        <div class="site-footer__columns">
+            <div class="site-footer__column site-footer__column--left">
+                {% if view.logo_html and (view.layout == 'left_logo_right_content' or (not structural_logo and view.logo_position == 'left')) %}{{ view.logo_html }}{% endif %}
+                {% if view.left_html %}<div class="site-footer__configured-content">{{ view.left_html }}</div>{% endif %}
+                {% if view.social_left_html %}{{ view.social_left_html }}{% endif %}
+                {% if view.layout == 'single' %}
+                    {{ footer_contact(contact, documents) }}
+                    {% if view.social_right_html %}<div class="site-footer__social-slot--right">{{ view.social_right_html }}</div>{% endif %}
+                {% endif %}
+            </div>
+
+            {% if view.layout != 'single' %}
+                <div class="site-footer__column site-footer__column--right">
+                    {% if view.right_html %}<div class="site-footer__configured-content">{{ view.right_html }}</div>{% endif %}
+                    {{ footer_contact(contact, documents) }}
+                    {% if view.social_right_html %}{{ view.social_right_html }}{% endif %}
+                    {% if view.logo_html and (view.layout == 'left_content_right_logo' or (not structural_logo and view.logo_position == 'right')) %}{{ view.logo_html }}{% endif %}
+                </div>
+            {% endif %}
+        </div>
+
+        {% if view.logo_html and not structural_logo and view.logo_position == 'bottom' %}{{ view.logo_html }}{% endif %}
+        {% if view.social_bottom_html %}<div class="site-footer__social-bottom">{{ view.social_bottom_html }}</div>{% endif %}
+    </div>
+    {% if show_credit %}<div class="container site-footer__bottom">Created by Witold Grzesiak</div>{% endif %}
+</footer>
+{% endmacro %}

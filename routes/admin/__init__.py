@@ -27,7 +27,6 @@ from models import (
     EmailLog,
     Form,
     FormField,
-    FormPermission,
     FormSubmission,
     MailFooter,
     MailTemplate,
@@ -68,6 +67,7 @@ from services.logo_service import (
     safe_asset_filename as logo_safe_asset_filename,
 )
 from services.mail_dispatch_service import MailDispatchService
+from services.permission_service import PermissionService
 
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -78,6 +78,15 @@ ROLE_FORM_MANAGER = "form_manager"
 ROLES = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_FORM_MANAGER}
 TECHNICAL_SORT_FIELDS = {"created_at", "process_status", "officer_decision", "email", "nazwisko", "submission_id"}
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+
+@bp.errorhandler(403)
+def admin_forbidden(error):
+    return render_template(
+        "admin/error.html",
+        error_title="Brak uprawnień",
+        error_message=str(getattr(error, "description", "") or "Nie masz uprawnień do wykonania tej operacji."),
+    ), 403
 OFFICER_DECISIONS = [
     ("", "Brak decyzji"),
     ("accepted", "Zaakceptowano"),
@@ -93,7 +102,14 @@ MAIL_TEMPLATE_TYPES = [
     "agreement_ready",
     "agreement_signed_by_user",
     "agreement_signed_by_office",
+    "agreement_rejected_by_office",
+    "stage_rollback",
+    "auto_rejected_by_condition",
+    "returned_for_correction",
     "custom",
+    "correction_accepted",
+    "form_draft_resume",
+    "repeatable_item_decision",
 ]
 
 
@@ -104,7 +120,7 @@ def db_session_factory():
     return create_session_factory(database_url)
 
 
-from .auth import get_current_user, login_required, role_required  # noqa: E402,F401
+from .auth import get_current_user, login_required, permission_required, role_required  # noqa: E402,F401
 
 
 def normalize_slug(value: str) -> str:
@@ -216,9 +232,7 @@ def format_json(value: Any) -> str:
 
 
 def accessible_form_ids(db, user: User) -> list[int]:
-    if user.role == ROLE_SUPER_ADMIN:
-        return [item for item in db.execute(select(Form.id)).scalars().all()]
-    return [item for item in db.execute(select(FormPermission.form_id).where(FormPermission.user_id == user.id)).scalars().all()]
+    return PermissionService().accessible_form_ids(db, user)
 
 
 def accessible_form_slugs(db, form_ids: list[int]) -> list[str]:
@@ -242,22 +256,31 @@ def list_accessible_forms(db, user: User) -> list[Form]:
     return db.execute(select(Form).where(Form.id.in_(form_ids)).order_by(Form.sort_order, Form.name)).scalars().all()
 
 
-def ensure_form_access(db, form_id: int, manage: bool = False) -> Form:
+def ensure_form_access(db, form_id: int, manage: bool = False, permission: str | None = None) -> Form:
     form = db.get(Form, form_id)
     if not form:
         abort(404)
     user = g.admin_user
-    if user.role == ROLE_SUPER_ADMIN:
-        return form
-    permission = db.execute(
-        select(FormPermission).where(FormPermission.form_id == form_id, FormPermission.user_id == user.id)
-    ).scalar_one_or_none()
-    if not permission or (manage and not permission.can_manage):
+    required = permission or ("can_edit_form" if manage else "can_view_submissions")
+    if not PermissionService().has_permission(db, user, required, form=form):
         abort(403)
     return form
 
 
+def can_manage_form(db, user: User, form_id: int) -> bool:
+    """Return the effective write permission, including the role policy."""
+    return PermissionService().has_permission(db, user, "can_edit_form", form=form_id)
+
+
+def has_permission(db, permission: str, *, form=None, submission=None, user=None) -> bool:
+    return PermissionService().has_permission(
+        db, user or g.admin_user, permission, form=form, submission=submission
+    )
+
+
 def build_mail_context(form: Form, submission: FormSubmission | None, files: list[SubmissionFile]) -> dict:
+    from services.training_availability_service import TrainingAvailabilityService
+
     return service_build_mail_context(
         form,
         submission,
@@ -265,11 +288,15 @@ def build_mail_context(form: Form, submission: FormSubmission | None, files: lis
         documents_to_sign_url_builder=lambda item: url_for(
             "documents.documents_to_sign",
             submission_id=item.submission_id,
+            token=item.access_token,
             _external=True,
         ),
         document_url_builder=lambda item, filename: current_app.extensions["services"].document_service.build_download_url(
             {"form_slug": item.form_slug, "submission_id": item.submission_id, "access_token": item.access_token},
             filename,
+        ),
+        training_availability_service=TrainingAvailabilityService(
+            current_app.extensions["services"].submission_repository
         ),
     )
 
@@ -279,6 +306,8 @@ def render_mail_text(raw_text: str, context: dict) -> str:
 
 
 def preview_mail_context(form: Form, submission: FormSubmission | None = None) -> dict:
+    from services.training_availability_service import TrainingAvailabilityService
+
     context = build_mail_context(form, submission, [])
     return service_preview_mail_context(
         form,
@@ -286,8 +315,16 @@ def preview_mail_context(form: Form, submission: FormSubmission | None = None) -
         {
             **context,
             "podpisz_url": context.get("podpisz_url")
-            or url_for("documents.documents_to_sign", submission_id=context.get("submission_id", ""), _external=True),
+            or url_for(
+                "documents.documents_to_sign",
+                submission_id=context.get("submission_id", ""),
+                token=getattr(submission, "access_token", ""),
+                _external=True,
+            ),
         },
+        training_availability_service=TrainingAvailabilityService(
+            current_app.extensions["services"].submission_repository
+        ),
     )
 
 
@@ -303,5 +340,9 @@ from . import dashboard  # noqa: E402,F401
 from . import forms  # noqa: E402,F401
 from . import logos  # noqa: E402,F401
 from . import mail  # noqa: E402,F401
+from . import mail_settings  # noqa: E402,F401
+from . import site  # noqa: E402,F401
 from . import submissions  # noqa: E402,F401
+from . import training_management  # noqa: E402,F401
+from . import sla  # noqa: E402,F401
 from . import users  # noqa: E402,F401

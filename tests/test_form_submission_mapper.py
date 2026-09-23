@@ -36,3 +36,25 @@ def test_validate_required_submission_fields_requires_core_fields_and_consents(f
 
     assert "imiona" in errors
     assert "osw_regulamin" in errors
+
+
+def test_dynamic_form_does_not_require_legacy_columns_absent_from_definition():
+    form_definition = {
+        "fields": [
+            {"name": "imie", "type": "text", "required": True},
+            {"name": "nazwisko", "type": "text", "required": True},
+            {"name": "telefon", "type": "tel", "required": True},
+            {"name": "wybrane_szkolenie", "type": "select", "required": True, "options": ["Kompetencje cyfrowe"]},
+        ]
+    }
+    payload = {
+        "imie": "Jan",
+        "nazwisko": "Kowalski",
+        "telefon": "600700800",
+        "wybrane_szkolenie": "Kompetencje cyfrowe",
+    }
+
+    mapped = build_submission_from_form(payload, form_definition)
+    errors = validate_required_submission_fields(mapped, form_definition)
+
+    assert errors == {}

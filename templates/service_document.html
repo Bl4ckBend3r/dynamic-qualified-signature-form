@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>{{ title }}</h2>
+    </div>
+    {% if document %}
+        {% if document.content_html %}
+            <div class="static-text">{{ document.content_html|trusted_html }}</div>
+        {% endif %}
+        {% if document.original_filename %}
+            <p>
+                <a class="btn-secondary" href="{{ url_for('public_forms.service_document_file', document_type=document.document_type) }}" target="_blank" rel="noopener noreferrer">
+                    Otwórz dokument
+                </a>
+            </p>
+        {% endif %}
+    {% else %}
+        <p>Dokument nie został jeszcze dodany.</p>
+    {% endif %}
+</div>
+{% endblock %}

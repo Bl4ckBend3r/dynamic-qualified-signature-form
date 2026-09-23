@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% set is_test = survey is defined and survey and survey.survey_type != 'survey' %}
+{% block title %}{{ 'Test szkoleniowy' if is_test else 'Ankieta szkoleniowa' }}{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/training_test.css') }}">{% endblock %}
+
+{% block content %}
+<main class="training-test">
+    {% if not valid %}
+        <section class="training-test__state card" role="alert"><p class="training-test__eyebrow">Ankieta lub test szkoleniowy</p><h1>Link jest nieaktywny</h1><p>Link jest nieprawidłowy, wygasł albo test nie jest już dostępny.</p></section>
+    {% elif completed %}
+        <section class="training-test__state card">
+            <p class="training-test__eyebrow">{{ 'Test PRE' if survey.survey_type == 'pre_test' else ('Test POST' if survey.survey_type == 'post_test' else 'Ankieta szkoleniowa') }}</p><h1>{{ survey.name }}</h1><p>Dziękujemy za przesłanie odpowiedzi.</p>
+            {% if response and response.score_percent is not none %}<div class="training-test__score" aria-label="Wynik testu"><span>Twój wynik</span><strong>{{ response.score_points }}/{{ response.max_points }} ({{ response.score_percent }}%)</strong></div>{% endif %}
+        </section>
+    {% else %}
+        <header class="training-test__header card">
+            <p class="training-test__eyebrow">{{ 'Test PRE' if survey.survey_type == 'pre_test' else ('Test POST' if survey.survey_type == 'post_test' else 'Ankieta szkoleniowa') }}</p>
+            <h1>{{ survey.name }}</h1>
+            {% if survey.description %}<p class="training-test__description">{{ survey.description }}</p>{% endif %}
+            {% if is_test %}<p class="training-test__instruction">Odpowiedz na wymagane pytania, a następnie wybierz „Zakończ test”.</p>{% endif %}
+            <div class="training-test__meta" aria-label="Informacje o teście"><span>{{ questions|length }} {{ 'pytanie' if questions|length == 1 else ('pytania' if questions|length in [2, 3, 4] else 'pytań') }}</span>{% if is_test %}<span>{{ 'Jedno podejście' if survey.attempt_policy == 'single_attempt' else 'Wiele podejść' }}</span>{% endif %}</div>
+            <div class="training-test__progress"><div class="training-test__progress-label"><span>Postęp</span><strong>Odpowiedziano: <span data-answered-count>0</span> / {{ questions|length }}</strong></div><progress data-training-test-progress value="0" max="{{ questions|length }}">0 z {{ questions|length }}</progress></div>
+        </header>
+
+        <form class="training-test__form" method="post" data-training-test-form data-single-attempt="{{ 'true' if is_test and survey.attempt_policy == 'single_attempt' else 'false' }}" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            {% if error %}<div class="training-test__validation" role="alert">{{ error }}</div>{% endif %}
+            <div class="training-test__validation" role="alert" data-training-test-validation hidden></div>
+            <div class="training-test__questions">
+                {% for question in questions %}
+                    <article class="training-test-question" data-training-test-question data-question-number="{{ loop.index }}" data-required="{{ 'true' if question.required else 'false' }}">
+                    <fieldset class="training-test-question__fieldset"{% if question.required %} aria-required="true" aria-describedby="question_{{ question.id }}_error"{% endif %}>
+                        <legend class="training-test-question__heading"><span class="training-test-question__number">Pytanie {{ loop.index }}</span><span class="training-test-question__title">{{ question.text }}</span></legend>
+                        {% if question.question_type == 'scale' %}
+                            <div class="training-test-options">{% for value in range(1, 6) %}<label class="training-test-option"><input class="training-test-option__control" type="radio" name="question_{{ question.id }}" value="{{ value }}"><span class="training-test-option__text">{{ value }}</span></label>{% endfor %}</div>
+                        {% elif question.question_type in ['single_choice', 'multiple_choice'] %}
+                            <div class="training-test-options">{% for option in question.options_json %}<label class="training-test-option"><input class="training-test-option__control" type="{{ 'radio' if question.question_type == 'single_choice' else 'checkbox' }}" name="question_{{ question.id }}" value="{{ option }}"><span class="training-test-option__text">{{ option }}</span></label>{% endfor %}</div>
+                        {% elif question.question_type == 'true_false' %}
+                            <div class="training-test-options"><label class="training-test-option"><input class="training-test-option__control" type="radio" name="question_{{ question.id }}" value="true"><span class="training-test-option__text">Prawda</span></label><label class="training-test-option"><input class="training-test-option__control" type="radio" name="question_{{ question.id }}" value="false"><span class="training-test-option__text">Fałsz</span></label></div>
+                        {% else %}
+                            <label class="training-test-question__open-answer"><span class="training-test-question__open-label">Twoja odpowiedź</span><textarea name="question_{{ question.id }}" rows="5"></textarea></label>
+                        {% endif %}
+                        <p class="training-test-question__error" id="question_{{ question.id }}_error" data-question-error aria-live="polite" hidden>To pytanie wymaga odpowiedzi.</p>
+                    </fieldset>
+                    </article>
+                {% endfor %}
+            </div>
+            <div class="training-test__actions"><button class="btn-primary" type="submit">{{ 'Zakończ test' if is_test else 'Wyślij odpowiedzi' }}</button></div>
+        </form>
+
+        {% if is_test and survey.attempt_policy == 'single_attempt' %}<dialog class="training-test-dialog" data-training-test-dialog aria-labelledby="training-test-dialog-title"><h2 id="training-test-dialog-title">Zakończyć test?</h2><p>Czy na pewno chcesz zakończyć test? Po zatwierdzeniu odpowiedzi nie będzie można ich zmienić.</p><div class="training-test-dialog__actions"><button class="btn-secondary" type="button" data-dialog-cancel>Wróć do odpowiedzi</button><button class="btn-primary" type="button" data-dialog-confirm>Zakończ test</button></div></dialog>{% endif %}
+    {% endif %}
+</main>
+{% endblock %}
+
+{% block extra_js %}{% if valid and not completed %}<script>
+(() => {
+    const form = document.querySelector("[data-training-test-form]");
+    if (!form) return;
+    const questions = Array.from(form.querySelectorAll("[data-training-test-question]"));
+    const progress = document.querySelector("[data-training-test-progress]");
+    const answeredCount = document.querySelector("[data-answered-count]");
+    const validation = form.querySelector("[data-training-test-validation]");
+    const dialog = document.querySelector("[data-training-test-dialog]");
+    let confirmed = false;
+    const isAnswered = (question) => Boolean(question.querySelector("input:checked") || question.querySelector("textarea")?.value.trim());
+    const updateProgress = () => {
+        const count = questions.filter(isAnswered).length;
+        if (answeredCount) answeredCount.textContent = String(count);
+        if (progress) progress.value = count;
+        questions.forEach((question) => { if (isAnswered(question)) { question.classList.remove("training-test-question--error"); question.removeAttribute("aria-invalid"); const error = question.querySelector("[data-question-error]"); if (error) error.hidden = true; } });
+    };
+    form.addEventListener("input", updateProgress);
+    form.addEventListener("change", updateProgress);
+    form.addEventListener("submit", (event) => {
+        const missing = questions.filter((question) => question.dataset.required === "true" && !isAnswered(question));
+        if (missing.length) {
+            event.preventDefault();
+            validation.textContent = `Nie odpowiedziano na pytania: ${missing.map((question) => question.dataset.questionNumber).join(", ")}.`;
+            validation.hidden = false;
+            missing.forEach((question) => { question.classList.add("training-test-question--error"); question.setAttribute("aria-invalid", "true"); const error = question.querySelector("[data-question-error]"); if (error) error.hidden = false; });
+            validation.scrollIntoView({behavior: "smooth", block: "center"});
+            missing[0].querySelector("input, textarea")?.focus({preventScroll: true});
+            return;
+        }
+        validation.hidden = true;
+        if (form.dataset.singleAttempt === "true" && !confirmed && dialog?.showModal) { event.preventDefault(); dialog.showModal(); }
+    });
+    dialog?.querySelector("[data-dialog-cancel]")?.addEventListener("click", () => dialog.close());
+    dialog?.querySelector("[data-dialog-confirm]")?.addEventListener("click", () => { confirmed = true; dialog.close(); form.requestSubmit(); });
+    updateProgress();
+})();
+</script>{% endif %}{% endblock %}

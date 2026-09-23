@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.apply_p2_1_template_patch import patch_template
+from scripts.maintenance.apply_p2_1_template_patch import patch_template
 
 
 def test_p2_1_template_patch_is_idempotent(tmp_path, monkeypatch):
@@ -30,4 +30,4 @@ def test_p2_1_template_patch_is_idempotent(tmp_path, monkeypatch):
 
 
 def test_p2_1_template_patch_script_exists():
-    assert Path("scripts/apply_p2_1_template_patch.py").exists()
+    assert Path("scripts/maintenance/apply_p2_1_template_patch.py").exists()

@@ -1,28 +1,43 @@
 {% extends "base.html" %}
 
-{% block title %}Do podpisania{% endblock %}
+{% block title %}Dokumenty do podpisania{% endblock %}
+
+{% macro current_status_tile(title, description, variant='neutral', reason='', next_action='') -%}
+<section class="status-tile status-tile--{{ variant }}" data-public-current-status role="{{ 'alert' if variant == 'danger' else 'status' }}">
+    <span class="status-tile__icon" aria-hidden="true">{{ '✓' if variant == 'success' else '!' if variant == 'danger' else '…' if variant == 'warning' else 'i' }}</span>
+    <div>
+        <h3 class="status-tile__title">{{ title }}</h3>
+        <p class="status-tile__description">{{ description }}</p>
+        {% if reason %}<p><strong>Powód:</strong> {{ reason }}</p>{% endif %}
+        {% if next_action %}<p><strong>Co teraz?</strong> {{ next_action }}</p>{% endif %}
+    </div>
+</section>
+{%- endmacro %}
 
 {% block extra_css %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='documents_to_sign.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/training_selection.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/documents_to_sign.css') }}">
 {% endblock %}
 
 {% block extra_js %}
-    <script src="{{ url_for('static', filename='documents_to_sign.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/training_selection.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/documents_to_sign.js') }}" defer></script>
 {% endblock %}
 
 {% block content %}
-{% set initial_submission_id = submission_id or request.args.get('submission_id', '') %}
+{% set initial_submission_id = submission_id|default('') %}
+{% set participant_access_token = access_token|default('', true) %}
 
 <div class="card">
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
-            Podaj ID wniosku. System najpierw sprawdzi, czy formularz został zaakceptowany przez urzędnika.
-            Dopiero po akceptacji możliwe będzie przejście do podpisywania dokumentów.
+            Tutaj sprawdzisz aktualny status zgłoszenia i dostępne czynności.
         </p>
+        <p id="signing-status-help">Sprawdzimy status wniosku przed pokazaniem dokumentów do podpisu.</p>
     </div>
 
-    <div class="static-text documents-instructions">
+    <div class="static-text documents-instructions{% if not participant_access_token or (result and result.agreement_blocked) %} is-hidden{% endif %}">
         <strong>Instrukcja podpisania dokumentów:</strong>
         <ol class="documents-instructions__list">
             <li>Wypełnij wymagany dokument.</li>
@@ -33,15 +48,19 @@
         </ol>
     </div>
 
-    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form" id="sign-documents-form" novalidate>
+    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form{% if not participant_access_token %} is-hidden{% endif %}" id="sign-documents-form" data-access-denied="{{ 'true' if access_denied|default(false) else 'false' }}" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+        <input type="hidden" name="access_token" value="{{ participant_access_token }}" id="participant-access-token">
         <div class="form-field sign-id-field">
-            <label for="submission_id">ID wniosku</label>
+            <label for="submission_id">Numer zgłoszenia wniosku (ID)</label>
             <input
                 type="text"
                 id="submission_id"
                 name="submission_id"
                 value="{{ initial_submission_id }}"
-                placeholder="Wpisz ID wniosku"
+                data-acceptance-status-url-template="{{ url_for('api.api_acceptance_status', submission_id='__SUBMISSION_ID__') }}"
+                readonly
+                aria-describedby="signing-status-help acceptance-status"
                 autocomplete="off"
                 required
             >
@@ -50,54 +69,139 @@
                 <div class="field-error">{{ errors.get("submission_id") }}</div>
             {% endif %}
 
-            <div id="acceptance-status" class="field-help"></div>
+            <div id="acceptance-status" class="field-help" aria-live="polite"></div>
         </div>
 
         <div class="form-field is-hidden" id="documents-section">
             <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
         </div>
 
-        <div class="form-actions sign-actions">
+        <div class="form-actions sign-actions{% if result and result.document_step %} is-hidden{% endif %}">
             <button type="submit" class="btn-primary" id="generate-button" disabled>
-                Wygeneruj deklarację do podpisu
+                Kontynuuj
             </button>
         </div>
     </form>
 
-    <div class="status-tiles" id="submission-status-tiles" aria-live="polite"></div>
+    {% if not result %}<div class="status-tiles" id="submission-status-tiles" aria-live="polite">
+        {% if not participant_access_token %}{{ current_status_tile('Otwórz link dostępu', 'Otwórz link dostępu otrzymany po wysłaniu zgłoszenia — na stronie potwierdzenia lub w wiadomości e-mail.', 'warning') }}{% endif %}
+    </div>{% endif %}
 
-    <div id="process-completed-box" class="result-box result-box--completed is-hidden">
-        <p><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
-    </div>
+    <aside id="user-instruction-window" class="instruction-window is-hidden" aria-labelledby="user-instruction-title">
+        <div class="instruction-window__header">
+            <h3 id="user-instruction-title"></h3>
+            <div class="instruction-window__actions">
+                <button type="button" id="user-instruction-minimize" class="instruction-window__button" aria-label="Minimalizuj instrukcję">−</button>
+                <button type="button" id="user-instruction-close" class="instruction-window__button" aria-label="Zamknij instrukcję">×</button>
+            </div>
+        </div>
+        <div class="instruction-window__body">
+            <section id="form-instruction-section" class="instruction-window__section is-hidden">
+                <div id="form-instruction-content" class="instruction-window__general"></div>
+            </section>
+            <section id="current-stage-label-section" class="instruction-window__section is-hidden"><h4>Aktualny etap</h4><strong id="current-stage-label"></strong></section>
+            <section id="current-stage-description-section" class="instruction-window__section is-hidden">
+                <h4>Opis aktualnego etapu</h4>
+                <div id="current-stage-description" class="instruction-window__general"></div>
+            </section>
+            <section id="next-action-section" class="instruction-window__section is-hidden">
+                <h4>Co masz zrobić teraz?</h4>
+                <div id="next-action-content" class="instruction-window__next-action"></div>
+            </section>
+            <section id="next-stage-section" class="instruction-window__section is-hidden"><h4>Następny etap w razie powodzenia</h4><strong id="next-stage-label"></strong></section>
+            <details id="instruction-stages-section" class="instruction-window__section is-hidden"><summary>Pokaż cały przebieg procesu</summary><ol id="instruction-steps" class="instruction-steps"></ol></details>
+        </div>
+    </aside>
+    <button type="button" id="user-instruction-restore" class="instruction-window__restore is-hidden">Instrukcja</button>
 
-    {% if result %}
+    {% if result and result.training_picker %}
+        <div class="training-picker-disclosure" data-training-disclosure>
+            <button type="button" class="btn-secondary training-picker-disclosure__toggle"
+                    aria-expanded="false" aria-controls="public-training-picker"
+                    data-training-disclosure-toggle>Wybierz szkolenia</button>
+            <div id="public-training-picker" class="training-picker-disclosure__panel" hidden data-training-disclosure-panel>
+        {% with field=result.training_picker.field, submission=result.training_picker.submission,
+            catalog=result.training_picker.catalog, summary=result.training_picker.summary,
+            selection_open=result.training_picker.selection_open, action_url=result.training_picker.action_url,
+            limit_total_formatted=result.training_picker.limit_total_formatted,
+            limit_used_formatted=result.training_picker.limit_used_formatted,
+            limit_pending_formatted=result.training_picker.limit_pending_formatted,
+            limit_remaining_formatted=result.training_picker.limit_remaining_formatted,
+            limit_remaining_after_selection_formatted=result.training_picker.limit_remaining_after_selection_formatted %}
+            {% include "partials/training_picker.html" %}
+        {% endwith %}
+            </div>
+        </div>
+    {% endif %}
+    {% if result and result.completed_document_files %}
+    <section class="result-box"><h3>Dokumenty do pobrania</h3>
+        {% for file in result.completed_document_files %}<p><a href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=file.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endfor %}
+    </section>
+    {% endif %}
+    {% if result and result.document_step %}
+        {% set document = result.document_step %}
+        <section class="result-box" data-composite-document data-substate="{{ document.substate }}">
+            <div id="submission-status-tiles" aria-live="polite">{{ current_status_tile(document.status.title, document.status.message) }}</div>
+            {% for file in document.files %}
+                <div class="composite-document-file">
+                {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
+                {% if file.can_upload %}
+                <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}" data-document-upload>
+                    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                    <input type="hidden" name="access_token" value="{{ result.access_token }}">
+                    <input type="hidden" name="instance" value="{{ file.instance }}">
+                    <label class="composite-document-dropzone">{{ 'Wgraj podpisany dokument' if document.policy.participant_signature else 'Wgraj dokument' }} — przeciągnij PDF tutaj lub wybierz plik
+                        <input type="file" name="document_pdf" accept="application/pdf,.pdf" required>
+                    </label>
+                    <button type="submit" class="btn-primary">{{ 'Wgraj ponownie' if document.substate == 'verification_failed' else 'Wgraj dokument' }}: {{ document.label }}</button>
+                    <p data-document-upload-status aria-live="polite"></p>
+                </form>
+                {% endif %}
+                </div>
+            {% endfor %}
+            {% if document.can_retry %}<form method="post" action="{{ url_for('documents.retry_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}">
+                <button class="btn-secondary" type="submit">Ponów przygotowanie dokumentu</button>
+            </form>{% endif %}
+        </section>
+    {% elif result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}
-        {% set declaration_completed = result.declaration_signature_valid|default(false) %}
-        {% set agreement_completed = result.agreement_signature_valid|default(false) %}
+        {% set declaration_completed = result.declaration_completed|default(result.declaration_signature_valid|default(false)) %}
+        {% set agreement_completed = result.agreement_completed|default(result.agreement_signature_valid|default(false)) %}
         {% set declaration_generated = result.declaration_generated|default(result.declaration_url) %}
         {% set agreement_generated = result.agreement_generated|default(result.agreement_filename) %}
-        {% set training_agreements = result.training_agreements|default([]) %}
+        {% set agreement_items = result.agreement_items|default(result.training_agreements|default([])) %}
+        {% set training_agreements = agreement_items %}
 
-        {% set show_declaration_stage = not declaration_completed and not agreement_completed %}
-        {% set show_declaration_upload = declaration_generated and result.declaration_upload_url and not declaration_completed and not agreement_completed %}
-        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement and not agreement_generated and not agreement_completed %}
-        {% set show_agreement_upload = ((agreement_generated and result.agreement_upload_url) or training_agreements) and not agreement_completed %}
-        {% set show_agreement_stage = show_agreement_generate or show_agreement_upload %}
+        {% set show_declaration_stage = result.can_fill_declaration|default(false) or result.can_download_declaration|default(false) %}
+        {% set show_declaration_upload = result.can_upload_signed_declaration|default(false) and result.declaration_upload_url %}
+        {% set show_agreement_generate = declaration_completed and result.can_generate_agreement %}
+        {% set show_agreement_upload = (result.can_download_agreement|default(false) or result.can_upload_signed_agreement|default(false)) and (not agreement_completed or training_agreements) %}
+        {% set show_agreement_stage = show_agreement_generate or show_agreement_upload or training_agreements %}
 
+        {% set current_status = result.status|default({}) %}
         <div class="result-box" id="signing-result-box">
-            <p>{{ result.message }}</p>
+            <div id="submission-status-tiles" aria-live="polite">{{ current_status_tile(
+                current_status.title|default(result.status_title),
+                current_status.message|default(result.status_description|default(result.message)),
+                current_status.variant|default(result.status_variant|default('neutral')),
+                current_status.reason|default(result.status_reason),
+                current_status.next_action|default(result.next_action)
+            ) }}</div>
             <p><strong>ID wniosku:</strong> {{ result.submission_id }}</p>
             <p><strong>Formularz:</strong> {{ result.form_title }}</p>
-
-            {% if result.process_status %}
-                <p><strong>Status procesu:</strong> {{ result.process_status_label|default(result.process_status) }}</p>
+            {% include "_training_agreements_overview.html" %}
+            {% if result.training_selection_url %}
+                <p>
+                    <a class="btn-primary" href="{{ result.training_selection_url }}">
+                        Wybierz lub zmień szkolenia
+                    </a>
+                </p>
             {% endif %}
-
-            {% if result.agreement_blocked %}
-                <p><strong>Status umowy:</strong> Umowa zablokowana</p>
-                {% if result.agreement_block_reason %}
-                    <p><strong>Powód:</strong> {{ result.agreement_block_reason }}</p>
-                {% endif %}
+            {% if result.agreement_configuration_error %}
+                <div class="form-errors" role="alert">
+                    <p>{{ result.agreement_configuration_error }}</p>
+                </div>
             {% endif %}
 
             {% if result.needs_additional_fields %}
@@ -107,6 +211,12 @@
                         <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
                     </div>
                     <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
+                        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                        <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
+                        {% if result.additional_errors.get('compliance') %}<div class="form-errors" role="alert"><p>{{ result.additional_errors.get('compliance') }}</p></div>{% endif %}
+                        {% if result.additional_form_definition.fields|selectattr('required')|list %}
+                            <p class="form-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
+                        {% endif %}
                         {% for field in result.additional_form_definition.fields %}
                             {% if field.type == "section" %}
                                 <section class="form-section"><h3>{{ field.label|trusted_html }}</h3></section>
@@ -116,30 +226,52 @@
                                 {% set value = result.additional_values.get(field.name, field.default) %}
                                 {% set has_error = result.additional_errors.get(field.name) %}
                                 <div class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}">
-                                    {% if field.type != "checkbox" %}
-                                        <label for="additional_{{ field.name }}">{{ field.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</label>
+                                   {% if field.type != "checkbox" %}
+                                        <label for="additional_{{ field.name }}">
+                                            {{ field.label|trusted_html }}
+                                            {% if field.required %}
+                                                <span class="required required-marker" aria-hidden="true">*</span>
+                                            {% endif %}
+                                        </label>
+                                    {% elif (field.options or [])|length > 1 %}
+                                        <div
+                                            class="field-group-label"
+                                            id="additional_{{ field.name }}-group-label"
+                                        >
+                                            {{ field.label|trusted_html }}
+                                            {% if field.required %}
+                                                <span class="required required-marker" aria-hidden="true">*</span>
+                                            {% endif %}
+                                        </div>
                                     {% endif %}
                                     {% if field.type in ["text", "email", "number", "date", "tel", "pesel"] %}
-                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required{% endif %}>
+                                        <input type="{% if field.type == 'pesel' %}text{% else %}{{ field.type }}{% endif %}" id="additional_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" {% if field.required %}required aria-required="true"{% endif %}>
                                     {% elif field.type == "textarea" %}
-                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>{{ value }}</textarea>
+                                        <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>{{ value }}</textarea>
                                     {% elif field.type == "select" %}
-                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>
                                             <option value="">-- wybierz --</option>
                                             {% for option in field.options %}
-                                                <option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>
+                                                <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
                                             {% endfor %}
                                         </select>
                                     {% elif field.type == "radio" %}
                                         <div class="option-list">
                                             {% for option in field.options %}
-                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option }}" {% if value == option %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option|trusted_html }}</span></label>
+                                                <label class="option-item"><input type="radio" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
-                                        <div class="option-list">
+                                        {% elif field.type == "checkbox" %}
+                                        <div
+                                            class="option-list"
+                                            {% if (field.options or [])|length > 1 %}
+                                                role="group"
+                                                aria-labelledby="additional_{{ field.name }}-group-label"
+                                            {% endif %}
+                                        >
                                             {% for option in field.options %}
-                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option.value }}" {% if value == option.value or value == "Tak" %}checked{% endif %} {% if field.required %}required{% endif %}><span>{{ option.label|trusted_html }}{% if field.required %}<span class="required">*</span>{% endif %}</span></label>
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% endif %}
@@ -167,7 +299,7 @@
                         {% if result.form_slug and result.submission_id %}
                             <a
                                 class="btn-primary"
-                                href="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                                href="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
                             >
                                 Wypełnij deklarację
                             </a>
@@ -178,7 +310,7 @@
                                 class="btn-primary"
                                 href="{{ result.declaration_url }}"
                                 data-download-replace-trigger
-                                data-edit-url="/declaration/{{ result.form_slug }}/{{ result.submission_id }}"
+                                data-edit-url="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
                                 data-edit-title="Edytuj deklarację"
                             >
                                 Pobierz deklarację PDF
@@ -206,6 +338,8 @@
                     </div>
 
                     <form method="post" action="{{ result.declaration_upload_url }}" enctype="multipart/form-data" class="dynamic-form">
+                        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                        <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                         <div class="form-row width-full">
                             <label class="upload-dropzone" data-upload-dropzone>
                                 <input
@@ -233,15 +367,22 @@
                 </div>
             {% endif %}
 
-            {% if show_agreement_stage %}
+            {% if show_agreement_stage and not agreement_items %}
                 <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
-                        <h3>Umowa do podpisania</h3>
-                        <p>Deklaracja została poprawnie zweryfikowana. Możesz wygenerować umowę, podpisać ją i wgrać podpisany plik PDF.</p>
+                        {% if training_agreements %}
+                            <h3>Umowy szkoleniowe</h3>
+                            <p>Każde szkolenie ma własny status umowy i zestaw dostępnych czynności.</p>
+                        {% else %}
+                            <h3>Umowa do wygenerowania</h3>
+                            <p>Deklaracja została poprawnie zweryfikowana. Wygeneruj umowę dla wybranego szkolenia.</p>
+                        {% endif %}
                     </div>
 
                     {% if show_agreement_generate and result.generate_agreement_url %}
                         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
+                            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                            <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                             <div class="submit-row">
                                 <button type="submit" class="btn-primary">Wygeneruj umowę</button>
                             </div>
@@ -250,55 +391,82 @@
 
                     {% if training_agreements %}
                         <div data-stage="agreement-upload">
+                            <div class="card-header">
+                                <h4>Umowy oczekujące na podpisany plik</h4>
+                            </div>
+                            <div class="agreement-upload-status-list">
+                                {% for agreement in training_agreements if agreement.filename %}
+                                    <div class="agreement-upload-status-item">
+                                        <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
+                                        {% if agreement.number %}<p><strong>Numer umowy:</strong> {{ agreement.number }}</p>{% endif %}
+                                        <p><strong>Oczekiwany plik:</strong> {{ agreement.filename }}</p>
+                                        <p><strong>Status:</strong> {{ "podpisany plik wgrany" if agreement.beneficiary_uploaded else "oczekuje na podpisany plik" }}</p>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                            {% if result.uploadable_training_agreements %}
+                                <form
+                                    method="post"
+                                    action="{{ url_for('documents.upload_signed_training_agreements', slug=result.form_slug, submission_id=result.submission_id) }}"
+                                    enctype="multipart/form-data"
+                                    class="bulk-agreement-upload"
+                                    data-bulk-agreement-upload
+                                >
+                                    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                                    <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}" data-bulk-agreement-token>
+                                    <div class="card-header">
+                                        <h4>Wgraj podpisane umowy</h4>
+                                        <p>Przeciągnij i upuść podpisane pliki PDF albo wybierz je z dysku. Pliki zostaną dopasowane do umów na podstawie nazwy pliku.</p>
+                                    </div>
+                                    <label class="upload-dropzone" data-upload-dropzone>
+                                        <input type="file" name="signed_agreement_files" accept="application/pdf" multiple required class="upload-dropzone__input" data-bulk-agreement-files>
+                                        <span class="upload-dropzone__inner">
+                                            <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
+                                            <span class="upload-dropzone__title">Wybierz podpisane umowy</span>
+                                            <span class="upload-dropzone__description">Możesz wskazać jeden lub wiele plików PDF</span>
+                                            <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano plików</span>
+                                        </span>
+                                    </label>
+                                    <div class="bulk-agreement-matches" data-bulk-agreement-matches hidden>
+                                        <div class="bulk-agreement-row bulk-agreement-row--heading"><span>Plik</span><span>Umowa</span><span>Status</span></div>
+                                        <div data-bulk-agreement-rows></div>
+                                    </div>
+                                    <div class="bulk-agreement-summary" data-bulk-agreement-summary aria-live="polite"></div>
+                                    <div class="submit-row"><button type="submit" class="btn-primary" data-bulk-agreement-submit disabled>Wyślij podpisane umowy</button></div>
+                                    <script type="application/json" data-bulk-agreements>{{ result.uploadable_training_agreements|tojson }}</script>
+                                </form>
+                            {% else %}
+                                <p class="status-message status-message--success">Wszystkie wymagane podpisane umowy zostały wgrane.</p>
+                            {% endif %}
                             {% for agreement in training_agreements %}
                                 <div class="signing-document-card signing-document-card--spaced">
+                                    <div class="card-header">
+                                        <h4>{{ agreement.state_title }}</h4>
+                                        <p>{{ agreement.state_description }}</p>
+                                    </div>
                                     <p><strong>Szkolenie:</strong> {{ agreement.training_name }}</p>
-                                    <p><strong>Numer umowy:</strong> {{ agreement.number }}</p>
-                                    <p><strong>Plik:</strong> {{ agreement.filename }}</p>
+                                    {% if agreement.number %}<p><strong>Numer umowy:</strong> {{ agreement.number }}</p>{% endif %}
+                                    {% if agreement.filename %}<p><strong>Plik:</strong> {{ agreement.filename }}</p>{% endif %}
+                                    <p><strong>Status:</strong> {{ agreement.participant_status_label or agreement.state_title }}</p>
+                                    {% if agreement.is_locked %}<p><span class="badge badge-success">Zablokowane</span>{% if agreement.locked_at %} · {{ agreement.locked_at }}{% endif %}</p>{% endif %}
 
                                     {% if agreement.generated_at %}
                                         <p><strong>Data wygenerowania umowy:</strong> {{ agreement.generated_at }}</p>
                                     {% endif %}
 
-                                    {% if agreement.url %}
-                                        <div class="download-links download-links--spaced">
-                                            <a class="btn-primary" href="{{ agreement.url }}">Pobierz umowę PDF</a>
-                                        </div>
-                                    {% endif %}
-
-                                    {% if agreement.signature_valid %}
-                                        <p class="document-status-line"><strong>Status podpisu:</strong> poprawny</p>
-                                    {% else %}
-                                        {% if agreement.signature_error %}
-                                            <p class="document-status-line"><strong>Status podpisu:</strong> niepoprawny</p>
-                                            <p><strong>Błąd:</strong> {{ agreement.signature_error }}</p>
+                                    <div class="download-links download-links--spaced">
+                                        {% if agreement.office_signed and agreement.final_url %}
+                                            <a class="btn-primary" href="{{ agreement.final_url }}">Pobierz finalną umowę podpisaną przez urząd</a>
+                                        {% elif agreement.beneficiary_uploaded %}
+                                            {% if agreement.url %}<a class="btn-secondary" href="{{ agreement.url }}">Pobierz wygenerowaną umowę PDF</a>{% endif %}
+                                            {% if agreement.signed_url %}<a class="btn-primary" href="{{ agreement.signed_url }}">Pobierz wgraną podpisaną umowę</a>{% endif %}
+                                        {% elif agreement.url %}
+                                            <a class="btn-primary" href="{{ agreement.url }}">{{ agreement.download_label }}</a>
                                         {% endif %}
+                                    </div>
 
-                                        <form method="post" action="{{ agreement.upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
-                                            <div class="form-row width-full">
-                                                <label class="upload-dropzone" data-upload-dropzone>
-                                                    <input
-                                                        type="file"
-                                                        id="signed_agreement_pdf_{{ loop.index }}"
-                                                        name="signed_agreement_pdf"
-                                                        accept="application/pdf"
-                                                        required
-                                                        class="upload-dropzone__input"
-                                                        data-upload-input
-                                                    >
-                                                    <span class="upload-dropzone__inner">
-                                                        <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
-                                                        <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną umowę PDF</span>
-                                                        <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
-                                                        <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
-                                                    </span>
-                                                </label>
-                                            </div>
-
-                                            <div class="submit-row">
-                                                <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
-                                            </div>
-                                        </form>
+                                    {% if agreement.beneficiary_uploaded and not agreement.office_signed %}
+                                        <p class="status-message status-message--success">Podpisana umowa została wgrana. Szkolenie jest zablokowane i nie może zostać usunięte z wyboru.</p>
                                     {% endif %}
                                 </div>
                             {% endfor %}
@@ -319,7 +487,10 @@
                                 </div>
                             {% endif %}
 
+                            {% if result.can_upload_signed_agreement %}
                             <form method="post" action="{{ result.agreement_upload_url }}" enctype="multipart/form-data" class="dynamic-form dynamic-form--spaced">
+                                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                                <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
                                 <div class="form-row width-full">
                                     <label class="upload-dropzone" data-upload-dropzone>
                                         <input
@@ -344,6 +515,7 @@
                                     <button type="submit" class="btn-primary">Wyślij podpisaną umowę</button>
                                 </div>
                             </form>
+                            {% endif %}
                         </div>
                     {% endif %}
 
@@ -354,15 +526,6 @@
                 </div>
             {% endif %}
 
-            <p id="completed-stage-message" class="document-status-line is-hidden"></p>
-
-            {% if declaration_completed and not show_agreement_stage and not agreement_completed %}
-                <p class="document-status-line"><strong>Deklaracja:</strong> etap zakończony poprawnie.</p>
-            {% endif %}
-
-            {% if agreement_completed %}
-                <p class="document-status-line"><strong>Proces podpisywania dokumentów:</strong> zakończony poprawnie.</p>
-            {% endif %}
         </div>
     {% endif %}
 </div>

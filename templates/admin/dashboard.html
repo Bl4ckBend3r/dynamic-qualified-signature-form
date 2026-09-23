@@ -7,11 +7,60 @@
         <h1>Dashboard</h1>
     </div>
 </div>
-<div class="admin-stats-grid">
-    <div class="admin-card admin-stat"><span>Liczba formularzy</span><strong>{{ forms_count or 0 }}</strong></div>
-    <div class="admin-card admin-stat"><span>Liczba zgloszen</span><strong>{{ submissions_count or 0 }}</strong></div>
-    <div class="admin-card admin-stat"><span>Oczekujace zgloszenia</span><strong>{{ pending_count or 0 }}</strong></div>
-    <div class="admin-card admin-stat"><span>Liczba dokumentow</span><strong>{{ documents_count or 0 }}</strong></div>
-    <div class="admin-card admin-stat"><span>Bledy maili</span><strong>{{ email_errors_count or 0 }}</strong></div>
+<div class="admin-dashboard-groups" aria-label="Podsumowanie panelu">
+    <section class="admin-dashboard-group" aria-labelledby="dashboard-general-title">
+        <h2 id="dashboard-general-title">Ogólne</h2>
+        <div class="admin-stats-grid admin-stats-grid--general">
+            <div class="admin-card admin-stat"><span>Liczba formularzy</span><strong>{{ forms_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Liczba zgłoszeń</span><strong>{{ submissions_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Oczekujące zgłoszenia</span><strong>{{ pending_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Liczba dokumentów</span><strong>{{ documents_count or 0 }}</strong></div>
+        </div>
+    </section>
+    <section class="admin-dashboard-group" aria-labelledby="dashboard-email-title">
+        <h2 id="dashboard-email-title">E-mail</h2>
+        <div class="admin-stats-grid admin-stats-grid--compact">
+            <div class="admin-card admin-stat"><span>Udane wysyłki e-mail</span><strong>{{ email_sent_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Nieudane wysyłki e-mail</span><strong>{{ email_errors_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Ostatnia próba wysyłki</span><strong class="admin-stat-date">{{ last_email_attempt_at|business_datetime('%d.%m.%Y, %H:%M') if last_email_attempt_at else "Brak prób" }}</strong></div>
+        </div>
+    </section>
+    <section class="admin-dashboard-group" aria-labelledby="dashboard-smtp-title">
+        <h2 id="dashboard-smtp-title">SMTP</h2>
+        <div class="admin-stats-grid admin-stats-grid--compact">
+            <div class="admin-card admin-stat"><span>Udane testy SMTP</span><strong>{{ smtp_success_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Nieudane testy SMTP</span><strong>{{ smtp_failure_count or 0 }}</strong></div>
+            <div class="admin-card admin-stat"><span>Ostatnia próba SMTP</span><strong class="admin-stat-date">{{ last_smtp_attempt_at|business_datetime('%d.%m.%Y, %H:%M') if last_smtp_attempt_at else "Brak prób" }}</strong></div>
+        </div>
+    </section>
 </div>
+<section class="admin-card admin-section">
+    <div class="admin-section-heading"><div><h2>Kolejki spraw</h2><p>Liczniki są agregowane bezpośrednio w bazie.</p></div></div>
+    <div class="admin-stats-grid admin-stats-grid--queues">
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='mine') }}"><span>Moje sprawy</span><strong>{{ assignment_queues.mine }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='unassigned') }}"><span>Nieprzydzielone</span><strong>{{ assignment_queues.unassigned }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='overdue') }}"><span>Po terminie</span><strong>{{ assignment_queues.overdue }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_overdue') }}"><span>SLA po terminie</span><strong>{{ sla_queues.overdue }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_today') }}"><span>SLA dzisiaj</span><strong>{{ sla_queues.today }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_24h') }}"><span>SLA ≤ 24h</span><strong>{{ sla_queues.within_24h }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='sla_48h') }}"><span>SLA ≤ 48h</span><strong>{{ sla_queues.within_48h }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='requiring_decision') }}"><span>Wymagające decyzji</span><strong>{{ assignment_queues.requiring_decision }}</strong></a>
+        <a class="admin-card admin-stat" href="{{ url_for('admin.submissions_all', queue='waiting_office_signature') }}"><span>Oczekujące na podpis urzędu</span><strong>{{ assignment_queues.waiting_office_signature }}</strong></a>
+    </div>
+</section>
+<section class="admin-card admin-section">
+    <div class="admin-section-heading"><div><h2>Ostatni błąd SMTP</h2><p>Wynik ostatniego nieudanego testu połączenia SMTP.</p></div></div>
+    {% if last_smtp_error %}
+    <p><strong>{{ last_smtp_error.error_type or "Błąd SMTP" }}</strong> — {{ last_smtp_error.administrator_message or last_smtp_error.error_message }}</p>
+    <p class="admin-muted">{{ last_smtp_error.created_at|business_datetime('%d.%m.%Y, %H:%M') if last_smtp_error.created_at else "-" }}</p>
+    {% else %}<p class="admin-empty-state">Brak zarejestrowanych błędów testu SMTP.</p>{% endif %}
+</section>
+<section class="admin-card admin-section">
+    <div class="admin-section-heading"><div><h2>Ostatnie błędy wysyłki</h2><p>Dane pochodzą bezpośrednio z rejestru <code>email_logs</code>.</p></div></div>
+    {% if last_email_errors %}
+    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Adresat</th><th>Temat</th><th>Typ</th><th>Błąd</th></tr></thead><tbody>
+        {% for item in last_email_errors %}<tr><td>{{ item.created_at|business_datetime('%d.%m.%Y, %H:%M') if item.created_at else "-" }}</td><td>{{ item.to_email or "-" }}</td><td>{{ item.subject or "Test SMTP" }}</td><td>{{ item.error_type or "-" }}</td><td>{{ item.administrator_message or item.error_message or "Brak szczegółów" }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p class="admin-empty-state">Brak zarejestrowanych błędów wysyłki.</p>{% endif %}
+</section>
 {% endblock %}

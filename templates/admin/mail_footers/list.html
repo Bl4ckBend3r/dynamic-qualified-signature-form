@@ -1,10 +1,10 @@
 {% extends "admin/base.html" %}
 {% block title %}Stopki maili{% endblock %}
 {% block content %}
-<div class="admin-heading"><h1>Stopki maili: {{ form.name }}</h1><a class="btn-primary" href="{{ url_for('admin.mail_footer_edit', form_id=form.id) }}">Dodaj</a></div>
-<table class="data-table"><thead><tr><th>Nazwa</th><th>Domyslna</th><th>Status</th><th></th></tr></thead><tbody>
+<div class="admin-heading"><div><h1>Stopka formularza: {{ form.name }}</h1><p>Maile procesowe używają tej stopki, a przy jej braku lub wyłączeniu — stopki ogólnej.</p></div><a class="admin-button" href="{{ url_for('admin.mail_footer_edit', form_id=form.id) }}">Edytuj stopkę formularza</a></div>
+<div class="admin-card admin-table-wrap"><table class="admin-table"><thead><tr><th>Nazwa</th><th>Domyslna</th><th>Status</th><th>Akcje</th></tr></thead><tbody>
 {% for footer in footers %}
-<tr><td>{{ footer.name }}</td><td>{{ "Tak" if footer.is_default else "Nie" }}</td><td>{{ "Aktywna" if footer.is_active else "Nieaktywna" }}</td><td><a href="{{ url_for('admin.mail_footer_edit', form_id=form.id, footer_id=footer.id) }}">Edytuj</a></td></tr>
+<tr><td>{{ footer.name }}</td><td>{{ "Tak" if footer.is_default else "Nie" }}</td><td>{{ "Aktywna" if footer.is_active else "Nieaktywna" }}</td><td><div class="admin-actions"><a href="{{ url_for('admin.mail_footer_edit', form_id=form.id, footer_id=footer.id) }}">Edytuj</a></div></td></tr>
 {% else %}<tr><td colspan="4">Brak stopek.</td></tr>{% endfor %}
-</tbody></table>
+</tbody></table></div>
 {% endblock %}

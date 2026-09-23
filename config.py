@@ -15,11 +15,48 @@ def _env_list(name: str) -> list[str]:
     return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
 
 
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def normalize_app_base_path(value: str | None) -> str:
+    value = (value or "").strip()
+    if not value or value == "/":
+        return ""
+    return "/" + value.strip("/")
+
+
 class Config:
     APP_NAME = "Formularze Lubuskie"
+    SERVICE_NAME = os.getenv("SERVICE_NAME", "dynamic-qualified-signature-form").strip() or "dynamic-qualified-signature-form"
+    LOG_FORMAT = os.getenv("LOG_FORMAT", "text").strip().lower() or "text"
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    METRICS_ENABLED = _env_bool("METRICS_ENABLED", "true")
+    METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")
     ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+    APP_BASE_PATH = normalize_app_base_path(
+        os.getenv("APP_BASE_PATH")
+        or os.getenv("APPLICATION_ROOT")
+        or os.getenv("SCRIPT_NAME")
+        or ""
+    )
+    APPLICATION_ROOT = APP_BASE_PATH or "/"
+    PROXY_FIX = _env_bool("PROXY_FIX", "false")
+    TRUSTED_PROXY_HOPS = _env_int("TRUSTED_PROXY_HOPS", 0, minimum=0, maximum=10)
+    PUBLIC_CSRF_ENABLED = _env_bool("PUBLIC_CSRF_ENABLED", "true")
+    APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Warsaw").strip() or "Europe/Warsaw"
+    SESSION_COOKIE_SECURE = _env_bool(
+        "SESSION_COOKIE_SECURE",
+        "true" if ENV.strip().lower() == "production" else "false",
+    )
+    SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", "true")
+    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax").strip() or "Lax"
 
     BASE_DIR = Path(__file__).resolve().parent
     TEMPLATE_DIR = BASE_DIR / "templates"
@@ -32,7 +69,7 @@ class Config:
     NEXTCLOUD_FORMS_DIR = os.getenv("NEXTCLOUD_FORMS_DIR", "Formularze")
     NEXTCLOUD_OUTPUT_DIR = os.getenv("NEXTCLOUD_OUTPUT_DIR", "output")
 
-    FORMS_DIR = BASE_DIR / "forms"
+    FORMS_DIR = BASE_DIR / "examples" / "forms"
     OUTPUT_DIR = BASE_DIR / "output"
     PDF_OUTPUT_DIR = TEMP_DIR / "pdfs"
     CSV_OUTPUT_DIR = TEMP_DIR / "csv"
@@ -43,10 +80,25 @@ class Config:
     CSV_FILENAME = os.getenv("CSV_FILENAME", "dane.csv")
     DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
     AUTO_CREATE_DB_SCHEMA = _env_bool("AUTO_CREATE_DB_SCHEMA", "false")
+    AUTO_DB_MIGRATE = _env_bool("AUTO_DB_MIGRATE", "false")
     STRICT_DOCUMENT_METADATA_READ = _env_bool("STRICT_DOCUMENT_METADATA_READ", "false")
     STRICT_WORKFLOW_HISTORY_READ = _env_bool("STRICT_WORKFLOW_HISTORY_READ", "false")
     STRICT_DECISION_AUDIT_READ = _env_bool("STRICT_DECISION_AUDIT_READ", "false")
     REQUIRE_STRICT_READINESS_CHECK = _env_bool("REQUIRE_STRICT_READINESS_CHECK", "false")
+    ALLOW_UNSCANNED_UPLOADS = _env_bool("ALLOW_UNSCANNED_UPLOADS", "false")
+
+    ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS", 5, minimum=1, maximum=100
+    )
+    ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS", 60, minimum=10, maximum=3600
+    )
+    ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS", 30, minimum=2, maximum=1000
+    )
+    ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS = _env_int(
+        "ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS", 3600, minimum=60, maximum=86400
+    )
 
     SIGNATURE_PROVIDER = os.getenv("SIGNATURE_PROVIDER", "mock")
     SIGNATURE_MOCK_MODE = os.getenv("SIGNATURE_MOCK_MODE", "signed").lower()
@@ -60,9 +112,11 @@ class Config:
     MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)
     SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", "true")
     SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", "false")
-    SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "30"))
+    SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 10, minimum=1, maximum=120)
 
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
+    FORM_DRAFT_TTL_DAYS = _env_int("FORM_DRAFT_TTL_DAYS", 30, minimum=1, maximum=365)
+    FORM_DRAFT_MAX_DATA_BYTES = _env_int("FORM_DRAFT_MAX_DATA_BYTES", 262144, minimum=4096, maximum=1048576)
 
     @classmethod
     def validate(cls) -> None:

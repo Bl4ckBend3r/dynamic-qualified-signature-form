@@ -1,59 +1,116 @@
 {% extends "admin/base.html" %}
-{% block title %}Zgloszenia{% endblock %}
+{% block title %}Zgłoszenia{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">Wszystkie formularze</p>
-        <h1>Zgloszenia</h1>
+        <h1>Zgłoszenia</h1>
     </div>
 </div>
-<form method="get" class="admin-card admin-filters">
-    <input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj">
-    <select name="status">
+<form id="all-submission-advanced-filters" method="get" class="admin-card admin-filters admin-submission-filters">
+    <div class="admin-filter-grid admin-filter-grid--primary">
+    <label><span>Szukaj</span><input name="q" value="{{ filters.get('q', '') }}" placeholder="ID, osoba, e-mail lub formularz"></label>
+    <label><span>Status</span><select name="status">
         <option value="">Wszystkie statusy</option>
-        {% for option in ["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION", "ACCEPTED", "REJECTED"] %}
-            <option value="{{ option }}" {% if filters.get('status') == option %}selected{% endif %}>{{ option }}</option>
+        {% for option in status_options %}
+            <option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
-    </select>
-    <select name="sort">
+    </select></label>
+    <label><span>Stan workflow</span><input name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" placeholder="Każdy stan"></label>
+    <label><span>Stan checklisty</span><select name="checklist_status"><option value="">Każdy stan checklisty</option><option value="incomplete" {% if filters.get('checklist_status') == 'incomplete' %}selected{% endif %}>Checklista niekompletna</option><option value="blocking_failure" {% if filters.get('checklist_status') == 'blocking_failure' %}selected{% endif %}>Kryterium blokujące: NIE</option><option value="ready" {% if filters.get('checklist_status') == 'ready' %}selected{% endif %}>Gotowe do decyzji</option></select></label>
+    <label><span>Data od</span><input type="date" name="date_from" value="{{ filters.get('date_from', '') }}"></label>
+    <label><span>Data do</span><input type="date" name="date_to" value="{{ filters.get('date_to', '') }}"></label>
+    </div>
+    <details class="admin-filter-more" {% if filters.get('sort') or filters.get('direction') or filters.get('queue') or filters.get('assignee') or filters.get('priority') %}open{% endif %}>
+    <summary>Więcej filtrów</summary>
+    <div class="admin-filter-grid admin-filter-grid--additional">
+    <label><span>Sortowanie</span><select name="sort">
         {% for option in ["created_at", "process_status", "nazwisko", "email", "submission_id"] %}
             <option value="{{ option }}" {% if filters.get('sort', 'created_at') == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
-    </select>
-    <select name="direction">
+    </select></label>
+    <label><span>Kierunek</span><select name="direction">
         <option value="desc" {% if filters.get('direction', 'desc') == 'desc' %}selected{% endif %}>Data malejaco</option>
         <option value="asc" {% if filters.get('direction') == 'asc' %}selected{% endif %}>Data rosnaco</option>
-    </select>
-    <button class="admin-button-secondary" type="submit">Filtruj</button>
+    </select></label>
+    <label><span>Kolejka</span><select name="queue">{% for value, label in [("", "Wszystkie kolejki"), ("mine", "Moje sprawy"), ("unassigned", "Nieprzydzielone"), ("overdue", "Po terminie przydziału"), ("sla_overdue", "SLA po terminie"), ("sla_today", "SLA dzisiaj"), ("sla_24h", "SLA ≤ 24h"), ("sla_48h", "SLA ≤ 48h"), ("requiring_decision", "Wymagające decyzji"), ("waiting_office_signature", "Oczekujące na podpis urzędu")] %}<option value="{{ value }}" {% if filters.get('queue') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label><span>Prowadzący</span><select name="assignee"><option value="">Każdy prowadzący</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Nieprzydzielone</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></label>
+    <label><span>Priorytet</span><select name="priority"><option value="">Każdy priorytet</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></label>
+    </div>
+    </details>
+    <div class="admin-filter-actions"><button class="admin-button" type="submit">Filtruj</button><a class="admin-button-secondary" href="{{ url_for('admin.submissions_all') }}">Wyczyść filtry</a></div>
 </form>
+<form id="all-submission-column-filters" method="get"><input type="hidden" name="sort" value="{{ filters.get('sort', 'created_at') }}"><input type="hidden" name="direction" value="{{ filters.get('direction', 'desc') }}"></form>
+<div class="admin-filter-summary"><span>Znaleziono: <strong>{{ pagination.total }}</strong></span></div>
+{% macro sortable(label, field) -%}<a class="admin-sort-link" href="{{ sort_urls[field] }}">{{ label }}{% if filters.get('sort', 'created_at') == field %}<span class="admin-sort-indicator">{{ '↑' if filters.get('direction') == 'asc' else '↓' }}</span>{% endif %}</a>{%- endmacro %}
 <div class="admin-card admin-table-wrap">
-    <table class="admin-table">
+    <table class="admin-table admin-table--submissions admin-table--responsive">
+        <colgroup><col class="col-id"><col class="col-name"><col class="column-secondary col-email"><col class="column-secondary col-phone"><col class="col-date"><col class="col-form"><col class="col-assignee"><col class="col-priority"><col class="col-status"><col class="column-secondary col-workflow"><col class="column-secondary col-decision"><col class="col-actions"></colgroup>
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Formularz</th>
-                <th>Data</th>
-                <th>Nazwisko</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th>Akcje</th>
+                <th>{{ sortable('ID', 'submission_id') }}</th>
+                <th>{{ sortable('Imię i nazwisko', 'full_name') }}</th><th class="column-secondary">{{ sortable('E-mail', 'email') }}</th><th class="column-secondary">{{ sortable('Telefon', 'telefon') }}</th><th>{{ sortable('Data złożenia', 'created_at') }}</th>
+                <th>{{ sortable('Formularz', 'form_slug') }}</th><th>Prowadzący</th><th>Priorytet / termin</th><th>{{ sortable('Aktualny status', 'process_status') }}</th><th class="column-secondary">{{ sortable('Etap workflow', 'workflow_stage') }}</th><th class="column-secondary">Decyzja urzędnika</th>
+                <th class="actions-column">Akcje</th>
+            </tr>
+            <tr class="admin-column-filters">
+                <th><a class="admin-sort-link" href="{{ sort_urls.submission_id }}" aria-label="Sortuj po ID">↕</a><input form="all-submission-column-filters" name="submission_id" value="{{ filters.get('submission_id', '') }}" aria-label="Filtruj po ID"></th>
+                <th><a class="admin-sort-link" href="{{ sort_urls.full_name }}" aria-label="Sortuj po nazwie">↕</a><input form="all-submission-column-filters" name="full_name" value="{{ filters.get('full_name', '') }}" aria-label="Filtruj po imieniu i nazwisku"></th>
+                <th class="column-secondary"><input form="all-submission-column-filters" name="email" value="{{ filters.get('email', '') }}" aria-label="Filtruj po e-mailu"></th>
+                <th class="column-secondary"><input form="all-submission-column-filters" name="telefon" value="{{ filters.get('telefon', '') }}" aria-label="Filtruj po telefonie"></th>
+                <th><a class="admin-sort-link" href="{{ sort_urls.created_at }}" aria-label="Sortuj po dacie">↕</a><div class="admin-date-filter"><input form="all-submission-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Data od"><input form="all-submission-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Data do"></div></th>
+                <th class="column-secondary"><select form="all-submission-column-filters" name="form_id" aria-label="Filtruj po formularzu"><option value="">Wszystkie</option>{% for available_form in forms %}<option value="{{ available_form.id }}" {% if filters.get('form_id') == available_form.id|string %}selected{% endif %}>{{ available_form.name }}</option>{% endfor %}</select></th>
+                <th><select form="all-submission-column-filters" name="assignee"><option value="">Każdy</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Brak</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></th>
+                <th><select form="all-submission-column-filters" name="priority"><option value="">Każdy</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></th>
+                <th><select form="all-submission-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></th>
+                <th class="column-secondary"><input form="all-submission-column-filters" name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" aria-label="Filtruj po etapie workflow"></th>
+                <th class="column-secondary"></th>
+                <th class="actions-column"><button class="admin-button-secondary compact" type="submit" form="all-submission-column-filters">Filtruj</button></th>
             </tr>
         </thead>
         <tbody>
         {% for submission in submissions %}
             {% set form = form_by_slug.get(submission.form_slug) %}
             <tr>
-                <td><code>{{ submission.submission_id }}</code></td>
+                <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
+                <td>{{ (((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
+                <td class="column-secondary">{{ (submission.email or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td><td class="column-secondary">{{ (submission.telefon or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
+                <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
                 <td>{{ form.name if form else submission.form_slug }}</td>
-                <td>{{ submission.created_at.strftime("%Y-%m-%d %H:%M") if submission.created_at else "-" }}</td>
-                <td>{{ submission.nazwisko or "-" }}</td>
-                <td>{{ submission.email or "-" }}</td>
+                <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
+                <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at|business_datetime('%d.%m.%Y, %H:%M') if submission.due_at else "Bez terminu" }}</small></td>
                 <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
-                <td>
+                <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step, form) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
+<td class="column-secondary">
+  <div class="admin-decision-cell">
+    <span class="admin-decision-current">
+      {{ {
+        "accepted": "Zaakceptowano",
+        "rejected": "Odrzucono",
+        "correction": "Do poprawy",
+        "TAK": "Zaakceptowano",
+        "NIE": "Odrzucono"
+      }.get(submission.officer_decision, submission.officer_decision or "-") }}
+    </span>
+
+    {% if form and submission.form_slug in permission_slugs.can_make_decision %}
+      <div class="admin-decision-actions">
+        <a class="admin-link-button"
+           href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#officer-decision">
+          Decyzja
+        </a>
+      </div>
+    {% endif %}
+  </div>
+</td>              <td class="actions-column">
                     {% if form %}
-                        <div class="admin-actions">
-                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Szczegoly</a>
-                            <a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyslij mail</a>
+                        <div class="admin-action-dropdown">
+                            <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="all-submission-actions-{{ submission.id }}">Akcje</button>
+                            <div id="all-submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
+                            {% if submission.form_slug in permission_slugs.can_send_email %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
+                            <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#correspondence">Pokaż korespondencję</a>
+                            </div>
                         </div>
                     {% else %}
                         -
@@ -61,9 +118,16 @@
                 </td>
             </tr>
         {% else %}
-            <tr><td colspan="7">Brak zgloszen.</td></tr>
+            <tr><td colspan="12">Brak zgłoszeń.</td></tr>
         {% endfor %}
         </tbody>
     </table>
 </div>
+<nav class="admin-pagination" aria-label="Paginacja zgłoszeń">
+    <span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span>
+    <div class="admin-pagination__links">
+        {% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+        {% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+    </div>
+</nav>
 {% endblock %}

@@ -7,7 +7,7 @@ pytest.importorskip("sqlalchemy")
 
 from database import create_session_factory
 from models import Base, FormSubmission, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
-from scripts.backfill_p4_metadata import BackfillP4Metadata, build_parser, write_report
+from scripts.migration.backfill_p4_metadata import BackfillP4Metadata, build_parser, write_report
 from services.submission_document_service import SubmissionDocumentType
 from sqlalchemy import create_engine
 
@@ -166,6 +166,28 @@ def test_backfill_limit_submission_id_and_report_file(tmp_path):
     assert selected["processed_submissions"] == 1
     assert selected["documents"]["missing_file"] == 1
     assert json.loads(report_path.read_text(encoding="utf-8"))["dry_run"] is True
+
+
+def test_backfill_does_not_create_submission_file_when_pdf_is_missing(tmp_path):
+    session_factory = make_session_factory(tmp_path)
+    with session_factory() as db:
+        add_submission(
+            db,
+            submission_id="missing-pdf",
+            training_agreements=json.dumps(
+                [{"id": "excel", "number": "A/1", "filename": "missing-umowa.pdf"}]
+            ),
+        )
+
+    report = BackfillP4Metadata(
+        session_factory,
+        apply=True,
+        file_exists=lambda path: False,
+    ).run(submission_id="missing-pdf")
+
+    assert report["documents"]["missing_file"] == 1
+    with session_factory() as db:
+        assert db.query(SubmissionFile).count() == 0
 
 
 def test_backfill_cli_parser_defaults_to_dry_run():

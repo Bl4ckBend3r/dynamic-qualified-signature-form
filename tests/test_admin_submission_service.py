@@ -4,7 +4,14 @@ import pytest
 
 pytest.importorskip("sqlalchemy")
 
-from services.admin_submission_service import admin_status_label, filter_submissions, sort_submissions, submission_value
+from services.admin_submission_service import (
+    admin_status_label,
+    build_filter_fields,
+    build_submission_detail_sections,
+    filter_submissions,
+    sort_submissions,
+    submission_value,
+)
 
 
 def test_admin_status_label_uses_workflow_label_before_catalog():
@@ -51,3 +58,103 @@ def test_submission_filter_and_sort_use_flat_and_json_values():
     assert filtered == [first]
     assert submission_value(first, "city") == "Lublin"
     assert sort_submissions([first, second], "nazwisko", "asc") == [first, second]
+
+
+def test_submission_column_filters_combine_and_sort_whitelist_is_safe():
+    first = SimpleNamespace(
+        submission_id="ABC-123456",
+        imiona="Anna Maria",
+        nazwisko="Kowalska",
+        email="anna@example.com",
+        telefon="500600700",
+        form_slug="grant",
+        workflow_stage="OFFICER_REVIEW",
+        workflow_step=None,
+        process_status="FORM_SUBMITTED",
+        officer_decision="",
+        data_json={},
+        created_at=None,
+    )
+    second = SimpleNamespace(
+        submission_id="XYZ-999999",
+        imiona="Jan",
+        nazwisko="Nowak",
+        email="jan@example.com",
+        telefon="111222333",
+        form_slug="training",
+        workflow_stage="FINISHED",
+        workflow_step=None,
+        process_status="OFFICER_ACCEPTED",
+        officer_decision="accepted",
+        data_json={},
+        created_at=None,
+    )
+
+    result = filter_submissions(
+        [first, second],
+        {"submission_id": "abc", "full_name": "kowal", "email": "anna", "telefon": "600", "workflow_stage": "review"},
+    )
+
+    assert result == [first]
+    assert sort_submissions([second, first], "__unsafe_field", "asc") == [second, first]
+    assert sort_submissions([second, first], "full_name", "asc") == [first, second]
+
+
+def test_filter_fields_hide_internal_evaluation_metadata():
+    fields = [SimpleNamespace(name="wiek", label="Wiek")]
+    submissions = [SimpleNamespace(data_json={"custom": "value", "_qualification": {"passed": False}})]
+
+    result = build_filter_fields(fields, submissions)
+
+    assert ("custom", "custom") in result
+    assert all(name != "_qualification" for name, _label in result)
+
+
+def test_submission_detail_sections_use_labels_and_formatted_training_snapshot():
+    form = SimpleNamespace(
+        definition_json={
+            "fields": [
+                {"type": "text", "name": "imiona", "label": "Imiona"},
+                {"type": "checkbox", "name": "osw_rodo", "label": "Zgoda RODO"},
+            ],
+            "documents": {
+                "declaration": {
+                    "enabled": True,
+                    "fields": [
+                        {"type": "training_selection", "name": "selected_trainings", "label": "Szkolenia"}
+                    ],
+                }
+            },
+        }
+    )
+    submission = SimpleNamespace(
+        __table__=SimpleNamespace(
+            columns=[
+                SimpleNamespace(name="id"),
+                SimpleNamespace(name="submission_id"),
+                SimpleNamespace(name="form_name"),
+                SimpleNamespace(name="created_at"),
+                SimpleNamespace(name="imiona"),
+                SimpleNamespace(name="email"),
+                SimpleNamespace(name="osw_rodo"),
+                SimpleNamespace(name="selected_trainings"),
+                SimpleNamespace(name="data_json"),
+            ]
+        ),
+        id=1,
+        submission_id="ABC",
+        form_name="Formularz",
+        created_at=None,
+        imiona="Anna",
+        email="anna@example.com",
+        osw_rodo=True,
+        selected_trainings='[{"id":"python","name":"Python","price":"1200.00","currency":"PLN","code":"PY"}]',
+        data_json={"custom": "true"},
+    )
+
+    detail = build_submission_detail_sections(form, submission)
+
+    assert detail["sections"][0]["title"] == "Dane podstawowe"
+    assert {"label": "Imiona", "value": "Anna"} in detail["sections"][0]["items"]
+    assert detail["trainings"][0]["price_formatted"] == "1 200,00 zł"
+    assert detail["technical_items"]

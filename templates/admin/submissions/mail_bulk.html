@@ -1,0 +1,53 @@
+{% extends "admin/base.html" %}
+{% block title %}Wyślij wiadomość{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div><p class="admin-eyebrow">{{ form.name }}</p><h1>Wyślij wiadomość</h1><p>Wiadomość zostanie spersonalizowana osobno dla każdego wybranego zgłoszenia.</p></div>
+    <a class="admin-button-secondary" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Anuluj</a>
+</div>
+{% if missing_email_submissions %}
+<div class="admin-alert admin-alert-warning"><strong>Bez adresu e-mail — te zgłoszenia zostaną pominięte:</strong>
+    {{ missing_email_submissions|map(attribute='submission_id')|join(', ') }}
+</div>
+{% endif %}
+<form method="post" class="admin-card admin-form mail-composer" data-mail-composer data-mail-variable-scope>
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="send_now" value="1">
+    {% for submission in submissions %}<input type="hidden" name="submission_ids" value="{{ submission.submission_id }}">{% endfor %}
+    <div class="mail-composer__workspace">
+        <div class="mail-composer__main">
+            <div class="admin-form-grid">
+                <label><span>Szablon (opcjonalnie)</span><select name="template_id" data-mail-template>
+                    <option value="">Własna wiadomość</option>
+                    {% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+                </select></label>
+                <label class="admin-form-wide"><span>Temat</span><input name="subject" required data-mail-subject data-variable-target></label>
+                <label class="admin-form-wide"><span>Treść HTML</span><textarea name="html_body" rows="12" required data-mail-html data-variable-target data-variable-default-target></textarea></label>
+                <label class="admin-form-wide"><span>Treść tekstowa (opcjonalnie)</span><textarea name="text_body" rows="6" data-mail-text data-variable-target></textarea></label>
+            </div>
+            <section class="admin-section"><h2>Podgląd</h2><div class="admin-card admin-mail-preview" data-mail-preview></div></section>
+        </div>
+        {% set variable_storage_key = 'submission-mail-variables-collapsed' %}
+        {% set variable_heading_id = 'bulk-mail-variables-heading' %}
+        {% include "admin/mail_templates/_variable_panel.html" %}
+    </div>
+    <div class="admin-form-actions"><button class="admin-button" type="submit">Wyślij do {{ submissions|length }} zgłoszeń</button></div>
+</form>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const templates = {{ template_payload|tojson }};
+    const byId = new Map(templates.map((item) => [String(item.id), item]));
+    const subject = document.querySelector("[data-mail-subject]");
+    const html = document.querySelector("[data-mail-html]");
+    const text = document.querySelector("[data-mail-text]");
+    const preview = document.querySelector("[data-mail-preview]");
+    function refresh() { if (preview) preview.innerHTML = html?.value || "<p>Podgląd pojawi się tutaj.</p>"; }
+    document.querySelector("[data-mail-template]")?.addEventListener("change", (event) => {
+        const template = byId.get(event.target.value); if (!template) return;
+        subject.value = template.subject || ""; html.value = template.html_body || ""; text.value = template.text_body || ""; refresh();
+    });
+    html?.addEventListener("input", refresh); refresh();
+});
+</script>
+<script src="{{ url_for('static', filename='js/mail_variables_panel.js') }}"></script>
+{% endblock %}

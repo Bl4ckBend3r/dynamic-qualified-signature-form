@@ -7,6 +7,7 @@ from typing import Any
 
 from services.document_service import DocumentType
 from services.process_service import ProcessStatus
+from services.training_service import training_key
 
 
 @dataclass
@@ -81,14 +82,14 @@ class AgreementFlowService:
         resolved_date = generated_date or date.today().isoformat()
         existing_agreements = _json_list(submission["row"].get("training_agreements"))
         existing_training_ids = {
-            str(item.get("training_id") or item.get("id") or "").strip()
+            training_key(item)
             for item in existing_agreements
-            if str(item.get("filename") or "").strip()
+            if training_key(item) and str(item.get("filename") or "").strip()
         }
         selected_trainings = _json_list(submission["row"].get("selected_trainings"))
         pending_trainings = [
             item for item in selected_trainings
-            if str(item.get("id") or item.get("training_id") or "").strip() not in existing_training_ids
+            if training_key(item) and training_key(item) not in existing_training_ids
         ]
         if existing_agreements and not pending_trainings:
             return AgreementFlowResult(

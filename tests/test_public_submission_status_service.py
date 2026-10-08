@@ -249,3 +249,34 @@ def test_legacy_submission_without_workflow_step_uses_existing_process_fallback(
 
     assert status["status"]["title"] == "Umowa jest gotowa do podpisania"
     assert status["status"]["step"] == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+
+
+@pytest.mark.parametrize(
+    ("workflow_step", "workflow_stage", "document_enabled", "expected"),
+    [
+        ("declaration", "officer_review", True, True),
+        ("officer_review", "declaration", True, False),
+        ("declaration", "officer_review", False, False),
+    ],
+)
+def test_explicit_declaration_availability_uses_current_step_and_versioned_document(
+    workflow_step, workflow_stage, document_enabled, expected,
+):
+    config = {
+        "documents": [{"id": "declaration", "enabled": document_enabled}],
+        "workflow": {"flow_mode": "explicit", "steps": [
+            {"id": "officer_review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
+            {"id": "declaration", "stage_type": "document", "status": "DECLARATION_READY",
+             "next_action": "Uzupełnij i wygeneruj deklarację"},
+        ]},
+    }
+    status = build_public_submission_status(
+        accepted_row(process_status="DECLARATION_READY", workflow_step=workflow_step,
+                     workflow_stage=workflow_stage),
+        form_config=config,
+    )
+
+    assert status["can_fill_declaration"] is expected
+    if expected:
+        assert status["status_title"] == "Deklaracja gotowa"
+        assert status["next_action"] == "Uzupełnij i wygeneruj deklarację"

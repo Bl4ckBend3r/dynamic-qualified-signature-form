@@ -93,7 +93,12 @@ def requirements_satisfied(state, policy):
 def document_step_status(row, step):
     state = document_step_state(row, step["id"])
     substate = state.get("substate", "generating")
-    label = step.get("user_label") or step.get("admin_label") or "Dokument"
+    label = (
+            step.get("label")
+            or step.get("user_label")
+            or step.get("admin_label")
+            or "Dokument"
+        )
     messages = {
         "collect_data": "Uzupełnij dane wymagane do przygotowania deklaracji.",
         "verification_error": "Nie udało się obecnie zweryfikować podpisu. Spróbuj ponownie później.",
@@ -107,12 +112,28 @@ def document_step_status(row, step):
         "signed": "Dokument został poprawnie podpisany.", "completed": "Dokument został obsłużony.",
         "failed": "Nie udało się przygotować dokumentu. Spróbuj ponownie.",
     }
+    next_actions = {
+        "generating": "Poczekaj na przygotowanie dokumentu.",
+        "ready": "Pobierz dokument, podpisz go elektronicznie i wgraj podpisany plik.",
+        "awaiting_signature": "Pobierz dokument, podpisz go elektronicznie i wgraj podpisany plik.",
+        "upload": "Wgraj podpisany dokument.",
+        "verifying": "Poczekaj na zakończenie weryfikacji podpisu.",
+        "verification_failed": "Popraw podpis i wgraj dokument ponownie.",
+    }
     message = messages.get(substate, "Przygotowujemy dokument.")
     if substate in {"verification_failed", "verification_error"}:
         message = VERIFICATION_MESSAGES.get(state.get("verification_result"), message)
-    return {"title": f"{label} — {DOCUMENT_SUBSTATES.get(substate, 'Przygotowanie dokumentu').lower()}",
-            "message": message, "substate": substate,
-            "variant": "danger" if substate in {"failed", "verification_failed", "verification_error"} else "info"}
+    return {
+            "title": f"{label} — {DOCUMENT_SUBSTATES.get(substate, 'Przygotowanie dokumentu').lower()}",
+            "message": message,
+            "next_action": next_actions.get(substate, ""),
+            "substate": substate,
+            "variant": "danger" if substate in {
+                "failed",
+                "verification_failed",
+                "verification_error",
+            } else "info",
+        }
 
 
 def validate_document_step(step, form_config):
@@ -197,11 +218,17 @@ class DocumentWorkflowService:
             files = {file.get("training_key"): file for file in state["files"]}
             if set(files) == set(selected):
                 continue
-            state["files"] = [files.get(key) or {"filename": "", "training_key": key, "label": item["name"]}
-                              for key, item in selected.items()]
+            state["files"] = [
+                files.get(key) or {
+                    "filename": "",
+                    "training_key": key,
+                    "label": item["name"],
+                }
+                for key, item in selected.items()
+            ]
             state["completed"] = False
-            state["substate"] = "generating"
-            state["status"] = DocumentState.PENDING.value
+            state["substate"] = "ready"
+            state["status"] = DocumentState.READY.value
         submission.document_states = states
         document = self.documents.get_document_by_id(definition, "declaration")
         if not document:
@@ -289,7 +316,7 @@ class DocumentWorkflowService:
         row = self.repository.get_by_id(self.documents._submission_id(submission))
         if not row:
             raise ValueError("Nie znaleziono zgłoszenia.")
-        current = row.get("workflow_stage") or row.get("workflow_step")
+        current = row.get("workflow_step") or row.get("workflow_stage")
         step = next((s for s in definition.get("workflow", {}).get("steps", []) if s.get("id") == current), {})
         if not is_document_step(step) or (expected_step and current != expected_step):
             raise ValueError("Etap dokumentowy nie jest już aktywny.")
@@ -379,12 +406,13 @@ class DocumentWorkflowService:
             if requirements_satisfied(state, policy):
                 self._complete(row, step, state, token)
                 return True
-            if state.get("substate") not in {None, "collect_data", "generating", "failed"}:
+            collection = bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
+            pending_collection = collection and any(not file.get("filename") for file in state.get("files", []))
+            if state.get("substate") not in {None, "collect_data", "generating", "failed"} and not (state.get("substate") == "ready" and pending_collection):
                 return False
             if policy["generate"]:
                 self._save(row, step, state, token, "generating", "DOCUMENT_GENERATION_STARTED")
                 generated = [f for f in self._files(row, step) if not f.get("signed")] if not state.get("regenerate") else []
-                collection = bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
                 if collection:
                     generated = self.documents.generate_documents_for_collection(row, definition, step["document_id"], document.get("repeat_over") or "selected_trainings", document.get("repeat_item_alias") or "training")
                 elif not generated:
@@ -431,7 +459,7 @@ class DocumentWorkflowService:
         file = next(f for f in self._files(row, step) if f["filename"] == filename)
         data = self.documents.read_document_bytes_for_download(row, filename, signed=bool(file.get("signed")))
         state = document_step_state(row, step_id)
-        if (row.get("workflow_stage") or row.get("workflow_step")) == step_id:
+        if (row.get("workflow_step") or row.get("workflow_stage")) == step_id:
             token = self._claim(row, step)
             try:
                 state = document_step_state(self.repository.get_by_id(row["submission_id"]), step_id)
@@ -600,20 +628,32 @@ class DocumentWorkflowService:
         if collect_data:
             substate = "collect_data"
         busy = float(document_states(row).get("document_operation_until") or 0) > time.time()
+        collection = bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
+        sources = [] if collect_data else list(state.get("files", []))
+        if collection and not collect_data:
+            existing_keys = {str(source.get("training_key") or "") for source in sources}
+            sources.extend({"filename": "", "training_key": item["id"], "label": item["name"]}
+                           for item in parse_training_snapshots(row.get("selected_trainings"))
+                           if item["id"] not in existing_keys)
+        pending_collection = collection and any(not source.get("filename") for source in sources)
+        can_generate = bool(policy["generate"] and pending_collection and substate in {"ready", "failed", "generating"} and not busy
+            and not state.get("completed") and (row.get("workflow_step") or row.get("workflow_stage")) == step["id"])
         files = []
-        for source in [] if collect_data else state.get("files", []):
+        for source in sources:
             signatures = state.get("signatures", {}).get(source.get("training_key") or "document", {})
             filename = (signatures.get("participant") or source.get("filename")) if signer == "office" else source.get("filename")
-            can_upload = not state.get("completed") and substate not in {"generating", "failed"} and not busy and not signatures.get(signer)
+            can_upload = bool(filename) and not state.get("completed") and substate not in {"generating", "failed"} and not busy and not signatures.get(signer)
             can_upload = can_upload and (policy["upload_required"] if signer == "participant" else policy["office_signature"] and (not policy["upload_required"] or bool(signatures.get("participant"))))
             files.append({"filename": filename if policy["download"] or signer == "office" else "", "instance": source.get("training_key", ""),
                           "label": self._public_file_label(row, document, source),
-                          "can_upload": bool(can_upload), "signed": bool(signatures.get(signer))})
+                          "can_upload": bool(can_upload), "signed": bool(signatures.get(signer)),
+                          "pending_generation": bool(collection and not source.get("filename"))})
         status = document_step_status(row, step)
         if collect_data:
             status.update(title=document["label"], message="Uzupełnij dane wymagane do przygotowania deklaracji.", substate="collect_data")
         return {"step_id": step["id"], "label": step.get("admin_label") or document["label"], "document_id": step["document_id"],
                 "substate": substate, "files": files, "policy": policy, "status": status,
+                "can_generate": can_generate,
                 "form_definition": current_app.extensions["services"].declaration_flow_service.document_fields_definition(
                     current_app.extensions["services"].declaration_flow_service.operational_document(document, row, self.repository)) if collect_data else None,
                 "instruction": (step.get("document_instructions") or {}).get(substate) or {},

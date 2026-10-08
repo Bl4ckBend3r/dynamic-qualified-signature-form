@@ -5,7 +5,7 @@ from copy import deepcopy
 from collections.abc import Mapping
 from typing import Any
 
-from services.instruction_html_service import sanitize_instruction_html
+from services.instruction_html_service import sanitize_workflow_instruction_html as sanitize_instruction_html
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 

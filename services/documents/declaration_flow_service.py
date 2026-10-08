@@ -22,7 +22,6 @@ from services.training_service import (
     format_price_pln,
     is_training_section_label,
     normalize_trainings_config,
-    without_training_selection_section,
 )
 
 
@@ -108,7 +107,7 @@ class DeclarationFlowService:
             db.refresh(submission, with_for_update=True)
             for field in fields:
                 field = services.submission_training_service.selection_field(form, {"id": "declaration", "fields": [field]})
-                if not services.submission_training_service.can_select(form, submission, field):
+                if not services.submission_training_service.can_select(form, submission, field, document_collection=True):
                     from services.training_service import parse_training_snapshots
                     saved_ids = {item["id"] for item in parse_training_snapshots(submission.selected_trainings)}
                     if saved_ids == set(form_data.getlist(field["name"])):
@@ -127,17 +126,30 @@ class DeclarationFlowService:
         step: str | None = None,
         availability: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict:
-        legacy_fields = list(declaration_config.get("fields") or [])
+        service = FieldAvailabilityService()
+        legacy_fields: list[dict] = []
+        for raw_field in declaration_config.get("fields") or []:
+            if not isinstance(raw_field, Mapping) or raw_field.get("type") == "training_selection":
+                continue
+            field = dict(raw_field)
+            if form_config and (field.get("availability") or field.get("stage")) and field.get("type") != "section":
+                permission = service.permission(field, form_config, step or service.legacy_after_acceptance_step(form_config))
+                if not permission["visible"]:
+                    continue
+                if field.get("type") != "static_text":
+                    field["required"] = bool(permission["required"])
+                    field["readonly"] = not bool(permission["editable"])
+            legacy_fields.append(field)
         workflow_fields: list[dict] = []
         if form_config:
-            selected_step = step or FieldAvailabilityService().legacy_after_acceptance_step(form_config)
-            workflow_fields = FieldAvailabilityService().visible_fields(form_config, selected_step)
+            selected_step = step or service.legacy_after_acceptance_step(form_config)
+            workflow_fields = service.visible_fields(form_config, selected_step, excluded_types={"training_selection"})
         names = {str(field.get("name")) for field in workflow_fields if field.get("name")}
         return {
             "title": declaration_config.get("form_title") or "Uzupelnienie deklaracji uczestnictwa",
             "description": declaration_config.get("form_description") or "",
             "submit_label": declaration_config.get("form_submit_label") or "Wygeneruj deklaracje PDF",
-            "fields": without_training_selection_section(
+            "fields": service.prune_empty_sections(
                 workflow_fields + [field for field in legacy_fields if not field.get("name") or str(field.get("name")) not in names]
             ),
         }
@@ -163,8 +175,11 @@ class DeclarationFlowService:
     @staticmethod
     def _row_availability_step(form_config: dict, row: Mapping[str, Any]) -> str:
         service = FieldAvailabilityService()
+        canonical = str(row.get("workflow_step") or "").strip()
+        if canonical and (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
+            return canonical
         configured = set(service.step_ids(form_config))
-        for key in ("workflow_stage", "workflow_step", "current_stage"):
+        for key in ("workflow_step", "workflow_stage", "current_stage"):
             value = str(row.get(key) or "").strip()
             if value in configured:
                 return value
@@ -172,9 +187,32 @@ class DeclarationFlowService:
 
     @staticmethod
     def has_fields_for_step(form_config: dict, step: str) -> bool:
+        workflow = form_config.get("workflow") or {}
+        if workflow.get("flow_mode") == "explicit":
+            configured_step = next(
+                (item for item in workflow.get("steps") or [] if item.get("id") == step and item.get("active", True)),
+                None,
+            )
+            # Document fields belong to the declaration form. A separate user action
+            # is the only explicit workflow step served by the additional-fields form.
+            if (not configured_step or configured_step.get("stage_type") != "user_action"
+                    or configured_step.get("type") == "form_submit"
+                    or step == workflow.get("initial_step")):
+                return False
+            targets = {str(configured_step.get("next") or "")}
+            targets.update(str(edge.get("next") or "") for edge in configured_step.get("transitions") or []
+                           if isinstance(edge, Mapping))
+            configured_mapping = (workflow.get("legacy_field_stage_mapping") or {}).get(FIELD_STAGE_AFTER_ACCEPTANCE)
+            precedes_declaration = any(
+                target.get("id") in targets and target.get("stage_type") == "document"
+                and str(target.get("document_id") or target.get("id") or "") == DocumentType.DECLARATION
+                for target in workflow.get("steps") or []
+            )
+            if configured_mapping != step and not precedes_declaration:
+                return False
         return any(
             field.get("type") not in {"section", "static_text"}
-            for field in FieldAvailabilityService().visible_fields(form_config, step)
+            for field in FieldAvailabilityService().editable_fields(form_config, step)
         )
 
     def prepare_declaration_form(
@@ -290,6 +328,7 @@ class DeclarationFlowService:
         form_data,
         submission_repository,
         compliance_service=None,
+        workflow_service=None,
     ) -> DeclarationFlowResult:
         step = self._row_availability_step(form_config, submission["row"])
         additional_definition = self.build_additional_fields_definition(form_config, step)
@@ -360,14 +399,21 @@ class DeclarationFlowService:
                     "side_effects": {"changed_fields": sorted(additional_data)},
                 },
             )
+        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit" and workflow_service is not None:
+            refreshed = submission_repository.get_by_id(submission_id)
+            if refreshed:
+                workflow_service.advance_after_action(refreshed, form_config, actor="participant")
         return DeclarationFlowResult(
             success=True,
             message="Dodatkowe informacje zostaly zapisane. Mozesz pobrac deklaracje.",
             values=values,
         )
 
-    @staticmethod
-    def has_additional_fields(form_config: dict) -> bool:
+    def has_additional_fields(self, form_config: dict) -> bool:
+        workflow = form_config.get("workflow") or {}
+        if workflow.get("flow_mode") == "explicit":
+            return any(self.has_fields_for_step(form_config, str(step.get("id") or ""))
+                       for step in workflow.get("steps") or [])
         return has_additional_fields_after_acceptance(form_config)
 
 

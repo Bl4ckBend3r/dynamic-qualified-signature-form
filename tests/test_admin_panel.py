@@ -2625,10 +2625,10 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
         assert decision.target_status in {"OFFICER_ACCEPTED", "accepted_waiting_for_additional_fields"}
         assert decision.email_requested is False
         workflow_event = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id="abc").one()
-        assert workflow_event.new_status in {"REVIEW_ACCEPTED", "ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS"}
+        assert workflow_event.new_status == submission.process_status
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
     assert "Decyzja urzednika" in html
-    assert "Wniosek zaakceptowany" in html
+    assert "Zaakceptowano" in html
     assert f'name="officer_decision_{submission_pk}"' not in html
 
 

@@ -62,16 +62,34 @@ class SubmissionTrainingService:
         if not field or not field.get("enabled", True):
             return False
         submission.process_status = ProcessStatus.TRAINING_SELECTION_OPEN.value
-        submission.workflow_step = ProcessStatus.TRAINING_SELECTION_OPEN.value
         db.flush()
         return True
 
     @staticmethod
-    def can_select(form, submission, field=None) -> bool:
+    def is_training_selection_unlocked(form, submission) -> bool:
+        """Keep public selection closed until a required declaration is verified."""
+        version = getattr(submission, "form_version", None)
+        if getattr(submission, "form_version_id", None) and version is None:
+            return False
+        definition = (version.definition_json if version else form.definition_json) or {}
+        documents = definition.get("documents") or []
+        declaration = (
+            documents.get("declaration") if isinstance(documents, dict)
+            else next((item for item in documents if isinstance(item, Mapping) and item.get("id") == "declaration"), None)
+        )
+        declaration_enabled = isinstance(declaration, Mapping) and declaration.get("enabled", True)
+        required = declaration_enabled or str(getattr(submission, "declaration_required", "") or "").strip().lower() in {"tak", "true", "1"}
+        if not required:
+            return True
+        return str(getattr(submission, "declaration_signature_valid", "") or "").strip().lower() in {"tak", "true", "1"}
+
+    @classmethod
+    def can_select(cls, form, submission, field=None, *, document_collection=False) -> bool:
         if field is None:
             version = getattr(submission, "form_version", None)
             field = TrainingCatalogService.get_training_field(version or form)
-        return bool(field and field.get("enabled", True) and form.training_selection_open)
+        return bool(field and field.get("enabled", True) and form.training_selection_open
+                    and (document_collection or cls.is_training_selection_unlocked(form, submission)))
 
     @staticmethod
     def selection_field(form, definition):
@@ -452,7 +470,6 @@ class SubmissionTrainingService:
                 if has_selection
                 else ProcessStatus.TRAINING_SELECTION_OPEN.value
             )
-            submission.workflow_step = submission.process_status
         if has_app_context():
             current_app.logger.info(
                 "training_selection_saved",
@@ -490,7 +507,6 @@ class SubmissionTrainingService:
             row.updated_at = now
         if any(not row.is_locked and row.status == "agreement_generated" for row in rows.values()):
             submission.process_status = ProcessStatus.AGREEMENT_READY.value
-            submission.workflow_step = submission.process_status
         db.flush()
 
     def mark_agreement_downloaded(
@@ -526,7 +542,6 @@ class SubmissionTrainingService:
         row.agreement_downloaded_at = row.agreement_downloaded_at or now
         row.updated_at = now
         submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value
-        submission.workflow_step = submission.process_status
         db.add(SubmissionWorkflowEvent(
             submission_id=submission.id,
             public_submission_id=submission.submission_id,
@@ -613,11 +628,10 @@ class SubmissionTrainingService:
         row.signed_agreement_uploaded_at = now
         from services.documents.document_workflow_service import is_document_step
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
-        current = submission.workflow_stage or submission.workflow_step
+        current = submission.workflow_step or submission.workflow_stage
         composite = any(s.get("id") == current and is_document_step(s) for s in definition.get("workflow", {}).get("steps", []))
         if not composite:
             submission.process_status = ProcessStatus.AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE.value
-            submission.workflow_step = submission.process_status
         db.add(SubmissionWorkflowEvent(
             submission_id=submission.id,
             public_submission_id=submission.submission_id,

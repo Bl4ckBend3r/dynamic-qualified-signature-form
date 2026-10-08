@@ -71,6 +71,7 @@
         <tbody>
         {% for submission in submissions %}
             {% set form = form_by_slug.get(submission.form_slug) %}
+            {% set decisions = decision_options_by_submission.get(submission.id, []) %}
             <tr>
                 <td class="admin-id-cell"><code title="{{ submission.submission_id }}">{{ submission.submission_id[:8] }}{% if submission.submission_id|length > 8 %}…{% endif %}</code><button type="button" class="admin-copy-id" data-copy-id="{{ submission.submission_id }}" aria-label="Kopiuj pełne ID" title="Kopiuj pełne ID">⧉</button></td>
                 <td>{{ (((submission.imiona or '') ~ ' ' ~ (submission.nazwisko or ''))|trim or "-") if submission.form_slug in permission_slugs.can_view_sensitive_data else "Dane ukryte" }}</td>
@@ -79,21 +80,15 @@
                 <td>{{ form.name if form else submission.form_slug }}</td>
                 <td>{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
                 <td><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><br><small>{{ submission.due_at|business_datetime('%d.%m.%Y, %H:%M') if submission.due_at else "Bez terminu" }}</small></td>
-                <td><span class="admin-badge">{{ status_label(submission.process_status, form) }}</span></td>
-                <td class="column-secondary">{{ status_label(submission.workflow_stage or submission.workflow_step, form) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
+                <td><span class="admin-badge">{{ submission_status_label(submission, form) }}</span></td>
+                <td class="column-secondary">{{ submission_step_label(submission, form) }}</td>
 <td class="column-secondary">
   <div class="admin-decision-cell">
     <span class="admin-decision-current">
-      {{ {
-        "accepted": "Zaakceptowano",
-        "rejected": "Odrzucono",
-        "correction": "Do poprawy",
-        "TAK": "Zaakceptowano",
-        "NIE": "Odrzucono"
-      }.get(submission.officer_decision, submission.officer_decision or "-") }}
+      {{ submission_decision_label(submission, form) }}
     </span>
 
-    {% if form and submission.form_slug in permission_slugs.can_make_decision %}
+    {% if form and decisions and submission.form_slug in permission_slugs.can_make_decision %}
       <div class="admin-decision-actions">
         <a class="admin-link-button"
            href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#officer-decision">

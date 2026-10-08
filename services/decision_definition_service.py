@@ -90,17 +90,21 @@ class DecisionDefinitionService:
         draft.updated_at = datetime.now(timezone.utc)
 
     def available_for_submission(self, submission, *, scope: str | None = None) -> list[dict]:
+        from services.workflow_service import current_workflow_step
+
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         workflow = definition.get("workflow") or {}
-        current_step = str(
-            submission.workflow_step
-            or submission.workflow_stage
-            or workflow.get("initial_step")
-            or "submission"
-        )
+        current_step = current_workflow_step(submission, definition)
+        step = next((s for s in workflow.get("steps", []) if s.get("id") == current_step), {})
         if workflow.get("flow_mode") == "explicit":
-            step = next((s for s in workflow.get("steps", []) if s.get("id") == current_step), {})
             if step.get("stage_type") != "decision":
+                return []
+        elif workflow.get("steps") and not (step.get("requires_officer_action") or step.get("type") == "manual_decision" or step.get("decisions")):
+            return []
+        elif not workflow.get("steps"):
+            from services.beneficiary_agreement_service import can_edit_application_decision
+
+            if not can_edit_application_decision(submission):
                 return []
         all_configured = [dict(item) for item in (workflow.get("decision_types") or []) if isinstance(item, dict) and item.get("active", True)]
         configured = [item for item in all_configured if str(item.get("step_id") or current_step) == current_step]

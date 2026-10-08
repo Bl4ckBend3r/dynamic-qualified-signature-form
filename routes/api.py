@@ -158,7 +158,7 @@ def instruction_payload(submission: dict) -> dict:
     instruction = form_context["instruction"]
     from services.documents.document_workflow_service import document_step_state
     row = submission.get("row") or submission
-    step_id = row.get("workflow_stage") or row.get("workflow_step")
+    step_id = row.get("workflow_step") or row.get("workflow_stage")
     process_view = build_process_instruction_view(
         submission.get("process_status"),
         instruction_config=form_context["instruction_config"],

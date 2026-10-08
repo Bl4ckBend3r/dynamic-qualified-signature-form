@@ -1,8 +1,10 @@
 from __future__ import annotations
+from collections.abc import Mapping
 from sqlalchemy import select
 import logging
 from datetime import datetime, timezone
-from models import FormSubmission, FormVersion, SubmissionDecision
+from models import FormSubmission, FormVersion, SubmissionWorkflowEvent
+from sqlalchemy.orm import object_session
 from statuses import (
     COMPLETED,
     CORRECTED,
@@ -12,7 +14,7 @@ from statuses import (
     WAITING_FOR_SIGNATURE,
     normalize_status,
 )
-from services.status_catalog import can_transition, get_status_label, normalize_status as catalog_normalize_status
+from services.status_catalog import can_transition, get_status_label
 from services.workflow_state_service import FinalOutcome, final_outcome_for_status
 from form_loader import evaluate_scoped_condition
 
@@ -22,6 +24,43 @@ logger = logging.getLogger(__name__)
 
 class WorkflowTransitionError(ValueError):
     pass
+
+
+def current_workflow_step(submission, form_config: dict | None = None) -> str:
+    """Read the canonical step, retaining workflow_stage for older records."""
+    if isinstance(submission, Mapping):
+        step = submission.get("workflow_step") or submission.get("workflow_stage")
+    else:
+        step = getattr(submission, "workflow_step", None) or getattr(submission, "workflow_stage", None)
+    return str(step or ((form_config or {}).get("workflow") or {}).get("initial_step") or "submission").strip()
+
+
+def workflow_step_document_id(step: Mapping) -> str:
+    """Resolve a document step's document, including legacy same-ID steps."""
+    if step.get("document_lifecycle") == "composite":
+        return str(step.get("document_id") or "")
+    if step.get("document_id"):
+        return str(step["document_id"])
+    if step.get("stage_type") != "document":
+        return ""
+    step_id = str(step.get("id") or "")
+    return step_id.removesuffix("_signature") if step_id.endswith("_signature") else step_id
+
+
+def workflow_document_action(step: Mapping, document_id: str) -> str:
+    """Return the action available for a document on this configured step."""
+    if not step or step.get("final") or step.get("document_lifecycle") == "composite":
+        return ""
+    if workflow_step_document_id(step) != document_id:
+        return ""
+    action = str(step.get("action") or "none")
+    if action in {"generate_document", "await_signature"}:
+        return action
+    if action == "none" and step.get("stage_type") == "document" and step.get("id") == f"{document_id}_signature":
+        return "await_signature"
+    if action == "none" and step.get("stage_type") == "document" and step.get("id") == document_id:
+        return "generate_document"
+    return ""
 
 def workflow_status_label(status_id: str, form_config: dict | None = None) -> str:
     status_id = str(status_id or "").strip()
@@ -177,11 +216,7 @@ class WorkflowService:
             self._driving.discard(public_id)
 
     def get_current_step(self, submission: dict, form_config: dict) -> str:
-        explicit = str(submission.get("workflow_stage") or submission.get("workflow_step") or "").strip()
-        if explicit:
-            return explicit
-        workflow = form_config.get("workflow") or {}
-        return workflow.get("initial_step") or "submission"
+        return current_workflow_step(submission, form_config)
 
     def transition_to(
         self,
@@ -195,7 +230,7 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
-        old_step = submission.get("workflow_stage") or submission.get("workflow_step")
+        old_step = current_workflow_step(submission)
         from services.documents.document_workflow_service import is_document_step, document_step_state
         old_config = self._find_step(self.definition_for(submission), old_step) or {}
         if target_step != old_step and is_document_step(old_config) and not document_step_state(submission, old_step).get("completed"):
@@ -273,9 +308,11 @@ class WorkflowService:
         reason: str = "",
         target_step: str | None = None,
         strict: bool = False,
+        decision_code: str = "",
     ):
+        db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
         old_status = getattr(submission, "process_status", None)
-        old_step = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
+        old_step = current_workflow_step(submission)
         from services.documents.document_workflow_service import is_document_step, document_step_state
         version = getattr(submission, "form_version", None)
         definition = (version.definition_json if version else {}) or {}
@@ -295,11 +332,8 @@ class WorkflowService:
             submission.legacy_process_status = str(old_status or "")
         if hasattr(submission, "final_outcome"):
             submission.final_outcome = final_outcome_for_status(target_status).value
-        new_step = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
+        new_step = current_workflow_step(submission)
         if self.workflow_sla_service and old_step != new_step:
-            from sqlalchemy.orm import object_session
-
-            db = object_session(submission)
             if db is not None:
                 self.workflow_sla_service.transition(
                     db,
@@ -315,10 +349,11 @@ class WorkflowService:
             new_step=new_step,
             actor=actor,
             reason=reason,
-            decision_code="",
+            decision_code=decision_code,
             user_message="",
             side_effects={},
             source="workflow_transition_submission",
+            db=db,
         )
         logger.info(
             "workflow_transition",
@@ -534,10 +569,7 @@ class WorkflowService:
                 return configured_status
 
         return self._status_for_step(step_id)
-    
-    
-    
-    
+
     def _status_for_step(self, step_id: str) -> str:
         if step_id == "completed":
             return COMPLETED
@@ -563,19 +595,42 @@ class WorkflowService:
         user_message: str = "",
         side_effects: dict | None = None,
         source: str,
+        db=None,
     ) -> bool:
+        actor_value = str(actor or "system").strip() or "system"
+        recorded_previous = str(previous_status or "")
+        recorded_new = str(new_status or "")
+        if db is not None:
+            submission = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            db.add(SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status=recorded_previous,
+                new_status=recorded_new,
+                previous_step=previous_step or "",
+                new_step=new_step or "",
+                actor_role=actor_value,
+                reason=reason,
+                decision_code=decision_code,
+                user_message=user_message,
+                side_effects=dict(side_effects or {}),
+                source=source,
+            ))
+            return True
         if not self.submission_repository or not hasattr(self.submission_repository, "record_workflow_event"):
             return False
-        actor_value = str(actor or "system").strip() or "system"
         try:
-            normalized_previous = catalog_normalize_status(previous_status).value if previous_status else ""
-            normalized_new = catalog_normalize_status(new_status).value if new_status else ""
             return bool(
                 self.submission_repository.record_workflow_event(
                     submission_id,
                     {
-                        "previous_status": normalized_previous,
-                        "new_status": normalized_new,
+                        "previous_status": recorded_previous,
+                        "new_status": recorded_new,
                         "previous_step": previous_step or "",
                         "new_step": new_step or "",
                         "actor_role": actor_value,

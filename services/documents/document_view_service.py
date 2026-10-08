@@ -9,6 +9,7 @@ from services.process_service import ProcessStatus
 from services.status_catalog import build_status_view
 from services.submission_document_service import SubmissionDocumentType
 from services.public_submission_status_service import build_public_submission_status
+from services.training_service import training_key
 
 
 logger = logging.getLogger(__name__)
@@ -218,15 +219,16 @@ class DocumentViewService:
         )
         training_agreements = _parse_json_list(row.get("training_agreements"))
         selected_trainings = _parse_json_list(row.get("selected_trainings"))
-        def training_key(item: Mapping[str, Any]) -> str:
-            nested = item.get("training") if isinstance(item.get("training"), Mapping) else {}
-            return str(nested.get("id") or item.get("training_id") or item.get("id") or "").strip()
-
+        has_selected_trainings = bool(selected_trainings)
         inactive_statuses = {
             "unselected", "cancelled", "cancelled_before_signed_agreement",
             "rejected", "inactive_without_signed_agreement",
         }
         selected_training_ids = {training_key(item) for item in selected_trainings if training_key(item)}
+        selected_training_names = {
+            training_key(item): str(item.get("name") or item.get("training_name") or "").strip()
+            for item in selected_trainings if training_key(item)
+        }
         raw_selection = row.get("selected_trainings")
         selection_snapshot_present = raw_selection is not None and str(raw_selection).strip() not in {"", "null", "None"}
         training_agreements = [
@@ -259,16 +261,23 @@ class DocumentViewService:
                 ProcessStatus.BENEFICIARY_AGREEMENT_REJECTED.value,
             }
         )
-        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
-            agreement_actions_allowed = bool(public_status["can_generate_agreement"] or public_status["can_upload_signed_agreement"])
+        if (
+                (form_config.get("workflow") or {}).get("flow_mode") == "explicit"
+                and not public_status.get("composite_document")
+            ):
+                agreement_actions_allowed = bool(
+                    public_status["can_generate_agreement"]
+                    or public_status["can_upload_signed_agreement"]
+                )
         today_iso = date.today().isoformat()
         declaration_enabled = bool(declaration.get("enabled"))
         declaration_filename = declaration.get("filename", "")
-        declaration_ready = bool(declaration_enabled and declaration_filename)
         available = available_filenames
 
         def is_available(filename: str) -> bool:
             return bool(filename) and (available is None or filename in available)
+
+        declaration_ready = bool(declaration_enabled and is_available(declaration_filename))
 
         training_agreement_views = []
         if agreement_template_configured:
@@ -303,8 +312,13 @@ class DocumentViewService:
                 filename = str(agreement.get("filename") or "")
                 signed_filename = str(agreement.get("signed_filename") or "")
                 final_filename = str(agreement.get("office_signed_filename") or "")
+                key = training_key(agreement)
+                nested_training = agreement.get("training") if isinstance(agreement.get("training"), Mapping) else {}
                 agreement_view = {
                     **agreement,
+                    "training_id": key,
+                    "training_name": str(agreement.get("training_name") or nested_training.get("name")
+                                         or selected_training_names.get(key) or key),
                     "state": status,
                     "status_label": str(agreement.get("participant_status_label") or _agreement_status_label(status)),
                     "state_title": title,
@@ -312,6 +326,7 @@ class DocumentViewService:
                     "beneficiary_uploaded": beneficiary_uploaded,
                     "office_signed": office_signed,
                     "downloaded": downloaded,
+                    "is_pending_generation": False,
                     "can_upload": bool(
                         agreement_actions_allowed
                         and
@@ -357,6 +372,9 @@ class DocumentViewService:
 
         return {
             **public_status,
+            "has_selected_trainings": bool(selected_trainings),
+            "can_download_declaration": bool(public_status["can_download_declaration"] and declaration_ready),
+            "can_upload_signed_declaration": bool(public_status["can_upload_signed_declaration"] and declaration_ready),
             "submission_id": submission_id,
             "form_slug": submission["form_slug"],
             "form_title": submission["form_title"],
@@ -396,10 +414,10 @@ class DocumentViewService:
             "declaration_filename": declaration_filename,
             "declaration_url": (
                 download_url_builder(declaration_filename, False)
-                if declaration_ready
+                if declaration_ready and public_status["can_download_declaration"]
                 else None
             ),
-            "declaration_upload_url": declaration_upload_url if declaration_enabled else None,
+            "declaration_upload_url": declaration_upload_url if declaration_ready and public_status["can_upload_signed_declaration"] else None,
             "declaration_signature_valid": str(row.get("declaration_signature_valid", "")).strip().lower() == "tak",
             "agreement_blocked": public_status["agreement_blocked"],
             "agreement_block_reason": public_status["blocking_reason"],

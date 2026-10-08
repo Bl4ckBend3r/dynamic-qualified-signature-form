@@ -121,15 +121,9 @@
     overflow-wrap: anywhere;
 }
 
-.training-summary__item.is-used {
-    border-color: #d8c69f;
-    background: #fbf7ef;
-}
 
-.training-summary__item.is-remaining {
-    border-color: #b9ddc7;
-    background: #f1faf4;
-}
+
+
 
 .training-summary__item.is-locked {
     border-color: #cbd2dc;

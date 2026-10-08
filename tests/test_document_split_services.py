@@ -496,6 +496,29 @@ def test_agreement_flow_generates_only_new_training_and_preserves_previous_agree
     assert [item["id"] for item in json.loads(updates[0][1]["training_agreements"])] == ["python", "excel"]
 
 
+def test_agreement_flow_uses_nested_training_id_for_pending_generation():
+    document_service = FakeDocumentService()
+    document_service.submission_repository = SimpleNamespace(update=lambda *_: True)
+    document_service.generate_documents_for_collection = lambda *args, **kwargs: (
+        document_service.generated_collections.append((args, kwargs))
+        or [{"id": "excel", "training_id": "excel", "filename": "excel.pdf"}]
+    )
+    previous = {"id": "agreement-python", "training": {"id": "python"},
+                "filename": "python.pdf", "number": "A/1", "generated_at": "2026-01-01"}
+    submission = {"submission_id": "abc", "form_slug": "sample", "row": {
+        "declaration_signature_valid": "Tak",
+        "selected_trainings": json.dumps([{"id": "python", "name": "Python"}, {"id": "excel", "name": "Excel"}]),
+        "training_agreements": json.dumps([previous]),
+    }}
+
+    result = AgreementFlowService().generate_training_agreements(
+        submission=submission, form_config={"documents": []}, document_service=document_service)
+
+    generated_submission = document_service.generated_collections[0][0][0]
+    assert [item["id"] for item in json.loads(generated_submission["row"]["selected_trainings"])] == ["excel"]
+    assert result.agreements == [previous, {"id": "excel", "training_id": "excel", "filename": "excel.pdf"}]
+
+
 def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_trainings=None, row_extra=None):
     row = {
         "officer_decision": "TAK",
@@ -504,7 +527,7 @@ def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_tra
         "declaration_signature_valid": "Tak",
         "agreement_required": "Tak",
         "agreement_generated": "Tak",
-        "agreement_filename": items[0]["filename"],
+        "agreement_filename": items[0]["filename"] if items else "",
         "training_agreements": json.dumps(items),
         "selected_trainings": json.dumps(selected_trainings) if selected_trainings is not None else None,
         "process_status": process_status,
@@ -531,6 +554,30 @@ def _agreement_view_for(items, *, process_status="AGREEMENT_READY", selected_tra
             item.get(key) for item in items for key in ("filename", "signed_filename", "office_signed_filename") if item.get(key)
         },
     )
+
+
+def test_training_agreement_view_tracks_pending_and_downloads_per_training():
+    selected = [{"id": "python", "name": "Python"}, {"id": "excel", "name": "Excel"}]
+    empty = _agreement_view_for([], selected_trainings=selected[:1])
+    assert empty["can_generate_agreement"] is True
+    assert [item["training_id"] for item in empty["agreement_items"]] == ["python"]
+    assert empty["agreement_items"][0]["is_pending_generation"] is True
+
+    python = {"id": "agreement-python", "training": {"id": "python"},
+              "filename": "python.pdf", "number": "A/1", "generated_at": "2026-01-01"}
+    pending = _agreement_view_for([python], selected_trainings=selected)
+    by_training = {item["training_id"]: item for item in pending["agreement_items"]}
+    assert pending["can_generate_agreement"] is True
+    assert by_training["python"]["url"] == "/generated/python.pdf"
+    assert by_training["excel"]["is_pending_generation"] is True
+
+    excel = {"id": "excel", "training_id": "excel", "filename": "excel.pdf",
+             "number": "B/1", "generated_at": "2026-01-02"}
+    completed = _agreement_view_for([python, excel], selected_trainings=selected)
+    assert completed["can_generate_agreement"] is False
+    assert {item["url"] for item in completed["agreement_items"]} == {
+        "/generated/python.pdf", "/generated/excel.pdf"}
+    assert not any(item["is_pending_generation"] for item in completed["agreement_items"])
 
 
 def test_training_agreement_view_distinguishes_generated_downloaded_uploaded_and_office_states():

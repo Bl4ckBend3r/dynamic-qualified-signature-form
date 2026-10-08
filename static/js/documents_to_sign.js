@@ -267,7 +267,7 @@ function showUserInstruction(data, submissionId) {
     }
 
     if (formInstructionContent) {
-        formInstructionContent.textContent = instruction;
+        renderInstructionFragment(formInstructionContent, instruction);
     }
     if (instructionTitle) {
         instructionTitle.textContent = String(nested?.title || "Instrukcja dalszego postępowania");
@@ -284,7 +284,7 @@ function showUserInstruction(data, submissionId) {
         hideElement(instructionStagesSection);
     }
     if (currentStageDescription) {
-        currentStageDescription.textContent = stageDescription;
+        renderInstructionFragment(currentStageDescription, stageDescription);
     }
     if (stageDescription) {
         showElement(currentStageDescriptionSection);
@@ -294,7 +294,7 @@ function showUserInstruction(data, submissionId) {
     if (currentStageLabel) currentStageLabel.textContent = stageLabel;
     if (stageLabel) showElement(currentStageLabelSection); else hideElement(currentStageLabelSection);
     if (nextActionContent) {
-        nextActionContent.textContent = nextAction;
+        renderInstructionFragment(nextActionContent, nextAction);
     }
     if (nextAction) {
         showElement(nextActionSection);
@@ -336,7 +336,12 @@ function hideAgreementStage() {
     hideElements('[data-stage="agreement-upload"]');
 }
 
-function renderStatusTile({ variant = "neutral", icon = "i", title, description }) {
+function renderInstructionFragment(element, html) {
+    // Instruction HTML is sanitized by the workflow instruction service before the API responds.
+    element.innerHTML = html;
+}
+
+function renderStatusTile({ variant = "neutral", icon = "i", title, description, descriptionHtml = null }) {
     if (!statusTiles) {
         return;
     }
@@ -355,7 +360,12 @@ function renderStatusTile({ variant = "neutral", icon = "i", title, description 
     heading.textContent = String(title || "");
     const text = document.createElement("p");
     text.className = "status-tile__description";
-    text.textContent = String(description || "");
+    if (descriptionHtml === null) {
+        text.textContent = String(description || "");
+    } else {
+        renderInstructionFragment(text, descriptionHtml);
+        if (description) text.append(document.createTextNode(` ${description}`));
+    }
     content.append(heading, text);
     tile.append(iconBox, content);
     statusTiles.appendChild(tile);
@@ -379,12 +389,12 @@ function renderSubmissionStatus(data) {
         const rawVariant = currentStatus?.variant || data.status_variant;
         const variant = ["success", "warning", "danger"].includes(rawVariant) ? rawVariant : "neutral";
         const icon = variant === "success" ? "✓" : variant === "danger" ? "!" : variant === "warning" ? "…" : "i";
-        const description = [
+        const descriptionHtml = [
             currentStatus?.message || data.status_description || data.message || "",
-            currentStatus?.reason || data.status_reason || "",
             currentStatus?.next_action || data.next_action || "",
         ].filter(Boolean).join(" ");
-        renderStatusTile({variant, icon, title: statusTitle, description});
+        renderStatusTile({variant, icon, title: statusTitle,
+            description: currentStatus?.reason || data.status_reason || "", descriptionHtml});
         return;
     }
 

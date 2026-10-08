@@ -210,3 +210,95 @@ def test_required_readonly_is_valid_when_value_was_required_earlier():
         {"step": "declaration", "visible": True, "editable": False, "required": True},
     ])]
     assert FieldAvailabilityService().validate_config(definition) == []
+
+
+def test_explicit_additional_fields_require_a_separate_user_action_step():
+    definition = {
+        "workflow": {"flow_mode": "explicit", "initial_step": "submission", "steps": [
+            {"id": "submission", "stage_type": "user_action", "type": "form_submit"},
+            {"id": "officer_review", "stage_type": "decision"},
+            {"id": "waiting_for_correction", "stage_type": "user_action", "next": "officer_review"},
+            {"id": "more_information", "stage_type": "user_action", "next": "declaration"},
+            {"id": "declaration", "stage_type": "document", "status": "DECLARATION_READY"},
+        ]},
+        "fields": [
+            field("post_acceptance", [{"step": "more_information", "visible": True,
+                                        "editable": True, "required": True}]),
+            field("correction", [{"step": "waiting_for_correction", "visible": True,
+                                   "editable": True, "required": True}]),
+            field("declaration_data", [{"step": "declaration", "visible": True,
+                                        "editable": True, "required": True}]),
+        ],
+    }
+    flow = DeclarationFlowService()
+    row = {"workflow_step": "more_information", "process_status": "ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS"}
+    assert flow.has_additional_fields(definition) is True
+    assert flow.requires_additional_fields(definition, row) is True
+    assert [item["name"] for item in flow.build_additional_fields_definition(definition, "more_information")["fields"]] == ["post_acceptance"]
+    assert flow.requires_additional_fields(definition, {**row, "additional_fields_completed": "Tak"}) is False
+    assert flow.requires_additional_fields(definition, {**row, "workflow_step": "declaration"}) is False
+    assert flow.requires_additional_fields(definition, {**row, "workflow_step": "waiting_for_correction"}) is False
+    assert flow.requires_additional_fields(definition, {**row, "workflow_step": "unknown", "workflow_stage": "more_information"}) is False
+
+    class Repository:
+        def __init__(self):
+            self.row = {**row, "data_json": {}}
+
+        def update(self, _submission_id, updates):
+            self.row.update(updates)
+            return True
+
+        def get_by_id(self, _submission_id):
+            return self.row
+
+        def record_workflow_event(self, *_args):
+            return True
+
+    class Workflow:
+        def __init__(self):
+            self.advanced = False
+
+        def advance_after_action(self, current, form_config, *, actor):
+            self.advanced = current["additional_fields_completed"] == "Tak" and form_config is definition and actor == "participant"
+
+    repository = Repository()
+    workflow = Workflow()
+    saved = flow.save_additional_fields(
+        submission_id="sub-1", submission={"row": repository.row}, form_config=definition,
+        form_data={"post_acceptance": "Gotowe"}, submission_repository=repository,
+        workflow_service=workflow,
+    )
+    assert saved.success and workflow.advanced
+    assert repository.row["data_json"] == {"post_acceptance": "Gotowe"}
+
+
+def test_declaration_fields_omit_other_steps_empty_sections_and_training_selection():
+    definition = workflow_definition()
+    definition["fields"] = [
+        {"type": "section", "label": "Dane zgłoszenia"},
+        field("initial", [{"step": "submission", "visible": True, "editable": True, "required": True}]),
+        {"type": "section", "label": "Pusta sekcja"},
+        field("hidden", [{"step": "declaration", "visible": False, "editable": False, "required": False}]),
+        {"type": "section", "label": "Dane deklaracji"},
+        field("readonly", [{"step": "declaration", "visible": True, "editable": False, "required": False}]),
+        field("required", [{"step": "declaration", "visible": True, "editable": True, "required": True}]),
+        {"type": "section", "label": "Szkolenia"},
+        {"name": "training", "type": "training_selection", "availability": [
+            {"step": "submission", "visible": True, "editable": True, "required": False},
+        ]},
+        {"type": "section", "label": "Informacja"},
+        {"type": "static_text", "label": "Treść dla deklaracji", "availability": [
+            {"step": "declaration", "visible": True, "editable": False, "required": False},
+        ]},
+    ]
+    declaration = DeclarationFlowService.build_declaration_form_definition(
+        {"fields": []}, definition, "declaration",
+    )
+    fields = declaration["fields"]
+    assert [item.get("name") or item.get("label") for item in fields] == [
+        "Dane deklaracji", "readonly", "required", "Informacja", "Treść dla deklaracji",
+    ]
+    assert fields[1]["readonly"] is True
+    assert fields[2]["required"] is True
+    assert extract_submission_data(declaration, {"readonly": "injected", "required": ""}) == {"required": ""}
+    assert validate_submission(declaration, {"required": ""}) == {"required": "Pole „required” jest wymagane."}

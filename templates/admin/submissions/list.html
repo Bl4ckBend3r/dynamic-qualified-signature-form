@@ -102,6 +102,7 @@
                 </tr>
             </thead>
             <tbody>{% for submission in submissions %}
+                {% set decisions = decision_options_by_submission.get(submission.id, []) %}
                 <tr>
                     {% if can_select_rows %}<td class="col-select">
                         <input type="hidden" name="submission_row_ids" value="{{ submission.id }}">
@@ -114,15 +115,14 @@
                     <td class="admin-form-name-cell">{{ form.name }}</td>
                     <td class="admin-assignee-cell">{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
                     <td class="admin-priority-cell"><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
-                    <td><span class="admin-badge">{{ status_label(submission.process_status) }}</span></td>
-                    <td>{{ status_label(submission.workflow_stage or submission.workflow_step) if (submission.workflow_stage or submission.workflow_step) else "-" }}</td>
+                    <td><span class="admin-badge">{{ submission_status_label(submission, form) }}</span></td>
+                    <td>{{ submission_step_label(submission, form) }}</td>
                     <td>
-                        {% if can_make_decision and can_edit_application_decision(submission) %}
+                        {% if can_make_decision and decisions %}
                             <div class="admin-decision-controls">
                                 <select name="officer_decision_{{ submission.id }}" class="admin-decision-select">
-                                    {% for value, label in officer_decisions %}
-                                        <option value="{{ value }}" {% if submission.officer_decision == value %}selected{% endif %}>{{ label }}</option>
-                                    {% endfor %}
+                                    <option value="">Wybierz decyzję</option>
+                                    {% for decision in decisions %}<option value="{{ decision.code }}" data-requires-reason="{{ 'true' if decision.reason_required|default(decision.require_reason|default(decision.semantic_category in ['negative', 'correction'])) else 'false' }}">{{ decision.label }}</option>{% endfor %}
                                 </select>
                                 <input
                                     name="officer_decision_reason_{{ submission.id }}"
@@ -132,7 +132,7 @@
                                 >
                             </div>
                         {% elif submission.officer_decision %}
-                            <span class="admin-badge">{{ "Wniosek zaakceptowany" if submission.officer_decision|lower in ["accepted", "tak"] else "Wniosek odrzucony" }}</span>
+                            <span class="admin-badge">{{ submission_decision_label(submission, form) }}</span>
                         {% else %}
                             <span>Etap zakończony</span>
                         {% endif %}
@@ -143,10 +143,8 @@
                             <div id="submission-actions-{{ submission.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Podgląd</a>
                             {% if can_edit_workflow and submission.process_status not in ['FORM_SUBMITTED', 'WAITING_FOR_OFFICER_DECISION'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#rollback-stage-dialog">Cofnij etap</a>{% endif %}
-                            {% if can_make_decision and can_edit_application_decision(submission) %}
-                                <button type="button" class="admin-link-button" data-quick-decision="accepted" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Zaakceptuj</button>
-                                <button type="button" class="admin-link-button" data-quick-decision="rejected" data-action="{{ url_for('admin.submission_decision_update', form_id=form.id, submission_pk=submission.id) }}" data-submission-id="{{ submission.submission_id }}">Odrzuć</button>
-                                {% if can_return_for_correction %}<button type="button" class="admin-link-button" data-quick-decision="correction" data-action="{{ url_for('admin.submission_return_for_correction', submission_id=submission.submission_id) }}" data-submission-id="{{ submission.submission_id }}">Wyślij do poprawy</button>{% endif %}
+                            {% if can_make_decision and decisions %}
+                                <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#officer-decision">Podejmij decyzję</a>
                             {% endif %}
                             {% if submission.process_status in ['DECLARATION_READY', 'DECLARATION_WAITING_FOR_SIGNATURE'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Wygeneruj deklarację</a>{% endif %}
                             {% if submission.process_status in ['DECLARATION_SIGNED', 'DECLARATION_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź podpis</a>{% endif %}
@@ -278,7 +276,7 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!controls) return;
         const reason = controls.querySelector(".admin-decision-reason");
         if (!reason) return;
-        const needsReason = select.value === "rejected" || select.value === "correction";
+        const needsReason = select.selectedOptions[0]?.dataset.requiresReason === "true";
         reason.hidden = !needsReason;
         reason.required = needsReason;
         if (!needsReason) {

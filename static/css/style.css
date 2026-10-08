@@ -703,7 +703,9 @@ textarea:focus {
     margin: 12px 0 30px;
     padding-top: 12px;
 }
-
+.form-actions.sign-actions {
+    margin-bottom: 30px;
+}
 .back-link a {
     display: inline-flex;
     align-items: center;

@@ -250,7 +250,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import FormSubmission
         with self.session_factory() as db:
             model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
-            if not model or (model.workflow_stage or model.workflow_step) != step_id:
+            if not model or (model.workflow_step or model.workflow_stage) != step_id:
                 return False
             states = dict(model.document_states or {})
             prior = states.get("document_operation", "")
@@ -276,8 +276,8 @@ class PostgresSubmissionRepository(SubmissionRepository):
         values = {key: mapped[key] for key in columns if key in mapped and key in FORM_SUBMISSION_COLUMNS and key != "id"}
         with self.session_factory() as db:
             result = db.execute(update(FormSubmission).where(FormSubmission.submission_id == submission_id,
-                or_(FormSubmission.workflow_stage == expected_step,
-                    and_(or_(FormSubmission.workflow_stage.is_(None), FormSubmission.workflow_stage == ""), FormSubmission.workflow_step == expected_step)),
+                or_(FormSubmission.workflow_step == expected_step,
+                    and_(or_(FormSubmission.workflow_step.is_(None), FormSubmission.workflow_step == ""), FormSubmission.workflow_stage == expected_step)),
             ).values(**values))
             db.commit()
             return result.rowcount == 1
@@ -288,7 +288,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import FormSubmission, SubmissionWorkflowEvent
         with self.session_factory() as db:
             model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
-            if not model or (model.workflow_stage or model.workflow_step) != step_id:
+            if not model or (model.workflow_step or model.workflow_stage) != step_id:
                 return False
             states = deepcopy(model.document_states or {})
             states.setdefault("workflow_documents", {})[step_id] = deepcopy(state)

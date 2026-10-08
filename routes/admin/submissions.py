@@ -42,7 +42,7 @@ from services.submission_internal_note_service import (
     SubmissionInternalNotePermissionError,
 )
 from services.decision_definition_service import DecisionDefinitionError
-from services.admin_form_service import form_has_additional_fields
+from form_loader import has_additional_fields_after_acceptance
 from services.admin_workflow_view_service import build_admin_workflow_view
 from services.beneficiary_agreement_service import (
     AGREEMENT_DECISION_ROLES,
@@ -60,8 +60,12 @@ from services.admin_submission_service import (
     paginate_submissions,
     format_submission_value,
     sort_submissions,
+    submission_decision_label,
+    submission_status_label,
+    submission_step_label,
     submission_value,
 )
+from services.workflow_service import current_workflow_step
 from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
@@ -234,6 +238,11 @@ def submissions_all():
             }
             for key in ("can_view_sensitive_data", "can_send_email", "can_make_decision")
         }
+        decision_service = current_app.extensions["services"].decision_definition_service
+        decision_options_by_submission = {
+            item.id: decision_service.available_for_submission(item, scope="submission")
+            for item in submissions
+        }
         return render_template(
             "admin/submissions/all.html",
             submissions=submissions,
@@ -250,8 +259,10 @@ def submissions_all():
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
             permission_slugs=permission_slugs,
-            workflow_history=workflow_history,
-            decision_history=decision_history,
+            decision_options_by_submission=decision_options_by_submission,
+            submission_decision_label=submission_decision_label,
+            submission_status_label=submission_status_label,
+            submission_step_label=submission_step_label,
         )
 @bp.get("/forms/<int:form_id>/submissions")
 @login_required
@@ -293,6 +304,11 @@ def submissions_list(form_id: int):
                 "can_export_data",
             )
         }
+        decision_service = current_app.extensions["services"].decision_definition_service
+        decision_options_by_submission = {
+            item.id: decision_service.available_for_submission(item, scope="submission")
+            for item in submissions
+        }
         return render_template(
             "admin/submissions/list.html",
             form=form,
@@ -303,6 +319,10 @@ def submissions_list(form_id: int):
             filter_fields=filter_fields,
             officer_decisions=OFFICER_DECISIONS,
             can_edit_application_decision=can_edit_application_decision,
+            decision_options_by_submission=decision_options_by_submission,
+            submission_decision_label=submission_decision_label,
+            submission_status_label=submission_status_label,
+            submission_step_label=submission_step_label,
             status_label=lambda status: admin_status_label(status, form),
             status_options=status_options,
             pagination=pagination,
@@ -2050,8 +2070,11 @@ def submissions_decisions_update(form_id: int):
         ).scalars().all()
         for submission in submissions:
             decision = request.form.get(f"officer_decision_{submission.id}", "")
+            if not decision:
+                skipped_count += 1
+                continue
             reason = request.form.get(f"officer_decision_reason_{submission.id}", "")
-            result = save_officer_decision(db, form, submission, decision, reason, skip_unchanged=True)
+            result = save_officer_decision(db, form, submission, decision, reason)
             if result.get("checklist_errors"):
                 checklist_errors.extend(f"{submission.submission_id}: {error}" for error in result["checklist_errors"])
                 continue
@@ -2139,17 +2162,12 @@ def delete_submissions_transactionally(db, submissions: list[FormSubmission]) ->
 def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:
     historical_definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
     workflow_config = historical_definition.get("workflow") or {}
-    current_workflow_step = str(
-            submission.workflow_step
-            or submission.workflow_stage
-            or workflow_config.get("initial_step")
-            or "submission"
-        )
-    current_step_config = next((item for item in workflow_config.get("steps") or [] if str(item.get("id") or "") == current_workflow_step), {})
+    current_step = current_workflow_step(submission, historical_definition)
+    current_step_config = next((item for item in workflow_config.get("steps") or [] if str(item.get("id") or "") == current_step), {})
     workflow_allows_decision = bool(current_step_config and (current_step_config.get("requires_officer_action") or current_step_config.get("type") == "manual_decision" or current_step_config.get("decisions")))
     if workflow_config.get("flow_mode") == "explicit":
         workflow_allows_decision = current_step_config.get("stage_type") == "decision" and current_step_config.get("decision_scope") == "submission"
-    if (workflow_config.get("flow_mode") == "explicit" and not workflow_allows_decision) or (not can_edit_application_decision(submission) and not workflow_allows_decision):
+    if (workflow_config.get("steps") and not workflow_allows_decision) or (not workflow_config.get("steps") and not can_edit_application_decision(submission)):
         return {
             "invalid_stage": True,
             "missing_reason": False,
@@ -2167,7 +2185,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     if category == "positive":
         validation = current_app.extensions["services"].verification_checklist_service.validate_for_decision(
-            db, submission, decision="accepted", workflow_step=current_workflow_step,
+            db, submission, decision="accepted", workflow_step=current_step,
             include_sensitive_labels=current_app.extensions["services"].verification_checklist_service.can_view_sensitive_data(
                 db, g.admin_user, form
             ),
@@ -2194,7 +2212,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     submission.officer_decision_reason = reason
 
     workflow_service = current_app.extensions["services"].workflow_service
-    previous_step = current_workflow_step
+    previous_step = current_step
 
     target_step = (
         str(decision_definition.get("target_step") or "")
@@ -2226,31 +2244,28 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     if category == "positive":
         if not target_step:
-            db.rollback()
-            abort(400)
-
-        target_status = workflow_service.status_for_step(
-            historical_definition,
-            target_step,
-        )
+            if workflow_config.get("steps"):
+                db.rollback()
+                abort(400)
+            target_status = (
+                ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
+                if has_additional_fields_after_acceptance(historical_definition)
+                else ProcessStatus.OFFICER_ACCEPTED.value
+            )
+        else:
+            target_status = workflow_service.status_for_step(historical_definition, target_step)
 
     elif category == "negative":
         target_status = (
-            workflow_service.status_for_step(
-                historical_definition,
-                target_step,
-            )
-            if target_step
+            workflow_service.status_for_step(historical_definition, target_step)
+            if workflow_config.get("steps") and target_step
             else ProcessStatus.OFFICER_REJECTED.value
         )
 
     elif category == "correction":
         target_status = (
-            workflow_service.status_for_step(
-                historical_definition,
-                target_step,
-            )
-            if target_step
+            workflow_service.status_for_step(historical_definition, target_step)
+            if workflow_config.get("steps") and target_step
             else WAITING_FOR_CORRECTION
         )
 
@@ -2270,6 +2285,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         actor="officer",
         reason="officer_decision",
         target_step=target_step,
+        decision_code=decision,
     )
     submission.updated_at = datetime.now(timezone.utc)
     db.commit()

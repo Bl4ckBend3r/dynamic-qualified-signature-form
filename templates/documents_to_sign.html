@@ -7,9 +7,9 @@
     <span class="status-tile__icon" aria-hidden="true">{{ '✓' if variant == 'success' else '!' if variant == 'danger' else '…' if variant == 'warning' else 'i' }}</span>
     <div>
         <h3 class="status-tile__title">{{ title }}</h3>
-        <p class="status-tile__description">{{ description }}</p>
+        <div class="status-tile__description">{{ description|instruction_html }}</div>
         {% if reason %}<p><strong>Powód:</strong> {{ reason }}</p>{% endif %}
-        {% if next_action %}<p><strong>Co teraz?</strong> {{ next_action }}</p>{% endif %}
+        {% if next_action %}<div><strong>Co teraz?</strong> {{ next_action|instruction_html }}</div>{% endif %}
     </div>
 </section>
 {%- endmacro %}
@@ -107,9 +107,17 @@
 
     {% if result and result.training_picker %}
         <div class="training-picker-disclosure" data-training-disclosure>
-            <button type="button" class="btn-secondary training-picker-disclosure__toggle"
-                    aria-expanded="false" aria-controls="public-training-picker"
-                    data-training-disclosure-toggle>Wybierz szkolenia</button>
+            <button type="button"
+                    class="btn-secondary training-picker-disclosure__toggle"
+                    aria-expanded="false"
+                    aria-controls="public-training-picker"
+                    data-training-disclosure-toggle>
+                {% if result.has_selected_trainings %}
+                    Wybierz lub zmień szkolenia
+                {% else %}
+                    Wybierz szkolenia
+                {% endif %}
+            </button>
             <div id="public-training-picker" class="training-picker-disclosure__panel" hidden data-training-disclosure-panel>
         {% with field=result.training_picker.field, submission=result.training_picker.submission,
             catalog=result.training_picker.catalog, summary=result.training_picker.summary,
@@ -136,6 +144,7 @@
             {% for file in document.files %}
                 <div class="composite-document-file">
                 {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
+                {% if file.pending_generation %}<p>{{ file.label }} — dokument do wygenerowania.</p>{% endif %}
                 {% if file.can_upload %}
                 <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}" data-document-upload>
                     <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
@@ -150,7 +159,11 @@
                 {% endif %}
                 </div>
             {% endfor %}
-            {% if document.can_retry %}<form method="post" action="{{ url_for('documents.retry_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
+            {% if document.can_generate %}<form method="post" action="{{ url_for('documents.retry_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}">
+                <button class="btn-primary" type="submit">{% if document.document_id in ['agreement', 'training_agreement'] %}Wygeneruj umowę dla nowych szkoleń{% else %}Wygeneruj dokumenty dla nowych szkoleń{% endif %}</button>
+            </form>{% endif %}
+            {% if document.can_retry and not document.can_generate %}<form method="post" action="{{ url_for('documents.retry_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}">
                 <button class="btn-secondary" type="submit">Ponów przygotowanie dokumentu</button>
             </form>{% endif %}
@@ -185,7 +198,11 @@
             {% if result.training_selection_url %}
                 <p>
                     <a class="btn-primary" href="{{ result.training_selection_url }}">
-                        Wybierz lub zmień szkolenia
+                        {% if result.has_selected_trainings %}
+                            Wybierz lub zmień szkolenia
+                        {% else %}
+                            Wybierz szkolenia
+                        {% endif %}
                     </a>
                 </p>
             {% endif %}
@@ -287,7 +304,7 @@
                     {% endif %}
 
                     <div class="download-links document-download-links">
-                        {% if result.form_slug and result.submission_id %}
+                        {% if result.can_fill_declaration and result.form_slug and result.submission_id %}
                             <a
                                 class="btn-primary"
                                 href="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
@@ -300,9 +317,9 @@
                             <a
                                 class="btn-primary"
                                 href="{{ result.declaration_url }}"
-                                data-download-replace-trigger
+                                {% if result.can_fill_declaration %}data-download-replace-trigger
                                 data-edit-url="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
-                                data-edit-title="Edytuj deklarację"
+                                data-edit-title="Edytuj deklarację"{% endif %}
                             >
                                 Pobierz deklarację PDF
                             </a>
@@ -358,7 +375,7 @@
                 </div>
             {% endif %}
 
-            {% if show_agreement_stage and not agreement_items %}
+            {% if show_agreement_stage and result.has_selected_trainings and not agreement_items %}
                 <div class="card upload-card document-stage-card" data-stage="agreement">
                     <div class="card-header">
                         {% if training_agreements %}
@@ -370,7 +387,7 @@
                         {% endif %}
                     </div>
 
-                    {% if show_agreement_generate and result.generate_agreement_url %}
+                    {% if result.has_selected_trainings and show_agreement_generate and result.generate_agreement_url %}
                         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
                             <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
                             <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">

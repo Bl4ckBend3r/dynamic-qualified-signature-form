@@ -10,18 +10,23 @@ DROP_WITH_CONTENT_TAGS = {"script", "style", "iframe", "object", "embed", "svg",
 ALLOWED_LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
 
 
-def sanitize_instruction_html(value: object, *, limit: int = 50_000) -> str:
+def sanitize_instruction_html(value: object, *, limit: int = 50_000, link_schemes: frozenset[str] | None = None) -> str:
     """Return a small, safe HTML fragment suitable for instructions and JSON APIs."""
     source = str(value or "").replace("\x00", "")[:limit]
-    parser = _InstructionHTMLSanitizer()
+    parser = _InstructionHTMLSanitizer(link_schemes or frozenset(ALLOWED_LINK_SCHEMES))
     parser.feed(source)
     parser.close()
     return parser.result().strip()
 
 
+def sanitize_workflow_instruction_html(value: object) -> str:
+    return sanitize_instruction_html(value, link_schemes=frozenset({"http", "https"}))
+
+
 class _InstructionHTMLSanitizer(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, link_schemes: frozenset[str]) -> None:
         super().__init__(convert_charrefs=True)
+        self.link_schemes = link_schemes
         self.output: list[str] = []
         self.open_tags: list[str] = []
         self.suppressed_tags: list[str] = []
@@ -82,12 +87,11 @@ class _InstructionHTMLSanitizer(HTMLParser):
             self.output.append(f"</{self.open_tags.pop()}>")
         return "".join(self.output)
 
-    @staticmethod
-    def _safe_anchor(attrs: list[tuple[str, str | None]]) -> str:
+    def _safe_anchor(self, attrs: list[tuple[str, str | None]]) -> str:
         values = {str(name).lower(): str(value or "") for name, value in attrs}
         href = "".join(character for character in values.get("href", "").strip() if ord(character) >= 32)
         scheme = urlsplit(href).scheme.lower()
-        if scheme not in ALLOWED_LINK_SCHEMES:
+        if scheme not in self.link_schemes:
             href = ""
         parts = ["<a"]
         if href:

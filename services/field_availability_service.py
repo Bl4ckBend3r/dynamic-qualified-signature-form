@@ -98,29 +98,49 @@ class FieldAvailabilityService:
             {"step": wanted, "visible": False, "editable": False, "required": False},
         )
 
-    def fields_for_step(self, form_definition: Mapping[str, Any], step: str, *, mode: str = "visible") -> list[dict]:
+    @staticmethod
+    def prune_empty_sections(fields: list[dict]) -> list[dict]:
         result: list[dict] = []
-        pending_sections: list[dict] = []
+        pending_section: dict | None = None
+        for field in fields:
+            if field.get("type") == "section":
+                pending_section = field
+                continue
+            if pending_section is not None:
+                result.append(pending_section)
+                pending_section = None
+            result.append(field)
+        return result
+
+    def fields_for_step(self, form_definition: Mapping[str, Any], step: str, *, mode: str = "visible",
+                        excluded_types: set[str] | None = None) -> list[dict]:
+        result: list[dict] = []
         for raw_field in form_definition.get("fields") or []:
             if not isinstance(raw_field, Mapping):
                 continue
             field = self.normalize_field(raw_field, form_definition)
-            if field.get("type") in {"section", "static_text"}:
-                pending_sections.append(field)
+            field_type = field.get("type")
+            if field_type == "section":
+                result.append(field)
+                continue
+            if field_type == "static_text":
+                if mode == "visible" and self.permission(field, form_definition, step)["visible"]:
+                    result.append(field)
+                continue
+            if field_type in (excluded_types or set()):
                 continue
             permission = self.permission(field, form_definition, step)
             allowed = permission["visible"] if mode == "visible" else permission["editable"]
             if not allowed:
                 continue
-            result.extend(pending_sections)
-            pending_sections = []
             field["required"] = bool(permission["required"])
             field["readonly"] = not bool(permission["editable"])
             result.append(field)
-        return result
+        return self.prune_empty_sections(result)
 
-    def visible_fields(self, form_definition: Mapping[str, Any], step: str) -> list[dict]:
-        return self.fields_for_step(form_definition, step, mode="visible")
+    def visible_fields(self, form_definition: Mapping[str, Any], step: str,
+                       *, excluded_types: set[str] | None = None) -> list[dict]:
+        return self.fields_for_step(form_definition, step, mode="visible", excluded_types=excluded_types)
 
     def editable_fields(self, form_definition: Mapping[str, Any], step: str) -> list[dict]:
         return self.fields_for_step(form_definition, step, mode="editable")

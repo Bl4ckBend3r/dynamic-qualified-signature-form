@@ -8,7 +8,7 @@
         <form method="post" action="{{ result.generate_agreement_url }}" class="dynamic-form" data-stage="agreement-generate">
             <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
             <input type="hidden" name="access_token" value="{{ result.access_token|default('') }}">
-            <div class="submit-row"><button type="submit" class="btn-primary">Wygeneruj umowę</button></div>
+            <div class="submit-row"><button type="submit" class="btn-primary">Wygeneruj brakujące umowy</button></div>
         </form>
     {% endif %}
     <div class="agreement-overview__items">

@@ -8,7 +8,7 @@ from models import Form, FormField, FormSubmission
 from services.admin_form_service import normalize_admin_form_definition
 from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
-from services.workflow_service import workflow_status_label
+from services.workflow_service import current_workflow_step, workflow_status_label
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 
 
@@ -29,6 +29,34 @@ SUBMISSION_SORT_FIELDS = {
 def admin_status_label(status_id: str, form: Form | None = None) -> str:
     form_config = normalize_admin_form_definition(form.definition_json or {}) if form else {}
     return workflow_status_label(status_id, form_config)
+
+
+def submission_status_label(submission: FormSubmission, form: Form | None = None) -> str:
+    version = getattr(submission, "form_version", None)
+    definition = version.definition_json if version else (form.definition_json if form else {})
+    return workflow_status_label(submission.process_status, definition or {})
+
+
+def submission_step_label(submission: FormSubmission, form: Form | None = None) -> str:
+    version = getattr(submission, "form_version", None)
+    definition = version.definition_json if version else (form.definition_json if form else {})
+    if not (getattr(submission, "workflow_step", None) or getattr(submission, "workflow_stage", None)
+            or ((definition or {}).get("workflow") or {}).get("initial_step")):
+        return "-"
+    step = current_workflow_step(submission, definition or {})
+    return workflow_status_label(step, definition or {})
+
+
+def submission_decision_label(submission: FormSubmission, form: Form | None = None) -> str:
+    code = str(submission.officer_decision or "").strip()
+    if not code:
+        return "-"
+    version = getattr(submission, "form_version", None)
+    definition = version.definition_json if version else (form.definition_json if form else {})
+    for decision in ((definition or {}).get("workflow") or {}).get("decision_types") or []:
+        if str(decision.get("code") or "") == code:
+            return str(decision.get("label") or code)
+    return {"accepted": "Zaakceptowano", "rejected": "Odrzucono", "correction": "Do poprawy"}.get(code, code)
 
 
 def build_status_filter_options(
@@ -480,7 +508,7 @@ def filter_submissions(
             return False
         if phone and phone not in str(getattr(submission, "telefon", "") or "").casefold():
             return False
-        stage_value = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or "").casefold()
+        stage_value = current_workflow_step(submission).casefold()
         if workflow_stage and workflow_stage not in stage_value:
             return False
         if (date_from or date_to) and not matches_created_at_range(
@@ -607,7 +635,7 @@ def sort_submissions(submissions: list[FormSubmission], sort_field: str, directi
         if sort_field == "full_name":
             value = f"{getattr(submission, 'imiona', '') or ''} {getattr(submission, 'nazwisko', '') or ''}".strip()
         elif sort_field == "workflow_stage":
-            value = getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or ""
+            value = current_workflow_step(submission)
         else:
             value = submission_value(submission, sort_field)
         return "" if value is None else str(value).lower()

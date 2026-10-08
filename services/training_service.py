@@ -45,6 +45,12 @@ def normalize_training_id(value: Any) -> str:
     return str(value or "").strip()
 
 
+def training_key(item: Mapping[str, Any]) -> str:
+    """Identify a training in selection snapshots and agreement records."""
+    nested = item.get("training") if isinstance(item.get("training"), Mapping) else {}
+    return normalize_training_id(nested.get("id") or item.get("training_id") or item.get("id"))
+
+
 def is_training_active(item: Mapping[str, Any]) -> bool:
     if item.get("archived"):
         return False

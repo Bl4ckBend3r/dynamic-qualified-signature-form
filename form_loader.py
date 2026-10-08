@@ -782,7 +782,7 @@ def validate_submission(
         required = bool(field.get("required"))
         if field.get("required_if"):
             required = required or evaluate_visible_if(field.get("required_if"), submission_data)
-        if field.get("required"):
+        if required:
             if field_type == "checkbox":
                 options = field.get("options") or []
 
@@ -793,6 +793,9 @@ def validate_submission(
                 elif value != "Tak":
                     errors[field_name] = f"Pole „{label}” jest wymagane."
                     continue
+            elif value == "":
+                errors[field_name] = f"Pole „{label}” jest wymagane."
+                continue
 
         if value == "":
             continue

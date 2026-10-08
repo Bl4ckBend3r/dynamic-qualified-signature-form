@@ -25,6 +25,7 @@ from services.process_service import OfficerDecision, ProcessStatus, build_initi
 from services.qualification_condition_service import QualificationConditionService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.submission_attachment_service import SubmissionAttachmentService
+from services.workflow_service import workflow_document_action, workflow_step_document_id
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +389,7 @@ class SubmissionService:
         }
         explicit_flow = (form_config.get("workflow") or {}).get("flow_mode") == "explicit"
         if explicit_flow:
-            updates["workflow_step"] = existing.get("workflow_stage") or existing.get("workflow_step")
+            updates["workflow_step"] = existing.get("workflow_step") or existing.get("workflow_stage")
             updates["process_status"] = existing.get("process_status")
         if signed_data_changed:
             updates.update({
@@ -804,7 +805,11 @@ class SubmissionService:
         definition = self.workflow_service.definition_for(row) if self.workflow_service else {}
         if definition.get("workflow", {}).get("flow_mode") == "explicit":
             step = self.workflow_service._find_step(definition, self.workflow_service.get_current_step(row, definition)) or {}
-            can_sign_documents = step.get("stage_type") in {"document", "user_action"} and step.get("action") in {"generate_document", "await_signature"} and not step.get("final")
+            document_id = workflow_step_document_id(step)
+            can_sign_documents = (
+                step.get("stage_type") in {"document", "user_action"}
+                and bool(workflow_document_action(step, document_id))
+            )
             if step.get("document_lifecycle") == "composite":
                 can_sign_documents = True
             can_view_status_details = True

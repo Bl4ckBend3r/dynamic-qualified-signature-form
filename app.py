@@ -250,10 +250,13 @@ def register_context_processors(app: Flask) -> None:
 
 def register_template_filters(app: Flask) -> None:
     from services.html_safety import sanitize_trusted_html
+    from services.instruction_html_service import sanitize_workflow_instruction_html
+    from markupsafe import Markup
     from services.form_option_service import option_label, option_value
     from services.admin_submission_service import format_business_datetime
 
     app.jinja_env.filters["trusted_html"] = sanitize_trusted_html
+    app.jinja_env.filters["instruction_html"] = lambda value: Markup(sanitize_workflow_instruction_html(value))
     app.jinja_env.filters["option_label"] = option_label
     app.jinja_env.filters["option_value"] = option_value
     app.jinja_env.filters["business_datetime"] = lambda value, fmt="%Y-%m-%d %H:%M": format_business_datetime(

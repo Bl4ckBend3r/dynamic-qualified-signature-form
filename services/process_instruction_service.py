@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from services.instruction_html_service import sanitize_instruction_html
+from services.instruction_html_service import sanitize_workflow_instruction_html as sanitize_instruction_html
 from services.process_service import ProcessStatus
 from services.status_catalog import LEGACY_STATUS_MAP, ProcessStatusCode, get_status_label
 
@@ -143,7 +143,7 @@ def build_process_instruction_view(
     """Build the public instruction exclusively from the form configuration."""
     raw_status = _plain_text(process_status, limit=128)
     config = normalize_instruction_config(instruction_config, legacy_description=legacy_description)
-    if document_substate and workflow:
+    if workflow and (document_substate or workflow.get("flow_mode") == "explicit"):
         steps = [s for s in workflow.get("steps", []) if s.get("active", True)]
         step = next((s for s in steps if s.get("id") == step_id), None)
         if step:

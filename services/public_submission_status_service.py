@@ -14,8 +14,9 @@ from services.process_service import (
     is_declaration_signature_valid,
     is_yes,
 )
-from services.status_catalog import get_status_label
+from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
 from services.workflow_config_service import DEFAULT_STEP_STATUS
+from services.workflow_service import workflow_document_action, workflow_step_document_id
 
 
 REJECTED_STATUSES = {
@@ -104,6 +105,15 @@ def build_public_submission_status(
     blocked = state.agreement_blocked or status == ProcessStatus.AGREEMENT_BLOCKED
     accepted = decision == OfficerDecision.ACCEPTED or status in ACCEPTED_STATUSES
     declaration_required = is_declaration_required(row)
+    configured_step = workflow_context.get("config") or {}
+    explicit_flow = (form_config or {}).get("workflow", {}).get("flow_mode") == "explicit"
+    documents = (form_config or {}).get("documents") or []
+    declaration_enabled = any(
+        document.get("id") == "declaration" and document.get("enabled", True)
+        for document in documents if isinstance(document, Mapping)
+    )
+    if explicit_flow and workflow_document_action(configured_step, "declaration") and declaration_enabled:
+        declaration_required = True
     agreement_required = is_agreement_required(row)
     explicit_status = str(row.get("process_status") or "").strip()
     declaration_completed = is_declaration_signature_valid(row) or (
@@ -159,8 +169,10 @@ def build_public_submission_status(
         declaration_generated=is_yes(row.get("declaration_generated")),
         agreement_generated=is_yes(row.get("agreement_generated")),
     )
-    configured_step = workflow_context.get("config") or {}
-    if configured_step.get("user_label") and (configured_step.get("type") == "manual_decision" or (form_config or {}).get("workflow", {}).get("flow_mode") == "explicit"):
+    if explicit_flow and configured_step:
+        step_status = str(configured_step.get("status") or "")
+        headline = str(configured_step.get("user_label") or WORKFLOW_STATUS_LABELS.get(step_status) or headline).strip()
+    elif configured_step.get("user_label") and configured_step.get("type") == "manual_decision":
         headline = str(configured_step["user_label"]).strip()
     description = str(configured_step.get("description") or description).strip()
     next_action = str(configured_step.get("next_action") or next_action).strip()
@@ -194,15 +206,14 @@ def build_public_submission_status(
         and not correction
     )
 
-    explicit_flow = (form_config or {}).get("workflow", {}).get("flow_mode") == "explicit"
     can_generate_agreement = bool(state.can_generate_agreement and accepted and not rejected and not correction and not blocked)
     if explicit_flow:
-        document_id = configured_step.get("document_id")
-        action = configured_step.get("action")
+        document_id = workflow_step_document_id(configured_step)
+        action = workflow_document_action(configured_step, document_id)
         active_action = configured_step.get("stage_type") in {"document", "user_action", "system"} and not configured_step.get("final")
         declaration_stage = active_action and document_id == "declaration"
         agreement_stage = active_action and document_id in {"agreement", "training_agreement"}
-        can_fill_declaration = bool(declaration_stage and action == "generate_document")
+        can_fill_declaration = bool(declaration_stage and declaration_enabled and action == "generate_document")
         can_download_declaration = bool(declaration_stage and row.get("declaration_filename"))
         can_upload_signed_declaration = bool(declaration_stage and action == "await_signature" and can_download_declaration and not is_declaration_signature_valid(row))
         can_generate_agreement = bool(agreement_stage and action == "generate_document")
@@ -223,6 +234,10 @@ def build_public_submission_status(
         can_upload_signed_declaration = can_upload_signed_agreement = False
         blocked = False
         blocking_reason = ""
+    from services.instruction_html_service import sanitize_workflow_instruction_html
+
+    description = sanitize_workflow_instruction_html(description)
+    next_action = sanitize_workflow_instruction_html(next_action)
     status_reason = (
         blocking_reason
         or (str(row.get("correction_message") or "").strip() if correction else "")
@@ -320,9 +335,9 @@ def _workflow_context(
     form_config: Mapping[str, Any] | None,
     current_step: str | None,
 ) -> dict[str, Any]:
-    persisted_step = str(row.get("workflow_stage") or row.get("workflow_step") or "").strip()
-    step_id = str(current_step or persisted_step).strip() if persisted_step else ""
     workflow = (form_config or {}).get("workflow") or {}
+    persisted_step = str(row.get("workflow_step") or row.get("workflow_stage") or "").strip()
+    step_id = str(current_step or persisted_step).strip() if persisted_step or workflow.get("flow_mode") == "explicit" else ""
     configured_step = next(
         (
             step

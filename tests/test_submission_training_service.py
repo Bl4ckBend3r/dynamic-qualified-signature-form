@@ -49,7 +49,7 @@ def make_submission(db):
     return submission
 
 
-def test_selection_is_independent_of_acceptance_and_declaration(db):
+def test_selection_requires_signed_declaration_when_configured(db):
     form = Form(slug="sample", name="Sample", training_selection_open=True, definition_json={"documents": [{"id": "declaration", "fields": [{**FIELD, "type": "training_selection"}]}]})
     submission = make_submission(db)
 
@@ -57,7 +57,7 @@ def test_selection_is_independent_of_acceptance_and_declaration(db):
     submission.declaration_signature_valid = "Nie"
     submission.officer_decision = ""
     submission.declaration_signed = ""
-    assert SubmissionTrainingService.can_select(form, submission) is True
+    assert SubmissionTrainingService.can_select(form, submission) is False
     submission.declaration_signature_valid = "Tak"
     form.training_selection_open = False
     assert SubmissionTrainingService.can_select(form, submission) is False
@@ -212,6 +212,7 @@ def test_downloaded_agreement_moves_only_its_training_to_upload_stage_without_lo
     assert rows["python"].is_locked is False
     assert rows["excel"].status == "agreement_generated"
     assert submission.process_status == "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE"
+    assert submission.workflow_step != submission.process_status
     assert db.query(SubmissionWorkflowEvent).filter_by(source="agreement_downloaded_by_beneficiary").count() == 1
 
 

@@ -7,7 +7,7 @@ from services.beneficiary_agreement_service import can_edit_application_decision
 from services.documents.document_workflow_service import document_step_status
 from services.process_service import ProcessStatus
 from services.status_catalog import get_status_label, is_final_status, is_rejected_status
-from services.workflow_service import workflow_status_label
+from services.workflow_service import current_workflow_step, workflow_status_label
 
 
 APPLICATION_TARGETS = {
@@ -100,7 +100,7 @@ def build_admin_workflow_view(
         },
     ]
     workflow = (form_config or {}).get("workflow") or {}
-    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", ""))
+    current = current_workflow_step(submission, form_config)
     step = next((s for s in workflow.get("steps", []) if s.get("id") == current), {})
     if workflow.get("steps"):
         sections = _configured_sections(submission, workflow, list(events), decisions)
@@ -119,7 +119,10 @@ def build_admin_workflow_view(
         "explicit_flow": workflow.get("flow_mode") == "explicit",
         "officer_action": step if workflow.get("flow_mode") == "explicit" and step.get("stage_type") == "officer_action" else None,
         "sections": sections,
-        "can_edit_application_decision": _workflow_allows_decision(submission, form_config or {}) if ((form_config or {}).get("workflow") or {}).get("flow_mode") == "explicit" else can_edit_application_decision(submission) or _workflow_allows_decision(submission, form_config or {}),
+        "can_edit_application_decision": (
+            _workflow_allows_decision(submission, form_config or {})
+            if workflow.get("steps") else can_edit_application_decision(submission)
+        ),
         "can_review_agreement": can_review_agreement,
         "application_decision": application_decision,
         "agreement_decision": agreement_decision,
@@ -128,7 +131,7 @@ def build_admin_workflow_view(
 
 def _configured_sections(submission, workflow, events, decisions):
     """Present the saved graph and observed path; order alone never proves completion."""
-    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or "")
+    current = current_workflow_step(submission, {"workflow": workflow})
     entered, departed = {}, {}
     for event in events:
         if event.get("new_step"):
@@ -183,7 +186,7 @@ def _configured_sections(submission, workflow, events, decisions):
 
 def _workflow_allows_decision(submission, form_config: Mapping[str, Any]) -> bool:
     workflow = form_config.get("workflow") or {}
-    current = str(getattr(submission, "workflow_stage", "") or getattr(submission, "workflow_step", "") or workflow.get("initial_step") or "")
+    current = current_workflow_step(submission, form_config)
     step = next((item for item in workflow.get("steps") or [] if str(item.get("id") or "") == current), None)
     if workflow.get("flow_mode") == "explicit":
         return bool(step and step.get("stage_type") == "decision" and step.get("decision_scope") == "submission")

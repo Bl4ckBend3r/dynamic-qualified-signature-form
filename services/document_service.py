@@ -31,6 +31,7 @@ from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.training_service import format_price_pln, parse_decimal_price, parse_training_snapshots
 from services.upload_validation import UploadValidationError, validate_pdf_upload
+from services.workflow_service import workflow_document_action, workflow_step_document_id
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ_-]+")
@@ -848,7 +849,7 @@ class DocumentService:
             if step.get("document_id") == document_id and action == "generate_document" and self._document_operation_token.get() and document_states(row).get("document_operation") == self._document_operation_token.get():
                 return
             raise ValueError("Użyj czynności złożonego etapu dokumentowego.")
-        if step.get("document_id") != document_id or step.get("action") != action or step.get("final"):
+        if workflow_document_action(step, document_id) != action:
             raise ValueError("Ta czynność dokumentowa nie jest dostępna na bieżącym etapie workflow.")
 
     def _update_submission(self, submission: dict, updates: dict) -> bool:
@@ -865,14 +866,15 @@ class DocumentService:
             saved = self.submission_repository.update(submission_id, updates)
             if saved and explicit and submission_id not in workflow._driving and not self.composite_step(row, definition):
                 step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
-                document_id = step.get("document_id")
+                document_id = workflow_step_document_id(step)
+                action = workflow_document_action(step, document_id)
                 prefix = "agreement" if document_id in {"agreement", "training_agreement"} else "declaration" if document_id == "declaration" else ""
                 generated = prefix and (updates.get(f"{prefix}_filename") or updates.get("training_agreements"))
                 signed = prefix and str(updates.get(f"{prefix}_signature_valid") or "").lower() in {"tak", "true"}
                 if document_id == "training_agreement" and updates.get("training_agreements"):
                     agreements = normalize_selected_items(updates["training_agreements"])
                     signed = bool(agreements) and all(item.get("signature_valid") is True for item in agreements)
-                if (step.get("action") == "generate_document" and generated) or (step.get("action") == "await_signature" and signed):
+                if (action == "generate_document" and generated) or (action == "await_signature" and signed):
                     workflow.advance_after_action(row, definition)
             return saved
         return False

@@ -27,21 +27,31 @@ def picker_env(composite_env):
     env.client = env.app.test_client()
     env.url = f"/submissions/{env.public_id}/trainings?token={env.row()['access_token']}"
     env.status_url = f"/do-podpisania?submission_id={env.public_id}&token={env.row()['access_token']}"
-    page = env.client.get(env.url)
+    page = env.client.get(env.status_url)
     assert page.status_code == 200
     env.csrf = html.fromstring(page.text).xpath('//input[@name="csrf_token"]/@value')[0]
     env.post = lambda ids, **extra: env.client.post(env.url, data={"csrf_token": env.csrf, "wybor_szkolen": ids, **extra})
+    env.unlock = lambda: env.document.upload(env.row(), env.definition, "paper", env.file())["completed"]
     return env
 
 
 @pytest.mark.parametrize("signed", [False, True])
-def test_status_picker_available_before_and_after_signed_declaration(picker_env, signed):
+def test_status_picker_unlocks_after_signed_declaration(picker_env, signed):
     env = picker_env
     if signed:
-        assert env.document.upload(env.row(), env.definition, "paper", env.file())["completed"]
+        assert env.unlock()
     page = env.client.get(env.status_url)
     assert page.status_code == 200
     doc = html.fromstring(page.text)
+    if not signed:
+        assert not doc.xpath('//form[@data-training-picker]')
+        assert not doc.xpath('//a[contains(@href, "/trainings")]')
+        assert env.client.get(env.url).status_code == 403
+        before = env.row()["selected_trainings"]
+        assert env.post(["course-a", "course-b"]).status_code == 403
+        assert env.row()["selected_trainings"] == before
+        return
+    assert env.client.get(env.url).status_code == 200
     assert doc.xpath('//form[@data-training-picker]')
     assert doc.xpath('//input[@value="course-a" and @checked and not(@disabled)]')
     assert doc.xpath('//input[@value="course-b" and not(@disabled)]')
@@ -64,6 +74,7 @@ def test_status_picker_available_before_and_after_signed_declaration(picker_env,
 
 def test_closed_after_render_rejects_post_and_keeps_readonly_selection(picker_env):
     env = picker_env
+    assert env.unlock()
     before = env.row()["selected_trainings"]
     with env.repo.session_factory() as db:
         db.get(Form, env.form_id).training_selection_open = False
@@ -80,6 +91,7 @@ def test_closed_after_render_rejects_post_and_keeps_readonly_selection(picker_en
 @pytest.mark.parametrize("ids,message", [(["outside"], "nie jest już dostępne"), ([], "co najmniej jedno")])
 def test_invalid_selection_is_atomic(picker_env, ids, message):
     env = picker_env
+    assert env.unlock()
     before = env.row()["selected_trainings"]
     response = env.post(ids)
     assert response.status_code == 400 and message in response.text
@@ -88,6 +100,7 @@ def test_invalid_selection_is_atomic(picker_env, ids, message):
 
 def test_current_catalog_and_versioned_limit_checked_on_post(picker_env):
     env = picker_env
+    assert env.unlock()
     with env.repo.session_factory() as db:
         form = db.get(Form, env.form_id)
         definition = deepcopy(form.definition_json)
@@ -102,6 +115,7 @@ def test_current_catalog_and_versioned_limit_checked_on_post(picker_env):
 
 def test_forged_post_with_two_trainings_from_one_selection_group_is_rejected(picker_env):
     env = picker_env
+    assert env.unlock()
     with env.repo.session_factory() as db:
         form = db.get(Form, env.form_id)
         definition = deepcopy(form.definition_json)
@@ -126,6 +140,7 @@ def test_forged_post_with_two_trainings_from_one_selection_group_is_rejected(pic
 @pytest.mark.parametrize("status,locked", [("locked", True), ("agreement_signed_by_office", False)])
 def test_locked_training_and_signed_history_survive_other_changes(picker_env, status, locked):
     env = picker_env
+    assert env.unlock()
     with env.repo.session_factory() as db:
         row = db.query(SubmissionTraining).filter_by(training_id="course-a").one()
         row.status, row.is_locked = status, locked
@@ -147,6 +162,7 @@ def test_locked_training_and_signed_history_survive_other_changes(picker_env, st
 
 def test_access_and_csrf(picker_env):
     env = picker_env
+    assert env.unlock()
     url = env.url.split("?")[0]
     assert env.client.get(url).status_code == 404
     assert env.client.post(url, data={"csrf_token": env.csrf}).status_code == 404
@@ -213,8 +229,73 @@ def test_added_training_gets_agreement_without_regenerating_signed_training(pick
         assert current_files[filename]["checksum_sha256"] == old["checksum_sha256"]
 
 
+def test_composite_agreement_generates_only_new_training_and_keeps_both_downloads(picker_env):
+    env = picker_env
+    assert env.unlock()
+    env.definition["documents"].append({
+        "id": "agreement", "label": "Umowa", "kind": "generated_pdf",
+        "template_html": "<p>{{ training.name }}</p>", "repeat_over": "selected_trainings",
+        "repeat_item_alias": "training", "filename_pattern": "agreement-{training_id}.pdf",
+    })
+    env.definition["workflow"]["steps"].append({
+        "id": "agreement", "admin_label": "Umowy", "user_label": "Umowy",
+        "status": "AGREEMENT_READY", "stage_type": "document", "type": "document",
+        "document_lifecycle": "composite", "document_id": "agreement", "next": "done",
+    })
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+    env.repo.update(env.public_id, {"workflow_step": "agreement", "workflow_stage": "agreement",
+                                     "process_status": "AGREEMENT_READY"})
+
+    # Given A is selected and no agreement exists, the participant can generate A.
+    initial_view = env.document.view(env.row(), env.definition)
+    assert initial_view["can_generate"] is True
+    assert {file["instance"] for file in initial_view["files"] if file["pending_generation"]} == {"course-a"}
+    token = env.row()["access_token"]
+    retry_url = f"/document-steps/{env.row()['form_slug']}/{env.public_id}/agreement/retry"
+    assert env.client.post(retry_url, data={"csrf_token": env.csrf, "access_token": token}).status_code == 302
+    first_file = env.document.view(env.row(), env.definition)["files"][0]["filename"]
+    first_count = len(env.generated)
+    assert first_file and first_count > 0
+
+    # When B is added, A remains downloadable and B waits for generation.
+    assert env.post(["course-a", "course-b"]).status_code == 302
+    pending_view = env.document.view(env.row(), env.definition)
+    assert pending_view["can_generate"] is True
+    assert {file["instance"] for file in pending_view["files"] if file["pending_generation"]} == {"course-b"}
+    assert next(file for file in pending_view["files"] if file["instance"] == "course-a")["filename"] == first_file
+    pending_page = html.fromstring(env.client.get(env.status_url).text)
+    assert pending_page.xpath('//a[contains(@href, "/agreement/download/")]')
+    generate_form = pending_page.xpath('//form[contains(@action, "/agreement/retry")]')
+    assert generate_form and "Wygeneruj umowę" in generate_form[0].text_content()
+
+    # When the participant generates again, only B is rendered and both PDFs stay available.
+    assert env.client.post(retry_url, data={"csrf_token": env.csrf, "access_token": token}).status_code == 302
+    assert len(env.generated) == first_count + 1
+    assert env.generated[-1]["context"]["training"]["id"] == "course-b"
+    files = env.document.view(env.row(), env.definition)["files"]
+    filenames = {file["instance"]: file["filename"] for file in files}
+    assert filenames["course-a"] == first_file
+    assert filenames["course-b"] and filenames["course-b"] != first_file
+    assert env.document.view(env.row(), env.definition)["can_generate"] is False
+    agreements = {item["id"]: item for item in json.loads(env.row()["training_agreements"])}
+    assert set(agreements) == {"course-a", "course-b"}
+    assert all(agreements[key]["filename"] == filename for key, filename in filenames.items())
+    assert all(agreements[key]["training_id"] == key and agreements[key]["number"]
+               and agreements[key]["generated_at"] for key in filenames)
+    stored = [file for file in env.services.submission_document_service.list_documents(env.public_id)
+              if file["document_id"] == "agreement" and not file["signed"]]
+    assert {file["training_key"] for file in stored} == {"course-a", "course-b"}
+    final_page = html.fromstring(env.client.get(env.status_url).text)
+    links = final_page.xpath('//a[contains(@href, "/agreement/download/")]/@href')
+    assert len(links) == 2
+    assert all(env.client.get(link).status_code == 200 for link in links)
+
+
 def test_removed_current_catalog_id_and_disabled_configuration_rejected(picker_env):
     env = picker_env
+    assert env.unlock()
     with env.repo.session_factory() as db:
         form = db.get(Form, env.form_id)
         definition = deepcopy(form.definition_json)
@@ -233,8 +314,9 @@ def test_removed_current_catalog_id_and_disabled_configuration_rejected(picker_e
     assert doc.xpath('//input[@type="checkbox" and @value="course-a" and @checked and @disabled]')
 
 
-def test_unsigned_unselection_keeps_row_history(picker_env):
+def test_unselection_after_declaration_signature_keeps_row_history(picker_env):
     env = picker_env
+    assert env.unlock()
     assert env.post(["course-b"]).status_code == 302
     assert [item["id"] for item in json.loads(env.row()["selected_trainings"])] == ["course-b"]
     with env.repo.session_factory() as db:
@@ -250,6 +332,7 @@ def test_declaration_dependencies_distinguish_training_from_other_fields(picker_
     with env.repo.session_factory() as db:
         db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
         db.commit()
+    assert env.unlock()
     before = deepcopy(env.state())
     assert env.post(["course-a", "course-b"]).status_code == 302
     assert (env.state()["substate"] == "collect_data") is dependent
@@ -269,7 +352,8 @@ def test_document_fields_cannot_bypass_closed_recruitment(picker_env):
         db.commit()
     before = env.row()["selected_trainings"]
     page = html.fromstring(env.client.get(env.status_url).text)
-    assert page.xpath('//input[@type="checkbox" and @value="course-a" and @checked and @disabled]')
+    assert not page.xpath('//form[@data-training-picker]')
+    assert env.client.get(env.url).status_code == 403
     url = f"/document-steps/{env.row()['form_slug']}/{env.public_id}/paper/fields?token={env.row()['access_token']}"
     response = env.client.post(url, data={"csrf_token": env.csrf, "deklaracja_18_lat": "Tak",
         "wybor_szkolen": ["course-a", "course-b"], "declaration_note": "Dane", "document_action": "save"})

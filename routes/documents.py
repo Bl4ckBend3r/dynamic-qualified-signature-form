@@ -22,6 +22,7 @@ from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
 from services.process_service import build_process_state
+from services.public_submission_status_service import build_public_submission_status
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
 from services.workflow_service import workflow_status_label
@@ -71,6 +72,8 @@ def get_form_config(slug: str, submission_id: str | None = None) -> dict | None:
                     version = services.form_version_service.resolve_for_submission(db, submission)
                     if version:
                         return services.form_config_service.normalize_form_config(version.definition_json or {})
+                    if submission.form_version_id:
+                        return None
             return services.form_config_service.normalize_form_config(form.definition_json or {})
     return services.form_config_service.get_form_config(services.storage, slug)
 
@@ -122,8 +125,10 @@ def build_declaration_form_definition(declaration_config: dict) -> dict:
     return get_services().declaration_flow_service.build_declaration_form_definition(declaration_config)
 
 
-def build_additional_fields_definition(form_config: dict) -> dict:
-    return get_services().declaration_flow_service.build_additional_fields_definition(form_config)
+def build_additional_fields_definition(form_config: dict, row: dict | None = None) -> dict:
+    flow = get_services().declaration_flow_service
+    step = flow._row_availability_step(form_config, row) if row is not None else None
+    return flow.build_additional_fields_definition(form_config, step)
 
 
 def additional_fields_completed(row: dict) -> bool:
@@ -395,6 +400,8 @@ def training_selection(submission_id: str):
         field = services.submission_training_service.selection_field(form, definition or {})
         if field is None:
             abort(404)
+        if not services.submission_training_service.is_training_selection_unlocked(form, submission):
+            abort(403)
 
         availability = TrainingAvailabilityService(
             services.submission_repository
@@ -455,6 +462,8 @@ def _public_training_picker(submission_id, credential):
         field = services.submission_training_service.selection_field(form, version.definition_json if version else form.definition_json)
         if field is None:
             return None
+        if not services.submission_training_service.is_training_selection_unlocked(form, submission):
+            return None
         availability = TrainingAvailabilityService(services.submission_repository).availability_for_field(
             form_slug=form.slug, field=field, current_submission_id=submission_id)
         view = services.submission_training_service.public_view(db, form, submission, field, availability)
@@ -490,9 +499,15 @@ def upload_signed_declaration(slug: str, submission_id: str):
     access = require_participant_submission_access(submission_id, slug=slug)
     require_public_csrf()
     submission = access.submission
-    if not submission["can_sign_documents"]:
+    form_config = get_form_config(slug, submission_id) or {}
+    available = get_services().document_service.available_document_files(submission)
+    declaration_filename = str(submission["row"].get("declaration_filename") or "")
+    if (
+        not build_public_submission_status(submission["row"], form_config=form_config)["can_upload_signed_declaration"]
+        or not any(file.get("filename") == declaration_filename for file in available)
+    ):
         flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+        return redirect(documents_to_sign_url(submission_id, access.credential))
 
     try:
         result = get_services().document_signing_service.upload_signed_document(
@@ -529,16 +544,15 @@ def declaration_form(slug: str, submission_id: str):
     services = get_services()
     access = require_participant_submission_access(submission_id, slug=slug)
     submission = access.submission
-    if not submission["can_sign_documents"]:
-        flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
-        return redirect(documents_to_sign_url(submission_id))
-
     form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
+    if not build_public_submission_status(submission["row"], form_config=form_config)["can_fill_declaration"]:
+        flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
+        return redirect(documents_to_sign_url(submission_id, access.credential))
     if requires_additional_fields(form_config, submission["row"]):
         flash("Przed pobraniem deklaracji uzupełnij dodatkowe informacje wymagane po akceptacji wniosku.", "error")
-        return redirect(documents_to_sign_url(submission_id))
+        return redirect(documents_to_sign_url(submission_id, access.credential))
 
     declaration_config = get_document(form_config, DocumentType.DECLARATION)
     if not declaration_config.get("enabled"):
@@ -604,15 +618,15 @@ def save_additional_fields(slug: str, submission_id: str):
     access = require_participant_submission_access(submission_id, slug=slug)
     require_public_csrf()
     submission = access.submission
-    if not submission["can_sign_documents"]:
-        flash("Wniosek nie został jeszcze zaakceptowany przez urzędnika.", "error")
-        return redirect(documents_to_sign_url(submission_id))
     form_config = get_form_config(slug, submission_id)
     if not form_config:
         abort(404)
-    if not services.declaration_flow_service.has_additional_fields(form_config):
+    if not submission["can_sign_documents"] and (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
+        flash("Wniosek nie został jeszcze zaakceptowany przez urzędnika.", "error")
+        return redirect(documents_to_sign_url(submission_id, access.credential))
+    if not requires_additional_fields(form_config, submission["row"]):
         flash("Ten formularz nie wymaga dodatkowych informacji.", "info")
-        return redirect(documents_to_sign_url(submission_id))
+        return redirect(documents_to_sign_url(submission_id, access.credential))
 
     flow_result = services.declaration_flow_service.save_additional_fields(
         submission_id=submission_id,
@@ -621,6 +635,7 @@ def save_additional_fields(slug: str, submission_id: str):
         form_data=request.form,
         submission_repository=services.submission_repository,
         compliance_service=services.compliance_service,
+        workflow_service=services.workflow_service,
     )
     if not flow_result.success:
         flash(flow_result.message or "Dodatkowe informacje zawierają błędy. Popraw wskazane pola.", "error")
@@ -639,7 +654,7 @@ def save_additional_fields(slug: str, submission_id: str):
         ), 400
 
     flash(flow_result.message or "Dodatkowe informacje zostały zapisane. Możesz pobrać deklarację.", "success")
-    return redirect(documents_to_sign_url(submission_id))
+    return redirect(documents_to_sign_url(submission_id, access.credential))
 
 
 @bp.post("/agreements/<slug>/<submission_id>/generate")
@@ -970,7 +985,7 @@ def retry_document_step(slug, submission_id, step_id):
     require_public_csrf()
     definition = get_form_config(slug, submission_id) or {}
     row = access.submission["row"]
-    if (row.get("workflow_stage") or row.get("workflow_step")) != step_id:
+    if (row.get("workflow_step") or row.get("workflow_stage")) != step_id:
         abort(409)
     try:
         get_services().workflow_service.run_automatic_steps(row, definition)
@@ -1051,7 +1066,7 @@ def build_documents_to_sign_result(
             submission_id=submission_id,
             submission=submission,
             form_config=form_config,
-            additional_definition=build_additional_fields_definition(form_config),
+            additional_definition=build_additional_fields_definition(form_config, row),
             additional_action_url=url_for(
                 "documents.save_additional_fields",
                 slug=submission["form_slug"],
@@ -1143,9 +1158,8 @@ def build_documents_to_sign_result(
             submission_id=submission_id,
             token=access_token,
         )
-        if access_token
-        and training_field
-        and training_field.get("enabled", True)
+        if training_picker and training_picker.get("selection_open")
+        and access_token and training_field and training_field.get("enabled", True)
         else ""
     )
     return result

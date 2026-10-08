@@ -18,6 +18,7 @@ from models import (
     FormField,
     FormRegulationVersion,
     FormSubmission,
+    FormVersion, 
     MailFooter,
     MailTemplate,
     SubmissionDecision,
@@ -57,6 +58,7 @@ from services.admin_submission_service import (
     build_filter_fields,
     filter_submissions,
     paginate_submissions,
+    format_submission_value,
     sort_submissions,
     submission_value,
 )
@@ -248,6 +250,8 @@ def submissions_all():
             priorities=PRIORITIES,
             priority_labels=PRIORITY_LABELS,
             permission_slugs=permission_slugs,
+            workflow_history=workflow_history,
+            decision_history=decision_history,
         )
 @bp.get("/forms/<int:form_id>/submissions")
 @login_required
@@ -2135,7 +2139,12 @@ def delete_submissions_transactionally(db, submissions: list[FormSubmission]) ->
 def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:
     historical_definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
     workflow_config = historical_definition.get("workflow") or {}
-    current_workflow_step = str(submission.workflow_stage or submission.workflow_step or workflow_config.get("initial_step") or "submission")
+    current_workflow_step = str(
+            submission.workflow_step
+            or submission.workflow_stage
+            or workflow_config.get("initial_step")
+            or "submission"
+        )
     current_step_config = next((item for item in workflow_config.get("steps") or [] if str(item.get("id") or "") == current_workflow_step), {})
     workflow_allows_decision = bool(current_step_config and (current_step_config.get("requires_officer_action") or current_step_config.get("type") == "manual_decision" or current_step_config.get("decisions")))
     if workflow_config.get("flow_mode") == "explicit":
@@ -2183,39 +2192,78 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     submission.officer_decision = decision
     submission.officer_decision_reason = reason
-    if category == "positive":
-        target_status = (
-            ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
-            if form_has_additional_fields(form)
-            else ProcessStatus.OFFICER_ACCEPTED.value
+
+    workflow_service = current_app.extensions["services"].workflow_service
+    previous_step = current_workflow_step
+
+    target_step = (
+        str(decision_definition.get("target_step") or "")
+        or workflow_service.resolve_next_step(
+            historical_definition,
+            previous_step,
+            decision,
         )
+    )
+
+    if category == "correction" and not target_step:
+        target_step = "waiting_for_correction"
+    elif category == "negative" and not target_step:
+        target_step = "end_rejected"
+
+    configured_target = next(
+        (
+            item
+            for item in workflow_config.get("steps") or []
+            if str(item.get("id") or "") == str(target_step)
+        ),
+        None,
+    )
+
+    if workflow_config.get("flow_mode") == "explicit":
+        if not configured_target or configured_target.get("active") is False:
+            db.rollback()
+            abort(400)
+
+    if category == "positive":
+        if not target_step:
+            db.rollback()
+            abort(400)
+
+        target_status = workflow_service.status_for_step(
+            historical_definition,
+            target_step,
+        )
+
     elif category == "negative":
-        target_status = ProcessStatus.OFFICER_REJECTED.value
+        target_status = (
+            workflow_service.status_for_step(
+                historical_definition,
+                target_step,
+            )
+            if target_step
+            else ProcessStatus.OFFICER_REJECTED.value
+        )
+
     elif category == "correction":
-        target_status = WAITING_FOR_CORRECTION
+        target_status = (
+            workflow_service.status_for_step(
+                historical_definition,
+                target_step,
+            )
+            if target_step
+            else WAITING_FOR_CORRECTION
+        )
+
         submission.correction_required = "Tak"
         submission.correction_message = reason
         submission.correction_requested_at = datetime.now(timezone.utc)
+
     else:
         target_status = submission.process_status
 
     if category != "correction":
         submission.correction_required = "Nie"
-    workflow_service = current_app.extensions["services"].workflow_service
-    previous_step = current_workflow_step
-    target_step = str(decision_definition.get("target_step") or "") or workflow_service.resolve_next_step(
-        historical_definition, previous_step, decision
-    )
-    if category == "correction" and not target_step:
-        target_step = "waiting_for_correction"
-    elif category == "negative" and not target_step:
-        target_step = "end_rejected"
-    configured_target = next((item for item in workflow_config.get("steps") or [] if item.get("id") == target_step), None)
-    if workflow_config.get("flow_mode") == "explicit" and (not configured_target or configured_target.get("active") is False):
-        db.rollback()
-        abort(400)
-    if configured_target and configured_target.get("status"):
-        target_status = str(configured_target["status"])
+
     workflow_service.transition_submission(
         submission,
         target_status,

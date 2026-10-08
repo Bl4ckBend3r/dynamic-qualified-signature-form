@@ -31,7 +31,7 @@ def normalize_app_base_path(value: str | None) -> str:
 
 
 class Config:
-    APP_NAME = "Formularze Lubuskie"
+    APP_NAME = "Wnioski Lubuskie"
     SERVICE_NAME = os.getenv("SERVICE_NAME", "dynamic-qualified-signature-form").strip() or "dynamic-qualified-signature-form"
     LOG_FORMAT = os.getenv("LOG_FORMAT", "text").strip().lower() or "text"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"

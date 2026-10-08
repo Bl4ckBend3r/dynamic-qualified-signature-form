@@ -77,7 +77,19 @@ def build_status_filter_options(
         {"value": code, "label": label}
         for code, label in sorted(labels.items(), key=lambda item: (item[1].casefold(), item[0]))
     ]
+    
+def format_field_display_value(options, value):
+    if isinstance(value, (list, tuple, set)):
+        return " | ".join(
+            option_label_for_value(options, item)
+            for item in value
+            if str(item).strip()
+        )
 
+    if options:
+        return option_label_for_value(options, value)
+
+    return format_admin_value(value)
 
 def paginate_submissions(
     submissions: list[FormSubmission],
@@ -108,9 +120,48 @@ def paginate_submissions(
 
 
 def submission_value(submission: FormSubmission, field_name: str) -> Any:
+    data = submission.data_json or {}
+
+    # Dla pól formularza data_json jest ważniejsze niż legacy kolumna modelu.
+    if field_name in data:
+        return data[field_name]
+
     if hasattr(submission, field_name):
         return getattr(submission, field_name)
-    return (submission.data_json or {}).get(field_name, "")
+
+    return ""
+
+def format_submission_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, (list, tuple, set)):
+        return " | ".join(
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        )
+
+    if isinstance(value, dict):
+        selected = []
+
+        for key, item_value in value.items():
+            if item_value in (True, "Tak", "TAK", "true", "1", 1):
+                selected.append(str(key))
+
+        if selected:
+            return " | ".join(selected)
+
+        return " | ".join(
+            str(item).strip()
+            for item in value.values()
+            if str(item).strip()
+        )
+
+    if isinstance(value, bool):
+        return "Tak" if value else "Nie"
+
+    return str(value)
 
 
 def build_filter_fields(fields: list[FormField], submissions: list[FormSubmission]) -> list[tuple[str, str]]:
@@ -283,7 +334,10 @@ def build_submission_detail_sections(
             elif field_name == "created_at":
                 display_value = format_business_datetime(value, "%d.%m.%Y %H:%M", timezone_name=timezone_name)
             else:
-                display_value = option_label_for_value(options_by_field.get(field_name), value) if field_name in options_by_field else format_admin_value(value)
+                display_value = format_field_display_value(
+                    options_by_field.get(field_name),
+                    value,
+                )
             items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": display_value})
             used_fields.add(field_name)
         if items:
@@ -293,7 +347,14 @@ def build_submission_detail_sections(
     for key, value in (submission.data_json or {}).items():
         if str(key).startswith("_") or key in used_fields or key in TECHNICAL_FIELDS or is_empty_admin_value(value):
             continue
-        display_value = "Dane ukryte — brak uprawnienia" if not include_sensitive and key in sensitive_fields else (option_label_for_value(options_by_field.get(key), value) if key in options_by_field else format_admin_value(value))
+        display_value = (
+            "Dane ukryte — brak uprawnienia"
+            if not include_sensitive and key in sensitive_fields
+            else format_field_display_value(
+                options_by_field.get(key),
+                value,
+            )
+        )
         dynamic_items.append({"label": labels.get(key, key), "value": display_value})
         used_fields.add(key)
     if dynamic_items:

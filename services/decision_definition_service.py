@@ -92,7 +92,12 @@ class DecisionDefinitionService:
     def available_for_submission(self, submission, *, scope: str | None = None) -> list[dict]:
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         workflow = definition.get("workflow") or {}
-        current_step = str(submission.workflow_stage or submission.workflow_step or workflow.get("initial_step") or "submission")
+        current_step = str(
+            submission.workflow_step
+            or submission.workflow_stage
+            or workflow.get("initial_step")
+            or "submission"
+        )
         if workflow.get("flow_mode") == "explicit":
             step = next((s for s in workflow.get("steps", []) if s.get("id") == current_step), {})
             if step.get("stage_type") != "decision":
@@ -150,11 +155,11 @@ class DecisionDefinitionService:
                 item.update(self._item_presentation(field, item))
             decisions = self.available_for_submission(submission, scope="item")
             workflow = definition.get("workflow") or {}
-            step = next((s for s in workflow.get("steps", []) if s.get("id") == str(submission.workflow_stage or submission.workflow_step or "")), {})
+            step = next((s for s in workflow.get("steps", []) if s.get("id") == str(submission.workflow_step or submission.workflow_stage or "")), {})
             if workflow.get("flow_mode") == "explicit" and step.get("decision_group") != key:
                 decisions = []
             decision_steps = (field.get("decision_completion") or {}).get("step_ids") or []
-            current = str(submission.workflow_stage or submission.workflow_step or "")
+            current = str(submission.workflow_step or submission.workflow_stage or "")
             if workflow.get("flow_mode") != "explicit" and decision_steps and current not in decision_steps:
                 decisions = []
             result.append({"key": key, "label": str(field.get("label") or key), "contact_field": contact_key, "items": records, "config": field, "applicant_record_id": applicant_id, "decisions": decisions})
@@ -191,7 +196,7 @@ class DecisionDefinitionService:
         normalized_comment = str(comment or "").strip()
         if decision.get("reason_required", decision.get("require_reason")) and not normalized_comment:
             raise DecisionDefinitionError("Uzasadnienie tej decyzji jest wymagane.")
-        workflow_step = str(submission.workflow_stage or submission.workflow_step or "")
+        workflow_step = str(submission.workflow_step or submission.workflow_stage or "")
         latest = db.execute(
             select(RepeatableGroupItemDecision)
             .where(
@@ -274,12 +279,12 @@ class DecisionDefinitionService:
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         workflow = definition.get("workflow") or {}
         if workflow.get("flow_mode") == "explicit":
-            current = str(submission.workflow_stage or submission.workflow_step or "")
+            current = str(submission.workflow_step or submission.workflow_stage or "")
             step = next((s for s in workflow.get("steps", []) if s.get("id") == current), {})
             completion = {"policy": step.get("completion_policy"), "step_ids": [current], "next": step.get("completion_next")} if step.get("decision_group") == group_key else {}
         if str(completion.get("policy") or "").upper() != "ALL":
             return {"configured": False, "complete": False, "aggregate": None, "target_step": ""}
-        current_step = str(submission.workflow_stage or submission.workflow_step or "")
+        current_step = str(submission.workflow_step or submission.workflow_stage or "")
         configured_steps = {str(value) for value in completion.get("step_ids") or []}
         if configured_steps and current_step not in configured_steps:
             return {"configured": True, "complete": False, "aggregate": None, "target_step": ""}

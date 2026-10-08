@@ -1,8 +1,8 @@
 from __future__ import annotations
-
+from sqlalchemy import select
 import logging
 from datetime import datetime, timezone
-
+from models import FormSubmission, FormVersion, SubmissionDecision
 from statuses import (
     COMPLETED,
     CORRECTED,
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 class WorkflowTransitionError(ValueError):
     pass
-
 
 def workflow_status_label(status_id: str, form_config: dict | None = None) -> str:
     status_id = str(status_id or "").strip()
@@ -92,7 +91,6 @@ class WorkflowService:
         """Resolve immutable configuration, never the current form editor."""
         if not getattr(self.submission_repository, "session_factory", None) or not submission.get("form_version_id"):
             return {}
-        from models import FormVersion
         with self.submission_repository.session_factory() as db:
             version = db.get(FormVersion, submission["form_version_id"])
             return dict(version.definition_json or {}) if version else {}
@@ -255,9 +253,6 @@ class WorkflowService:
                 metadata=metadata or {},
             )
         if updated and self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
-            from models import FormSubmission
-            from sqlalchemy import select
-
             with self.submission_repository.session_factory() as db:
                 model = db.execute(
                     select(FormSubmission).where(FormSubmission.submission_id == submission_id)
@@ -530,6 +525,19 @@ class WorkflowService:
                 return {**step, "explicit_stage": True} if form_config["workflow"].get("flow_mode") == "explicit" else step
         return None
 
+    def status_for_step(self, form_config: dict, step_id: str) -> str:
+        step = self._find_step(form_config, step_id)
+
+        if step:
+            configured_status = str(step.get("status") or "").strip()
+            if configured_status:
+                return configured_status
+
+        return self._status_for_step(step_id)
+    
+    
+    
+    
     def _status_for_step(self, step_id: str) -> str:
         if step_id == "completed":
             return COMPLETED

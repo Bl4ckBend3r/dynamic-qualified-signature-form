@@ -580,10 +580,13 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
                 _get(request_form, field_name, [])
             )
 
-        elif field_type == "checkbox":
-            data[field_name] = (
-                "Tak" if _is_checked(request_form, field_name) else "Nie"
-            )
+        if field_type == "checkbox":
+            options = field.get("options") or []
+
+            if len(options) > 1:
+                data[field_name] = _getlist(request_form, field_name)
+            else:
+                data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
 
         elif field_type == "training_selection":
             data[field_name] = ",".join(
@@ -779,14 +782,17 @@ def validate_submission(
         required = bool(field.get("required"))
         if field.get("required_if"):
             required = required or evaluate_visible_if(field.get("required_if"), submission_data)
-        if required:
+        if field.get("required"):
             if field_type == "checkbox":
-                if value != "Tak":
+                options = field.get("options") or []
+
+                if len(options) > 1:
+                    if not value:
+                        errors[field_name] = f"Pole „{label}” jest wymagane."
+                        continue
+                elif value != "Tak":
                     errors[field_name] = f"Pole „{label}” jest wymagane."
                     continue
-            elif value == "":
-                errors[field_name] = f"Pole „{label}” jest wymagane."
-                continue
 
         if value == "":
             continue

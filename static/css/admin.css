@@ -110,6 +110,12 @@
     width: min(1520px, calc(100% - 64px));
     margin: 0 auto;
     min-width: 0;
+
+}
+
+.admin-container > section.form-card {
+    position: fixed;
+    justify-items: center;
 }
 
 .admin-page-title {
@@ -1802,6 +1808,10 @@ body.admin-modal-open {
     .admin-form-tab-save {
         bottom: .4rem;
     }
+}
+
+button.btn-primary {
+    margin-top: 15px;
 }
 
 .admin-shell [hidden] {
@@ -3752,6 +3762,8 @@ a.admin-stat:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px
     border-radius: 12px;
     background: #f8fafc;
 }
+
+
 .document-source-panel[hidden],
 .document-variable-catalog[hidden] { display: none !important; }
 .document-source-panel__content { min-width: 0; }

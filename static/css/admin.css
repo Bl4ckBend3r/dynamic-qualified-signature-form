@@ -1527,7 +1527,7 @@ body.admin-modal-open {
     padding: 18px;
     border: 1px solid #d8dee9;
     border-radius: 10px;
-    background: #f8fafc;
+    background: var(--bg);
 }
 
 .admin-instruction-preview h3 {
@@ -2420,7 +2420,7 @@ a.admin-stat:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px
 .workflow-linked-instruction label { display: grid; gap: .4rem; }
 .workflow-linked-instruction__heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .workflow-linked-instruction__heading h3 { margin: 0; }
-.workflow-inactive-instructions { margin-top: 1.25rem; padding: 1rem; border: 1px solid #e6b85c; border-radius: 12px; background: #fffaf0; }
+.workflow-inactive-instructions { margin-top: 1.25rem; padding: 1rem; border: 1px solid #e6b85c; border-radius: 12px; background: var(--bg); }
 .workflow-inactive-instruction { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: .65rem; }
 .workflow-warning-badge, .training-badge { display: inline-flex; align-items: center; padding: .2rem .55rem; border-radius: 999px; font-size: .78rem; font-weight: 750; }
 .workflow-warning-badge { color: #7a4b00; background: #ffedbf; }

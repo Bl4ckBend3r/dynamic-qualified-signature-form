@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
+
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessStatusCode(StrEnum):
@@ -10,6 +14,8 @@ class ProcessStatusCode(StrEnum):
     WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
     REVIEW_ACCEPTED = "REVIEW_ACCEPTED"
     REVIEW_REJECTED = "REVIEW_REJECTED"
+    AUTO_REJECTED = "AUTO_REJECTED"
+    RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_CORRECTION = "WAITING_FOR_CORRECTION"
     CORRECTED = "CORRECTED"
     WAITING_FOR_DOCUMENT = "WAITING_FOR_DOCUMENT"
@@ -60,6 +66,19 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
         final=True,
         rejected=True,
     ),
+    ProcessStatusCode.AUTO_REJECTED: StatusDefinition(
+        ProcessStatusCode.AUTO_REJECTED,
+        "Odrzucony automatycznie",
+        rejected=True,
+        requires_officer_action=True,
+        allowed_transitions=(ProcessStatusCode.RETURNED_FOR_CORRECTION,),
+    ),
+    ProcessStatusCode.RETURNED_FOR_CORRECTION: StatusDefinition(
+        ProcessStatusCode.RETURNED_FOR_CORRECTION,
+        "Wysłany do poprawy",
+        requires_user_action=True,
+        allowed_transitions=(ProcessStatusCode.SUBMITTED, ProcessStatusCode.AUTO_REJECTED),
+    ),
     ProcessStatusCode.WAITING_FOR_CORRECTION: StatusDefinition(
         ProcessStatusCode.WAITING_FOR_CORRECTION,
         "Oczekuje na korektę",
@@ -97,6 +116,8 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
 
 LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
     "FORM_SUBMITTED": ProcessStatusCode.SUBMITTED,
+    "AUTO_REJECTED": ProcessStatusCode.AUTO_REJECTED,
+    "RETURNED_FOR_CORRECTION": ProcessStatusCode.RETURNED_FOR_CORRECTION,
     "WAITING_FOR_OFFICER_DECISION": ProcessStatusCode.WAITING_FOR_REVIEW,
     "OFFICER_ACCEPTED": ProcessStatusCode.REVIEW_ACCEPTED,
     "accepted_waiting_for_additional_fields": ProcessStatusCode.REVIEW_ACCEPTED,
@@ -108,10 +129,19 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
     "DECLARATION_WAITING_FOR_SIGNATURE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
     "DECLARATION_SIGNED": ProcessStatusCode.WAITING_FOR_DOCUMENT,
     "DECLARATION_SIGNATURE_INVALID": ProcessStatusCode.SIGNATURE_INVALID,
+    "TRAINING_SELECTION_OPEN": ProcessStatusCode.WAITING_FOR_DOCUMENT,
     "AGREEMENT_NOT_REQUIRED": ProcessStatusCode.COMPLETED,
     "AGREEMENT_BLOCKED": ProcessStatusCode.WAITING_FOR_DOCUMENT,
     "AGREEMENT_READY": ProcessStatusCode.WAITING_FOR_DOCUMENT,
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": ProcessStatusCode.WAITING_FOR_REVIEW,
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": ProcessStatusCode.WAITING_FOR_REVIEW,
+    "AGREEMENT_SIGNED_BY_OFFICE": ProcessStatusCode.COMPLETED,
+    "AGREEMENT_REJECTED_BY_OFFICE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
     "AGREEMENT_WAITING_FOR_SIGNATURE": ProcessStatusCode.WAITING_FOR_SIGNATURE,
+    "AGREEMENT_UPLOADED": ProcessStatusCode.WAITING_FOR_REVIEW,
+    "BENEFICIARY_AGREEMENT_CONFIRMED": ProcessStatusCode.COMPLETED,
+    "BENEFICIARY_AGREEMENT_REJECTED": ProcessStatusCode.WAITING_FOR_SIGNATURE,
     "AGREEMENT_SIGNED": ProcessStatusCode.COMPLETED,
     "AGREEMENT_SIGNATURE_INVALID": ProcessStatusCode.SIGNATURE_INVALID,
     "PARTICIPANT_ACCEPTED": ProcessStatusCode.COMPLETED,
@@ -120,7 +150,10 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
 
 
 LEGACY_STATUS_LABELS: dict[str, str] = {
+    "zlozony": "Złożony",
     "FORM_SUBMITTED": "Wniosek złożony",
+    "AUTO_REJECTED": "Odrzucony automatycznie",
+    "RETURNED_FOR_CORRECTION": "Wysłany do poprawy",
     "WAITING_FOR_OFFICER_DECISION": "Oczekuje na decyzję urzędnika",
     "OFFICER_ACCEPTED": "Wniosek zaakceptowany",
     "OFFICER_REJECTED": "Wniosek odrzucony",
@@ -131,10 +164,19 @@ LEGACY_STATUS_LABELS: dict[str, str] = {
     "DECLARATION_WAITING_FOR_SIGNATURE": "Deklaracja oczekuje na podpis",
     "DECLARATION_SIGNED": "Deklaracja podpisana",
     "DECLARATION_SIGNATURE_INVALID": "Podpis deklaracji wymaga poprawy",
+    "TRAINING_SELECTION_OPEN": "Oczekuje na wybór szkoleń",
     "AGREEMENT_NOT_REQUIRED": "Umowa niewymagana",
     "AGREEMENT_BLOCKED": "Umowa zablokowana",
     "AGREEMENT_READY": "Umowa gotowa do wygenerowania",
-    "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
+    "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
+    "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
     "AGREEMENT_SIGNED": "Umowa podpisana",
     "AGREEMENT_SIGNATURE_INVALID": "Podpis umowy wymaga poprawy",
     "PARTICIPANT_ACCEPTED": "Proces zaakceptowany",
@@ -144,8 +186,17 @@ LEGACY_STATUS_LABELS: dict[str, str] = {
 
 
 DECLARATION_COMPLETED_RAW_STATUSES = {
+    "TRAINING_SELECTION_OPEN",
     "AGREEMENT_READY",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+    "AGREEMENT_SIGNED_BY_OFFICE",
+    "AGREEMENT_REJECTED_BY_OFFICE",
     "AGREEMENT_WAITING_FOR_SIGNATURE",
+    "AGREEMENT_UPLOADED",
+    "BENEFICIARY_AGREEMENT_CONFIRMED",
+    "BENEFICIARY_AGREEMENT_REJECTED",
     "AGREEMENT_SIGNED",
     "AGREEMENT_SIGNATURE_INVALID",
     "AGREEMENT_NOT_REQUIRED",
@@ -153,7 +204,48 @@ DECLARATION_COMPLETED_RAW_STATUSES = {
     "PROCESS_COMPLETED",
 }
 
-AGREEMENT_COMPLETED_RAW_STATUSES = {"AGREEMENT_SIGNED", "PARTICIPANT_ACCEPTED", "PROCESS_COMPLETED"}
+AGREEMENT_COMPLETED_RAW_STATUSES = {
+    "AGREEMENT_SIGNED_BY_OFFICE",
+    "AGREEMENT_SIGNED",
+    "BENEFICIARY_AGREEMENT_CONFIRMED",
+    "PARTICIPANT_ACCEPTED",
+    "PROCESS_COMPLETED",
+}
+
+# Pełny katalog używany przez wizualny konfigurator. Obejmuje statusy procesu,
+# dokumentów oraz nazwy spotykane w starszych plikach JSON.
+WORKFLOW_STATUS_LABELS: dict[str, str] = {
+    **{code.value: definition.label for code, definition in STATUS_CATALOG.items()},
+    **LEGACY_STATUS_LABELS,
+    "APPLICATION_SUBMITTED": "Wniosek złożony",
+    "application_submitted": "Wniosek złożony",
+    "OFFICER_REVIEW": "Weryfikacja przez urzędnika",
+    "OFFICER_ACCEPTED": "Wniosek zaakceptowany",
+    "officer_accepted": "Wniosek zaakceptowany",
+    "OFFICER_REJECTED": "Wniosek odrzucony",
+    "officer_rejected": "Wniosek odrzucony",
+    "DECLARATION_REQUIRED": "Deklaracja wymagana",
+    "declaration_required": "Deklaracja wymagana",
+    "DECLARATION_GENERATED": "Deklaracja wygenerowana",
+    "DECLARATION_UPLOADED": "Podpisana deklaracja wgrana",
+    "AGREEMENT_REQUIRED": "Umowa wymagana",
+    "contract_required": "Umowa wymagana",
+    "AGREEMENT_GENERATED": "Umowa wygenerowana",
+    "AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED_BY_BENEFICIARY": "Podpisana umowa wgrana przez beneficjenta",
+    "AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE": "Umowa oczekuje na podpis po stronie urzędu",
+    "AGREEMENT_SIGNED_BY_OFFICE": "Umowa podpisana przez urząd",
+    "AGREEMENT_REJECTED_BY_OFFICE": "Umowa wymaga poprawy",
+    "AGREEMENT_WAITING_FOR_SIGNATURE": "Umowa oczekuje na podpis beneficjenta",
+    "AGREEMENT_UPLOADED": "Umowa oczekuje na podpis po stronie urzędu",
+    "BENEFICIARY_AGREEMENT_CONFIRMED": "Umowa podpisana przez urząd",
+    "BENEFICIARY_AGREEMENT_REJECTED": "Umowa wymaga poprawy",
+    "CORRECTION_REQUIRED": "Wymagana korekta",
+    "PROCESS_COMPLETED": "Proces zakończony",
+    "PROCESS_CANCELLED": "Proces anulowany",
+    "document_generated": "Dokument wygenerowany",
+    "document_uploaded": "Dokument wgrany",
+}
 
 
 def normalize_status(value: str | None) -> ProcessStatusCode:
@@ -175,6 +267,7 @@ def get_status_label(value: str | None) -> str:
     status = normalize_status(raw_value)
     if raw_value == status.value:
         return STATUS_CATALOG[status].label
+    logger.warning("Unknown process status; using controlled public fallback: %s", raw_value)
     return f"Nieznany status: {raw_value}"
 
 

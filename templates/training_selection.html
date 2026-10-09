@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Wybór szkoleń{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/training_selection.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{{ url_for('documents.documents_to_sign', submission_id=submission.submission_id, token=token) }}">← Powrót do dokumentów</a>
+</div>
+
+{% include "partials/training_picker.html" %}
+{% endblock %}
+
+{% block extra_js %}
+    <script src="{{ url_for('static', filename='js/training_selection.js') }}" defer></script>
+{% endblock %}

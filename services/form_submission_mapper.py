@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import json
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -92,6 +92,10 @@ FORM_FIELD_MAP: dict[str, str] = {
     # Workflow/status columns.
     "process_status": "process_status",
     "workflow_step": "workflow_step",
+    "workflow_stage": "workflow_stage",
+    "final_outcome": "final_outcome",
+    "document_states": "document_states",
+    "legacy_process_status": "legacy_process_status",
     "officer_decision": "officer_decision",
     "officer_decision_reason": "officer_decision_reason",
     "officer_decision_email_requested": "officer_decision_email_requested",
@@ -136,6 +140,7 @@ FORM_FIELD_MAP: dict[str, str] = {
 
 FORM_SUBMISSION_COLUMNS = set(FORM_FIELD_MAP.values()) | {
     "id",
+    "form_version_id",
 }
 
 BOOLEAN_COLUMNS = {
@@ -163,9 +168,9 @@ DATETIME_COLUMNS = {
     "correction_completed_at",
 }
 
-INTEGER_COLUMNS = {"wiek"}
+INTEGER_COLUMNS = {"wiek", "form_version_id"}
 NUMERIC_COLUMNS: set[str] = set()
-JSON_COLUMNS = {"data_json"}
+JSON_COLUMNS = {"data_json", "document_states"}
 
 TEXT_COLUMNS = (
     FORM_SUBMISSION_COLUMNS
@@ -196,6 +201,10 @@ REQUIRED_CONSENT_COLUMNS = {
 STATUS_DEFAULTS: dict[str, Any] = {
     "process_status": ProcessStatus.FORM_SUBMITTED.value,
     "workflow_step": "",
+    "workflow_stage": "",
+    "final_outcome": "ACTIVE",
+    "document_states": {},
+    "legacy_process_status": "",
     "officer_decision": "",
     "officer_decision_reason": "",
     "officer_decision_email_requested": "",
@@ -268,7 +277,7 @@ def build_submission_from_form(
             mapped[column_name] = False
 
     if "created_at" not in mapped or mapped["created_at"] in {"", None}:
-        mapped["created_at"] = datetime.now()
+        mapped["created_at"] = datetime.now(timezone.utc)
 
     if include_metadata:
         return mapped, {
@@ -283,13 +292,22 @@ def validate_required_submission_fields(
     form_config: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
-    required_columns = set(REQUIRED_FORM_COLUMNS)
+    required_columns = set(REQUIRED_FORM_COLUMNS) if form_config is None else set()
+
+    if form_config is not None:
+        for field in form_config.get("fields", []):
+            if not field.get("required") or field.get("type") in {"section", "static_text", "checkbox", "file", "attachment"}:
+                continue
+            field_name = str(field.get("name") or "")
+            column_name = FORM_FIELD_MAP.get(field_name, field_name)
+            if column_name in FORM_SUBMISSION_COLUMNS:
+                required_columns.add(column_name)
 
     for column_name in required_columns:
         if _is_empty_value(submission.get(column_name)):
             errors[column_name] = "Pole jest wymagane."
 
-    required_consents = set(REQUIRED_CONSENT_COLUMNS)
+    required_consents = set(REQUIRED_CONSENT_COLUMNS) if form_config is None else set()
     for field in (form_config or {}).get("fields", []):
         if field.get("type") != "checkbox" or not field.get("required"):
             continue
@@ -300,7 +318,7 @@ def validate_required_submission_fields(
 
     for column_name in required_consents:
         if submission.get(column_name) is not True:
-            errors[column_name] = "Wymagane oswiadczenie musi byc zaakceptowane."
+            errors[column_name] = "Wymagane oświadczenie musi zostać zaakceptowane."
 
     return errors
 

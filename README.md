@@ -2,6 +2,8 @@
 
 Flask application for dynamic form submissions, generated PDF documents, external electronic signatures and configurable document workflows.
 
+Operational guidance for logs, metrics, verified backup/restore, disaster-recovery tests and controlled performance checks is in [`docs/P3_OPERATIONS.md`](docs/P3_OPERATIONS.md).
+
 The current implementation is no longer a single hard-coded flow in `legacy_app.py`. The application starts from a normal Flask application factory, registers blueprints, creates a service container, reads form definitions from Nextcloud and keeps the current CSV/Nextcloud storage adapter as the persistence layer.
 
 ## What The Application Does
@@ -288,6 +290,45 @@ Default local URL:
 http://127.0.0.1:5000
 ```
 
+## Migracja bazy danych po aktualizacji aplikacji
+
+Przed uruchomieniem nowej wersji sprawdź i zaktualizuj schemat:
+
+```powershell
+python manage.py db-check
+alembic upgrade head
+```
+
+Alternatywnie można użyć komendy administracyjnej:
+
+```powershell
+python manage.py db-upgrade
+```
+
+Automatyczna migracja podczas startu jest domyślnie wyłączona. Można ją
+włączyć świadomie:
+
+```env
+AUTO_DB_MIGRATE=true
+```
+
+Na produkcji zalecane jest ręczne wykonanie `alembic upgrade head` przed
+startem aplikacji. Gdy `AUTO_DB_MIGRATE=false`, aplikacja sprawdza kluczowe
+kolumny i zapisuje w logu instrukcję migracji, ale nie modyfikuje schematu.
+`docker compose up` uruchamia migrację jako osobny, jednorazowy serwis `migrate`;
+kontener `app` startuje dopiero po jego poprawnym zakończeniu. Nie uruchamia to
+migracji w każdym workerze Gunicorna.
+
+Przykładowa aktualizacja usługi produkcyjnej:
+
+```bash
+sudo systemctl stop signature-app-new.service
+cd /opt/signature-app-new
+source .venv/bin/activate
+alembic upgrade head
+sudo systemctl start signature-app-new.service
+```
+
 ## Tests
 
 Run all tests:
@@ -313,13 +354,13 @@ Current expected result after the refactor:
 Validate a local JSON file:
 
 ```powershell
-python manage.py validate-form forms/sample_form.json --skip-template-check
+python manage.py validate-form examples/forms/sample_form.json --skip-template-check
 ```
 
 Use a local template root when templates are available on disk:
 
 ```powershell
-python manage.py validate-form forms/sample_form.json --template-root C:\path\to\templates
+python manage.py validate-form examples/forms/sample_form.json --template-root C:\path\to\templates
 ```
 
 Use `--skip-template-check` for forms whose templates exist only in Nextcloud.
@@ -327,8 +368,8 @@ Use `--skip-template-check` for forms whose templates exist only in Nextcloud.
 ## More Documentation
 
 ```text
-docs/process-workflow.md
-docs/document-configuration.md
-docs/json-and-html-templates.md
-docs/instrukcja-deklaracje-i-umowy.md
+docs/workflow/process-workflow.md
+docs/forms/document-configuration.md
+docs/forms/json-and-html-templates.md
+docs/forms/instrukcja-deklaracje-i-umowy.md
 ```

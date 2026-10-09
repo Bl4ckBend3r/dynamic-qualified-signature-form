@@ -26,16 +26,9 @@
         <label><span>Wgraj plik TXT</span><input type="file" name="txt_file" accept=".txt,text/plain"></label>
         <label class="admin-form-wide"><span>Wklej HTML</span><textarea name="body_html" rows="12" placeholder="<p>Dzien dobry, ...</p>"></textarea></label>
         <label class="admin-form-wide"><span>Treść TXT</span><textarea name="body_text" rows="7" placeholder="Opcjonalna wersja tekstowa"></textarea></label>
-        <label><span>Trigger event</span><input name="trigger_event" value="manual_bulk"></label>
-        <label><span>Trigger status</span><input name="trigger_status" placeholder="FORM_SUBMITTED"></label>
-        <label>
-            <span>Trigger decyzja</span>
-            <select name="trigger_decision">
-                {% for value, label in officer_decisions %}
-                    <option value="{{ value }}">{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
+        <label><span>Zdarzenie</span><select name="trigger_event"><option value="">Dowolne zdarzenie</option>{% for option in trigger_events %}<option value="{{ option.value }}" title="{{ option.description }}">{{ option.label }}</option>{% endfor %}</select></label>
+        <label><span>Status procesu</span><select name="trigger_status"><option value="">Dowolny status</option>{% for option in trigger_statuses %}<option value="{{ option.value }}" title="{{ option.description }}">{{ option.label }}</option>{% endfor %}</select></label>
+        <label><span>Decyzja</span><select name="trigger_decision"><option value="">Dowolna decyzja</option>{% for option in trigger_decisions %}<option value="{{ option.value }}" title="{{ option.description }}">{{ option.label }}</option>{% endfor %}</select></label>
         <label class="admin-check"><input type="checkbox" name="is_default_for_status"><span>Domyslny dla statusu</span></label>
     </div>
     <div class="admin-form-actions">

@@ -31,6 +31,8 @@ def record_submission_file(
     training_key: str = "",
     generated_at: datetime | None = None,
     signed_at: datetime | None = None,
+    storage_path: str = "",
+    workflow_step_at_upload: str = "",
 ) -> bool:
     if not submission_repository or not hasattr(submission_repository, "record_file"):
         return False
@@ -39,7 +41,7 @@ def record_submission_file(
         "document_id": document_id,
         "document_type": document_type,
         "filename": Path(filename).name,
-        "storage_path": resolve_pdf_storage_path(storage, form_slug, filename, document_type, signed),
+        "storage_path": storage_path or resolve_pdf_storage_path(storage, form_slug, filename, document_type, signed),
         "mime_type": mime_type,
         "size_bytes": len(file_bytes) if file_bytes is not None else None,
         "checksum_sha256": hashlib.sha256(file_bytes).hexdigest() if file_bytes is not None else "",
@@ -52,6 +54,7 @@ def record_submission_file(
         "training_key": training_key,
         "generated_at": generated_at,
         "signed_at": signed_at,
+        "workflow_step_at_upload": workflow_step_at_upload,
     }
     recorded = bool(submission_repository.record_file(submission_id, metadata))
     logger.info(

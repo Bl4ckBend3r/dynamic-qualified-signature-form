@@ -16,8 +16,11 @@ branch_labels = None
 depends_on = None
 
 
-def _jsonb():
-    return postgresql.JSONB(astext_type=sa.Text())
+def _json_type():
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        return postgresql.JSONB()
+    return sa.JSON()
 
 
 def _text_column(name: str, length: int | None = None, default: str = ""):
@@ -42,7 +45,7 @@ def upgrade() -> None:
     if "data_json" not in submission_columns:
         op.add_column(
             "form_submissions",
-            sa.Column("data_json", _jsonb(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+            sa.Column("data_json", _json_type(), nullable=False, server_default=sa.text("'{}'")),
         )
     if "updated_at" not in submission_columns:
         op.add_column(
@@ -70,7 +73,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(255), nullable=False),
         _text_column("title", 255),
         _text_column("description"),
-        sa.Column("definition_json", _jsonb(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("definition_json", _json_type(), nullable=False,server_default=sa.text("'{}'")),
         _bool_column("is_active", True),
         sa.Column("created_by_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -86,7 +89,7 @@ def upgrade() -> None:
         _text_column("label"),
         _text_column("type", 64, "text"),
         _bool_column("required"),
-        sa.Column("options", _jsonb(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+        sa.Column("options", _json_type(), nullable=False, server_default=sa.text("'[]'")),
         _text_column("default_value"),
         _text_column("section", 255),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),

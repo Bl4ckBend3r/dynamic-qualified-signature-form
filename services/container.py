@@ -7,26 +7,49 @@ from repositories.audit_log_repository import StorageAuditLogRepository
 from repositories.storage_repository import StorageRepository
 from repositories.submission_repository import CsvSubmissionRepository, PostgresSubmissionRepository
 from services.access_token_service import AccessTokenService
+from services.admin_login_rate_limit_service import AdminLoginRateLimitService, LoginRateLimitPolicy
 from services.audit_log_service import AuditLogService
+from services.beneficiary_agreement_service import BeneficiaryAgreementService
+from services.blocked_agreement_admin_service import BlockedAgreementAdminService
+from services.compliance_service import ComplianceService
 from services.document_service import DocumentService
 from services.documents.agreement_flow_service import AgreementFlowService
+from services.documents.agreement_docx_template_service import AgreementDocxTemplateService
 from services.documents.declaration_flow_service import DeclarationFlowService
 from services.documents.document_access_service import DocumentAccessService
 from services.documents.document_download_service import DocumentDownloadService
 from services.documents.document_signing_service import DocumentSigningService
 from services.form_config_service import FormConfigService
+from services.form_version_service import FormVersionService
+from services.form_draft_service import FormDraftService
+from services.field_availability_service import FieldAvailabilityService
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.legacy_fallback_readiness_service import LegacyFallbackReadinessService
 from services.mail_dispatch_service import MailDispatchService
+from services.mail_settings_service import MailSettingsService
 from services.nextcloud_storage import create_nextcloud_storage_from_env
 from services.notification_service import NotificationService
+from services.office_signed_agreement_service import OfficeSignedAgreementService
+from services.permission_service import PermissionService
+from services.password_policy_service import PasswordPolicyService
+from services.qualification_condition_service import QualificationConditionService
 from services.rules_service import RulesService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_attachment_service import SubmissionAttachmentService
+from services.submission_assignment_service import SubmissionAssignmentService
+from services.submission_training_service import SubmissionTrainingService
+from services.training_management_service import TrainingManagementService
+from services.submission_correction_service import SubmissionCorrectionService
+from services.submission_stage_rollback_service import SubmissionStageRollbackService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 from services.workflow_service import WorkflowService
+from services.verification_checklist_service import VerificationChecklistService
+from services.submission_internal_note_service import SubmissionInternalNoteService
+from services.workflow_sla_service import WorkflowSlaService
+from services.decision_definition_service import DecisionDefinitionService
 
 
 @dataclass
@@ -35,16 +58,25 @@ class ServiceContainer:
     storage_repository: StorageRepository
     submission_repository: object
     submission_service: SubmissionService
+    submission_attachment_service: SubmissionAttachmentService
+    submission_assignment_service: SubmissionAssignmentService
+    submission_training_service: SubmissionTrainingService
+    training_management_service: TrainingManagementService
     workflow_service: WorkflowService
+    beneficiary_agreement_service: BeneficiaryAgreementService
+    office_signed_agreement_service: OfficeSignedAgreementService
     document_service: DocumentService
     document_access_service: DocumentAccessService
     document_download_service: DocumentDownloadService
     document_signing_service: DocumentSigningService
     declaration_flow_service: DeclarationFlowService
     agreement_flow_service: AgreementFlowService
+    agreement_docx_template_service: AgreementDocxTemplateService
     notification_service: NotificationService
     mail_dispatch_service: MailDispatchService
+    mail_settings_service: MailSettingsService
     submission_document_service: SubmissionDocumentService
+    submission_stage_rollback_service: SubmissionStageRollbackService
     submission_workflow_history_service: SubmissionWorkflowHistoryService
     submission_decision_service: SubmissionDecisionService
     legacy_fallback_report_service: LegacyFallbackReportService
@@ -53,13 +85,50 @@ class ServiceContainer:
     audit_log_service: AuditLogService
     access_token_service: AccessTokenService
     form_config_service: FormConfigService
+    form_version_service: FormVersionService
+    form_draft_service: FormDraftService
+    field_availability_service: FieldAvailabilityService
+    compliance_service: ComplianceService
     rules_service: RulesService
+    qualification_condition_service: QualificationConditionService
+    submission_correction_service: SubmissionCorrectionService
+    blocked_agreement_admin_service: BlockedAgreementAdminService
+    verification_checklist_service: VerificationChecklistService
+    submission_internal_note_service: SubmissionInternalNoteService
+    workflow_sla_service: WorkflowSlaService
+    permission_service: PermissionService
+    decision_definition_service: DecisionDefinitionService
+    admin_login_rate_limit_service: AdminLoginRateLimitService
+    password_policy_service: PasswordPolicyService
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
     storage = storage_override or create_nextcloud_storage_from_env()
     form_config_service = FormConfigService()
+    form_version_service = FormVersionService()
+    form_draft_service = FormDraftService(
+        ttl_days=app.config.get("FORM_DRAFT_TTL_DAYS", 30),
+        max_data_bytes=app.config.get("FORM_DRAFT_MAX_DATA_BYTES", 262144),
+    )
+    field_availability_service = FieldAvailabilityService()
     access_token_service = AccessTokenService()
+    qualification_condition_service = QualificationConditionService()
+    submission_correction_service = SubmissionCorrectionService()
+    submission_assignment_service = SubmissionAssignmentService()
+    blocked_agreement_admin_service = BlockedAgreementAdminService()
+    verification_checklist_service = VerificationChecklistService()
+    permission_service = PermissionService()
+    decision_definition_service = DecisionDefinitionService()
+    password_policy_service = PasswordPolicyService()
+    admin_login_rate_limit_service = AdminLoginRateLimitService(
+        app.config.get("SECRET_KEY", ""),
+        LoginRateLimitPolicy(
+            short_attempts=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_SHORT_ATTEMPTS", 5)),
+            short_window_seconds=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_SHORT_WINDOW_SECONDS", 60)),
+            long_attempts=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_LONG_ATTEMPTS", 30)),
+            long_window_seconds=int(app.config.get("ADMIN_LOGIN_RATE_LIMIT_LONG_WINDOW_SECONDS", 3600)),
+        ),
+    )
 
     form_slugs = []
     try:
@@ -79,22 +148,27 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         app.logger.info("Submission repository: CSV/Nextcloud")
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
-    workflow_service = WorkflowService(submission_repository, audit_log_service=audit_log_service)
+    submission_internal_note_service = SubmissionInternalNoteService(audit_log_service=audit_log_service)
+    beneficiary_agreement_service = BeneficiaryAgreementService()
+    office_signed_agreement_service = OfficeSignedAgreementService(storage)
     notification_service = NotificationService(
         submission_repository,
         audit_log_service=audit_log_service,
         storage=storage,
     )
+    mail_settings_service = MailSettingsService(app.config.get("SECRET_KEY", ""))
     mail_dispatch_service = MailDispatchService(
         notification_service=notification_service,
         submission_repository=submission_repository,
         audit_log_service=audit_log_service,
+        mail_settings_service=mail_settings_service,
     )
     submission_document_service = SubmissionDocumentService(
         submission_repository=submission_repository,
         storage=storage,
         log=app.logger,
     )
+    submission_stage_rollback_service = SubmissionStageRollbackService()
     submission_workflow_history_service = SubmissionWorkflowHistoryService(
         submission_repository=submission_repository,
         log=app.logger,
@@ -125,6 +199,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
     rules_service = RulesService()
     declaration_flow_service = DeclarationFlowService()
     agreement_flow_service = AgreementFlowService()
+    agreement_docx_template_service = AgreementDocxTemplateService(storage)
     document_access_service = DocumentAccessService()
     document_download_service = DocumentDownloadService(access_service=document_access_service)
     document_service = DocumentService(
@@ -135,16 +210,38 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_document_service=submission_document_service,
         strict_document_metadata_read=bool(app.config.get("STRICT_DOCUMENT_METADATA_READ")),
     )
+    workflow_sla_service = WorkflowSlaService(mail_dispatch_service=mail_dispatch_service)
+    workflow_service = WorkflowService(
+        submission_repository,
+        audit_log_service=audit_log_service,
+        workflow_sla_service=workflow_sla_service,
+        document_service=document_service,
+    )
+    document_service.workflow_service = workflow_service
+    compliance_service = ComplianceService(submission_repository)
+    submission_attachment_service = SubmissionAttachmentService(
+        submission_repository,
+        storage,
+        allow_unscanned_uploads=bool(app.config.get("ALLOW_UNSCANNED_UPLOADS")),
+    )
     submission_service = SubmissionService(
         submission_repository,
         storage=storage,
         workflow_service=workflow_service,
         document_service=document_service,
         notification_service=notification_service,
+        mail_dispatch_service=mail_dispatch_service,
         audit_log_service=audit_log_service,
         access_token_service=access_token_service,
         submission_document_service=submission_document_service,
+        qualification_condition_service=qualification_condition_service,
+        compliance_service=compliance_service,
+        submission_attachment_service=submission_attachment_service,
+        submission_assignment_service=submission_assignment_service,
+        workflow_sla_service=workflow_sla_service,
     )
+    submission_training_service = SubmissionTrainingService()
+    training_management_service = TrainingManagementService()
     document_signing_service = DocumentSigningService(
         storage=storage,
         submission_repository=submission_repository,
@@ -159,16 +256,25 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage_repository=storage_repository,
         submission_repository=submission_repository,
         submission_service=submission_service,
+        submission_attachment_service=submission_attachment_service,
+        submission_assignment_service=submission_assignment_service,
+        submission_training_service=submission_training_service,
+        training_management_service=training_management_service,
         workflow_service=workflow_service,
+        beneficiary_agreement_service=beneficiary_agreement_service,
+        office_signed_agreement_service=office_signed_agreement_service,
         document_service=document_service,
         document_access_service=document_access_service,
         document_download_service=document_download_service,
         document_signing_service=document_signing_service,
         declaration_flow_service=declaration_flow_service,
         agreement_flow_service=agreement_flow_service,
+        agreement_docx_template_service=agreement_docx_template_service,
         notification_service=notification_service,
         mail_dispatch_service=mail_dispatch_service,
+        mail_settings_service=mail_settings_service,
         submission_document_service=submission_document_service,
+        submission_stage_rollback_service=submission_stage_rollback_service,
         submission_workflow_history_service=submission_workflow_history_service,
         submission_decision_service=submission_decision_service,
         legacy_fallback_report_service=legacy_fallback_report_service,
@@ -177,5 +283,19 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         audit_log_service=audit_log_service,
         access_token_service=access_token_service,
         form_config_service=form_config_service,
+        form_version_service=form_version_service,
+        form_draft_service=form_draft_service,
+        field_availability_service=field_availability_service,
+        compliance_service=compliance_service,
         rules_service=rules_service,
+        qualification_condition_service=qualification_condition_service,
+        submission_correction_service=submission_correction_service,
+        blocked_agreement_admin_service=blocked_agreement_admin_service,
+        verification_checklist_service=verification_checklist_service,
+        submission_internal_note_service=submission_internal_note_service,
+        workflow_sla_service=workflow_sla_service,
+        permission_service=permission_service,
+        decision_definition_service=decision_definition_service,
+        admin_login_rate_limit_service=admin_login_rate_limit_service,
+        password_policy_service=password_policy_service,
     )

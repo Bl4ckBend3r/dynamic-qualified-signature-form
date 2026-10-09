@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -65,27 +66,53 @@ class PdfRenderService:
         ) as tmp_pdf:
             tmp_pdf_path = Path(tmp_pdf.name)
 
+        document_type = str(context.get("document_type") or "")
+        if document_type not in {"agreement", "declaration"}:
+            document_type = "agreement" if "agreement" in template_name else "declaration" if "declaration" in template_name else "form"
+        metrics = getattr(app, "extensions", {}).get("observability_metrics")
+        operation = metrics.operation("document_generation", document_type) if metrics else _null_operation()
         try:
             try:
-                if template_html:
-                    self.html_renderer(
-                        app=app,
-                        template_html=prepare_document_template_html(template_html, context),
-                        context=context,
-                        output_path=tmp_pdf_path,
+                with operation:
+                    if template_html:
+                        self.html_renderer(
+                            app=app,
+                            template_html=prepare_document_template_html(template_html, context),
+                            context=context,
+                            output_path=tmp_pdf_path,
+                        )
+                    else:
+                        self.template_renderer(
+                            app=app,
+                            template_name=template_name,
+                            context=context,
+                            output_path=tmp_pdf_path,
+                        )
+                    result = tmp_pdf_path.read_bytes()
+                active_logger = getattr(app, "logger", None)
+                if active_logger:
+                    active_logger.info(
+                        "document_generated",
+                        extra={"event": "document_generated", "operation": "document_generation", "document_type": document_type},
                     )
-                else:
-                    self.template_renderer(
-                        app=app,
-                        template_name=template_name,
-                        context=context,
-                        output_path=tmp_pdf_path,
-                    )
-                return tmp_pdf_path.read_bytes()
+                return result
             except Exception as exc:
+                logger = getattr(app, "logger", None)
+                if logger:
+                    logger.exception(
+                        "Blad renderowania PDF: submission_id=%s template_name=%s fields=%s",
+                        context.get("submission_id", ""),
+                        template_name,
+                        summarize_structured_context(context),
+                    )
                 raise PdfRenderError(f"Nie udalo sie wyrenderowac PDF: {exc}") from exc
         finally:
             tmp_pdf_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _null_operation():
+    yield
 
 
 def generate_document_pdf_bytes(
@@ -101,3 +128,22 @@ def generate_document_pdf_bytes(
         template_html=template_html,
         context=context,
     )
+
+
+def summarize_structured_context(context: Mapping[str, Any]) -> dict[str, str]:
+    summary = {}
+    for field_name in ("selected_trainings", "selected_trainings_normalized", "training_agreements"):
+        value = context.get(field_name)
+        summary[field_name] = describe_value_shape(value)
+    return summary
+
+
+def describe_value_shape(value: Any) -> str:
+    if value is None:
+        return "None"
+    if isinstance(value, list):
+        item_types = sorted({type(item).__name__ for item in value})
+        return f"list[{','.join(item_types) or 'empty'}]"
+    if isinstance(value, Mapping):
+        return "dict"
+    return type(value).__name__

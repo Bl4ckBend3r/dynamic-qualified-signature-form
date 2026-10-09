@@ -1,0 +1,140 @@
+{% set builder_document = document_builder_document|default({'version': 1, 'document_type': document_builder_type, 'blocks': []}) %}
+<section
+    class="agreement-builder document-builder{% if document_builder_standalone|default(false) %} agreement-builder--standalone document-builder--standalone{% endif %}"
+    data-agreement-builder
+    data-document-builder
+    data-document-type="{{ document_builder_type }}"
+    data-form-id="{{ form.id }}"
+    data-save-url="{{ document_builder_save_url }}"
+    data-preview-url="{{ document_builder_preview_url }}"
+    data-pdf-url="{{ document_builder_pdf_url }}"
+    data-import-url="{{ document_builder_import_url }}"
+    data-storage-key="document-builder:{{ document_builder_type }}:form:{{ form.id }}:v1"
+    data-legacy-storage-key="document-builder-{{ document_builder_type }}-draft-{{ form.id }}"
+    data-backend-updated-at="{{ document_builder_updated_at|default('') }}"
+    data-backend-is-new="{{ 'true' if document_builder_is_new|default(true) else 'false' }}"
+    data-debug="{{ 'true' if config.DEBUG else 'false' }}"
+    data-view-mode="split"
+    data-layout="balanced"
+    data-variables-visible="true"
+    data-fit-width="false"
+>
+    <textarea name="{{ 'contract_builder_json' if document_builder_type == 'agreement' else 'declaration_builder_json' }}" data-agreement-builder-json data-document-builder-json hidden>{{ builder_document|tojson }}</textarea>
+    <script type="application/json" data-agreement-builder-initial data-document-builder-initial>{{ builder_document|tojson }}</script>
+    <script type="application/json" data-agreement-builder-variables data-document-builder-variables>{{ document_builder_variables|default([])|tojson }}</script>
+    <script type="application/json" data-agreement-builder-submissions data-document-builder-submissions>{{ document_builder_submissions|default([])|tojson }}</script>
+
+    <header class="agreement-builder__header">
+        <div><h1>{{ document_builder_title }}: {{ form.title or form.name }}</h1><p>{{ document_builder_description }}</p></div>
+        <div class="agreement-builder__header-actions">
+            <span class="agreement-builder__status" data-agreement-builder-status role="status">Gotowy</span>
+            <button type="button" class="builder-button builder-button--primary" data-builder-save="draft">Zapisz</button>
+            <button type="button" class="builder-button builder-button--success" data-builder-save="activate">Aktywuj</button>
+            <button type="button" class="builder-button builder-button--secondary" data-builder-close>Zamknij kreator</button>
+        </div>
+    </header>
+
+    <div class="agreement-builder__errors" data-builder-draft-choice role="status" hidden>
+        <strong>Znaleziono niezapisany szkic.</strong>
+        <button type="button" class="builder-button builder-button--primary builder-button--compact" data-builder-draft-restore>Przywróć szkic</button>
+        <button type="button" class="builder-button builder-button--secondary builder-button--compact" data-builder-draft-discard>Użyj zapisanej wersji</button>
+    </div>
+
+    <div class="agreement-builder__toolbar" role="toolbar" aria-label="Narzędzia kreatora dokumentu">
+        <div class="agreement-builder__toolbar-group">
+            <div class="agreement-builder__toolset" aria-label="Historia"><button type="button" class="builder-button builder-button--secondary" title="Cofnij" data-builder-action="undo">↶ <span>Cofnij</span></button><button type="button" class="builder-button builder-button--secondary" title="Ponów" data-builder-action="redo">↷ <span>Ponów</span></button></div>
+            <div class="agreement-builder__toolset" aria-label="Bloki tekstowe"><button type="button" class="builder-button builder-button--secondary" data-builder-add="heading">Nagłówek</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="paragraph">Akapit</button></div>
+            <div class="agreement-builder__toolset" aria-label="Styl zaznaczonego tekstu">
+                <button type="button" class="builder-button builder-button--icon" data-builder-format="bold" aria-label="Pogrub zaznaczony tekst" title="Pogrub zaznaczony tekst" aria-pressed="false"><strong>B</strong></button><button type="button" class="builder-button builder-button--icon" data-builder-format="italic" aria-label="Ustaw kursywę zaznaczonego tekstu" title="Kursywa zaznaczonego tekstu" aria-pressed="false"><em>I</em></button><button type="button" class="builder-button builder-button--icon" data-builder-format="underline" aria-label="Podkreśl zaznaczony tekst" title="Podkreślenie zaznaczonego tekstu" aria-pressed="false"><u>U</u></button>
+            </div>
+            <div class="agreement-builder__toolset" aria-label="Wyrównanie bloku"><button type="button" class="builder-button builder-button--secondary" data-builder-align="left" aria-pressed="false">Do lewej</button><button type="button" class="builder-button builder-button--secondary" data-builder-align="center" aria-pressed="false">Wyśrodkuj</button><button type="button" class="builder-button builder-button--secondary" data-builder-align="right" aria-pressed="false">Do prawej</button><button type="button" class="builder-button builder-button--secondary" data-builder-align="justify" aria-pressed="false">Wyjustuj</button></div>
+            <div class="agreement-builder__toolset" aria-label="Listy"><button type="button" class="builder-button builder-button--secondary" data-builder-add="ordered_list">Lista numerowana</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="bullet_list">Lista punktowana</button><button type="button" class="builder-button builder-button--icon" data-builder-list-level="decrease" aria-label="Zmniejsz poziom punktu listy" title="Zmniejsz poziom (Shift+Tab)">←</button><button type="button" class="builder-button builder-button--icon" data-builder-list-level="increase" aria-label="Zwiększ poziom punktu listy" title="Zwiększ poziom (Tab)">→</button></div>
+            <div class="agreement-builder__toolset" aria-label="Komponenty"><button type="button" class="builder-button builder-button--secondary" data-builder-add="table">Tabela</button>{% if document_builder_type == 'agreement' %}<button type="button" class="builder-button builder-button--secondary" data-builder-add="agreement_section">Paragraf §</button>{% else %}<button type="button" class="builder-button builder-button--secondary" data-builder-add="criteria_table">Tabela kryteriów</button>{% endif %}<button type="button" class="builder-button builder-button--secondary" data-builder-action="variables">Zmienna</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="page_break">Podział strony</button></div>
+        </div>
+        <div class="agreement-builder__toolbar-group agreement-builder__toolbar-group--views">
+            <button type="button" class="builder-button builder-button--secondary is-active" data-builder-view-mode="split" aria-pressed="true">Widok podzielony</button><button type="button" class="builder-button builder-button--secondary" data-builder-view-mode="editor" aria-pressed="false">Tryb edycji</button><button type="button" class="builder-button builder-button--secondary" data-builder-view-mode="preview" aria-pressed="false">Tryb podglądu</button><button type="button" class="builder-button builder-button--secondary" data-builder-variables-toggle aria-pressed="true">Zmienne</button><button type="button" class="builder-button builder-button--secondary" data-builder-size-mode="editor-wide" aria-pressed="false">Edytor szerzej</button><button type="button" class="builder-button builder-button--secondary" data-builder-size-mode="preview-wide" aria-pressed="false">Podgląd szerzej</button>
+        </div>
+        <div class="agreement-builder__toolbar-group agreement-builder__toolbar-group--preview">
+            <label><span>Dane</span><select data-builder-preview-data><option value="">Przykładowe dane</option>{% for submission in document_builder_submissions|default([]) %}<option value="{{ submission.submission_id }}">{{ submission.label }}</option>{% endfor %}</select></label>
+            {% if document_builder_type == 'agreement' %}<label data-builder-preview-training-field hidden><span>Szkolenie</span><select data-builder-preview-training><option value="">Wybierz szkolenie</option></select></label>{% endif %}
+            <button type="button" class="builder-button builder-button--secondary" data-builder-preview-now>Podgląd</button><button type="button" class="builder-button builder-button--secondary" data-builder-download-pdf>Pobierz PDF</button><button type="button" class="builder-button builder-button--primary" data-builder-save="draft">Zapisz</button>
+            <span class="agreement-builder__zoom"><button type="button" class="builder-button builder-button--icon" data-builder-zoom="out" aria-label="Pomniejsz podgląd">−</button><output data-builder-zoom-value>80%</output><button type="button" class="builder-button builder-button--icon" data-builder-zoom="in" aria-label="Powiększ podgląd">+</button><button type="button" class="builder-button builder-button--secondary" data-builder-zoom="fit" aria-pressed="false">Dopasuj szerokość</button><button type="button" class="builder-button builder-button--secondary" data-builder-zoom="100">100%</button></span>
+            {% if document_docx_metadata|default({}) %}<button type="submit" class="builder-button builder-button--secondary" formaction="{{ document_builder_import_url }}" formmethod="post" formnovalidate>Importuj Word</button>{% endif %}
+        </div>
+    </div>
+
+    <div class="agreement-builder__workspace">
+        <section class="agreement-builder__editor-pane agreement-builder__editor" data-builder-editor-pane aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Edytor</strong><small>Edytuj treść, kolejność i proste warunki.</small></div>
+            <div class="agreement-builder__blocks" data-agreement-builder-blocks aria-label="Bloki dokumentu"></div>
+            <div class="agreement-builder__insert-menu" aria-label="Gotowe komponenty"><strong>Wstaw gotowy blok</strong><button type="button" class="builder-button builder-button--secondary" data-builder-add="participant_data">Dane uczestnika</button>{% if document_builder_type == 'agreement' %}<button type="button" class="builder-button builder-button--secondary" data-builder-add="training_table">Tabela wybranych szkoleń</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="signatures">Sekcja podpisów</button>{% else %}<button type="button" class="builder-button builder-button--secondary" data-builder-add="criteria_table">Tabela kryteriów kwalifikacyjnych</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="form_field">Pole formularza</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="participant_address">Adres uczestnika</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="participant_contact">Dane kontaktowe</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="statement">Oświadczenie</button><button type="button" class="builder-button builder-button--secondary" data-builder-add="participant_signature">Podpis uczestnika</button>{% endif %}<button type="button" class="builder-button builder-button--secondary" data-builder-add="project_info">Informacje o projekcie</button></div>
+        </section>
+        <section class="agreement-builder__preview-pane agreement-builder__preview" data-builder-preview-pane aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Podgląd A4</strong><small>LIVE, bez skutków biznesowych.</small></div>
+            <div class="agreement-preview-viewport" data-builder-preview-viewport><div class="agreement-builder__preview-state" data-agreement-builder-preview-state role="status">Generowanie podglądu…</div><div class="agreement-preview-canvas" data-builder-preview-canvas hidden><div class="agreement-preview-page agreement-builder__a4" data-agreement-builder-preview-page><iframe title="Podgląd LIVE kreatora dokumentu" data-agreement-builder-preview></iframe></div></div></div>
+        </section>
+        <aside class="agreement-builder__variables" data-agreement-builder-variable-panel aria-hidden="false">
+            <div class="agreement-builder__pane-title builder-panel__header"><strong>Zmienne</strong><small>Kliknij albo przeciągnij.</small></div>
+            <label><span>Szukaj zmiennej…</span><input type="search" data-builder-variable-search placeholder="Nazwa, etykieta lub opis"></label>
+            <div data-builder-recent-variables hidden><strong>Ostatnio używane</strong><div data-builder-recent-list></div></div>
+            {% set insertable_builder_variables = (document_builder_variables|default([]))|rejectattr('type', 'equalto', 'criterion')|list %}
+            <div class="agreement-builder__variable-list">
+    {% for category, variables in insertable_builder_variables|groupby('category') %}
+        <details open data-builder-variable-category>
+            <summary>{{ category }}</summary>
+
+            {% for variable in variables %}
+                <article
+                    class="agreement-builder__variable{% if variable.type == 'repeatable_group' %} agreement-builder__variable--repeatable{% endif %}"
+                    draggable="true"
+                    data-builder-variable="{{ variable.name }}"
+                    data-builder-variable-search-text="{{ (variable.name ~ ' ' ~ variable.label ~ ' ' ~ variable.description)|lower }}"
+                >
+                    {% if variable.type == 'repeatable_group' %}
+                        <span class="admin-badge">
+                            ⟳ Grupa powtarzalna
+                        </span>
+                    {% endif %}
+
+                    <strong>{{ variable.label }}</strong>
+
+                    <code>{{ variable.placeholder }}</code>
+
+                    <small>{{ variable.description }}</small>
+
+                    <span>
+                        Przykład: {{ variable.example }}
+                    </span>
+
+                    <div>
+                        <button
+                            type="button"
+                            class="builder-button builder-button--secondary builder-button--compact"
+                            data-builder-insert-variable="{{ variable.name }}"
+                        >
+                            {% if variable.type == 'repeatable_group' %}
+                                Wstaw grupę
+                            {% else %}
+                                Wstaw
+                            {% endif %}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="builder-button builder-button--secondary builder-button--compact"
+                            data-builder-copy-variable="{{ variable.name }}"
+                        >
+                            Kopiuj
+                        </button>
+                    </div>
+                </article>
+            {% endfor %}
+        </details>
+    {% endfor %}
+</div>
+        </aside>
+    </div>
+
+    <footer class="agreement-builder__footer"><div class="agreement-builder__errors" data-agreement-builder-errors hidden></div><span>Podgląd używa wspólnego renderera Jinja, CSS dokumentów i generatora PDF.</span>{% if document_builder_can_show_html|default(false) %}<details class="agreement-builder__html-preview"><summary>Pokaż wygenerowany HTML</summary><textarea rows="10" readonly data-agreement-builder-html></textarea></details>{% endif %}</footer>
+    <dialog class="admin-modal agreement-builder-close-dialog" data-builder-close-dialog data-admin-modal role="dialog" aria-modal="true" aria-labelledby="document-builder-close-title"><h2 id="document-builder-close-title">Masz niezapisane zmiany.</h2><p>Co chcesz zrobić przed zamknięciem kreatora?</p><div><button type="button" class="builder-button builder-button--primary" data-builder-close-save>Zapisz i zamknij</button><button type="button" class="builder-button builder-button--danger" data-builder-close-discard>Zamknij bez zapisywania</button><button type="button" class="builder-button builder-button--secondary" data-builder-close-cancel>Anuluj</button></div></dialog>
+</section>

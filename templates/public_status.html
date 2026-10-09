@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Sprawdź status{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/public_status.css') }}">{% endblock %}
+{% block content %}
+<div class="card status-page">
+    <div class="card-header">
+        <h1>Sprawdź status</h1>
+        <p id="status-help">Podaj numer zgłoszenia wniosku (ID). Pokażemy tylko jego aktualny status.</p>
+    </div>
+    <form id="public-status-form" class="status-lookup-form" data-status-url="{{ url_for('api.public_readonly_status', submission_id='__ID__') }}">
+        <div class="status-lookup-form__field">
+            <label for="public-submission-id">Numer zgłoszenia</label>
+            <input id="public-submission-id" name="submission_id" value="{{ request.args.get('submission_id', '') }}" required aria-describedby="status-help" autocomplete="off" autocapitalize="none" spellcheck="false">
+        </div>
+        <button type="submit" class="btn-primary">Sprawdź status</button>
+    </form>
+    <div aria-live="polite" aria-atomic="true">
+        <p id="public-status-message" class="status-page__message" hidden></p>
+        <section id="public-status-result" class="status-result" aria-labelledby="public-status-heading" hidden>
+            <h2 id="public-status-heading">Aktualny status</h2>
+            <p id="public-status-label" class="badge status-result__badge"></p>
+            <dl class="status-result__number">
+                <dt>Numer zgłoszenia</dt>
+                <dd>
+                    <span id="public-status-id" class="status-result__id"></span>
+                    <button id="public-status-copy" type="button" class="btn-secondary" aria-label="Kopiuj numer zgłoszenia">Kopiuj</button>
+                </dd>
+            </dl>
+            <p id="public-status-copy-message" class="status-result__copy-message" hidden></p>
+        </section>
+    </div>
+    <noscript>Włącz JavaScript, aby sprawdzić status zgłoszenia.</noscript>
+</div>
+{% endblock %}
+{% block extra_js %}<script src="{{ url_for('static', filename='js/public_status.js') }}" defer></script>{% endblock %}

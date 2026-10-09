@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_legacy_removal_checklist_exists_and_covers_required_areas():
-    text = Path("LEGACY_REMOVAL_CHECKLIST.md").read_text(encoding="utf-8")
+    text = Path("docs/archive/LEGACY_REMOVAL_CHECKLIST.md").read_text(encoding="utf-8")
 
     for item in ["Dokumenty", "Workflow", "Decyzje", "Legacy app", "Repo cleanup"]:
         assert item in text
@@ -11,7 +11,7 @@ def test_legacy_removal_checklist_exists_and_covers_required_areas():
 
 
 def test_legacy_removal_migration_plan_exists_and_lists_legacy_fields():
-    text = Path("LEGACY_REMOVAL_MIGRATION_PLAN.md").read_text(encoding="utf-8")
+    text = Path("docs/archive/LEGACY_REMOVAL_MIGRATION_PLAN.md").read_text(encoding="utf-8")
 
     for field in [
         "pdf_filename",
@@ -35,7 +35,7 @@ def test_legacy_removal_migration_plan_exists_and_lists_legacy_fields():
 
 
 def test_legacy_app_retirement_plan_exists_and_keeps_runtime_safe():
-    text = Path("LEGACY_APP_RETIREMENT_PLAN.md").read_text(encoding="utf-8")
+    text = Path("docs/archive/LEGACY_APP_RETIREMENT_PLAN.md").read_text(encoding="utf-8")
 
     assert "legacy_app.py" in text
     assert "test-only" in text
@@ -45,7 +45,7 @@ def test_legacy_app_retirement_plan_exists_and_keeps_runtime_safe():
 
 
 def test_p4_schema_documentation_describes_required_order():
-    text = Path("P4_SCHEMA_CHECK.md").read_text(encoding="utf-8")
+    text = Path("docs/database/P4_SCHEMA_CHECK.md").read_text(encoding="utf-8")
 
     for item in [
         "check_p4_schema.py",

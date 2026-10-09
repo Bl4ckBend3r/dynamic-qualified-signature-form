@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kreator dokumentu — {{ form.title or form.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body class="agreement-builder-window document-builder-window">
+    <form class="agreement-builder-window__form" method="post" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        {% include "admin/forms/_document_builder.html" %}
+    </form>
+    <script src="{{ url_for('static', filename='js/agreement_builder.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<section
+    class="document-variable-catalog admin-form-wide"
+    data-document-variable-catalog="{{ document_type }}"
+    {% if selected_source == 'builder' %}hidden{% endif %}
+>
+    <header class="document-variable-catalog__header">
+        <div>
+            <h3>Dostępne zmienne</h3>
+            <p>Kliknij zmienną, aby skopiować ją do schowka.</p>
+        </div>
+        <label class="document-variable-search">
+            <span class="document-variable-search__icon" aria-hidden="true">⌕</span>
+            <span class="visually-hidden">Szukaj dostępnych zmiennych</span>
+            <input type="search" placeholder="np. szkolenie, PESEL, numer umowy" data-document-variable-search autocomplete="off">
+        </label>
+    </header>
+
+    <p class="document-variable-copy-status" data-document-variable-copy-status role="status" aria-live="polite"></p>
+    <div class="document-variable-categories">
+        {% for category, variables in (template_variables|default([]))|groupby('category') %}
+            <section class="document-variable-category" data-document-variable-category data-category="{{ category }}">
+                <h4><span>{{ category }}</span></h4>
+                <div class="document-variable-grid">
+                    {% for variable in variables %}
+                        <button
+                            type="button"
+                            class="document-variable-card"
+                            data-document-variable-card
+                            data-variable-search-text="{{ (category ~ ' ' ~ variable.name ~ ' ' ~ variable.label ~ ' ' ~ variable.description)|lower }}"
+                            data-copy-variable="{{ variable.placeholder }}"
+                        >
+                            <span class="document-variable-card__topline">
+                                <code>{{ variable.placeholder }}</code>
+                                <span class="document-variable-card__copy" aria-hidden="true">⧉</span>
+                            </span>
+                            <strong>{{ variable.label }}</strong>
+                            {% if variable.description %}<small>{{ variable.description }}</small>{% endif %}
+                            <span class="document-variable-card__example"><span>Przykład:</span> {{ variable.example }}</span>
+                        </button>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    </div>
+    <p class="document-variable-empty" data-document-variable-empty hidden>Brak zmiennych pasujących do wyszukiwania.</p>
+</section>

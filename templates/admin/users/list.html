@@ -6,7 +6,7 @@
         <p class="admin-eyebrow">Dostep</p>
         <h1>Uzytkownicy</h1>
     </div>
-    <a class="admin-button" href="{{ url_for('admin.user_edit') }}">Dodaj uzytkownika</a>
+    <div class="admin-actions">{% if has_permission('can_manage_roles') %}<a class="admin-button-secondary" href="{{ url_for('admin.roles_list') }}">Role i uprawnienia</a><a class="admin-button" href="{{ url_for('admin.user_edit') }}">Dodaj uzytkownika</a>{% endif %}</div>
 </div>
 <div class="admin-card admin-table-wrap">
     <table class="admin-table">
@@ -28,15 +28,15 @@
                 <td>{{ user.created_at.strftime("%Y-%m-%d") if user.created_at else "-" }}</td>
                 <td>
                     <div class="admin-actions">
-                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edytuj</a>
-                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Przypisz formularze</a>
+                        {% if has_permission('can_manage_roles') %}<a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edytuj</a>
+                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Przypisz role</a>{% endif %}
                         <a href="{{ url_for('admin.user_change_password', user_id=user.id) }}">Zmien haslo</a>
                         {% if user.id != g.admin_user.id %}
                             <form method="post" action="{{ url_for('admin.user_toggle_block', user_id=user.id) }}">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button" type="submit">{{ "Odblokuj" if user.is_blocked else "Zablokuj" }}</button>
                             </form>
-                            <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" onsubmit="return confirm('Usunac uzytkownika {{ user.email }}?');">
+                            <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" data-admin-confirm-message="Usunąć użytkownika {{ user.email }}?">
                                 <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                                 <button class="admin-link-button admin-link-danger" type="submit">Usun</button>
                             </form>

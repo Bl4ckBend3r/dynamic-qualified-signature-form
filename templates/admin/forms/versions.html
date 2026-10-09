@@ -1,0 +1,90 @@
+{% extends "admin/base.html" %}
+{% block title %}Wersje formularza{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">Kontrolowana publikacja</p>
+        <h1>Wersje: {{ form.name }}</h1>
+        <p>Publiczny formularz i nowe zgłoszenia korzystają wyłącznie z wersji opublikowanej.</p>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Lista formularzy</a>
+        {% if versions|selectattr('status', 'equalto', 'draft')|list %}
+            {% set active_draft = versions|selectattr('status', 'equalto', 'draft')|first %}
+            <a class="admin-button" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=active_draft.id) }}">Edytuj wersję roboczą</a>
+            <a class="admin-button-secondary" href="{{ url_for('admin.form_checklists', form_id=form.id) }}">Checklisty weryfikacyjne</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if versions %}
+<div class="admin-card admin-table-wrap">
+    <table class="admin-table admin-table--responsive">
+        <thead><tr><th>Wersja</th><th>Status</th><th>Daty i autorzy</th><th>Opis zmian</th><th>Różnice względem źródła</th><th class="actions-column">Akcje</th></tr></thead>
+        <tbody>
+        {% for version in versions %}
+        {% set diff = diffs.get(version.id, {}) %}
+        <tr>
+            <td><strong>{{ version.version_label }}</strong><br><small>{{ version.version_major }}.{{ version.version_minor }}{% if version.source_version %} · z {{ version.source_version.version_label }}{% endif %}</small></td>
+            <td>
+                <span class="admin-badge {% if version.status == 'published' %}admin-badge-success{% elif version.status == 'draft' %}admin-badge-warning{% else %}admin-badge-muted{% endif %}">
+                    {% if version.status == 'published' %}Opublikowana{% elif version.status == 'draft' %}Robocza{% else %}Archiwalna{% endif %}
+                </span>
+            </td>
+            <td>
+                <small>Utworzono {{ version.created_at.strftime('%Y-%m-%d %H:%M') if version.created_at else '-' }}{% if version.created_by %}<br>przez {{ version.created_by.email }}{% endif %}</small>
+                {% if version.published_at %}<small><br>Opublikowano {{ version.published_at.strftime('%Y-%m-%d %H:%M') }}{% if version.published_by %}<br>przez {{ version.published_by.email }}{% endif %}</small>{% endif %}
+                {% if version.archived_at %}<small><br>Zarchiwizowano {{ version.archived_at.strftime('%Y-%m-%d %H:%M') }}</small>{% endif %}
+            </td>
+            <td>{{ version.change_summary or '—' }}</td>
+            <td>
+                {% if version.source_version %}
+                    <small>
+                        Pola: +{{ diff.added_fields|length }} / −{{ diff.removed_fields|length }} / zm. {{ diff.changed_fields|length }}<br>
+                        Workflow: +{{ diff.added_workflow_steps|length }} / −{{ diff.removed_workflow_steps|length }} / zm. {{ diff.changed_workflow_steps|length }}
+                    </small>
+                    {% if diff.added_fields or diff.removed_fields or diff.changed_fields %}
+                    <details><summary>Szczegóły pól</summary><small>
+                        {% if diff.added_fields %}Dodane: {{ diff.added_fields|join(', ') }}<br>{% endif %}
+                        {% if diff.removed_fields %}Usunięte: {{ diff.removed_fields|join(', ') }}<br>{% endif %}
+                        {% if diff.changed_fields %}Zmienione: {{ diff.changed_fields|join(', ') }}{% endif %}
+                    </small></details>
+                    {% endif %}
+                {% else %}—{% endif %}
+            </td>
+            <td class="actions-column">
+                <a class="admin-button-secondary compact" href="{{ url_for('admin.form_version_preview', form_id=form.id, version_id=version.id) }}">Podgląd</a>
+                {% if can_manage and version.status == 'draft' %}
+                    <a class="admin-button-secondary compact" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=version.id) }}">Edytuj</a>
+                    <form method="post" action="{{ url_for('admin.form_version_publish', form_id=form.id, version_id=version.id) }}" class="admin-form compact">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <label><span>Opis zmian</span><textarea name="change_summary" rows="2" required>{{ version.change_summary }}</textarea></label>
+                        <button class="admin-button compact" type="submit" data-admin-confirm-message="Opublikować tę wersję i zarchiwizować poprzednią?">Opublikuj</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin.form_version_delete', form_id=form.id, version_id=version.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-link-button admin-link-danger" type="submit" data-admin-confirm-message="Usunąć wersję roboczą?">Usuń roboczą</button>
+                    </form>
+                {% elif can_manage %}
+                    <form method="post" action="{{ url_for('admin.form_version_clone', form_id=form.id, version_id=version.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-button-secondary compact" name="bump" value="minor" type="submit">Nowa wersja podrzędna</button>
+                        <button class="admin-button-secondary compact" name="bump" value="major" type="submit">Nowa wersja główna</button>
+                    </form>
+                    {% if version.status == 'published' %}
+                    <form method="post" action="{{ url_for('admin.form_version_archive', form_id=form.id, version_id=version.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-link-button" type="submit" data-admin-confirm-message="Zarchiwizować aktywną wersję? Formularz publiczny przestanie być dostępny.">Archiwizuj</button>
+                    </form>
+                    {% endif %}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="admin-empty-state"><h2>Brak wersji.</h2><p>Ten formularz pochodzi ze starszego trybu zgodności.</p></div>
+{% endif %}
+{% endblock %}

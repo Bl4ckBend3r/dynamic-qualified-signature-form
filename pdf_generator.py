@@ -1,5 +1,6 @@
 import base64
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -15,8 +16,8 @@ NEXTCLOUD_LOGO_DIR = "Strona WWW/Formularze/Logo"
 
 def inject_pdf_styles(app, html_string: str) -> str:
     css_paths = [
-        Path(app.root_path) / "static" / "style.css",
-        Path(app.root_path) / "static" / "document_template.css",
+        Path(app.root_path) / "static" / "css" / "style.css",
+        Path(app.root_path) / "static" / "css" / "document_template.css",
     ]
 
     css_content = []
@@ -25,15 +26,42 @@ def inject_pdf_styles(app, html_string: str) -> str:
         if css_path.exists():
             css_content.append(css_path.read_text(encoding="utf-8"))
 
+    html_string = ensure_document_root(html_string)
+
     if not css_content:
         return html_string
 
     style_tag = "<style>\n" + "\n\n".join(css_content) + "\n</style>"
 
-    if "</head>" in html_string:
-        return html_string.replace("</head>", f"{style_tag}\n</head>", 1)
+    if re.search(r"</head\s*>", html_string, flags=re.IGNORECASE):
+        return re.sub(
+            r"</head\s*>",
+            lambda match: f"{style_tag}\n{match.group(0)}",
+            html_string,
+            count=1,
+            flags=re.IGNORECASE,
+        )
 
     return f"{style_tag}\n{html_string}"
+
+
+def ensure_document_root(html_string: str) -> str:
+    body_match = re.search(r"<body\b([^>]*)>", html_string, flags=re.IGNORECASE)
+    if not body_match:
+        return f'<main class="document">{html_string}</main>'
+
+    attributes = body_match.group(1)
+    class_match = re.search(r"\bclass\s*=\s*([\"'])(.*?)\1", attributes, flags=re.IGNORECASE | re.DOTALL)
+    if class_match:
+        classes = class_match.group(2).split()
+        if "document" in classes:
+            return html_string
+        new_class = f'class={class_match.group(1)}{class_match.group(2)} document{class_match.group(1)}'
+        new_attributes = attributes[: class_match.start()] + new_class + attributes[class_match.end() :]
+    else:
+        new_attributes = f'{attributes} class="document"'
+    replacement = f"<body{new_attributes}>"
+    return html_string[: body_match.start()] + replacement + html_string[body_match.end() :]
 
 
 def get_logo_filename_from_url(footer_image_url: str) -> str:
@@ -129,10 +157,10 @@ def write_pdf_from_html(
             header_template="<div></div>",
             footer_template=footer_template,
             margin={
-                "top": "20mm",
-                "right": "20mm",
+                "top": "18mm",
+                "right": "18mm",
                 "bottom": "28mm" if has_footer else "20mm",
-                "left": "20mm",
+                "left": "18mm",
             },
         )
 
@@ -159,12 +187,16 @@ def generate_pdf(app, template_name: str, context: dict, output_path: Path) -> P
 
 
 def generate_pdf_from_html(app, template_html: str, context: dict, output_path: Path) -> Path:
-    with app.app_context():
-        html_string = render_template_string(template_html, **context)
-        html_string = inject_pdf_styles(app, html_string)
+    html_string = render_document_html(app, template_html, context)
 
     return write_pdf_from_html(
         html_string,
         output_path,
         footer_image_url=get_footer_image_url(context),
     )
+
+
+def render_document_html(app, template_html: str, context: dict) -> str:
+    """Render the same Jinja and CSS pipeline used by final HTML-based PDFs."""
+    with app.app_context():
+        return inject_pdf_styles(app, render_template_string(template_html, **context))

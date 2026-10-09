@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import zipfile
+from collections.abc import Mapping
+from copy import deepcopy
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
+from uuid import uuid4
+from sqlalchemy import select
 
 from form_loader import (
     FIELD_STAGE_INITIAL,
+    SUPPORTED_FIELD_TYPES,
     SUPPORTED_FIELD_STAGES,
     has_additional_fields_after_acceptance,
     normalize_form_definition,
@@ -18,17 +25,90 @@ from form_loader import (
 from models import Form, FormField
 from services.documents.declaration_flow_service import training_section_insert_index
 from services.form_config_service import FormConfigService
+from services.field_availability_service import FieldAvailabilityService
+from services.qualification_condition_service import QualificationConditionService
+from services.training_catalog_service import TrainingCatalogService
+from services.workflow_config_service import WorkflowConfigNormalizer, WorkflowConfigValidator, collapse_draft_document_stages
+from services.training_service import decimal_price_to_storage
 from validators.form_config_validator import FormConfigValidator
+
+
+_DOCUMENT_BUILDER_WORKFLOW_KEYS = {
+    "declaration": (
+        "declaration_builder_document",
+        "declaration_builder_active_document",
+        "declaration_builder_status",
+        "declaration_builder_updated_at",
+        "declaration_builder_updated_by",
+        "declaration_template_updated_at",
+        "declaration_template_updated_by",
+        "declaration_template_updated_source",
+    ),
+    "contract": (
+        "contract_builder_document",
+        "contract_builder_active_document",
+        "contract_builder_status",
+        "contract_builder_updated_at",
+        "contract_builder_updated_by",
+        "contract_template_updated_at",
+        "contract_template_updated_by",
+        "contract_template_updated_source",
+    ),
+}
+
+
+def _form_getlist(form_data, key: str) -> list[Any]:
+    """Read a repeated form value from MultiDict or a plain mapping."""
+    getlist = getattr(form_data, "getlist", None)
+    if callable(getlist):
+        return list(getlist(key))
+    if not isinstance(form_data, Mapping) or key not in form_data:
+        return []
+    value = form_data.get(key)
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _merge_document_builder_state(candidate: dict, current: dict) -> tuple[dict, dict[str, bool]]:
+    """Keep builder-owned state from the current draft during an ordinary form save.
+
+    ``workflow_builder_json`` is a page-open snapshot.  It owns the visual
+    workflow fields, but not the document edited in the separate builder.
+    """
+    merged = dict(candidate or {})
+    stale: dict[str, bool] = {}
+    for document_type, keys in _DOCUMENT_BUILDER_WORKFLOW_KEYS.items():
+        revision_key = f"{document_type}_builder_updated_at"
+        if revision_key in merged or revision_key in current:
+            stale[document_type] = (
+                (revision_key in merged) != (revision_key in current)
+                or merged.get(revision_key) != current.get(revision_key)
+            )
+        else:
+            # Compatibility with older payloads/documents without revision metadata.
+            stale[document_type] = any(
+                key in merged and merged.get(key) != current.get(key)
+                for key in keys
+            )
+        for key in keys:
+            if key in current:
+                merged[key] = deepcopy(current[key])
+            else:
+                merged.pop(key, None)
+    return merged, stale
 
 
 def get_declaration_training_field(form_definition: dict) -> dict:
     definition = normalize_admin_form_definition(form_definition or {})
-    for document in definition.get("documents") or []:
-        if not isinstance(document, dict) or document.get("id") != "declaration":
-            continue
-        for field in document.get("fields") or []:
-            if isinstance(field, dict) and field.get("type") == "training_selection":
-                return {"enabled": True, **dict(field)}
+    field = TrainingCatalogService.get_training_field(definition)
+    if field:
+        normalized_field = {"enabled": True, **field}
+        normalized_field["catalog"] = TrainingCatalogService.get_trainings_for_field(
+            normalized_field,
+            active_only=False,
+        )
+        return normalized_field
     return {
         "enabled": False,
         "type": "training_selection",
@@ -57,27 +137,327 @@ def normalize_admin_form_definition(form_definition: dict) -> dict:
     return FormConfigService().normalize_form_config(normalized)
 
 
-def validate_admin_form_config(form_definition: dict) -> list[str]:
+def validate_admin_form_config(form_definition: dict, *, validate_visual_workflow: bool = True) -> list[str]:
     try:
         validate_form_definition(form_definition)
     except Exception as exc:
         return [str(exc)]
     validator = FormConfigValidator(skip_template_check=True)
-    return validator.validate(form_definition)
+    errors = validator.validate(form_definition)
+    training_field = TrainingCatalogService.get_training_field(form_definition)
+    errors.extend(TrainingCatalogService().validate_field(training_field))
+    errors.extend(FieldAvailabilityService().validate_config(form_definition))
+    if validate_visual_workflow:
+        errors.extend(
+            WorkflowConfigValidator().validate(
+                form_definition.get("workflow") or {},
+                form_definition,
+            )
+        )
+    return list(dict.fromkeys(errors))
 
 
-def build_form_definition_from_admin_form(current_definition: dict, form_data) -> dict:
+def build_form_definition_from_admin_form(
+    current_definition: dict,
+    form_data,
+    *,
+    allow_advanced_json: bool = False,
+) -> dict:
     definition = normalize_admin_form_definition(current_definition or {})
-    workflow = parse_workflow_json(form_data.get("workflow_json", ""), definition.get("workflow") or {})
+    current_workflow = dict(definition.get("workflow") or {})
+    full_definition_value = str(form_data.get("form_definition_json", "") or "").strip()
+    use_full_definition = allow_advanced_json and form_data.get("use_form_definition_json") == "on"
+    if use_full_definition:
+        parsed_definition = json.loads(full_definition_value)
+        if not isinstance(parsed_definition, dict):
+            raise ValueError("Pełna konfiguracja JSON musi być obiektem.")
+        definition = normalize_admin_form_definition(parsed_definition)
+    normalizer = WorkflowConfigNormalizer()
+    builder_value = str(form_data.get("workflow_builder_json", "") or "").strip()
+    advanced_value = str(form_data.get("workflow_json", "") or "").strip()
+    use_advanced_json = allow_advanced_json and form_data.get("workflow_use_advanced_json") == "on"
+    convert_documents = form_data.get("active_tab") == "workflow"
+    if use_advanced_json:
+        workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
+    elif builder_value:
+        workflow = parse_workflow_json(builder_value, definition.get("workflow") or {})
+        if workflow.pop("document_stage_conversion", False):
+            # GET already converted the graph; remap its source field references too.
+            definition = collapse_draft_document_stages(definition)
+            convert_documents = True
+    elif allow_advanced_json and advanced_value and advanced_value not in {"{}", "null"}:
+        # Kompatybilność ze starszym panelem, który wysyłał wyłącznie workflow_json.
+        workflow = parse_workflow_json(advanced_value, definition.get("workflow") or {})
+    else:
+        workflow = dict(definition.get("workflow") or {})
+    builder_state_stale = {"declaration": False, "contract": False}
+    if not use_full_definition and not use_advanced_json:
+        workflow, builder_state_stale = _merge_document_builder_state(workflow, current_workflow)
+    workflow = normalizer.normalize(workflow)
+    previous_declaration_template_source = str(workflow.get("declaration_template_source") or "")
+    previous_contract_template_source = str(workflow.get("contract_template_source") or "")
     workflow["name"] = form_data.get("workflow_name", workflow.get("name", "")).strip() or "Workflow"
-    workflow["initial_step"] = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
+    requested_initial_step = form_data.get("workflow_initial_step", workflow.get("initial_step", "")).strip()
+    workflow["initial_step"] = requested_initial_step
     workflow["requires_declaration"] = form_data.get("requires_declaration") == "on"
     workflow["requires_contract"] = form_data.get("requires_contract") == "on"
+    workflow["requires_agreement_confirmation"] = form_data.get("requires_agreement_confirmation") == "on"
+    workflow["send_email_notifications"] = form_data.get("send_email_notifications") == "on"
+    workflow["allow_correction"] = form_data.get("allow_correction") == "on"
+    workflow["electronic_signature_required"] = form_data.get("electronic_signature_required") == "on"
+    workflow["signed_document_uploader"] = form_data.get("signed_document_uploader", "beneficiary").strip() or "beneficiary"
     workflow["declaration_template_html"] = form_data.get("declaration_template_html", "").strip()
+    requested_declaration_source = str(form_data.get("declaration_template_source") or "").strip().casefold()
+    declaration_builder_json = str(form_data.get("declaration_builder_json") or "").strip()
+    if builder_state_stale["declaration"] and not declaration_builder_json:
+        requested_declaration_source = str(current_workflow.get("declaration_template_source") or "").strip().casefold()
+    if not requested_declaration_source and workflow["declaration_template_html"]:
+        requested_declaration_source = "html"
+    declaration_source = requested_declaration_source or str(workflow.get("declaration_template_source") or "builder").strip().casefold()
+    workflow["declaration_template_source"] = declaration_source if declaration_source in {"builder", "html", "docx"} else "builder"
+    workflow["declaration_docx_template"] = dict(workflow.get("declaration_docx_template") or {})
+    if workflow["declaration_template_source"] == "builder" and not isinstance(workflow.get("declaration_builder_document"), dict):
+        from services.documents.document_builder_service import default_document_builder_document
+
+        workflow["declaration_builder_document"] = default_document_builder_document("declaration")
+    if declaration_builder_json:
+        from services.documents.document_builder_service import normalize_document_builder_document
+
+        parsed_declaration_builder = json.loads(declaration_builder_json)
+        if not isinstance(parsed_declaration_builder, dict):
+            raise ValueError("Konfiguracja kreatora deklaracji musi być obiektem JSON.")
+        workflow["declaration_builder_document"] = normalize_document_builder_document(parsed_declaration_builder, "declaration")
+    if (
+        workflow["declaration_template_source"] == "builder"
+        and isinstance(workflow.get("declaration_builder_document"), dict)
+        and (bool(declaration_builder_json) or previous_declaration_template_source != "builder" or not workflow.get("declaration_builder_active_document"))
+    ):
+        from services.documents.document_builder_service import normalize_document_builder_document
+
+        workflow["declaration_builder_active_document"] = normalize_document_builder_document(
+            workflow["declaration_builder_document"], "declaration"
+        )
+    workflow["declaration_filename_pattern"] = (
+        form_data.get("declaration_filename_pattern", workflow.get("declaration_filename_pattern", "")).strip()
+        or "{first_name}_{last_name}-deklaracja.pdf"
+    )
+    workflow["declaration_generation_mode"] = "single"
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
+    requested_template_source = str(form_data.get("contract_template_source") or "").strip().casefold()
+    builder_json = str(form_data.get("contract_builder_json") or "").strip()
+    if builder_state_stale["contract"] and not builder_json:
+        requested_template_source = str(current_workflow.get("contract_template_source") or "").strip().casefold()
+    # Starsze formularze administracyjne i integracje przesyłały sam HTML,
+    # zanim wybór źródła stał się jawnym polem.
+    if not requested_template_source and workflow["contract_template_html"]:
+        requested_template_source = "html"
+    template_source = requested_template_source or str(workflow.get("contract_template_source") or "builder").strip().casefold()
+    workflow["contract_template_source"] = template_source if template_source in {"builder", "html", "docx"} else "builder"
+    workflow["contract_docx_template"] = dict(workflow.get("contract_docx_template") or {})
+    if workflow["contract_template_source"] == "builder" and not isinstance(workflow.get("contract_builder_document"), dict):
+        from services.documents.agreement_builder_service import default_agreement_builder_document
+
+        workflow["contract_builder_document"] = default_agreement_builder_document()
+    if builder_json:
+        from services.documents.agreement_builder_service import normalize_agreement_builder_document
+
+        parsed_builder = json.loads(builder_json)
+        if not isinstance(parsed_builder, dict):
+            raise ValueError("Konfiguracja kreatora umowy musi być obiektem JSON.")
+        workflow["contract_builder_document"] = normalize_agreement_builder_document(parsed_builder)
+    if (
+        workflow["contract_template_source"] == "builder"
+        and isinstance(workflow.get("contract_builder_document"), dict)
+        and (bool(builder_json) or previous_contract_template_source != "builder" or not workflow.get("contract_builder_active_document"))
+    ):
+        from services.documents.agreement_builder_service import normalize_agreement_builder_document
+
+        workflow["contract_builder_active_document"] = normalize_agreement_builder_document(workflow["contract_builder_document"])
+    workflow["contract_generation_mode"] = "per_training"
+    workflow["contract_show_all_trainings_total"] = form_data.get("contract_show_all_trainings_total") == "on"
+    workflow["contract_filename_pattern"] = (
+        form_data.get("contract_filename_pattern", workflow.get("contract_filename_pattern", "")).strip()
+        or "{first_name}_{last_name}-{training_id}-umowa.pdf"
+    )
+    workflow["contract_number_pattern"] = (
+        form_data.get("contract_number_pattern", workflow.get("contract_number_pattern", "")).strip()
+        or "{submission_id}/{agreement_sequence}/{generated_date}"
+    )
+    workflow["managed_documents"] = bool(
+        form_data.get("workflow_controls_present") == "1"
+        or form_data.get("requires_declaration")
+        or form_data.get("requires_contract")
+        or form_data.get("declaration_template_html")
+        or form_data.get("contract_template_html")
+        or workflow.get("declaration_docx_template")
+        or workflow.get("contract_docx_template")
+    )
+    workflow["decision_settings"] = _workflow_decision_settings(form_data, workflow.get("decision_settings") or [])
+    workflow["email_notifications"] = _workflow_email_notifications(form_data, workflow.get("email_notifications") or [])
+    workflow = normalizer.normalize(workflow)
+    if "workflow_initial_step" in form_data:
+        workflow["initial_step"] = requested_initial_step
+    if convert_documents:
+        # Convert the submitted graph, not only the fallback definition: a stale
+        # builder payload can still contain separate phases (including composites).
+        definition = collapse_draft_document_stages({**definition, "workflow": workflow})
+        workflow = definition["workflow"]
+    workflow.pop("document_stage_conversion", None)
+    if builder_value or use_advanced_json:
+        workflow_errors = WorkflowConfigValidator().validate(workflow)
+        if workflow_errors:
+            raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
+    if "assignment_mode" in form_data:
+        assignment_mode = str(form_data.get("assignment_mode") or "manual").strip()
+        if assignment_mode not in {"manual", "round_robin"}:
+            raise ValueError("Nieprawidłowy tryb automatycznego przydzielania spraw.")
+        eligible_users = [
+            int(item) for item in _form_getlist(form_data, "assignment_eligible_user_ids")
+            if str(item).isdigit()
+        ]
+        definition["assignment"] = {
+            **dict(definition.get("assignment") or {}),
+            "mode": assignment_mode,
+            "eligible_users": list(dict.fromkeys(eligible_users)),
+        }
+    if "qualification_conditions_json" in form_data:
+        raw_conditions = str(form_data.get("qualification_conditions_json") or "").strip() or "[]"
+        parsed_conditions = json.loads(raw_conditions)
+        if not isinstance(parsed_conditions, list):
+            raise ValueError("Konfiguracja warunków kwalifikujących musi być listą.")
+        qualification_service = QualificationConditionService()
+        qualification_config = qualification_service.normalize_config(
+            {
+                "enabled": form_data.get("qualification_conditions_enabled") == "on",
+                "conditions": parsed_conditions,
+            },
+            definition.get("fields") or [],
+        )
+        qualification_errors = qualification_service.validate_config(
+            qualification_config,
+            definition.get("fields") or [],
+        )
+        if qualification_errors:
+            raise ValueError(" ".join(qualification_errors))
+        definition["qualification_conditions"] = qualification_config
     definition = apply_training_selection_from_admin_form(definition, form_data)
     return normalize_admin_form_definition(definition)
+
+
+def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:
+    existing_by_id = {str(item.get("id") or ""): dict(item) for item in existing if isinstance(item, dict)}
+    definitions = (
+        ("application_decision", "Decyzja o akceptacji wniosku", ""),
+        ("declaration_confirmation", "Potwierdzenie podpisanej deklaracji", ""),
+        ("agreement_confirmation", "Potwierdzenie podpisania umowy przez urząd", ""),
+        ("correction_required", "Wymagana korekta", ""),
+        ("application_rejection", "Odrzucenie wniosku", ""),
+        ("agreement_rejection", "Skierowanie umowy do poprawy", ""),
+    )
+    known_ids = {item[0] for item in definitions}
+    definitions = (*definitions, *(
+        (decision_id, str(item.get("label") or decision_id), str(item.get("step_id") or ""))
+        for decision_id, item in existing_by_id.items()
+        if decision_id and decision_id not in known_ids
+    ))
+    result = []
+    for decision_id, label, default_step in definitions:
+        current = existing_by_id.get(decision_id, {})
+        result.append(
+            {
+                **current,
+                "id": decision_id,
+                "label": _modern_decision_label(
+                    form_data.get(f"decision_{decision_id}_label", current.get("label", label)).strip() or label
+                ),
+                "step_id": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
+                "assigned_stage": form_data.get(f"decision_{decision_id}_step", current.get("step_id", default_step)).strip(),
+                "values": ["accepted", "rejected", "correction"],
+                "yes_status": form_data.get(
+                    f"decision_{decision_id}_yes_status", current.get("yes_status", current.get("status_on_yes", ""))
+                ).strip(),
+                "no_status": form_data.get(
+                    f"decision_{decision_id}_no_status", current.get("no_status", current.get("status_on_no", ""))
+                ).strip(),
+                "correction_status": form_data.get(
+                    f"decision_{decision_id}_correction_status",
+                    current.get("correction_status", current.get("status_on_correction", "")),
+                ).strip(),
+                "reason_required": form_data.get(f"decision_{decision_id}_reason_required") == "on",
+                "require_reason": form_data.get(f"decision_{decision_id}_reason_required") == "on",
+                "send_email": form_data.get(f"decision_{decision_id}_send_email") == "on",
+                "user_message": form_data.get(
+                    f"decision_{decision_id}_user_message", current.get("user_message", "")
+                ).strip(),
+                "system_action": form_data.get(
+                    f"decision_{decision_id}_system_action", current.get("system_action", "")
+                ).strip(),
+                "active": (
+                    form_data.get(f"decision_{decision_id}_active") == "on"
+                    if f"decision_{decision_id}_active" in form_data
+                    else bool(current.get("active", current.get("step_id", default_step)))
+                ),
+            }
+        )
+    return result
+
+
+def _workflow_email_notifications(form_data, existing: list[dict]) -> list[dict]:
+    existing_by_id = {str(item.get("id") or ""): dict(item) for item in existing if isinstance(item, dict)}
+    events = (
+        ("application_accepted", "Po akceptacji wniosku"),
+        ("application_rejected", "Po odrzuceniu wniosku"),
+        ("correction_required", "Po wymaganiu korekty"),
+        ("declaration_uploaded", "Po wgraniu deklaracji"),
+        ("beneficiary_agreement_confirmed", "Po podpisaniu umowy przez urząd"),
+        ("beneficiary_agreement_rejected", "Po skierowaniu umowy do poprawy"),
+    )
+    submitted_ids = _form_getlist(form_data, "notification_id")
+    event_labels = dict(events)
+    for event_id in [*existing_by_id, *submitted_ids]:
+        if event_id:
+            event_labels.setdefault(event_id, existing_by_id.get(event_id, {}).get("label") or event_id)
+    result = []
+    for event_id, label in event_labels.items():
+        current = existing_by_id.get(event_id, {})
+        if event_id not in dict(events) and event_id not in submitted_ids:
+            result.append(current)
+            continue
+        source_type = form_data.get(f"notification_{event_id}_recipient_type")
+        if source_type == "repeatable_group":
+            current["recipient_source"] = {"type": "repeatable_group",
+                "group": form_data.get(f"notification_{event_id}_recipient_group", "").strip(),
+                "email_field": form_data.get(f"notification_{event_id}_recipient_email", "").strip()}
+        elif source_type == "submission":
+            current.pop("recipient_source", None)
+        elif source_type is not None:
+            raise ValueError("Nieobsługiwane źródło odbiorców wiadomości.")
+        if f"notification_{event_id}_event" in form_data:
+            current["event"] = form_data.get(f"notification_{event_id}_event", "").strip()
+        result.append(
+            {
+                **current,
+                "id": event_id,
+                "label": label,
+                "enabled": form_data.get(f"notification_{event_id}_enabled") == "on",
+                "template_type": form_data.get(
+                    f"notification_{event_id}_template",
+                    current.get("template_type", event_id),
+                ).strip(),
+                "manual_confirmation": form_data.get(f"notification_{event_id}_manual") == "on",
+                "automatic": form_data.get(f"notification_{event_id}_automatic") == "on",
+            }
+        )
+    return result
+
+
+def _modern_decision_label(value: str) -> str:
+    return {
+        "Potwierdzenie podpisanej umowy przez beneficjenta": "Potwierdzenie podpisania umowy przez urząd",
+        "Umowa podpisana przez beneficjenta": "Umowa podpisana przez urząd",
+        "Odrzucenie podpisanej umowy": "Skierowanie umowy do poprawy",
+    }.get(value, value)
 
 
 def apply_training_selection_from_admin_form(definition: dict, form_data) -> dict:
@@ -103,20 +483,29 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
         (index for index, field in enumerate(current_fields) if field.get("type") == "training_selection"),
         None,
     )
+    existing_training = current_fields[existing_training_index] if existing_training_index is not None else None
     fields = [field for field in current_fields if field.get("type") != "training_selection"]
 
-    if enabled:
+    if enabled or existing_training is not None:
         training_field = {
+            **(existing_training or {}),
             "type": "training_selection",
+            "enabled": enabled,
             "name": form_data.get("training_selection_name", "selected_trainings").strip() or "selected_trainings",
             "label": form_data.get("training_selection_label", "Wybierz szkolenia").strip() or "Wybierz szkolenia",
             "required": form_data.get("training_selection_required") == "on",
-            "currency": form_data.get("training_selection_currency", "PLN").strip() or "PLN",
-            "catalog": parse_training_catalog(form_data),
+            "currency": parse_training_currency(
+                form_data.get("training_selection_currency", "PLN")
+            ),
+            # The form editor owns only the versioned selection-stage settings.
+            # Concrete trainings are managed by the standalone training module.
+            "catalog": list((existing_training or {}).get("catalog") or []),
         }
-        max_total = parse_optional_float(form_data.get("training_selection_max_total"))
+        max_total = decimal_price_to_storage(form_data.get("training_selection_max_total"))
         if max_total is not None:
             training_field["max_total_amount"] = max_total
+        else:
+            training_field.pop("max_total_amount", None)
         insert_at = training_section_insert_index(fields)
         if insert_at is None:
             insert_at = min(existing_training_index, len(fields)) if existing_training_index is not None else len(fields)
@@ -129,34 +518,229 @@ def apply_training_selection_from_admin_form(definition: dict, form_data) -> dic
 
 def parse_training_catalog(form_data) -> list[dict]:
     catalog = []
-    item_ids = form_data.getlist("training_item_id")
-    names = form_data.getlist("training_item_name")
-    prices = form_data.getlist("training_item_price")
+    selection_groups = _form_getlist(form_data, "training_item_selection_group")
+    selection_group_choices = _form_getlist(form_data, "training_item_selection_group_choice")
+    new_selection_groups = _form_getlist(form_data, "training_item_selection_group_new")
+    item_ids = _form_getlist(form_data, "training_item_id")
+    names = _form_getlist(form_data, "training_item_name")
+    prices = _form_getlist(form_data, "training_item_price")
+    currencies = _form_getlist(form_data, "training_item_currency")
+    capacities = _form_getlist(form_data, "training_item_capacity")
+    descriptions = _form_getlist(form_data, "training_item_description")
+    admin_comments = _form_getlist(form_data, "training_item_admin_comment")
+    low_comments = _form_getlist(form_data, "training_item_low_seats_comment")
+    dates_by_training = parse_training_dates_from_form(form_data, len(names))
+    active_values = _form_getlist(form_data, "training_item_active")
+    active_indexes = {int(item) for item in active_values if str(item).isdigit()}
+    default_active = form_data.get("training_active_present") != "1" and not active_values
+    sort_orders = _form_getlist(form_data, "training_item_sort_order")
     for index, name in enumerate(names):
         clean_name = str(name or "").strip()
         if not clean_name:
+            if default_active or index in active_indexes:
+                raise ValueError(
+                    f"Aktywne szkolenie {index + 1} musi mieć nazwę."
+                )
             continue
         item_id = str(item_ids[index] if index < len(item_ids) else "").strip()
-        price = parse_optional_float(prices[index] if index < len(prices) else "")
-        catalog.append(
+        training_id = item_id or f"trn_{uuid4().hex}"
+        capacity = parse_required_capacity(capacities[index] if index < len(capacities) else "")
+        legacy_selection_group = str(
+            selection_groups[index] if index < len(selection_groups) else ""
+        ).strip()
+        if index < len(selection_group_choices):
+            selection_group_choice = str(selection_group_choices[index] or "").strip()
+            if selection_group_choice == "__new__":
+                selection_group = str(
+                    new_selection_groups[index]
+                    if index < len(new_selection_groups)
+                    else ""
+                ).strip()
+                if not selection_group:
+                    raise ValueError("Podaj nazwę nowej grupy powiązanych szkoleń.")
+            else:
+                selection_group = selection_group_choice
+        else:
+            selection_group = legacy_selection_group
+        item = {
+            "id": training_id,
+            "name": clean_name,
+            "selection_group": selection_group,
+            "price": decimal_price_to_storage(
+                prices[index] if index < len(prices) else ""
+            ),
+            "currency": parse_training_currency(
+                currencies[index] if index < len(currencies) else "PLN"
+            ),
+            "capacity": capacity,
+            "description": str(
+                descriptions[index] if index < len(descriptions) else ""
+            ).strip(),
+            "low_seats_comment": str(
+                low_comments[index] if index < len(low_comments) else ""
+            ).strip(),
+            "dates": dates_by_training[index],
+            "active": default_active or index in active_indexes,
+            "sort_order": parse_optional_int_value(
+                sort_orders[index] if index < len(sort_orders) else "",
+                index + 1,
+            ),
+        }
+        admin_comment = str(
+            admin_comments[index] if index < len(admin_comments) else ""
+        ).strip()
+        if admin_comment:
+            item["admin_comment"] = admin_comment
+        catalog.append(item)
+    return sorted(catalog, key=lambda item: (item["sort_order"], item["name"].lower()))
+
+
+def parse_optional_int_value(value: Any, fallback: int) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise ValueError("Kolejność szkolenia musi być liczbą całkowitą.") from exc
+    if parsed < 0:
+        raise ValueError("Kolejność szkolenia nie może być mniejsza niż 0.")
+    return parsed
+
+
+def parse_training_currency(value: Any) -> str:
+    currency = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("Waluta szkolenia musi być trzyliterowym kodem, np. PLN.")
+    return currency
+
+
+def parse_training_dates_from_form(form_data, training_count: int) -> list[list[dict]]:
+    dates_by_training: list[list[dict]] = [[] for _ in range(training_count)]
+    training_indexes = _form_getlist(form_data, "training_date_training_index")
+    if training_indexes:
+        start_dates = _form_getlist(form_data, "training_date_start_date")
+        end_dates = _form_getlist(form_data, "training_date_end_date")
+        start_times = _form_getlist(form_data, "training_date_start_time")
+        end_times = _form_getlist(form_data, "training_date_end_time")
+        locations = _form_getlist(form_data, "training_date_location")
+        descriptions = _form_getlist(form_data, "training_date_description")
+        for row_index, training_index_value in enumerate(training_indexes):
+            try:
+                training_index = int(str(training_index_value).strip())
+            except ValueError as exc:
+                raise ValueError("Nie można przypisać terminu do szkolenia.") from exc
+            if training_index < 0 or training_index >= training_count:
+                raise ValueError("Nie można przypisać terminu do szkolenia.")
+
+            start_date = _form_list_value(start_dates, row_index)
+            end_date = _form_list_value(end_dates, row_index)
+            start_time = _form_list_value(start_times, row_index)
+            end_time = _form_list_value(end_times, row_index)
+            location = _form_list_value(locations, row_index)
+            description = _form_list_value(descriptions, row_index)
+            if not any((start_date, end_date, start_time, end_time, location, description)):
+                continue
+            validate_training_date_range(
+                start_date,
+                end_date,
+                start_time,
+                end_time,
+                row_index + 1,
+            )
+            dates_by_training[training_index].append(
+                {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "location": location,
+                    "description": description,
+                }
+            )
+        for dates in dates_by_training:
+            dates.sort(key=lambda item: (item["start_date"], item.get("start_time") or ""))
+        return dates_by_training
+
+    legacy_values = _form_getlist(form_data, "training_item_dates")
+    for index in range(training_count):
+        legacy_value = legacy_values[index] if index < len(legacy_values) else ""
+        dates_by_training[index] = parse_training_dates_text(legacy_value)
+    return dates_by_training
+
+
+def _form_list_value(values: list[Any], index: int) -> str:
+    return str(values[index] if index < len(values) else "").strip()
+
+
+def parse_required_capacity(value: Any) -> int:
+    text = str(value or "").strip()
+    if text == "":
+        raise ValueError("Liczba miejsc szkolenia jest wymagana.")
+    try:
+        capacity = int(text)
+    except ValueError as exc:
+        raise ValueError("Liczba miejsc szkolenia musi być liczbą całkowitą.") from exc
+    if capacity < 0:
+        raise ValueError("Liczba miejsc szkolenia nie może być mniejsza niż 0.")
+    return capacity
+
+
+def parse_training_dates_text(value: Any) -> list[dict]:
+    dates = []
+    for line_no, raw_line in enumerate(str(value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        start_date = parts[0] if len(parts) > 0 else ""
+        end_date = parts[1] if len(parts) > 1 else ""
+        start_time = parts[2] if len(parts) > 2 else ""
+        end_time = parts[3] if len(parts) > 3 else ""
+        location = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        validate_training_date_range(start_date, end_date, start_time, end_time, line_no)
+        dates.append(
             {
-                "id": item_id or slugify_training_id(clean_name),
-                "name": clean_name,
-                "price": price or 0,
+                "start_date": start_date,
+                "end_date": end_date,
+                "start_time": start_time,
+                "end_time": end_time,
+                "location": location,
+                "description": description,
             }
         )
-    return catalog
+    return sorted(dates, key=lambda item: (item["start_date"], item.get("start_time") or ""))
 
 
-def parse_optional_float(value: Any) -> float | int | None:
-    text = str(value or "").strip().replace(",", ".")
-    if not text:
-        return None
+def validate_training_date_range(start_date: str, end_date: str, start_time: str, end_time: str, line_no: int) -> None:
+    if not start_date:
+        raise ValueError(f"Termin szkolenia w wierszu {line_no} musi mieć datę rozpoczęcia.")
     try:
-        parsed = float(text)
-    except ValueError:
-        return None
-    return int(parsed) if parsed.is_integer() else parsed
+        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Data rozpoczęcia terminu w wierszu {line_no} musi mieć format RRRR-MM-DD.") from exc
+    parsed_end = parsed_start
+    if end_date:
+        try:
+            parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(f"Data zakończenia terminu w wierszu {line_no} musi mieć format RRRR-MM-DD.") from exc
+    if parsed_end < parsed_start:
+        raise ValueError("Data zakończenia szkolenia nie może być wcześniejsza niż data rozpoczęcia.")
+    if start_time:
+        validate_time(start_time, "Godzina rozpoczęcia", line_no)
+    if end_time:
+        validate_time(end_time, "Godzina zakończenia", line_no)
+    if parsed_end == parsed_start and start_time and end_time and end_time < start_time:
+        raise ValueError("Godzina zakończenia szkolenia nie może być wcześniejsza niż godzina rozpoczęcia.")
+
+
+def validate_time(value: str, label: str, line_no: int) -> None:
+    try:
+        datetime.strptime(value, "%H:%M")
+    except ValueError as exc:
+        raise ValueError(f"{label} terminu w wierszu {line_no} musi mieć format GG:MM.") from exc
 
 
 def slugify_training_id(value: str) -> str:
@@ -176,41 +760,121 @@ def parse_workflow_json(raw_value: str, fallback: dict) -> dict:
 
 def build_definition_from_html(html: str, filename: str) -> dict:
     fields: list[dict] = []
+    errors: list[str] = []
+    seen_names: set[str] = set()
     input_pattern = re.compile(r"<(input|select|textarea)\b([^>]*)>", re.IGNORECASE | re.DOTALL)
-    for tag, attrs in input_pattern.findall(html):
+    for index, (tag, attrs) in enumerate(input_pattern.findall(html), start=1):
         name = html_attr(attrs, "name")
-        if not name or name.startswith("_") or name == "csrf_token":
+        field_type = (html_attr(attrs, "type") or "text").lower() if tag.lower() == "input" else tag.lower()
+        if field_type in {"submit", "button", "reset", "image"}:
             continue
-        field_type = tag.lower()
-        if tag.lower() == "input":
-            field_type = html_attr(attrs, "type") or "text"
+        if not name:
+            if field_type != "hidden":
+                errors.append(f"Kontrolka HTML nr {index} nie ma atrybutu 'name'.")
+            continue
+        if name.startswith("_") or name == "csrf_token":
+            continue
+        if name in seen_names:
+            errors.append(f"Duplikat pola HTML o nazwie '{name}'.")
+            continue
+        seen_names.add(name)
+        if field_type == "hidden":
+            continue
+        if field_type not in SUPPORTED_FIELD_TYPES:
+            errors.append(f"Pole '{name}' ma nieobsługiwany typ HTML '{field_type}'.")
+            continue
         fields.append(
             {
                 "type": field_type,
                 "name": name,
                 "label": humanize_field_name(name),
-                "required": "required" in attrs.lower(),
+                "required": True,
             }
         )
+    if errors:
+        raise ValueError("Nie można zaimportować HTML: " + " ".join(errors))
     if not fields:
-        raise ValueError("no fields")
+        raise ValueError(
+            "Nie wykryto pól formularza w HTML. Dodaj kontrolki input, select lub textarea z atrybutem 'name'."
+        )
     return {"title": Path(filename).stem, "fields": fields}
 
 
 def build_definition_from_docx(content: bytes, filename: str) -> dict:
-    with zipfile.ZipFile(BytesIO(content)) as archive:
-        xml = archive.read("word/document.xml")
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError("Plik DOCX jest uszkodzony albo nie zawiera dokumentu Word.") from exc
+
     root = ElementTree.fromstring(xml)
-    texts = [item.text or "" for item in root.iter() if item.tag.endswith("}t") and item.text]
-    raw = "\n".join(texts)
-    candidates = re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw)
-    fields = [
-        {"type": "text", "name": name, "label": humanize_field_name(name), "required": False}
-        for name in dict.fromkeys(candidates)
-    ]
+    paragraphs: list[str] = []
+    for paragraph in (item for item in root.iter() if item.tag.endswith("}p")):
+        text = "".join(
+            child.text or ""
+            for child in paragraph.iter()
+            if child.tag.endswith("}t") or child.tag.endswith("}tab")
+        ).strip()
+        if text:
+            paragraphs.append(text)
+    raw = "\n".join(paragraphs)
+    fields_by_name: dict[str, dict] = {}
+
+    def add_field(label: str, *, field_type: str = "text", options: list[dict] | None = None) -> None:
+        clean_label = re.sub(r"\s+", " ", label).strip(" :-_\t")
+        if not clean_label:
+            return
+        name = _docx_field_name(clean_label)
+        if not name or name in fields_by_name:
+            return
+        field = {"type": field_type, "name": name, "label": clean_label, "required": True}
+        if options:
+            field["options"] = options
+        fields_by_name[name] = field
+
+    for name in re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", raw):
+        fields_by_name.setdefault(
+            name,
+            {"type": "text", "name": name, "label": humanize_field_name(name), "required": True},
+        )
+
+    checkbox_group: list[str] = []
+    for line in paragraphs:
+        without_placeholders = re.sub(r"\{\{\s*[a-zA-Z0-9_]+\s*\}\}", "", line).strip()
+        checkbox_match = re.match(r"^(?:☐|□|\[\s*[ xX]?\s*\])\s*(.+)$", without_placeholders)
+        if checkbox_match:
+            checkbox_group.append(checkbox_match.group(1).strip())
+            continue
+        if checkbox_group:
+            label = "Wybór"
+            options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+            add_field(label, field_type="checkbox", options=options)
+            checkbox_group = []
+
+        label_match = re.match(
+            r"^(.{2,120}?)(?::\s*(?:_{3,}|\.{3,}|$)|\s+(?:_{3,}|\.{3,})$)",
+            without_placeholders,
+        )
+        if label_match:
+            add_field(label_match.group(1))
+    if checkbox_group:
+        options = [{"value": _docx_field_name(item), "label": item} for item in checkbox_group]
+        add_field("Wybór", field_type="checkbox", options=options)
+
+    fields = list(fields_by_name.values())
     if not fields:
-        raise ValueError("no fields")
+        raise ValueError(
+            "Nie wykryto pól w DOCX. Oznacz pola jako {{ nazwa_pola }} albo użyj etykiety "
+            "z dwukropkiem i miejscem do wpisania, np. „Imię: ______”."
+        )
     return {"title": Path(filename).stem, "fields": fields}
+
+
+def _docx_field_name(label: str) -> str:
+    ascii_label = "".join(
+        char for char in unicodedata.normalize("NFKD", str(label).casefold()) if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "_", ascii_label).strip("_")[:80]
 
 
 def html_attr(attrs: str, name: str) -> str:
@@ -223,39 +887,115 @@ def humanize_field_name(name: str) -> str:
 
 
 def sync_form_fields(db, form: Form, form_definition: dict) -> None:
-    existing_fields = {field.name: field for field in form.fields}
-    for field in existing_fields.values():
-        field.active = False
+    db.flush()
+
+    stored_fields = db.execute(
+        select(FormField)
+        .where(FormField.form_id == form.id)
+        .order_by(FormField.id.asc())
+    ).scalars().all()
+
+    # Legacy FormField jest jedynie adapterem aktualnie edytowanej wersji.
+    # Dezaktywujemy wszystkie istniejące rekordy, również ewentualne
+    # historyczne duplikaty powstałe przez starszą implementację.
+    existing_fields: dict[str, FormField] = {}
+
+    for stored_field in stored_fields:
+        stored_field.active = False
+
+        # Zachowujemy najstarszy rekord jako kanoniczny dla danej nazwy.
+        # Ewentualne duplikaty pozostają nieaktywne.
+        existing_fields.setdefault(stored_field.name, stored_field)
+
     current_section = ""
     order = 0
+
     for field in detect_form_fields(form_definition):
         if field.get("type") == "section":
             current_section = field.get("label", "")
             continue
+
         name = field.get("name")
         if not name:
             continue
-        form_field = existing_fields.get(name) or FormField(form_id=form.id, name=name)
+
+        form_field = existing_fields.get(name)
+
+        if form_field is None:
+            form_field = FormField(
+                form_id=form.id,
+                name=name,
+            )
+            existing_fields[name] = form_field
+
         form_field.label = field.get("label", name)
         form_field.type = field.get("type", "text")
         form_field.required = bool(field.get("required"))
         form_field.options = field.get("options") or []
         form_field.default_value = str(field.get("default", ""))
+
+        classification = str(
+            field.get("data_classification")
+            or field.get("sensitivity")
+            or "normal"
+        ).strip()
+
+        if classification not in {"normal", "personal", "sensitive"}:
+            raise ValueError(
+                f"Pole {name} ma nieprawidłową klasyfikację danych."
+            )
+
+        form_field.data_classification = classification
         form_field.section = current_section
+
+        normalized_field = FieldAvailabilityService().normalize_field(
+            field,
+            form_definition,
+        )
+
+        form_field.availability_json = (
+            normalized_field.get("availability") or []
+        )
         form_field.stage = normalize_field_stage(field.get("stage"))
         form_field.sort_order = order
         form_field.active = True
+
         db.add(form_field)
         order += 1
 
-
 def detect_form_fields(form_definition: dict) -> list[dict]:
-    fields = list(form_definition.get("fields") or [])
-    documents = ((form_definition.get("process") or {}).get("documents") or form_definition.get("documents") or {})
-    if isinstance(documents, dict):
-        for document in documents.values():
+    fields: list[dict] = []
+    seen_names: set[str] = set()
+
+    def append_fields(candidates) -> None:
+        for field in candidates or []:
+            if not isinstance(field, dict):
+                continue
+            if field.get("type") == "training_selection":
+                continue
+            name = str(field.get("name") or "").strip()
+            if name:
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+            fields.append(field)
+
+    def append_document_fields(documents) -> None:
+        if isinstance(documents, dict):
+            iterable = documents.values()
+        elif isinstance(documents, list):
+            iterable = documents
+        else:
+            iterable = []
+        for document in iterable:
             if isinstance(document, dict):
-                fields.extend(document.get("fields") or [])
+                append_fields(document.get("fields"))
+
+    append_fields(form_definition.get("fields"))
+    append_document_fields(form_definition.get("documents"))
+    process = form_definition.get("process") or {}
+    if isinstance(process, dict):
+        append_document_fields(process.get("documents"))
     return fields
 
 

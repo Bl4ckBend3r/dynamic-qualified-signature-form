@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_migration_plan_contains_required_sections():
-    plan = Path("MIGRATION_PLAN.md").read_text(encoding="utf-8")
+    plan = Path("docs/archive/MIGRATION_PLAN.md").read_text(encoding="utf-8")
 
     required_sections = [
         "Pola do zostawienia",

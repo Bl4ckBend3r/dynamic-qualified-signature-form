@@ -1,59 +1,190 @@
 {% extends "admin/base.html" %}
-{% block title %}Upload formularza{% endblock %}
+{% block title %}Tworzenie formularza{% endblock %}
 {% block content %}
 <div class="admin-page-title">
     <div>
         <p class="admin-eyebrow">Formularze</p>
-        <h1>Wgraj formularz</h1>
+        <h1>Utwórz formularz</h1>
     </div>
-    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrot</a>
+    <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Powrót</a>
 </div>
+{% set requested_upload_tab = upload_active_tab if upload_active_tab is defined else request.form.get('active_tab', 'fields') %}
+{% set upload_tab = requested_upload_tab if requested_upload_tab in ('fields', 'basic', 'emails', 'appearance') else 'fields' %}
+<nav class="admin-form-tabs" role="tablist" aria-label="Etapy tworzenia formularza" data-upload-tabs>
+    <button type="button" id="upload-tab-fields" role="tab" aria-controls="upload-panel-fields" aria-selected="{{ 'true' if upload_tab == 'fields' else 'false' }}" class="admin-form-tab{% if upload_tab == 'fields' %} is-active{% endif %}" data-upload-tab="fields">Pola formularza</button>
+    <button type="button" id="upload-tab-basic" role="tab" aria-controls="upload-panel-basic" aria-selected="{{ 'true' if upload_tab == 'basic' else 'false' }}" class="admin-form-tab{% if upload_tab == 'basic' %} is-active{% endif %}" data-upload-tab="basic">Podstawowe</button>
+    <button type="button" id="upload-tab-emails" role="tab" aria-controls="upload-panel-emails" aria-selected="{{ 'true' if upload_tab == 'emails' else 'false' }}" class="admin-form-tab{% if upload_tab == 'emails' %} is-active{% endif %}" data-upload-tab="emails">E-mail</button>
+    <button type="button" id="upload-tab-appearance" role="tab" aria-controls="upload-panel-appearance" aria-selected="{{ 'true' if upload_tab == 'appearance' else 'false' }}" class="admin-form-tab{% if upload_tab == 'appearance' %} is-active{% endif %}" data-upload-tab="appearance">Logo i wygląd</button>
+</nav>
+<label class="admin-form-tab-mobile"><span>Obszar tworzenia</span><select data-upload-tab-select><option value="fields" {% if upload_tab == 'fields' %}selected{% endif %}>Pola formularza</option><option value="basic" {% if upload_tab == 'basic' %}selected{% endif %}>Podstawowe</option><option value="emails" {% if upload_tab == 'emails' %}selected{% endif %}>E-mail</option><option value="appearance" {% if upload_tab == 'appearance' %}selected{% endif %}>Logo i wygląd</option></select></label>
 <div class="admin-card">
-    <form method="post" enctype="multipart/form-data" class="admin-form">
+    <form method="post" enctype="multipart/form-data" class="admin-form" data-upload-form data-upload-active="{{ upload_tab }}">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-        <div class="admin-form-grid">
-            <label>
-                <span>Plik formularza</span>
-                <input type="file" name="form_file" accept="application/json,.json,text/html,.html,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required>
-                <small>Obslugiwane formaty: JSON, HTML, DOCX.</small>
-            </label>
-            <label>
-                <span>Nazwa formularza</span>
-                <input type="text" name="name" placeholder="np. Formularz rekrutacyjny">
-            </label>
-            <label>
-                <span>Slug</span>
-                <input type="text" name="slug" placeholder="np. formularz_rekrutacyjny">
-            </label>
-            <label>
-                <span>Kolejnosc sortowania</span>
-                <input type="number" name="sort_order" value="0">
-            </label>
-            <label>
-                <span>Etykieta projektu</span>
-                <input type="text" name="label_text" placeholder="np. PROJEKT 6.08">
-            </label>
-            <label>
-                <span>Kolor tekstu etykiety</span>
-                <input type="text" name="label_color" value="#b38d45">
-            </label>
-            <label>
-                <span>Tlo etykiety</span>
-                <input type="text" name="label_background" value="#f7f3ec">
-            </label>
-            <label class="admin-check">
-                <input type="checkbox" name="is_active" checked>
-                <span>Aktywny po wgraniu</span>
-            </label>
-            <label class="admin-check">
-                <input type="checkbox" name="is_public" checked>
-                <span>Widoczny publicznie</span>
-            </label>
-        </div>
+        <input type="hidden" name="active_tab" value="{{ upload_tab }}" data-upload-active-input>
+        <section id="upload-panel-fields" class="admin-upload-panel{% if upload_tab == 'fields' %} is-active{% endif %}" role="tabpanel" aria-labelledby="upload-tab-fields" data-upload-panel="fields" {% if upload_tab != 'fields' %}hidden{% endif %}>
+            <p class="admin-required-note">Zaimportowane i dodawane pola są domyślnie wymagane. Wyjątkiem są pola ukryte, systemowe i sekcje. W JSON możesz jawnie ustawić <code>"required": false</code>.</p>
+            <div class="admin-alert admin-alert-info">
+                <strong>Jak przygotować plik?</strong>
+                {% if import_instruction and import_instruction.storage_path %}
+                    <a href="{{ url_for('admin.service_document_admin_file', document_id=import_instruction.id) }}">Pobierz instrukcję przygotowania plików formularza</a>
+                    <small>Aktualizacja: {{ import_instruction.updated_at.strftime('%Y-%m-%d %H:%M') if import_instruction.updated_at else '-' }}</small>
+                {% else %}
+                    <span>Instrukcja przygotowania plików formularza nie została jeszcze opublikowana. Skontaktuj się z superadministratorem.</span>
+                {% endif %}
+            </div>
+            <div class="admin-alert admin-alert-info">
+                JSON powinien zawierać co najmniej <code>title</code> i listę <code>fields</code>; każde pole wejściowe wymaga unikalnego <code>name</code> i obsługiwanego <code>type</code>. HTML wymaga kontrolek z atrybutem <code>name</code>. DOCX może używać znaczników <code>{{ '{{ nazwa_pola }}' }}</code> albo etykiet, np. „Imię: ______”.
+                <details>
+                    <summary>Skrócona specyfikacja plików i zmiennych</summary>
+                    <h3>JSON</h3>
+                    <p>Struktura główna: <code>title</code>, opcjonalne <code>name</code>, <code>description</code>, <code>slug</code> oraz tablica <code>fields</code>. Pole może zawierać <code>name</code>, <code>label</code>, <code>type</code>, <code>required</code>, <code>options</code>, <code>placeholder</code>, <code>help_text</code>, <code>default</code>, <code>validation</code>, <code>width</code>, <code>visible_if</code>, <code>readonly</code> i <code>stage</code>.</p>
+                    <p>Obsługiwane typy: text, textarea, email, tel, number, date, select, radio, checkbox, pesel, section, static_text i training_selection.</p>
+                    <pre><code>{
+  "title": "Formularz zgłoszeniowy",
+  "fields": [
+    {"type": "text", "name": "imie", "label": "Imię"},
+    {"type": "email", "name": "email", "label": "E-mail", "required": false}
+  ]
+}</code></pre>
+                    <h3>HTML i DOCX</h3>
+                    <p>W HTML użyj <code>input</code>, <code>select</code> lub <code>textarea</code> z unikalnym atrybutem <code>name</code>. W DOCX użyj znaczników <code>{{ '{{ nazwa_pola }}' }}</code> albo etykiet zakończonych dwukropkiem i miejscem do wpisania.</p>
+                    <h3>Zmienne systemowe</h3>
+                    <p>Identyfikatory techniczne nie są polami użytkownika i nie należy dodawać ich do <code>fields</code>. Należą do nich <code>submission_id</code>, <code>form_slug</code>, <code>process_status</code> i <code>current_stage</code>.</p>
+                </details>
+            </div>
+            <p>Po wgraniu pliku przejdziesz do edytora pól. Zakładki szkoleń, dokumentów, workflow i instrukcji będą dostępne po utworzeniu formularza.</p>
+            <div class="admin-form-grid">
+                <label>
+                    <span>Plik formularza</span>
+                    <input type="file" name="form_file" accept="application/json,.json,text/html,.html,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required>
+                    <small>Obsługiwane formaty: JSON, HTML i DOCX. W DOCX pola oznacz jako <code>{{ '{{ nazwa_pola }}' }}</code> albo zapisz jako etykietę z miejscem do wpisania, np. „Imię: ______”.</small>
+                </label>
+            </div>
+        </section>
+
+        <section id="upload-panel-basic" class="admin-upload-panel{% if upload_tab == 'basic' %} is-active{% endif %}" role="tabpanel" aria-labelledby="upload-tab-basic" data-upload-panel="basic" {% if upload_tab != 'basic' %}hidden{% endif %}>
+            <div class="admin-section-heading"><div><h2>Podstawowe</h2><p>Dane używane na formularzu publicznym i liście formularzy.</p></div></div>
+            <div class="admin-form-grid">
+                <label><span>Nazwa formularza</span><input type="text" name="name" value="{{ request.form.get('name', '') }}" placeholder="np. Formularz rekrutacyjny"></label>
+                <label><span>Tytuł publiczny</span><input type="text" name="title" value="{{ request.form.get('title', '') }}" placeholder="Nagłówek widoczny nad formularzem"></label>
+                <label class="admin-form-wide"><span>Opis publiczny</span><textarea name="description" rows="4" placeholder="Opis widoczny dla użytkownika">{{ request.form.get('description', '') }}</textarea></label>
+                <label><span>Slug</span><input type="text" name="slug" value="{{ request.form.get('slug', '') }}" placeholder="np. formularz_rekrutacyjny"></label>
+                <label><span>Kolejność sortowania</span><input type="number" name="sort_order" value="{{ request.form.get('sort_order', '0') }}"></label>
+                <label><span>Etykieta projektu</span><input type="text" name="label_text" value="{{ request.form.get('label_text', '') }}" placeholder="np. PROJEKT 6.08" data-upload-label-text></label>
+                <label class="admin-check"><input type="checkbox" name="is_active" {% if request.method != 'POST' or request.form.get('is_active') == 'on' %}checked{% endif %}><span>Aktywny po wgraniu</span></label>
+                <label class="admin-check"><input type="checkbox" name="is_public" {% if request.method != 'POST' or request.form.get('is_public') == 'on' %}checked{% endif %}><span>Widoczny publicznie</span></label>
+            </div>
+        </section>
+
+        <section id="upload-panel-emails" class="admin-upload-panel{% if upload_tab == 'emails' %} is-active{% endif %}" role="tabpanel" aria-labelledby="upload-tab-emails" data-upload-panel="emails" {% if upload_tab != 'emails' %}hidden{% endif %}>
+            <div class="admin-section-heading"><div><h2>E-mail</h2><p>Szczegółowe szablony maili będą dostępne po utworzeniu formularza.</p></div></div>
+            <div class="admin-form-grid">
+                <label><span>Tryb poczty</span><select name="mail_mode" data-mail-mode><option value="system" {% if request.form.get('mail_mode', 'system') == 'system' %}selected{% endif %}>Poczta systemowa</option><option value="custom" {% if request.form.get('mail_mode') == 'custom' %}selected{% endif %}>Poczta formularza</option><option value="disabled" {% if request.form.get('mail_mode') == 'disabled' %}selected{% endif %}>Brak wysyłki</option></select></label>
+                <label><span>Adres nadawcy</span><input type="email" name="form_smtp_mail_from" value="{{ request.form.get('form_smtp_mail_from', '') }}"></label>
+                <label><span>Nazwa nadawcy</span><input name="form_smtp_sender_name" value="{{ request.form.get('form_smtp_sender_name', '') }}"></label>
+                <label><span>Reply-To</span><input type="email" name="form_smtp_reply_to" value="{{ request.form.get('form_smtp_reply_to', '') }}"></label>
+            </div>
+            <div data-custom-smtp {% if request.form.get('mail_mode', 'system') != 'custom' %}hidden{% endif %}>
+                <details>
+                    <summary>Zaawansowana konfiguracja SMTP</summary>
+                    <div class="admin-form-grid">
+                        <label><span>SMTP host</span><input name="form_smtp_host" value="{{ request.form.get('form_smtp_host', '') }}"></label>
+                        <label><span>SMTP port</span><input type="number" min="1" max="65535" name="form_smtp_port" value="{{ request.form.get('form_smtp_port', '587') }}"></label>
+                        <label><span>Użytkownik SMTP</span><input name="form_smtp_user" value="{{ request.form.get('form_smtp_user', '') }}" autocomplete="off"></label>
+                        <label><span>Hasło SMTP</span><input type="password" name="form_smtp_password" autocomplete="new-password"></label>
+                        <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="form_smtp_timeout" value="{{ request.form.get('form_smtp_timeout', '10') }}"></label>
+                        <label class="admin-check"><input type="checkbox" name="form_smtp_use_tls" {% if request.method != 'POST' or request.form.get('form_smtp_use_tls') == 'on' %}checked{% endif %}><span>TLS/STARTTLS</span></label>
+                        <label class="admin-check"><input type="checkbox" name="form_smtp_use_ssl" {% if request.form.get('form_smtp_use_ssl') == 'on' %}checked{% endif %}><span>SSL</span></label>
+                    </div>
+                </details>
+            </div>
+        </section>
+
+        <section id="upload-panel-appearance" class="admin-upload-panel{% if upload_tab == 'appearance' %} is-active{% endif %}" role="tabpanel" aria-labelledby="upload-tab-appearance" data-upload-panel="appearance" {% if upload_tab != 'appearance' %}hidden{% endif %}>
+            <div class="admin-section-heading"><div><h2>Logo i wygląd</h2><p>Logo będzie widoczne w nagłówku publicznego formularza. Nowe pliki logo możesz dodać w bibliotece logo.</p></div></div>
+            <div class="admin-form-grid">
+                <label><span>Logo formularza</span><select name="logo_id" data-upload-logo><option value="">Bez logo</option>{% for logo in logos or [] %}<option value="{{ logo.id }}" data-logo-url="{{ url_for('admin.logo_asset', logo_id=logo.id) }}" {% if request.form.get('logo_id') == logo.id|string %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select></label>
+                <label><span>Wyrównanie logo</span><select name="logo_alignment" data-upload-logo-alignment><option value="left" {% if request.form.get('logo_alignment', 'left') == 'left' %}selected{% endif %}>Do lewej</option><option value="center" {% if request.form.get('logo_alignment') == 'center' %}selected{% endif %}>Na środku</option><option value="right" {% if request.form.get('logo_alignment') == 'right' %}selected{% endif %}>Do prawej</option></select></label>
+                <label><span>Kolor tekstu etykiety</span><input type="color" name="label_color" value="{{ request.form.get('label_color', '#b38d45') }}" data-upload-label-color></label>
+                <label><span>Kolor tła etykiety</span><input type="color" name="label_background" value="{{ request.form.get('label_background', '#f7f3ec') }}" data-upload-label-background></label>
+            </div>
+            <div class="admin-form-header-preview" data-upload-appearance-preview>
+                <div class="admin-form-header-logo admin-align-{{ request.form.get('logo_alignment', 'left') }}" data-upload-logo-wrap><img class="admin-form-header-logo__image" alt="Podgląd logo formularza" data-upload-logo-preview hidden></div>
+                <span class="admin-form-header-preview__label" data-upload-label-preview style="color: {{ request.form.get('label_color', '#b38d45') }}; background: {{ request.form.get('label_background', '#f7f3ec') }};">{{ request.form.get('label_text') or 'Etykieta projektu' }}</span>
+                <p>Podgląd nagłówka publicznego formularza</p>
+            </div>
+        </section>
         <div class="admin-form-actions">
             <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Anuluj</a>
             <button class="admin-button" type="submit">Wgraj i wykryj pola</button>
         </div>
     </form>
 </div>
+<script>
+const uploadForm = document.querySelector("[data-upload-form]");
+const uploadTabButtons = Array.from(document.querySelectorAll("[data-upload-tab]"));
+const uploadActiveInput = document.querySelector("[data-upload-active-input]");
+const uploadTabSelect = document.querySelector("[data-upload-tab-select]");
+function setUploadTab(tabName) {
+    const validTabs = new Set(["fields", "basic", "emails", "appearance"]);
+    const nextTab = validTabs.has(tabName) ? tabName : "fields";
+    document.querySelectorAll("[data-upload-panel]").forEach((panel) => {
+        const isActive = panel.dataset.uploadPanel === nextTab;
+        panel.hidden = !isActive;
+        panel.classList.toggle("is-active", isActive);
+        panel.setAttribute("aria-hidden", String(!isActive));
+    });
+    uploadTabButtons.forEach((button) => {
+        const isActive = button.dataset.uploadTab === nextTab;
+        button.classList.toggle("is-active", isActive);
+        button.setAttribute("aria-selected", String(isActive));
+        button.tabIndex = isActive ? 0 : -1;
+    });
+    if (uploadTabSelect) uploadTabSelect.value = nextTab;
+    if (uploadActiveInput) uploadActiveInput.value = nextTab;
+}
+uploadTabButtons.forEach((button) => button.addEventListener("click", () => setUploadTab(button.dataset.uploadTab)));
+uploadTabSelect?.addEventListener("change", () => setUploadTab(uploadTabSelect.value));
+uploadForm?.addEventListener("invalid", (event) => {
+    const panel = event.target.closest("[data-upload-panel]");
+    if (panel) setUploadTab(panel.dataset.uploadPanel);
+}, true);
+setUploadTab(uploadForm?.dataset.uploadActive || "fields");
+
+const mailMode = document.querySelector("[data-mail-mode]");
+const customSmtp = document.querySelector("[data-custom-smtp]");
+function syncMailSettingsVisibility() { if (customSmtp) customSmtp.hidden = mailMode?.value !== "custom"; }
+mailMode?.addEventListener("change", syncMailSettingsVisibility);
+syncMailSettingsVisibility();
+
+const uploadLabelText = document.querySelector("[data-upload-label-text]");
+const uploadLabelColor = document.querySelector("[data-upload-label-color]");
+const uploadLabelBackground = document.querySelector("[data-upload-label-background]");
+const uploadLabelPreview = document.querySelector("[data-upload-label-preview]");
+const uploadLogo = document.querySelector("[data-upload-logo]");
+const uploadLogoAlignment = document.querySelector("[data-upload-logo-alignment]");
+const uploadLogoWrap = document.querySelector("[data-upload-logo-wrap]");
+const uploadLogoPreview = document.querySelector("[data-upload-logo-preview]");
+function syncUploadAppearancePreview() {
+    if (uploadLabelPreview) {
+        uploadLabelPreview.textContent = uploadLabelText?.value.trim() || "Etykieta projektu";
+        uploadLabelPreview.style.color = uploadLabelColor?.value || "#b38d45";
+        uploadLabelPreview.style.background = uploadLabelBackground?.value || "#f7f3ec";
+    }
+    if (uploadLogoWrap) {
+        uploadLogoWrap.classList.remove("admin-align-left", "admin-align-center", "admin-align-right");
+        uploadLogoWrap.classList.add(`admin-align-${uploadLogoAlignment?.value || "left"}`);
+    }
+    const logoUrl = uploadLogo?.selectedOptions?.[0]?.dataset.logoUrl || "";
+    if (uploadLogoPreview) {
+        uploadLogoPreview.src = logoUrl;
+        uploadLogoPreview.hidden = !logoUrl;
+    }
+}
+[uploadLabelText, uploadLabelColor, uploadLabelBackground, uploadLogo, uploadLogoAlignment].forEach((control) => {
+    control?.addEventListener("input", syncUploadAppearancePreview);
+    control?.addEventListener("change", syncUploadAppearancePreview);
+});
+syncUploadAppearancePreview();
+</script>
 {% endblock %}

@@ -73,6 +73,59 @@ def test_documents_to_sign_frontend_receives_acceptance_status_url_template():
     assert "data-acceptance-status-url-template" in template
     assert "url_for('api.api_acceptance_status'" in template
     assert "buildAcceptanceStatusUrl" in script
+    assert "checkAcceptanceStatus();" in script
+    assert "generateButton" not in script
+    assert "acceptanceSelect" not in script
+    assert 'getElementById("akceptacja")' not in script
+
+
+def test_documents_to_sign_checks_status_and_instruction_on_load():
+    # Given a participant link, When the page script starts, Expected: it
+    # fetches the status and renders the instruction without a submit button.
+    node = shutil.which("node")
+    if not node:
+        return
+    script = Path("static/js/documents_to_sign.js").read_text(encoding="utf-8")
+    runner = f"""
+const vm = require("vm");
+const calls = [];
+function element(value = "") {{
+  const classes = new Set(["is-hidden"]);
+  return {{ value, dataset: {{}}, children: [], textContent: "", innerHTML: "",
+    classList: {{ add(name) {{ classes.add(name); }}, remove(name) {{ classes.delete(name); }}, contains(name) {{ return classes.has(name); }} }},
+    addEventListener() {{}}, setAttribute() {{}}, appendChild(child) {{ this.children.push(child); }},
+    append(...children) {{ this.children.push(...children); }},
+    replaceChildren() {{ this.children = []; }} }};
+}}
+const elements = {{
+  "submission_id": element("abc"),
+  "participant-access-token": element("secret-token"),
+  "sign-documents-panel": element(),
+  "submission-status-tiles": element(),
+  "user-instruction-window": element(),
+  "next-action-content": element(),
+}};
+elements["submission_id"].dataset.acceptanceStatusUrlTemplate = "/api/submissions/__SUBMISSION_ID__/acceptance-status";
+global.window = {{ APP_BASE_PATH: "", location: {{ pathname: "/do-podpisania" }} }};
+global.document = {{ getElementById(id) {{ return elements[id] || null; }}, querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }}, createElement() {{ return element(); }} }};
+global.fetch = async (url, options) => {{ calls.push({{ url, token: options.headers.Authorization }});
+  return {{ json: async () => ({{ authorized: true, exists: true, can_sign_documents: true,
+    status: {{ title: "Current stage", message: "Ready" }}, next_action: "Sign the document",
+    composite_document: true }}) }}; }};
+vm.runInThisContext({json.dumps(script)});
+checkAcceptanceStatus().then(() => console.log(JSON.stringify({{
+  calls, title: elements["submission-status-tiles"].children[0]?.children[1]?.children[0]?.textContent,
+  instruction: elements["next-action-content"].innerHTML,
+}}))).catch(error => {{ console.error(error); process.exitCode = 1; }});
+"""
+    completed = subprocess.run([node], input=runner, check=False, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["calls"]
+    assert result["calls"][0] == {"url": "/api/submissions/abc/acceptance-status", "token": "Bearer secret-token"}
+    assert result["title"] == "Current stage"
+    assert result["instruction"] == "Sign the document"
 
 
 def test_documents_to_sign_frontend_builds_api_urls_with_base_path():

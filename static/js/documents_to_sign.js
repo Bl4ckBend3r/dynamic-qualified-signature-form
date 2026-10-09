@@ -1,10 +1,7 @@
 const submissionInput = document.getElementById("submission_id");
 const statusBox = document.getElementById("acceptance-status");
 const statusTiles = document.getElementById("submission-status-tiles");
-const documentsSection = document.getElementById("documents-section");
-const generateButton = document.getElementById("generate-button");
-const acceptanceSelect = document.getElementById("akceptacja");
-const signDocumentsForm = document.getElementById("sign-documents-form");
+const signDocumentsPanel = document.getElementById("sign-documents-panel");
 const instructionWindow = document.getElementById("user-instruction-window");
 document.querySelectorAll('[data-composite-document] a[href*="/download/"]').forEach(link => {
     link.addEventListener('click', () => setTimeout(checkAcceptanceStatus, 700));
@@ -41,7 +38,7 @@ const instructionRestoreButton = document.getElementById("user-instruction-resto
 const participantAccessToken = document.getElementById("participant-access-token");
 const initialCredentialId = submissionInput?.value.trim() || "";
 const initialCredential = participantAccessToken?.value || "";
-const accessDenied = signDocumentsForm?.dataset.accessDenied === "true";
+const accessDenied = signDocumentsPanel?.dataset.accessDenied === "true";
 
 function credentialForSubmission(id) {
     if (id === initialCredentialId && initialCredential) return initialCredential;
@@ -312,17 +309,8 @@ function showUserInstruction(data, submissionId) {
     showElement(instructionWindow);
 }
 
-function disableGenerateButton() {
-    if (!generateButton) {
-        return;
-    }
-
-    generateButton.disabled = true;
-    generateButton.setAttribute("aria-disabled", "true");
-}
-
 function hideInitialSigningForm() {
-    hideElement(signDocumentsForm);
+    hideElement(signDocumentsPanel);
 }
 
 function hideDeclarationStage() {
@@ -525,7 +513,6 @@ function applyProcessStageVisibility(data) {
     if (isRejectedStatus(data)) {
         hideDeclarationStage();
         hideAgreementStage();
-        disableGenerateButton();
         return;
     }
 
@@ -540,7 +527,6 @@ function applyProcessStageVisibility(data) {
         hideDeclarationStage();
         hideAgreementStage();
         hideInitialSigningForm();
-        disableGenerateButton();
     }
 }
 
@@ -548,22 +534,13 @@ function resetState() {
     if (statusBox) {
         statusBox.textContent = "";
     }
-    if (documentsSection) {
-        hideElement(documentsSection);
-    }
-    if (generateButton) {
-        generateButton.disabled = true;
-    }
-    if (acceptanceSelect) {
-        acceptanceSelect.value = "";
-    }
     clearStatusTile();
     currentInstruction = null;
     hideInstruction();
 }
 
 function renderAccessLinkMessage() {
-    hideElement(signDocumentsForm);
+    hideElement(signDocumentsPanel);
     hideElement(document.querySelector('.documents-instructions'));
     renderStatusTile({
         variant: "warning",
@@ -584,7 +561,7 @@ async function checkAcceptanceStatus() {
         return;
     }
     if (participantAccessToken) participantAccessToken.value = token;
-    showElement(signDocumentsForm);
+    showElement(signDocumentsPanel);
 
     renderStatusTile({
         variant: "warning",
@@ -613,26 +590,7 @@ async function checkAcceptanceStatus() {
         showUserInstruction(data, submissionId);
         if (data.composite_document) {
             hideElement(document.querySelector('.documents-instructions'));
-            hideElement(document.querySelector('.sign-actions'));
             return;
-        }
-
-        if (
-            data.exists
-            && (data.can_sign_documents || data.can_view_status_details)
-            && !isRejectedStatus(data)
-            && !data.agreement_stage_completed
-            && !data.is_final
-        ) {
-            if (documentsSection) {
-                showElement(documentsSection);
-            }
-            if (generateButton) {
-                generateButton.disabled = false;
-            }
-            if (acceptanceSelect) {
-                acceptanceSelect.value = "Tak";
-            }
         }
     } catch (error) {
         if (submissionInput.value.trim() !== submissionId) return;
@@ -642,12 +600,6 @@ async function checkAcceptanceStatus() {
             title: "Błąd sprawdzania statusu",
             description: "Spróbuj ponownie albo sprawdź połączenie z serwerem.",
         });
-        if (documentsSection) {
-            hideElement(documentsSection);
-        }
-        if (generateButton) {
-            generateButton.disabled = true;
-        }
     }
 }
 

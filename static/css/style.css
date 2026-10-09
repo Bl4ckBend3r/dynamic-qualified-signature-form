@@ -715,6 +715,12 @@ textarea:focus {
     text-decoration: none;
 }
 
+.field-group-label {
+    font-weight: bold;
+    font-size: 1.5vw;
+    margin-bottom: 10px;
+}
+
 /* ATTENDANCE CONFIRMATION */
 
 .attendance-confirmation {

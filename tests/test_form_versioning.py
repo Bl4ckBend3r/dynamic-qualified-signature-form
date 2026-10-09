@@ -403,6 +403,43 @@ def test_public_get_requires_published_and_post_stays_on_rendered_version(tmp_pa
     assert client.get("/form/public-version").status_code == 404
 
 
+def test_rejected_public_post_rerenders_its_original_form_version(tmp_path, monkeypatch):
+    # Given a rendered version and a newer publication before the participant submits.
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="rejected-version")
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        first_id = first.id
+    calls = []
+    app = _public_app(monkeypatch, Session, calls)
+    client = app.test_client()
+    page = client.get("/form/rejected-version").get_data(as_text=True)
+    token = re.search(r'name="form_version_token"[^>]*value="([^"]+)"', page, re.DOTALL).group(1)
+    with Session.begin() as db:
+        form = db.execute(select(Form).where(Form.slug == "rejected-version")).scalar_one()
+        newer = service.clone_to_draft(db, form, db.get(FormVersion, first_id), actor_id=None, bump="minor")
+        updated = deepcopy(newer.definition_json)
+        updated["fields"][0]["label"] = "New email"
+        service.update_definition(newer, updated)
+        service.publish(db, form, newer, actor_id=None)
+
+    def reject(_slug, definition, _payload, *, form_version_id=None):
+        calls.append({"definition": definition, "form_version_id": form_version_id})
+        return {"ok": False, "errors": {"email": "Invalid"}, "values": {"email": "bad-email"}, "result": None}
+
+    monkeypatch.setattr(app.extensions["services"].submission_service, "submit_form", reject)
+
+    # When validation fails, Expected: the current input and old snapshot return.
+    response = client.post("/submit/rejected-version", data={"form_version_token": token, "email": "bad-email"})
+    html = response.get_data(as_text=True)
+    assert response.status_code == 400
+    assert calls[-1]["form_version_id"] == first_id
+    assert calls[-1]["definition"]["fields"][0]["label"] == "Email"
+    assert "New email" not in html
+    assert 'value="bad-email"' in html
+
+
 def test_public_post_rejects_missing_or_tampered_version_token(tmp_path, monkeypatch):
     _url, Session = _database(tmp_path)
     with Session.begin() as db:

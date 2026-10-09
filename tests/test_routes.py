@@ -1,8 +1,10 @@
 import io
 import json
+import re
 from pathlib import Path
 
 from flask import url_for
+from werkzeug.datastructures import MultiDict
 
 
 def test_index_lists_available_forms(client):
@@ -185,6 +187,72 @@ def test_submit_invalid_email_returns_validation_error(client, valid_form_data):
 
     assert response.status_code == 400
     assert "adres e-mail" in html
+
+
+def test_submit_validation_preserves_current_values_across_field_types(client, app, valid_form_data):
+    # Given a populated form with one invalid field and several choice types.
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [
+            *app.testing_storage.form_definition["fields"],
+            {"type": "text", "name": "custom_text", "label": "Text", "default": "old default"},
+            {"type": "textarea", "name": "custom_note", "label": "Note"},
+            {"type": "checkbox", "name": "newsletter", "label": "Newsletter", "required": False,
+             "options": [{"value": "yes", "label": "Yes"}]},
+            {"type": "checkbox", "name": "optional_consent", "label": "Optional", "required": False,
+             "options": [{"value": "yes", "label": "Yes"}]},
+            {"type": "checkbox", "name": "interests", "label": "Interests", "required": False,
+             "options": [{"value": choice, "label": choice} for choice in ("A", "B", "C")]},
+            {"type": "select", "name": "topics", "label": "Topics", "multiple": True, "required": False,
+             "options": ["A", "B", "C"]},
+            {"type": "text", "name": "dynamic_note", "label": "Dynamic", "required": False,
+             "visible_if": {"field": "praca_lubuskie", "operator": "equals", "value": "Tak"}},
+        ],
+    }
+    data = MultiDict(list({
+        **valid_form_data, "email": "invalid-email", "custom_text": "entered now",
+        "custom_note": "kept textarea", "newsletter": "yes", "dynamic_note": "visible value",
+    }.items()) + [("interests", "A"), ("interests", "C"), ("topics", "A"), ("topics", "C")])
+
+    # When validation rejects the submit.
+    response = client.post("/submit/formularz_zgloszeniowy", data=data)
+    html = response.get_data(as_text=True)
+
+    # Expected: no submission or workflow advance, and every current value is rendered.
+    assert response.status_code == 400
+    assert not app.testing_storage.csv_rows
+    assert 'value="entered now"' in html
+    assert 'value="invalid-email"' in html
+    assert 'value="visible value"' in html
+    assert 'value="600700800"' in html
+    assert 'value="1990-01-01"' in html
+    assert 'value="36"' in html
+    assert "kept textarea" in html
+    assert re.search(r'<input\b[^>]*name="newsletter"[^>]*\bchecked\b', html, re.DOTALL)
+    assert not re.search(r'<input\b[^>]*name="optional_consent"[^>]*\bchecked\b', html, re.DOTALL)
+    assert {
+        match.group(1) for match in re.finditer(r'<input\b[^>]*name="interests"[^>]*value="([A-C])"[^>]*\bchecked\b', html, re.DOTALL)
+    } == {"A", "C"}
+    topics = re.search(r'<select\b[^>]*name="topics"[^>]*>(.*?)</select>', html, re.DOTALL).group(1)
+    assert set(re.findall(r'<option\s+value="([A-C])"\s+selected', topics)) == {"A", "C"}
+    assert re.search(r'<input\b[^>]*name="plec"[^>]*value="Mężczyzna"[^>]*\bchecked\b', html, re.DOTALL)
+    assert re.search(r'<option\s+value="Wyższe magisterskie"\s+selected', html)
+
+
+def test_submit_rejects_unknown_multivalue_option(client, app, valid_form_data):
+    # Given a multivalue checkbox, When an unknown option is posted,
+    # Expected: validation rejects it and does not finalize the submission.
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [*app.testing_storage.form_definition["fields"], {
+            "type": "checkbox", "name": "interests", "label": "Interests", "required": False,
+            "options": [{"value": "A", "label": "A"}, {"value": "B", "label": "B"}],
+        }],
+    }
+    response = client.post("/submit/formularz_zgloszeniowy", data={**valid_form_data, "interests": "unknown"})
+    assert response.status_code == 400
+    assert "Wybrano nieprawidłową wartość" in response.get_data(as_text=True)
+    assert not app.testing_storage.csv_rows
 
 
 def test_predictable_compliance_error_returns_validation_response(client, app, valid_form_data, monkeypatch):
@@ -648,6 +716,15 @@ def test_documents_to_sign_get_with_submission_id_shows_current_submission(clien
     assert response.status_code == 200
     assert "deklaracja.pdf" in html
     assert "abc" in html
+    assert 'id="generate-button"' not in html
+    assert 'id="akceptacja"' not in html
+    assert 'id="sign-documents-form"' not in html
+
+    # Given the legacy POST URL, When a participant posts without the removed
+    # acceptance field, Expected: the same current step remains accessible.
+    legacy_response = client.post("/do-podpisania", data={"submission_id": "abc", "access_token": "secret-token"})
+    assert legacy_response.status_code == 200
+    assert "deklaracja.pdf" in legacy_response.get_data(as_text=True)
 
 
 def test_documents_to_sign_requires_additional_fields_before_declaration(client, app):
@@ -683,6 +760,40 @@ def test_documents_to_sign_requires_additional_fields_before_declaration(client,
     assert response.status_code == 200
     assert 'name="post_acceptance_note"' in html
     assert "Pobierz deklarację" not in html
+
+
+def test_additional_fields_validation_preserves_current_step_values(client, app):
+    # Given editable fields on the participant's current workflow step.
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [*app.testing_storage.form_definition["fields"],
+            {"type": "text", "name": "later_required", "label": "Required", "required": True,
+             "stage": "after_officer_acceptance"},
+            {"type": "text", "name": "later_note", "label": "Note", "required": False,
+             "stage": "after_officer_acceptance"},
+            {"type": "checkbox", "name": "later_choices", "label": "Choices", "required": False,
+             "stage": "after_officer_acceptance",
+             "options": [{"value": choice, "label": choice} for choice in ("A", "B", "C")]},
+        ],
+        "documents": {"declaration": {"enabled": True}},
+    }
+    row = {"submission_id": "abc", "form_slug": "formularz_zgloszeniowy", "form_name": "Formularz",
+           "access_token": "secret-token", "officer_decision": "TAK", "declaration_required": "Tak",
+           "process_status": "accepted_waiting_for_additional_fields"}
+    app.testing_storage.csv_rows = [row]
+    payload = MultiDict([("later_required", ""), ("later_note", "new note"),
+                         ("later_choices", "A"), ("later_choices", "C"), ("access_token", "secret-token")])
+
+    # When one required field is missing, Expected: no workflow transition and
+    # the remaining values are rendered on the same step.
+    response = client.post("/additional-fields/formularz_zgloszeniowy/abc", data=payload)
+    html = response.get_data(as_text=True)
+    assert response.status_code == 400
+    assert row["process_status"] == "accepted_waiting_for_additional_fields"
+    assert 'value="new note"' in html
+    assert {match.group(1) for match in re.finditer(
+        r'<input\b[^>]*name="later_choices"[^>]*value="([A-C])"[^>]*\bchecked\b', html, re.DOTALL
+    )} == {"A", "C"}
 
 
 def test_additional_fields_unlock_declaration_download(client, app):

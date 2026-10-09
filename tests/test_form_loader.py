@@ -15,6 +15,7 @@ from form_loader import (
     validate_form_definition,
     validate_pesel,
     validate_submission,
+    values_for_rerender,
 )
 
 
@@ -136,6 +137,34 @@ def test_extract_submission_data_maps_checkboxes_to_tak(form_definition):
     assert data["nazwisko"] == "Kowalski"
     assert data["accept_regulamin"] == "Tak"
     assert data["accept_rodo"] == "Nie"
+
+
+def test_rerender_values_keep_multivalue_and_current_empty_input():
+    # Given saved values and a current POST with multiple options and an empty text field.
+    from werkzeug.datastructures import MultiDict
+
+    definition = normalize_form_definition({"fields": [
+        {"type": "text", "name": "note", "default": "default", "required": False},
+        {"type": "checkbox", "name": "choices", "required": False,
+         "options": [{"value": item, "label": item} for item in ("A", "B", "C")]},
+        {"type": "select", "name": "topics", "multiple": True, "required": False,
+         "options": ["A", "B", "C"]},
+        {"type": "repeatable_group", "name": "people", "required": False,
+         "fields": [{"type": "text", "name": "person", "required": False}]},
+    ]})
+    current = MultiDict([
+        ("note", ""), ("choices", "A"), ("choices", "C"),
+        ("topics", "A"), ("topics", "C"),
+        ("people", '[{"person":"One"}]'),
+    ])
+
+    # When rebuilding values after a validation error, Expected: the request wins.
+    values = values_for_rerender(definition, current, saved_values={"note": "old", "choices": ["B"]})
+    assert values["note"] == ""
+    assert values["choices"] == ["A", "C"]
+    assert values["topics"] == ["A", "C"]
+    assert isinstance(values["people"], list)
+    assert values["people"][0]["person"] == "One"
 
 
 def test_validate_submission_accepts_valid_data(form_definition, valid_form_data):

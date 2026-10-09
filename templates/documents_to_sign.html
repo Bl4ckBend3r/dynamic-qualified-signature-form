@@ -39,8 +39,7 @@
 
 
 
-    <form method="post" action="{{ url_for('documents.documents_to_sign') }}" class="sign-documents-form{% if not participant_access_token %} is-hidden{% endif %}" id="sign-documents-form" data-access-denied="{{ 'true' if access_denied|default(false) else 'false' }}" novalidate>
-        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+    <div class="sign-documents-form{% if not participant_access_token %} is-hidden{% endif %}" id="sign-documents-panel" data-access-denied="{{ 'true' if access_denied|default(false) else 'false' }}">
         <input type="hidden" name="access_token" value="{{ participant_access_token }}" id="participant-access-token">
         <div class="form-field sign-id-field">
             <label for="submission_id">Numer zgłoszenia wniosku (ID)</label>
@@ -63,16 +62,7 @@
             <div id="acceptance-status" class="field-help" aria-live="polite"></div>
         </div>
 
-        <div class="form-field is-hidden" id="documents-section">
-            <input type="hidden" id="akceptacja" name="akceptacja" value="Tak">
-        </div>
-
-        <div class="form-actions sign-actions{% if result and result.document_step %} is-hidden{% endif %}">
-            <button type="submit" class="btn-primary" id="generate-button" disabled>
-                Kontynuuj
-            </button>
-        </div>
-    </form>
+    </div>
 
     {% if not result %}<div class="status-tiles" id="submission-status-tiles" aria-live="polite">
         {% if not participant_access_token %}{{ current_status_tile('Otwórz link dostępu', 'Otwórz link dostępu otrzymany po wysłaniu zgłoszenia — na stronie potwierdzenia lub w wiadomości e-mail.', 'warning') }}{% endif %}
@@ -257,10 +247,10 @@
                                     {% elif field.type == "textarea" %}
                                         <textarea id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>{{ value }}</textarea>
                                     {% elif field.type == "select" %}
-                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required aria-required="true"{% endif %}>
+                                        <select id="additional_{{ field.name }}" name="{{ field.name }}" {% if field.multiple %}multiple{% endif %} {% if field.required %}required aria-required="true"{% endif %}>
                                             <option value="">-- wybierz --</option>
                                             {% for option in field.options %}
-                                                <option value="{{ option|option_value }}" {% if value == (option|option_value) %}selected{% endif %}>{{ option|option_label }}</option>
+                                                <option value="{{ option|option_value }}" {% if (field.multiple and (option|option_value) in (value or [])) or (not field.multiple and value == (option|option_value)) %}selected{% endif %}>{{ option|option_label }}</option>
                                             {% endfor %}
                                         </select>
                                     {% elif field.type == "radio" %}
@@ -270,7 +260,6 @@
                                             {% endfor %}
                                         </div>
                                     {% elif field.type == "checkbox" %}
-                                        {% elif field.type == "checkbox" %}
                                         <div
                                             class="option-list"
                                             {% if (field.options or [])|length > 1 %}
@@ -279,7 +268,7 @@
                                             {% endif %}
                                         >
                                             {% for option in field.options %}
-                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if value == (option|option_value) or value == "Tak" %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</span></label>
+                                                <label class="checkbox-item"><input type="checkbox" name="{{ field.name }}" value="{{ option|option_value }}" {% if ((field.options or [])|length > 1 and value is not string and (option|option_value) in (value or [])) or ((field.options or [])|length <= 1 and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}checked{% endif %} {% if field.required %}required aria-required="true"{% endif %}><span>{{ option|option_label|trusted_html }}{% if field.required %}<span class="required required-marker" aria-hidden="true">*</span>{% endif %}</span></label>
                                             {% endfor %}
                                         </div>
                                     {% endif %}

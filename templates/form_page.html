@@ -340,6 +340,7 @@ endblock %}
         name="{{ field.name }}"
         data-field-name="{{ field.name }}"
         data-field-type="{{ field.type }}"
+        {% if field.multiple %}multiple{% endif %}
         {%
         if
         field.required
@@ -368,7 +369,7 @@ endblock %}
         {% for option in field.options %}
         <option
             value="{{ option|option_value }}"
-            {% if value == (option|option_value) %}selected{% endif %}
+            {% if (field.multiple and (option|option_value) in (value or [])) or (not field.multiple and value == (option|option_value)) %}selected{% endif %}
         >
             {{ option|option_label }}
         </option>
@@ -439,7 +440,7 @@ endblock %}
             data-field-name="{{ field.name }}"
             data-field-type="{{ field.type }}"
             value="{{ option|option_value }}"
-            {% if value == (option|option_value) %}
+            {% if ((field.options or [])|length > 1 and value is not string and (option|option_value) in (value or [])) or ((field.options or [])|length <= 1 and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}
             checked{%
             endif
             %}
@@ -572,9 +573,18 @@ endblock %}
       return;
   }
                       if (field.type === "file" || ["csrf_token", "form_version_token", "form_version_id"].includes(field.name)) return;
-                      if (field.type === "checkbox" || field.type === "radio") {
+                      if (field.disabled) return;
+                      if (field.type === "checkbox") {
+                          const group = field.closest(".form-row")?.querySelectorAll('input[type="checkbox"]') || [];
+                          if (group.length > 1) {
+                              if (!Array.isArray(payload[field.name])) payload[field.name] = [];
+                              if (field.checked) payload[field.name].push(field.value);
+                          } else if (field.checked) payload[field.name] = field.value;
+                      } else if (field.type === "radio") {
                           if (field.checked) payload[field.name] = field.value;
-                      } else if (!field.disabled) payload[field.name] = field.value;
+                      } else if (field.tagName === "SELECT" && field.multiple) {
+                          payload[field.name] = Array.from(field.selectedOptions).map(option => option.value);
+                      } else payload[field.name] = field.value;
                   });
                   return payload;
               };
@@ -647,13 +657,15 @@ endblock %}
           const dynamicRows = document.querySelectorAll("[data-visible-field]");
 
           function getFieldValue(fieldName) {
-              const radioChecked = document.querySelector(`input[name="${fieldName}"]:checked`);
+              const radioChecked = document.querySelector(`input[name="${fieldName}"][type="radio"]:checked`);
               if (radioChecked) return radioChecked.value;
 
-              const checkbox = document.querySelector(`input[name="${fieldName}"][type="checkbox"]`);
-              if (checkbox) return checkbox.checked ? "Tak" : "Nie";
+              const checkboxes = Array.from(document.querySelectorAll(`input[name="${fieldName}"][type="checkbox"]`));
+              if (checkboxes.length > 1) return checkboxes.filter(box => box.checked).map(box => box.value);
+              if (checkboxes.length) return checkboxes[0].checked ? "Tak" : "Nie";
 
               const input = document.querySelector(`[name="${fieldName}"]`);
+              if (input?.tagName === "SELECT" && input.multiple) return Array.from(input.selectedOptions).map(option => option.value);
               return input ? input.value : "";
           }
 
@@ -666,8 +678,9 @@ endblock %}
 
                   let visible = true;
 
-                  if (operator === "equals") visible = currentValue === expectedValue;
-                  if (operator === "not_equals") visible = currentValue !== expectedValue;
+                  const matches = Array.isArray(currentValue) ? currentValue.includes(expectedValue) : currentValue === expectedValue;
+                  if (operator === "equals") visible = matches;
+                  if (operator === "not_equals") visible = !matches;
 
                   row.style.display = visible ? "" : "none";
 

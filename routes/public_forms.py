@@ -10,7 +10,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
 from database import create_session_factory
-from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition
+from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition, values_for_rerender
 from models import ContactPage, Form, FormDraft, FormField, FormRegulationVersion, FormSubmission, FormVersion, Logo, ServiceDocument
 from services.form_draft_service import FormDraftError
 from services.compliance_service import ComplianceError
@@ -229,7 +229,7 @@ def create_form_draft(slug: str):
         except FormDraftError as exc:
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=initial_config,
-                errors={"email": str(exc)}, values=request_data, form_version_id=version.id,
+                errors={"email": str(exc)}, values=values_for_rerender(initial_config, request_data), form_version_id=version.id,
                 form_version_token=version_token, form_error=str(exc), draft_enabled=True,
             ), 400
         draft_public_id = created.draft.public_id
@@ -326,7 +326,10 @@ def submit_form_draft(slug: str, token: str):
                 get_services().form_draft_service.release_submit_claim(db, draft.id)
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=form_config,
-                errors=result["errors"], values=result["values"], draft_enabled=True, draft_mode=True,
+                errors=result["errors"], values=values_for_rerender(
+                    form_config, request_data, saved_values=dict(draft.data_json or {}),
+                    validated_values=result["values"],
+                ), draft_enabled=True, draft_mode=True,
                 draft_token=token, form_action=url_for("public_forms.submit_form_draft", slug=slug, token=token),
                 autosave_url=url_for("public_forms.autosave_form_draft", slug=slug, token=token),
                 form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
@@ -453,7 +456,7 @@ def submit(slug: str):
             form_meta=form_meta,
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
-            values=request_data or {},
+            values=values_for_rerender(form_definition_for_stage(form_config, FIELD_STAGE_INITIAL), request_data or {}),
             form_version_id=form_version.id if form_version else None,
             form_version_token=form_version_token,
             form_error="Sesja formularza wygasła lub brakuje tokenu bezpieczeństwa. Odśwież stronę i spróbuj ponownie.",
@@ -485,7 +488,7 @@ def submit(slug: str):
                 form_meta=form_meta,
                 form_definition=initial_form_config,
                 errors=submission_result["errors"],
-                values=submission_result["values"],
+                values=values_for_rerender(initial_form_config, request_data or {}, validated_values=submission_result["values"]),
                 form_version_id=form_version.id if form_version else None,
                 form_version_token=form_version_token,
                 form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
@@ -504,7 +507,7 @@ def submit(slug: str):
             form_meta=form_meta,
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={"compliance": str(exc)},
-            values=request_data or request.form,
+            values=values_for_rerender(form_definition_for_stage(form_config, FIELD_STAGE_INITIAL), request_data or request.form),
             form_version_id=form_version.id if form_version else None,
             form_version_token=form_version_token,
             form_error=str(exc),
@@ -520,7 +523,7 @@ def submit(slug: str):
             form_meta=form_meta,
             form_definition=form_definition_for_stage(form_config, FIELD_STAGE_INITIAL),
             errors={},
-            values=request_data or request.form,
+            values=values_for_rerender(form_definition_for_stage(form_config, FIELD_STAGE_INITIAL), request_data or request.form),
             form_version_id=form_version.id if form_version else None,
             form_version_token=form_version_token,
         ), 500
@@ -616,7 +619,10 @@ def correct_submission(slug: str, submission_id: str):
             form_meta=form_meta,
             form_definition=initial_form_config,
             errors=result["errors"],
-            values=result["values"],
+            values=values_for_rerender(
+                initial_form_config, request_data or {}, saved_values=stored_values,
+                validated_values=result["values"],
+            ),
             form_action=form_action,
             correction_mode=True,
             correction_message=correction_message,

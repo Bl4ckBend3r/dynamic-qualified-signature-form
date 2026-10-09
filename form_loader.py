@@ -580,13 +580,16 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
                 _get(request_form, field_name, [])
             )
 
-        if field_type == "checkbox":
+        elif field_type == "checkbox":
             options = field.get("options") or []
 
             if len(options) > 1:
                 data[field_name] = _getlist(request_form, field_name)
             else:
                 data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
+
+        elif field_type == "select" and field.get("multiple"):
+            data[field_name] = _getlist(request_form, field_name)
 
         elif field_type == "training_selection":
             data[field_name] = ",".join(
@@ -606,6 +609,28 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
         ).strip()
 
     return data
+
+
+def values_for_rerender(
+    form_definition: Dict[str, Any], request_data, *,
+    saved_values: Dict[str, Any] | None = None,
+    validated_values: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Overlay current editable inputs on saved data after a rejected POST."""
+    values = dict(saved_values or {})
+    values.update(validated_values or {})
+    values.update(extract_submission_data(form_definition, request_data))
+    for field in form_definition.get("fields", []):
+        name = field.get("name")
+        if not name or name not in values:
+            continue
+        if field.get("type") in {"checkbox", "select", "training_selection", "repeatable_group"}:
+            continue
+        if field.get("readonly") or field.get("hidden") or field.get("system") or field.get("technical"):
+            continue
+        if hasattr(request_data, "get"):
+            values[name] = request_data.get(name, "")
+    return values
 
 def _get(request_data, key: str, default: Any = None) -> Any:
     if hasattr(request_data, "get"):
@@ -793,11 +818,11 @@ def validate_submission(
                 elif value != "Tak":
                     errors[field_name] = f"Pole „{label}” jest wymagane."
                     continue
-            elif value == "":
+            elif value == "" or (field_type == "select" and field.get("multiple") and not value):
                 errors[field_name] = f"Pole „{label}” jest wymagane."
                 continue
 
-        if value == "":
+        if value == "" or value == []:
             continue
 
         if field_type == "email" and not EMAIL_REGEX.match(value):
@@ -834,7 +859,15 @@ def validate_submission(
             from services.form_option_service import option_value
 
             allowed_values = {option_value(option) for option in field.get("options", [])}
-            if value not in allowed_values:
+            selected_values = value if field_type == "select" and field.get("multiple") else [value]
+            if not isinstance(selected_values, list) or any(selected not in allowed_values for selected in selected_values):
+                errors[field_name] = "Wybrano nieprawidłową wartość."
+
+        if field_type == "checkbox" and len(field.get("options") or []) > 1:
+            from services.form_option_service import option_value
+
+            allowed_values = {option_value(option) for option in field.get("options", [])}
+            if not isinstance(value, list) or any(selected not in allowed_values for selected in value):
                 errors[field_name] = "Wybrano nieprawidłową wartość."
 
     signature_errors = validate_signature_submission(form_definition, submission_data)
@@ -1211,6 +1244,8 @@ def format_value_for_pdf(field_type: str, value: str) -> str:
             f"{training.get('name', '')} - {training.get('price_formatted') or 'Brak danych o cenie'}"
             for training in trainings
         )
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) if value else "Brak danych"
     if field_type == "checkbox":
         return "Tak" if value == "Tak" else "Nie"
     return format_admin_value(value)

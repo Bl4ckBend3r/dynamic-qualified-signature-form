@@ -17,6 +17,7 @@ from flask import Blueprint, abort, current_app, flash, jsonify, redirect, rende
 from werkzeug.exceptions import HTTPException
 from sqlalchemy import select
 from database import create_session_factory
+from form_loader import values_for_rerender
 from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
@@ -543,6 +544,8 @@ def upload_signed_declaration(slug: str, submission_id: str):
 def declaration_form(slug: str, submission_id: str):
     services = get_services()
     access = require_participant_submission_access(submission_id, slug=slug)
+    if request.method == "POST":
+        require_public_csrf()
     submission = access.submission
     form_config = get_form_config(slug, submission_id)
     if not form_config:
@@ -567,18 +570,6 @@ def declaration_form(slug: str, submission_id: str):
     )
 
     if request.method == "POST":
-        try:
-            require_public_csrf()
-        except HTTPException:
-            flow_result.errors = {"compliance": "Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie."}
-            flow_result.values = dict(request.form)
-            return render_template(
-                "declaration_form.html",
-                form_definition=flow_result.declaration_definition,
-                action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id, token=access.credential),
-                errors=flow_result.errors,
-                values=flow_result.values,
-            ), 400
         try:
             flow_result = services.declaration_flow_service.handle_declaration_post(
                 submission_id=submission_id,
@@ -608,7 +599,9 @@ def declaration_form(slug: str, submission_id: str):
         form_definition=flow_result.declaration_definition,
         action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id, token=access.credential),
         errors=flow_result.errors,
-        values=flow_result.values,
+        values=values_for_rerender(
+            flow_result.declaration_definition, request.form, saved_values=flow_result.values,
+        ) if request.method == "POST" and flow_result.errors else flow_result.values,
     )
 
 
@@ -642,14 +635,15 @@ def save_additional_fields(slug: str, submission_id: str):
         return render_template(
             "documents_to_sign.html",
             submission_id=submission_id,
-            acceptance_value="Tak",
             errors={},
             result=build_documents_to_sign_result(
                 submission_id,
                 submission,
                 access_token=access.credential,
                 additional_errors=flow_result.errors,
-                additional_values=flow_result.values,
+                additional_values=values_for_rerender(
+                    flow_result.declaration_definition, request.form, saved_values=flow_result.values,
+                ),
             ),
         ), 400
 
@@ -1033,7 +1027,8 @@ def save_document_step_fields(slug, submission_id, step_id):
             generate=request.form.get("document_action") != "save")
         if not result.success:
             view = service.view(access.submission["row"], definition)
-            return _render_document_fields(access.submission, view, access.credential, values=result.values, errors=result.errors), 400
+            field_values = values_for_rerender(view["form_definition"], request.form, saved_values=result.values)
+            return _render_document_fields(access.submission, view, access.credential, values=field_values, errors=result.errors), 400
         flash("Dane dokumentu zostały zapisane.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
@@ -1191,7 +1186,7 @@ def documents_to_sign():
             access = resolve_participant_submission_access(submission_id)
             if access is None:
                 return render_template(
-                    "documents_to_sign.html", submission_id="", acceptance_value="",
+                    "documents_to_sign.html", submission_id="",
                     errors={}, result=None, access_token="", access_denied=True,
                 ), 404
             submission = access.submission
@@ -1215,7 +1210,6 @@ def documents_to_sign():
             return render_template(
                 "documents_to_sign.html",
                 submission_id=submission_id,
-                acceptance_value="Tak" if result else "",
                 errors=errors,
                 result=result,
                 access_token=access_token,
@@ -1224,7 +1218,6 @@ def documents_to_sign():
         return render_template(
             "documents_to_sign.html",
             submission_id="",
-            acceptance_value="",
             errors={},
             result=None,
             access_token="",
@@ -1232,7 +1225,6 @@ def documents_to_sign():
 
     submission_id = request.form.get("submission_id", "").strip()
     access_token = participant_credential()
-    acceptance_value = request.form.get("akceptacja", "").strip()
     errors = {}
     submission = None
 
@@ -1245,14 +1237,10 @@ def documents_to_sign():
         require_public_csrf()
         if not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
             errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
-    if acceptance_value != "Tak":
-        errors["akceptacja"] = "Akceptacja dokumentów jest wymagana."
-
     if errors:
         return render_template(
             "documents_to_sign.html",
             submission_id=submission_id,
-            acceptance_value=acceptance_value,
             errors=errors,
             result=None,
             access_token=access_token,
@@ -1266,7 +1254,6 @@ def documents_to_sign():
         return render_template(
             "documents_to_sign.html",
             submission_id=submission_id,
-            acceptance_value=acceptance_value,
             errors=errors,
             result=None,
             access_token=access_token,
@@ -1277,7 +1264,6 @@ def documents_to_sign():
     return render_template(
         "documents_to_sign.html",
         submission_id=submission_id,
-        acceptance_value=acceptance_value,
         errors={},
         result=result,
         access_token=access_token,

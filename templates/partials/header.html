@@ -1,42 +1,59 @@
+<head>
+     <meta name="author" content="Witold Grzesiak">
+</head>
 <header class="site-header">
-    <div class="container site-header__inner">
-        <a href="{{ url_for('public_forms.index') }}" class="site-brand" aria-label="Strona główna">
-            <img
-                src="{{ url_for('static', filename='images/logo.png') }}"
-                alt="Logo Województwa Lubuskiego"
-                class="site-brand__logo"
-            >
-            <div class="site-brand__text">
-                <span class="site-title">{{ app_name }}</span>
-                <span class="site-subtitle">Platforma składania wniosków online</span>
-            </div>
-        </a>
+  <div class="container site-header__inner">
+    <a
+      href="{{ url_for('public_forms.index') }}"
+      class="site-brand"
+      aria-label="Strona główna"
+    >
+      <img
+        src="{{ url_for('static', filename='images/logo.png') }}"
+        alt="Logo Województwa Lubuskiego"
+        class="site-brand__logo"
+      />
+      <div class="site-brand__text">
+        <span class="site-title">{{ app_name }}</span>
+        <span class="site-subtitle">Platforma składania wniosków online</span>
+      </div>
+    </a>
 
-        <nav class="site-nav" aria-label="Nawigacja główna">
-            <a
-                href="{{ url_for('public_forms.index') }}"
-                class="{% if request.endpoint == 'public_forms.index' %}is-active{% endif %}"
-            >
-                Strona główna
-            </a>
+    <nav class="site-nav" aria-label="Nawigacja główna">
+      <a
+        href="{{ url_for('public_forms.index') }}"
+        class="{% if request.endpoint == 'public_forms.index' %}is-active{% endif %}"
+      >
+        Strona główna
+      </a>
 
-            <a
-                href="{{ url_for('public_forms.public_status_page') }}"
-                class="{% if request.endpoint == 'public_forms.public_status_page' %}is-active{% endif %}"
-            >
-                Sprawdź status
-            </a>
+      <a
+        href="{{ url_for('public_forms.public_status_page') }}"
+        class="{% if request.endpoint == 'public_forms.public_status_page' %}is-active{% endif %}"
+      >
+        Sprawdź status
+      </a>
 
-            <a
-                href="{{ url_for('public_forms.contact_page') }}"
-                class="{% if request.endpoint == 'public_forms.contact_page' %}is-active{% endif %}"
-            >
-                Kontakt
-            </a>
-            <button class="theme-toggle" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw">
-                <span class="theme-toggle__icon" data-theme-icon aria-hidden="true">☾</span>
-                <span data-theme-label>Ciemny</span>
-            </button>
-        </nav>
-    </div>
+      <a
+        href="{{ url_for('public_forms.contact_page') }}"
+        class="{% if request.endpoint == 'public_forms.contact_page' %}is-active{% endif %}"
+      >
+        Kontakt
+      </a>
+      <button
+        class="theme-toggle"
+        type="button"
+        data-theme-toggle
+        aria-label="Włącz ciemny motyw"
+        title="Włącz ciemny motyw"
+        aria-pressed="false"
+      >
+        <span class="theme-toggle__track" aria-hidden="true">
+          <span class="theme-toggle__sun">☀</span>
+          <span class="theme-toggle__moon">☾</span>
+          <span class="theme-toggle__thumb"></span>
+        </span>
+      </button>
+    </nav>
+  </div>
 </header>

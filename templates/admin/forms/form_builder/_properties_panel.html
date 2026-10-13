@@ -18,20 +18,31 @@
       >
         ×
       </button>
-    </div>
-    <label><span>Etykieta</span><input data-property="label" /></label>
-    <label
-      ><span>Nazwa pola</span><input data-property="name" spellcheck="false"
-    /></label>
-    <small data-name-help
-      >Nazwy istniejącego pola nie można zmienić, aby nie zerwać powiązań z
-      danymi.</small
-    >
-    <label
-      ><span>Typ</span
-      ><select data-property="type"></select
-    ></label>
-    <fieldset class="form-builder__widths">
+    <label data-label-setting>
+        <span>Etykieta</span>
+        <input data-property="label" />
+      </label>
+
+      <label data-static-text-setting hidden>
+        <span>Treść informacji</span>
+        <textarea rows="6" data-static-text-content></textarea>
+      </label>
+
+      <label data-name-setting>
+        <span>Nazwa pola</span>
+        <input data-property="name" spellcheck="false" />
+      </label>
+
+      <small data-name-help>
+        Nazwy istniejącego pola nie można zmienić, aby nie zerwać powiązań z danymi.
+      </small>
+
+      <label data-type-setting>
+        <span>Typ</span>
+        <select data-property="type"></select>
+      </label>
+
+      <fieldset class="form-builder__widths" data-width-setting>
       <legend>Szerokość</legend>
       <div data-width-options></div>
     </fieldset>

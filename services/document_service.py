@@ -164,6 +164,21 @@ class DocumentService:
 
         return FormConfigService().normalize_documents_config(form_config)
 
+    def _require_version_completion(self, submission: dict) -> None:
+        session_factory = getattr(self.submission_repository, "session_factory", None)
+        if not session_factory:
+            return
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.form_version_service import FormVersionService
+
+        with session_factory() as db:
+            record = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == self._submission_id(submission)
+            )).scalar_one()
+            if (record.data_json or {}).get("_form_version_upgrade"):
+                FormVersionService().require_submission_data_complete(db, record)
+
     def generate_document(
         self,
         submission: dict,
@@ -171,11 +186,18 @@ class DocumentService:
         document_id: str,
         context_extra: dict | None = None,
         force: bool = False,
+        version_gap: bool = False,
     ) -> dict:
-        self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
+        gap = self._version_gap_entry(submission, form_config, document_id) if version_gap else None
+        if not version_gap:
+            self._require_version_completion(submission)
+            self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
         if not document:
             raise ValueError(f"Unknown document_id: {document_id}")
+        if document_id == DocumentType.DECLARATION:
+            from services.documents.declaration_flow_service import DeclarationFlowService
+            document = {**document, "fields": DeclarationFlowService.submission_document_fields(document, form_config)}
         if not document.get("enabled", True):
             updates = self._not_required_updates(document_id, form_config)
             self._update_submission(submission, updates)
@@ -184,7 +206,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
-        composite = self.composite_step(row, form_config)
+        composite = {"id": gap["step_id"]} if gap else self.composite_step(row, form_config)
         resolved_context_extra = dict(context_extra or {})
         agreement_number = ""
         if document_id == DocumentType.AGREEMENT:
@@ -232,14 +254,26 @@ class DocumentService:
         filename = self.build_filename_for_document(document, render_row, document_id)
         if composite:
             filename = f"{Path(filename).stem}-{submission_id}-{composite['id']}.pdf"
-            from services.documents.document_workflow_service import document_step_state
-            revision = document_step_state(row, composite["id"]).get("data_sha256", "")
+            if document_id not in {DocumentType.DECLARATION, DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+                filename = f"{Path(filename).stem}-v{row.get('form_version_id') or 'legacy'}.pdf"
+            from services.documents.document_workflow_service import document_item_state
+            revision = document_item_state(row, composite["id"], document_id,
+                primary_document_id=str(composite.get("document_id") or "")).get("data_sha256", "")
             if revision:
                 filename = f"{Path(filename).stem}-{revision[:16]}.pdf"
+            existing_names = {file.get("filename") for file in
+                self.submission_document_service.list_documents(submission_id)}
+            base_filename = filename
+            sequence = 2
+            while filename in existing_names:
+                filename = append_filename_sequence(base_filename, sequence)
+                sequence += 1
         # The render view combines fields; the persisted form definition stays unchanged.
-        render_definition = {**form_config, "fields": [*(form_config.get("fields") or []),
+        render_fields = ([*(form_config.get("fields") or []),
             *({**field, "document_usage": {**(field.get("document_usage") or {}), document_id: True}}
-              for field in document.get("fields") or [])]}
+              for field in document.get("fields") or [])]
+            if document_id != DocumentType.DECLARATION else list(document.get("fields") or []))
+        render_definition = {**form_config, "fields": render_fields}
         context = build_document_pdf_context(
             form_definition=render_definition,
             submission_id=submission_id,
@@ -299,7 +333,8 @@ class DocumentService:
         updates = self._generated_updates(document_id, filename)
         if document_id == DocumentType.AGREEMENT:
             updates["agreement_generated_at"] = resolved_context_extra["generated_date"]
-        self._update_submission(submission, updates)
+        if updates:
+            self._update_submission(submission, updates)
         self._audit("DOCUMENT_GENERATED", submission, metadata={"document_id": document_id, "filename": filename})
         return {
             "enabled": True,
@@ -311,6 +346,20 @@ class DocumentService:
             "document": document,
         }
 
+    def _version_gap_entry(self, submission, form_config, document_id):
+        from services.documents.document_workflow_service import has_document_workflow, step_documents
+        row = self._row(submission)
+        marker = ((row.get("data_json") or {}).get("_form_version_upgrade") or {}).get("missing_documents") or []
+        item = next((item for item in marker if item.get("document_id") == document_id), None)
+        if not item:
+            raise ValueError("Dokument nie jest wymagany do uzupełnienia.")
+        step = next((step for step in (form_config.get("workflow") or {}).get("steps") or []
+                     if step.get("id") == item.get("step_id") and has_document_workflow(form_config, step)), None)
+        if not step or not any(document.get("id") == document_id and document.get("required", True)
+                           for document in step_documents(form_config, step)):
+            raise ValueError("Dokument nie należy do aktualnej wersji formularza.")
+        return item
+
     def generate_documents_for_collection(
         self,
         submission: dict,
@@ -320,6 +369,7 @@ class DocumentService:
         item_alias: str,
         context_extra: dict | None = None,
     ) -> list[dict]:
+        self._require_version_completion(submission)
         self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
         if not document:
@@ -775,7 +825,8 @@ class DocumentService:
 
             return render_document_builder_template(
                 document.get("builder_document") or {},
-                "declaration" if document.get("id") == "declaration" else "agreement",
+                "declaration" if document.get("id") == "declaration" else
+                "agreement" if document.get("id") in {"agreement", "training_agreement"} else "document",
             )
         if document.get("template_source") == "docx":
             try:
@@ -843,10 +894,12 @@ class DocumentService:
         if definition.get("workflow", {}).get("flow_mode") != "explicit":
             return
         step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
-        from services.documents.document_workflow_service import is_document_step, document_states
-        if is_document_step(step):
+        from services.documents.document_workflow_service import has_document_workflow, document_states
+        if has_document_workflow(definition, step):
             # Composite uploads must pass the lifecycle's verification and completion gate.
-            if step.get("document_id") == document_id and action == "generate_document" and self._document_operation_token.get() and document_states(row).get("document_operation") == self._document_operation_token.get():
+            from services.documents.document_workflow_service import step_documents
+            allowed_ids = {item["id"] for item in step_documents(definition, step)}
+            if document_id in allowed_ids and action == "generate_document" and self._document_operation_token.get() and document_states(row).get("document_operation") == self._document_operation_token.get():
                 return
             raise ValueError("Użyj czynności złożonego etapu dokumentowego.")
         if workflow_document_action(step, document_id) != action:
@@ -970,13 +1023,13 @@ class DocumentService:
         return f"signed_{document_id}" if signed else document_id
 
     def composite_step(self, row, definition=None):
-        from services.documents.document_workflow_service import is_document_step
+        from services.documents.document_workflow_service import has_document_workflow
         workflow = getattr(self, "workflow_service", None)
         if not workflow:
             return None
         definition = definition or workflow.definition_for(row)
         step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
-        return step if is_document_step(step) else None
+        return step if has_document_workflow(definition, step) else None
 
     def workflow_upload_metadata_type(self, document_id, *, signer, signed):
         """Adapt lifecycle roles to the existing canonical document metadata types."""
@@ -1074,10 +1127,9 @@ class DocumentService:
                 "agreement_filename": filename,
                 "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
             }
-        return {
-            f"{document_id}_generated": "Tak",
-            f"{document_id}_filename": filename,
-        }
+        # Additional documents are tracked by SubmissionFile, not ad-hoc
+        # FormSubmission columns.
+        return {}
 
     def _signed_document_target(self, row: dict, document_id: str, instance_id: str | None) -> tuple[str, str, dict | None]:
         return self.signed_document_service.build_target(row, document_id, instance_id)

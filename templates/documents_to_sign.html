@@ -27,8 +27,42 @@
 {% block content %}
 {% set initial_submission_id = submission_id|default('') %}
 {% set participant_access_token = access_token|default('', true) %}
+{% set upgrade = (((submission|default({})).get('row') or {}).get('data_json') or {}).get('_form_version_upgrade', {}) %}
 
 <div class="card">
+    {% if upgrade.get('missing_fields') or upgrade.get('invalid_training_ids') %}
+    <div class="alert alert-warning" role="status">
+        <strong>Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane.</strong>
+        <a class="btn-primary" href="{{ url_for('public_forms.complete_version_upgrade', slug=(submission.form_slug), submission_id=initial_submission_id, token=participant_access_token) }}">Uzupełnij dane</a>
+    </div>
+    {% endif %}
+    {% if version_gap_documents|default([]) %}
+    <section class="result-box" aria-labelledby="version-documents-title">
+        <h3 id="version-documents-title">Dokumenty wymagane po aktualizacji formularza</h3>
+        <p>Uzupełnij te dokumenty, aby kontynuować zgłoszenie. Pozostałe podpisane pliki są zachowane.</p>
+        {% for item in version_gap_documents %}
+        <div class="composite-document-file">
+            <h4>{{ item.label }}</h4>
+            {% if item.kind == 'generated_pdf' and not item.generated_filename %}
+            <form method="post" action="{{ url_for('documents.generate_version_document', slug=submission.form_slug, submission_id=initial_submission_id, document_id=item.document_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ participant_access_token }}">
+                <button type="submit" class="btn-primary">Przygotuj dokument</button>
+            </form>
+            {% endif %}
+            {% if item.generated_filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_version_document', slug=submission.form_slug, submission_id=initial_submission_id, document_id=item.document_id, filename=item.generated_filename, token=participant_access_token) }}">Pobierz dokument do podpisu</a></p>{% endif %}
+            {% if item.kind == 'uploaded_file' or item.generated_filename and item.signature_required %}
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.upload_version_document', slug=submission.form_slug, submission_id=initial_submission_id, document_id=item.document_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ participant_access_token }}">
+                <label>{{ 'Wgraj podpisany PDF' if item.signature_required else 'Wgraj dokument' }}
+                    <input type="file" name="document_pdf" accept="{{ '.pdf,application/pdf' if item.signature_required else '.pdf,.doc,.docx,.png,.jpg,.jpeg' }}" required>
+                </label>
+                <button type="submit" class="btn-primary">Wyślij dokument</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
     <div class="card-header">
         <h2>Dokumenty do podpisania</h2>
         <p>
@@ -124,13 +158,83 @@
     {% endif %}
     {% if result and result.completed_document_files %}
     <section class="result-box"><h3>Dokumenty do pobrania</h3>
-        {% for file in result.completed_document_files %}<p><a href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=file.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endfor %}
+        {% for file in result.completed_document_files %}<p><a href="{{ url_for('documents.download_document_item', slug=result.form_slug, submission_id=result.submission_id, step_id=file.step_id, document_id=file.document_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endfor %}
     </section>
     {% endif %}
     {% if result and result.document_step %}
         {% set document = result.document_step %}
         <section class="result-box" data-composite-document data-substate="{{ document.substate }}">
             <div id="submission-status-tiles" aria-live="polite">{{ current_status_tile(document.status.title, document.status.message) }}</div>
+            {% if document.group %}
+            <h3>Dokumenty na tym etapie</h3>
+            <p>{{ document.ready_count }} z {{ document.required_count }} wymaganych dokumentów ukończone.</p>
+            {% for action in document.generation_actions or [] %}
+            <form method="post"
+                action="{{ url_for(
+                    'documents.generate_group_document',
+                    slug=result.form_slug,
+                    submission_id=result.submission_id,
+                    step_id=document.step_id,
+                    document_id=action.document_id
+                ) }}">
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                <input type="hidden" name="access_token" value="{{ result.access_token }}">
+
+                <button type="submit" class="btn-primary">
+                    {% if action.document_id == "agreement" %}
+                        Wygeneruj umowę
+                    {% else %}
+                        Wygeneruj {{ action.label }}
+                    {% endif %}
+                </button>
+            </form>
+            {% endfor %}
+            {% for file in document.files %}
+                <div class="composite-document-file">
+                    <h4>{{ file.label }}{% if file.required %} — wymagany{% else %} — opcjonalny{% endif %}</h4>
+                    {% if file.description %}<p>{{ file.description }}</p>{% endif %}
+                    <p>Status: {{ file.status }}</p>
+                    <p>{{ 'Wymagany podpis uczestnika' if file.signature_required else 'Podpis uczestnika niewymagany' }}{% if file.office_signature_required %} · Wymagany podpis urzędu{% endif %}</p>
+                    {% if file.verification_message %}<p role="alert">{{ file.verification_message }}</p>{% endif %}
+                    {% if file.can_generate %}<form method="post" action="{{ url_for('documents.generate_group_document', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, document_id=file.document_id) }}"><input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}"><button type="submit" class="btn-primary">Wygeneruj dokument</button></form>{% endif %}
+                    {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_item', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, document_id=file.document_id, filename=file.filename, token=result.access_token) }}">Pobierz dokument</a></p>{% endif %}
+                </div>
+            {% endfor %}
+            {% if document.files|selectattr('can_upload')|list %}
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.bulk_upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}" data-bulk-document-upload>
+                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                <input type="hidden" name="access_token" value="{{ result.access_token }}">
+                <h4>Wgraj podpisane dokumenty</h4>
+                <div data-bulk-document-rows><div class="composite-document-file" data-bulk-document-row>
+                    <label>Dokument <select name="document_ids" required><option value="">Wybierz dokument</option>{% for file in document.files if file.can_upload %}<option value="{{ file.document_id }}{% if file.instance %}::{{ file.instance }}{% endif %}">{{ file.label }}</option>{% endfor %}</select></label>
+                    <label>Plik PDF <input type="file" name="document_files" accept=".pdf,application/pdf" required></label>
+                </div></div>
+                <button type="button" class="btn-secondary" data-add-bulk-document-row>+ Dodaj kolejny plik</button>
+                <button type="submit" class="btn-primary">Wgraj podpisane dokumenty</button>
+            </form>
+            <script>
+            (() => {
+                const form = document.querySelector('[data-bulk-document-upload]');
+                if (!form) return;
+                const rows = form.querySelector('[data-bulk-document-rows]');
+                form.querySelector('[data-add-bulk-document-row]').addEventListener('click', () => {
+                    if (rows.children.length >= 20) return;
+                    const row = rows.firstElementChild.cloneNode(true);
+                    row.querySelector('select').value = '';
+                    row.querySelector('input[type="file"]').value = '';
+                    rows.append(row);
+                });
+                form.addEventListener('submit', event => {
+                    const ids = [...rows.querySelectorAll('select')].map(item => item.value);
+                    if (ids.some(id => !id) || new Set(ids).size !== ids.length) {
+                        event.preventDefault();
+                        window.alert('Każdemu plikowi przypisz inny dokument.');
+                    }
+                });
+            })();
+            </script>
+            {% endif %}
+            {% else %}
             {% for file in document.files %}
                 <div class="composite-document-file">
                 {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endif %}
@@ -157,6 +261,7 @@
                 <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}">
                 <button class="btn-secondary" type="submit">Ponów przygotowanie dokumentu</button>
             </form>{% endif %}
+            {% endif %}
         </section>
     {% elif result %}
         {% set declaration_download_enabled = result.declaration_download_enabled|default(result.declaration_url) %}

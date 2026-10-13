@@ -2483,11 +2483,11 @@ a.admin-stat:focus-visible {
 
 .admin-mail-body {
   max-height: 28rem;
+  max-width: 25rem;
   overflow: auto;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fff;
 }
 .workflow-diagram-mode.is-manual {
   background: #fff1d6;

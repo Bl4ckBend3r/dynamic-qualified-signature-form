@@ -839,6 +839,42 @@
     </template>
     {% endif %}
     <section class="admin-form-tab-panel" id="form-tab-documents" role="tabpanel" data-form-tab-panel="documents" {% if active_tab != 'documents' %}hidden{% endif %}>
+    <div class="admin-section" data-custom-documents>
+        <h2>Dodatkowe dokumenty</h2>
+        <p>Biblioteka dodatkowych dokumentów. Przypisz dokument do dowolnego aktywnego etapu uczestnika; generowanie i upload mogą działać razem.</p>
+        <input type="hidden" name="documents_config_json" data-custom-documents-json>
+        <input type="hidden" name="reserved_documents_json" data-reserved-documents-json>
+        <div data-custom-documents-list></div>
+        <button type="button" class="admin-button-secondary" data-custom-document-add>+ Dodaj dokument</button>
+        <template data-custom-document-template>
+            <article class="admin-section" data-custom-document>
+                <div class="admin-form-grid">
+                    <label><span>ID techniczne</span><input data-custom-field="id" pattern="[a-z][a-z0-9_]{1,63}" required></label>
+                    <label><span>Nazwa</span><input data-custom-field="label" required></label>
+                    <label><span>Etykieta dla uczestnika</span><input data-custom-field="participant_label"></label>
+                    <label><span>Etap workflow</span><select data-custom-field="workflow_step">
+                        <option value="">Nieprzypisany</option>
+                        {% for step in participant_workflow_steps %}
+                        <option value="{{ step.get('id') }}">{{ step.get('admin_label') or step.get('label') or step.get('id') }}</option>
+                        {% endfor %}
+                    </select></label>
+                    <label data-custom-template-control><span>Szablon</span><select data-custom-field="template_source"><option value="builder">DocumentBuilder</option><option value="html">HTML</option><option value="docx">DOCX</option></select></label>
+                    <label><span>Kolejność</span><input type="number" data-custom-field="order" value="0"></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="required" checked><span>Dokument wymagany</span></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="generate"><span>Generuj dokument w systemie</span></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="upload_required" checked><span>Wymagany upload PDF</span></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="signature_required" checked><span>Wymagany podpis uczestnika</span></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="office_signature"><span>Wymagany podpis urzędu</span></label>
+                    <label class="admin-check"><input type="checkbox" data-custom-field="enabled" checked><span>Aktywny</span></label>
+                    <label class="admin-form-wide"><span>Opis / instrukcja</span><textarea data-custom-field="description" rows="2"></textarea></label>
+                    <label class="admin-form-wide" data-custom-template-control><span>Treść szablonu HTML (dla źródła HTML)</span><textarea data-custom-field="template_html" rows="5"></textarea></label>
+                </div>
+                <a data-custom-builder-link hidden>Otwórz DocumentBuilder</a>
+                <button type="button" class="admin-button-secondary" data-custom-document-remove>Usuń dokument</button>
+            </article>
+        </template>
+        <script type="application/json" data-custom-documents-initial>{{ form.workflow_editor_documents|default([])|tojson }}</script>
+    </div>
     <div class="admin-section">
         <h2>Regulamin</h2>
         {% if form.regulation %}
@@ -931,7 +967,11 @@
                             <label><span>Nazwa dla administratora</span><input data-step-admin-label value="{{ step.get('admin_label') }}" required></label>
                             <label><span>Status widoczny dla użytkownika</span><input data-step-user-label value="{{ step.get('user_label') }}" required><small>Tekst wyświetlany użytkownikowi na tym etapie.</small></label>
                             <label><span>Status techniczny</span><select data-step-status required title="Status zapisywany przez silnik workflow; niezależny od tekstu widocznego dla użytkownika.">{% for status in workflow_statuses %}<option value="{{ status.value }}" {% if status.value == step.get('status') %}selected{% endif %}>{{ status.label }}</option>{% endfor %}</select></label>
-                            <label><span>Typ etapu</span><select data-step-stage-type><option value="system" {% if step.get('stage_type') == 'system' %}selected{% endif %}>Etap automatyczny</option><option value="user_action" {% if step.get('stage_type') == 'user_action' %}selected{% endif %}>Akcja użytkownika</option><option value="officer_action" {% if step.get('stage_type') == 'officer_action' %}selected{% endif %}>Akcja urzędnika / decyzja</option><option value="document" {% if step.get('stage_type') == 'document' %}selected{% endif %}>Etap dokumentowy</option><option value="final" {% if step.get('stage_type') == 'final' %}selected{% endif %}>Etap końcowy</option></select></label>
+                            <label><span>Typ etapu</span><select data-step-stage-type><option value="system" {% if step.get('stage_type') == 'system' %}selected{% endif %}>Etap automatyczny</option><option value="user_action" {% if step.get('stage_type') == 'user_action' %}selected{% endif %}>Akcja użytkownika</option><option value="officer_action" {% if step.get('stage_type') == 'officer_action' %}selected{% endif %}>Akcja urzędnika / decyzja</option><option
+    value="documents"
+    {% if step.get('stage_type') in ['documents', 'document', 'declaration', 'agreement'] %}selected{% endif %}
+    Etap dokumentowy
+</option><option value="final" {% if step.get('stage_type') == 'final' %}selected{% endif %}>Etap końcowy</option></select></label>
                             <label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label>
                         </div>
                         <div class="workflow-stage-options">
@@ -940,6 +980,7 @@
                             <label class="admin-check"><input type="checkbox" data-step-final {% if step.get('final') %}checked{% endif %}><span>Etap końcowy</span></label>
                             <label class="admin-check"><input type="checkbox" data-step-rejected {% if step.get('rejected') %}checked{% endif %}><span>Odrzucenie</span></label>
                         </div>
+                        <section class="admin-section" data-stage-documents><h4>Dokumenty na tym etapie</h4><div data-stage-document-list></div><label><span>Przypisz istniejący dokument</span><select data-stage-document-choice><option value="">Wybierz dokument</option></select></label><button type="button" class="admin-button-secondary" data-stage-document-add>Przypisz</button><button type="button" class="admin-button-secondary" data-stage-document-create>Utwórz nowy dokument</button></section>
                         </div>
                         <textarea data-step-description hidden>{{ step.get('description') }}</textarea>
                         <textarea data-step-next-action hidden>{{ step.get('next_action') }}</textarea>
@@ -1274,7 +1315,7 @@
             <div class="workflow-stage-card__heading"><div><span class="workflow-stage-number">Nowy etap</span><h3 data-step-heading>Nowy etap</h3></div><div class="workflow-stage-actions"><button type="button" class="admin-button-secondary compact" data-edit-workflow-step aria-expanded="false">Edytuj etap</button><button type="button" class="admin-button-secondary compact" data-edit-step-instruction>Instrukcja</button><button type="button" class="admin-button-secondary compact" data-workflow-step-up aria-label="Przesuń etap w górę">↑</button><button type="button" class="admin-button-secondary compact" data-workflow-step-down aria-label="Przesuń etap w dół">↓</button><button type="button" class="admin-link-button admin-link-danger" data-remove-workflow-step>Usuń etap</button></div></div>
             <div class="workflow-stage-badges" data-step-badges></div>
             <dl class="workflow-stage-summary" data-step-summary></dl>
-            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>ID etapu</span><input data-step-id value="nowy_etap" required><small>ID jest używane w przejściach workflow. Nie można go zmienić po utworzeniu zgłoszeń.</small></label><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Status widoczny dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status techniczny</span><select data-step-status required title="Status zapisywany przez silnik workflow; niezależny od tekstu widocznego dla użytkownika.">{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Typ etapu</span><select data-step-stage-type><option value="system">Etap automatyczny</option><option value="user_action">Akcja użytkownika</option><option value="officer_action">Akcja urzędnika / decyzja</option><option value="document">Etap dokumentowy</option><option value="final">Etap końcowy</option></select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
+            <div class="workflow-stage-editor" data-workflow-step-editor hidden><div class="workflow-stage-fields"><label><span>ID etapu</span><input data-step-id value="nowy_etap" required><small>ID jest używane w przejściach workflow. Nie można go zmienić po utworzeniu zgłoszeń.</small></label><label><span>Nazwa dla administratora</span><input data-step-admin-label value="Nowy etap" required></label><label><span>Status widoczny dla użytkownika</span><input data-step-user-label value="Nowy etap" required></label><label><span>Status techniczny</span><select data-step-status required title="Status zapisywany przez silnik workflow; niezależny od tekstu widocznego dla użytkownika.">{% for status in workflow_statuses %}<option value="{{ status.value }}">{{ status.label }}</option>{% endfor %}</select></label><label><span>Typ etapu</span><select data-step-stage-type><option value="system">Etap automatyczny</option><option value="user_action">Akcja użytkownika</option><option value="officer_action">Akcja urzędnika / decyzja</option><option value="documents">Etap dokumentowy</option><option value="final">Etap końcowy</option></select></label><label><span>Kolejny etap</span><select data-step-next><option value="">Brak — koniec ścieżki</option></select></label></div>
             <div class="workflow-stage-options"><label class="admin-check"><input type="checkbox" data-step-user-action><span>Wymaga akcji użytkownika</span></label><label class="admin-check"><input type="checkbox" data-step-officer-action><span>Wymaga akcji urzędnika</span></label><label class="admin-check"><input type="checkbox" data-step-final><span>Etap końcowy</span></label><label class="admin-check"><input type="checkbox" data-step-rejected><span>Odrzucenie</span></label></div></div>
             <textarea data-step-description hidden></textarea><textarea data-step-next-action hidden></textarea>
         </article>
@@ -1386,6 +1427,166 @@
 <script>
 window.workflowFields = {{ (workflow_converted_fields if workflow_converted_fields is defined and workflow_converted_fields is not none else form.workflow_editor_fields|default((form.workflow_editor_definition|default(form.definition_json) or {}).get("fields", [])))|tojson }};
 window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson }};
+(() => {
+    const root = document.querySelector('[data-custom-documents]');
+    if (!root) return;
+    const reserved = new Set(['declaration', 'agreement', 'training_agreement']);
+    const initial = JSON.parse(root.querySelector('[data-custom-documents-initial]').textContent || '[]');
+    const reservedDocuments = initial.filter(item => reserved.has(item.id)).map(item => ({...item}));
+    const list = root.querySelector('[data-custom-documents-list]');
+    const stageList = document.querySelector('[data-workflow-step-list]');
+    const hidden = root.querySelector('[data-custom-documents-json]');
+    const reservedHidden = root.querySelector('[data-reserved-documents-json]');
+    const fields = ['id', 'label', 'participant_label', 'description', 'template_html', 'template_source',
+        'workflow_step', 'required', 'generate', 'upload_required', 'signature_required', 'office_signature', 'order', 'enabled'];
+    function serialize() {
+        const documents = [...list.querySelectorAll('[data-custom-document]')].map(card => {
+            const values = Object.fromEntries(fields.map(key => {
+                const input = card.querySelector(`[data-custom-field="${key}"]`);
+                return [key, input.type === 'checkbox' ? input.checked : key === 'order' ? Number(input.value || 0) : input.value.trim()];
+            }));
+            return {...values, kind: values.generate ? 'generated_pdf' : 'uploaded_file', lifecycle: {
+                generate: values.generate, download: true, upload_required: values.upload_required,
+                participant_signature: values.signature_required, signature_verification: true,
+                office_signature: values.office_signature}};
+        });
+        hidden.value = JSON.stringify(documents);
+        reservedHidden.value = JSON.stringify(reservedDocuments.map(item => ({id: item.id,
+            workflow_step: item.workflow_step || '', order: Number(item.order || 0)})));
+        window.workflowDocuments = [...reservedDocuments, ...documents];
+        refreshStageDocuments();
+    }
+    function add(item = {}) {
+        const card = root.querySelector('[data-custom-document-template]').content.firstElementChild.cloneNode(true);
+        fields.forEach(key => {
+            const input = card.querySelector(`[data-custom-field="${key}"]`);
+            const policyKey = key === 'signature_required' ? 'participant_signature' : key;
+            const saved = ['generate', 'upload_required', 'office_signature', 'signature_required'].includes(key) ?
+                (item.lifecycle || {})[policyKey] ?? item[key] ?? (key === 'generate' ? item.kind === 'generated_pdf' : undefined) : item[key];
+            if (input.type === 'checkbox') input.checked = saved === undefined ? input.checked : saved === true;
+            else if (item[key] !== undefined) input.value = item[key];
+        });
+        const builder = card.querySelector('[data-custom-builder-link]');
+        const idInput = card.querySelector('[data-custom-field="id"]');
+        if (item.id) idInput.readOnly = true;
+        function updateBuilderLink() {
+            const id = idInput.value.trim();
+            const generated = card.querySelector('[data-custom-field="generate"]').checked;
+            card.querySelectorAll('[data-custom-template-control]').forEach(control => { control.hidden = !generated; });
+            builder.hidden = !item.id || id !== item.id || !generated;
+            if (!builder.hidden) builder.href = `{{ url_for('admin.custom_document_builder_view', form_id=form.id, document_id='__ID__') }}`.replace('__ID__', encodeURIComponent(id));
+        }
+        card.addEventListener('input', () => { updateBuilderLink(); serialize(); });
+        card.addEventListener('change', () => { updateBuilderLink(); serialize(); });
+        card.querySelector('[data-custom-document-remove]').addEventListener('click', () => { card.remove(); serialize(); });
+        list.appendChild(card);
+        updateBuilderLink();
+        serialize();
+    }
+    function participantCard(card) {
+        const kind = card.querySelector('[data-step-stage-type]')?.value;
+        const requiresUserAction = Boolean(
+            card.querySelector('[data-step-user-action]')?.checked
+        );
+
+        if (
+            card.querySelector('[data-step-final]')?.checked ||
+            card.querySelector('[data-step-rejected]')?.checked ||
+            card.querySelector('[data-step-officer-action]')?.checked ||
+            card.hidden
+        ) {
+            return false;
+        }
+
+        return requiresUserAction || ['user_action', 'documents'].includes(kind);
+    }
+    function stageSection(card) {
+        let section = card.querySelector('[data-stage-documents]');
+        if (section) return section;
+        section = document.createElement('section');
+        section.className = 'admin-section'; section.dataset.stageDocuments = '';
+        section.innerHTML = '<h4>Dokumenty na tym etapie</h4><div data-stage-document-list></div><label><span>Przypisz istniejący dokument</span><select data-stage-document-choice><option value="">Wybierz dokument</option></select></label><button type="button" class="admin-button-secondary" data-stage-document-add>Przypisz</button><button type="button" class="admin-button-secondary" data-stage-document-create>Utwórz nowy dokument</button>';
+        card.querySelector('[data-workflow-step-editor]')?.append(section);
+        return section;
+    }
+    function refreshStageDocuments() {
+        if (!stageList) return;
+        const cards = [...stageList.querySelectorAll('[data-workflow-step]')];
+        const stageChoices = cards.filter(card => participantCard(card) &&
+            card.querySelector('[data-step-stage-type]')?.value === 'documents').map(card => ({
+            id: card.querySelector('[data-step-id]')?.value.trim(),
+            label: card.querySelector('[data-step-admin-label]')?.value.trim()
+        })).filter(item => item.id);
+        list.querySelectorAll('[data-custom-field="workflow_step"]').forEach(select => {
+            const selected = select.value;
+            select.replaceChildren(new Option('Nieprzypisany', ''), ...stageChoices.map(item => new Option(item.label || item.id, item.id)));
+            select.value = selected;
+        });
+        cards.forEach(card => {
+            const section = stageSection(card);
+            section.hidden = !participantCard(card) || card.querySelector('[data-step-stage-type]')?.value !== 'document';
+            if (section.hidden) return;
+            const stageId = card.querySelector('[data-step-id]')?.value.trim();
+            const assigned = window.workflowDocuments.filter(item => item.enabled !== false && item.workflow_step === stageId);
+            const listNode = section.querySelector('[data-stage-document-list]');
+            listNode.replaceChildren();
+            assigned.sort((a, b) => Number(a.order || 0) - Number(b.order || 0)).forEach((item, index) => {
+                const row = document.createElement('p');
+                const policy = item.lifecycle || {};
+                row.textContent = `${item.label || item.id} — ${item.required === false ? 'opcjonalny' : 'wymagany'} · ${policy.participant_signature ?? item.signature_required ? 'podpis uczestnika' : 'bez podpisu uczestnika'} · ${policy.office_signature ? 'podpis urzędu' : 'bez podpisu urzędu'} · ${policy.generate ?? item.kind === 'generated_pdf' ? 'generowany' : 'bez generowania'} · ${policy.upload_required ? 'upload PDF' : 'bez uploadu'} `;
+                const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'admin-button-secondary compact'; edit.textContent = 'Edytuj dokument';
+                edit.addEventListener('click', () => { document.querySelector(`[data-form-tab-target="${reserved.has(item.id) ? item.id === 'declaration' ? 'declaration' : 'agreement' : 'documents'}"]`)?.click();
+                    if (!reserved.has(item.id)) [...list.querySelectorAll('[data-custom-document]')].find(entry => entry.querySelector('[data-custom-field="id"]').value === item.id)?.scrollIntoView({block: 'center'}); });
+                row.append(edit);
+                for (const [label, offset] of [['↑', -1], ['↓', 1]]) {
+                    const move = document.createElement('button'); move.type = 'button'; move.className = 'admin-button-secondary compact'; move.textContent = label;
+                    move.disabled = index + offset < 0 || index + offset >= assigned.length;
+                    move.addEventListener('click', () => {
+                        const reordered = [...assigned]; [reordered[index], reordered[index + offset]] = [reordered[index + offset], reordered[index]];
+                        reordered.forEach((entry, position) => setDocumentValue(entry.id, 'order', position + 1)); serialize();
+                    }); row.append(move);
+                }
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'admin-button-secondary compact'; remove.textContent = 'Usuń przypisanie';
+                remove.addEventListener('click', () => { setDocumentValue(item.id, 'workflow_step', ''); serialize(); });
+                row.append(remove); listNode.append(row);
+            });
+            const choice = section.querySelector('[data-stage-document-choice]');
+            const selected = choice.value;
+            choice.replaceChildren(new Option('Wybierz dokument', ''), ...window.workflowDocuments.filter(item => item.id && item.workflow_step !== stageId).map(item => new Option(item.label || item.id, item.id)));
+            choice.value = selected;
+        });
+    }
+    function setDocumentValue(id, key, value) {
+        if (reserved.has(id)) {
+            const item = reservedDocuments.find(entry => entry.id === id);
+            if (item) item[key] = value;
+            return;
+        }
+        const card = [...list.querySelectorAll('[data-custom-document]')].find(entry => entry.querySelector('[data-custom-field="id"]').value === id);
+        if (card) card.querySelector(`[data-custom-field="${key}"]`).value = value;
+    }
+    stageList?.addEventListener('click', event => {
+        const card = event.target.closest('[data-workflow-step]');
+        if (!card) return;
+        const stageId = card.querySelector('[data-step-id]')?.value.trim();
+        if (event.target.matches('[data-stage-document-add]')) {
+            const id = card.querySelector('[data-stage-document-choice]')?.value;
+            if (stageId && id) { setDocumentValue(id, 'workflow_step', stageId); serialize(); }
+        }
+        if (event.target.matches('[data-stage-document-create]')) {
+            if (!stageId) return;
+            add({workflow_step: stageId, generate: true, upload_required: true, signature_required: true, required: true, enabled: true});
+            document.querySelector('[data-form-tab-target="documents"]')?.click();
+            list.lastElementChild?.scrollIntoView({block: 'center'});
+        }
+    });
+    stageList?.addEventListener('change', refreshStageDocuments);
+    stageList?.addEventListener('input', refreshStageDocuments);
+    if (stageList) new MutationObserver(refreshStageDocuments).observe(stageList, {childList: true});
+    initial.filter(item => !reserved.has(item.id)).forEach(add);
+    root.querySelector('[data-custom-document-add]').addEventListener('click', () => add());
+    serialize();
+})();
 document.querySelectorAll('[data-mail-recipient]').forEach(section => {
     section.querySelector('[data-mail-recipient-type]').addEventListener('change', event => {
         section.querySelector('[data-mail-recipient-fields]').hidden = event.target.value !== 'repeatable_group';
@@ -1937,7 +2138,22 @@ function setWorkflowStep(card, step) {
     }
     if (status) status.value = step.status || status.options[0]?.value || "";
     const stageType = card.querySelector("[data-step-stage-type]");
-    if (stageType) stageType.value = step.stage_type || (step.final ? "final" : step.document_id ? "document" : step.requires_officer_action ? "officer_action" : step.requires_user_action ? "user_action" : "system");
+    if (stageType) {
+            const kind = step.stage_type
+                || (step.final
+                    ? "final"
+                    : step.document_id
+                        ? "documents"
+                        : step.requires_officer_action
+                            ? "officer_action"
+                            : step.requires_user_action
+                                ? "user_action"
+                                : "system");
+
+            stageType.value = ["document", "declaration", "agreement"].includes(kind)
+                ? "documents"
+                : kind;
+        }
     card.dataset.selectedNext = step.next || "";
     card.querySelector("[data-step-description]").value = step.description || "";
     card.querySelector("[data-step-next-action]").value = step.next_action || "";
@@ -2259,7 +2475,9 @@ function renderWorkflowDiagramLegacy(config, configuredDecisions, validationErro
             step.rejected ? "is-rejected" : "",
             step.requires_user_action ? "is-user-action" : "",
             step.requires_officer_action ? "is-officer-action" : "",
-            step.document_id || step.stage_type === "document" ? "is-document" : "",
+            step.document_id || ["documents", "document", "declaration", "agreement"].includes(step.stage_type)
+                ? "is-document"
+                : "",
             validationErrors.some((error) => String(error).includes(step.admin_label || step.id)) ? "has-error" : "",
         ].filter(Boolean).join(" ");
         svg.appendChild(make("rect", {
@@ -2734,7 +2952,9 @@ function renderWorkflowDiagram(config, configuredDecisions, validationErrors) {
             step.rejected ? "is-rejected" : "",
             step.requires_user_action ? "is-user-action" : "",
             step.requires_officer_action ? "is-officer-action" : "",
-            step.document_id || step.stage_type === "document" ? "is-document" : "",
+            step.document_id || ["documents", "document", "declaration", "agreement"].includes(step.stage_type)
+                ? "is-document"
+                : "",
             hasError ? "has-error" : "",
         ].filter(Boolean).join(" ");
         group.appendChild(make("rect", {x: 0, y: 0, width: nodeWidth, height: nodeHeight, rx: step.final || step.rejected ? 28 : 12, class: classes}));
@@ -3203,7 +3423,7 @@ workflowBuilder?.addEventListener("click", (event) => {
     const instruction = event.target.closest("[data-edit-step-instruction]");
     if (instruction) {
         const card = instruction.closest("[data-workflow-step]");
-        if (card?.querySelector('[data-step-stage-type]')?.value === 'document' && card.querySelector('[data-stage-field="document_composite"]')?.checked) {
+        if (card?.querySelector('[data-step-stage-type]')?.value === 'documents' && card.querySelector('[data-stage-field="document_composite"]')?.checked) {
             const panel = card.querySelector('[data-workflow-step-editor]');
             panel.hidden = false;
             const toggle = card.querySelector('[data-edit-workflow-step]');

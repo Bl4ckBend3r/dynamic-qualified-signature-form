@@ -26,6 +26,60 @@ def test_form_page_loads(client):
     assert 'name="imie"' in html
     assert 'name="pesel"' in html
     assert '<h3>Twoje dane</h3>' in html
+    assert "Sprawdź dane przed wysłaniem" in html
+
+
+def test_public_review_validates_without_saving_and_confirmation_is_single_use(client, app, valid_form_data):
+    invalid = client.post("/form/formularz_zgloszeniowy/review", data={**valid_form_data, "email": "invalid"})
+    assert invalid.status_code == 400
+    assert invalid.json["errors"].get("email")
+    assert app.extensions["services"].submission_repository.list_by_form("formularz_zgloszeniowy") == []
+
+    preview = client.post("/form/formularz_zgloszeniowy/review", data=valid_form_data)
+    assert preview.status_code == 200
+    assert preview.json["ok"] is True
+    assert any(item["value"] == "Jan" for item in preview.json["summary"])
+    assert app.extensions["services"].submission_repository.list_by_form("formularz_zgloszeniowy") == []
+
+    revalidated = client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "email": "invalid", "review_token": preview.json["review_token"],
+    }, headers={"Accept": "application/json"})
+    assert revalidated.status_code == 400
+    assert "email" in revalidated.json["errors"]
+    assert app.extensions["services"].submission_repository.list_by_form("formularz_zgloszeniowy") == []
+
+    changed = client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "imie": "Adam", "review_token": preview.json["review_token"],
+    })
+    assert changed.status_code == 409
+    confirmed = client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "review_token": preview.json["review_token"],
+    }, headers={"Accept": "application/json"})
+    assert confirmed.status_code == 200
+    assert confirmed.json["ok"] is True
+    assert "/result/formularz_zgloszeniowy/" in confirmed.json["result_url"]
+    assert client.get(confirmed.json["result_url"]).status_code == 200
+    repeated = client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "review_token": preview.json["review_token"],
+    })
+    assert repeated.status_code == 409
+    repeated_json = client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "review_token": preview.json["review_token"],
+    }, headers={"Accept": "application/json"})
+    assert repeated_json.status_code == 200
+    assert repeated_json.json["result_url"] == confirmed.json["result_url"]
+
+
+def test_public_review_and_confirmation_require_csrf(client, app, valid_form_data):
+    app.config["WTF_CSRF_ENABLED"] = True
+    page = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
+    assert client.post("/form/formularz_zgloszeniowy/review", data=valid_form_data).status_code == 400
+    reviewed = client.post("/form/formularz_zgloszeniowy/review", data={**valid_form_data, "csrf_token": token})
+    assert reviewed.status_code == 200
+    assert client.post("/submit/formularz_zgloszeniowy/confirm", data={
+        **valid_form_data, "review_token": reviewed.json["review_token"],
+    }).status_code == 400
 
 
 def test_public_section_wording_preserves_definition_and_address_fields(client, app):

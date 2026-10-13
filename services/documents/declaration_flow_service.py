@@ -38,13 +38,50 @@ class DeclarationFlowResult:
 
 class DeclarationFlowService:
     @staticmethod
+    def submission_document_fields(document: Mapping[str, Any], form_definition: Mapping[str, Any]) -> list[dict]:
+        """Resolve the declaration's versioned fields for both its form and PDF."""
+        from services.documents.declaration_template_context_service import declaration_document_fields
+
+        form_fields = list(form_definition.get("fields") or [])
+        document_fields = list(document.get("fields") or [])
+        has_assignments = any(
+            isinstance(field.get("document_usage"), Mapping)
+            and "declaration" in field["document_usage"]
+            for field in form_fields
+        )
+        if not has_assignments:
+            return list(declaration_document_fields(document_fields))
+
+        form_names = {field.get("name") for field in form_fields if field.get("name")}
+        document_only = []
+        for field in document_fields:
+            if field.get("name") in form_names:
+                continue
+            usage = field.get("document_usage") or {}
+            if isinstance(usage, Mapping) and usage.get("declaration") is False:
+                continue
+            document_only.append({**field, "document_usage": {**usage, "declaration": True}})
+        return list(declaration_document_fields([*form_fields, *document_only]))
+
+    @staticmethod
     def document_fields_definition(document: Mapping[str, Any]) -> dict:
         """Use the shared field renderer/validator without moving document fields."""
         from form_loader import normalize_form_definition
+        from services.documents.declaration_template_context_service import (
+            declaration_document_fields,
+        )
+
+        fields = list(document.get("fields") or [])
+
+        if str(document.get("id") or "").strip() == "declaration":
+            fields = list(declaration_document_fields(fields))
+
+        fields = FieldAvailabilityService.prune_empty_sections(fields)
+
         definition = normalize_form_definition({
             "title": document.get("form_title") or document.get("label") or "Dokument",
             "description": document.get("form_description") or document.get("description") or "",
-            "fields": list(document.get("fields") or []),
+            "fields": fields,
         })
         definition["fields"] = normalize_training_fields(definition["fields"])
         definition["submit_label"] = document.get("form_submit_label") or "Wygeneruj deklarację PDF"
@@ -203,9 +240,18 @@ class DeclarationFlowService:
             targets.update(str(edge.get("next") or "") for edge in configured_step.get("transitions") or []
                            if isinstance(edge, Mapping))
             configured_mapping = (workflow.get("legacy_field_stage_mapping") or {}).get(FIELD_STAGE_AFTER_ACCEPTANCE)
+            from services.documents.document_workflow_service import step_documents
+            from services.workflow_config_service import (
+                DOCUMENTS_STAGE_TYPE,
+                workflow_stage_type,
+            )
             precedes_declaration = any(
-                target.get("id") in targets and target.get("stage_type") == "document"
-                and str(target.get("document_id") or target.get("id") or "") == DocumentType.DECLARATION
+                target.get("id") in targets
+                and workflow_stage_type(target) == DOCUMENTS_STAGE_TYPE
+                and any(
+                    str(document.get("id") or "") == DocumentType.DECLARATION
+                    for document in step_documents(form_config, target)
+                )
                 for target in workflow.get("steps") or []
             )
             if configured_mapping != step and not precedes_declaration:

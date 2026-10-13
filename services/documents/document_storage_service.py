@@ -22,6 +22,24 @@ def validate_storage_path(storage_path: str) -> str:
 
 
 class DocumentStorageService:
+    def save_attachment(self, *, storage, slug: str, filename: str, content: bytes, mime_type: str) -> str:
+        """Keep ordinary attachments beside document PDFs behind the storage layer."""
+        from services.upload_validation import validate_upload_filename, SAFE_ATTACHMENT_EXTENSIONS
+        validate_upload_filename(filename, allowed_suffixes={f".{ext}" for ext in SAFE_ATTACHMENT_EXTENSIONS})
+        output_dir = str(getattr(storage, "output_dir", "output")).strip("/")
+        path = validate_storage_path(f"{output_dir}/{slug}/documents/{filename}")
+        if hasattr(storage, "write_bytes"):
+            if hasattr(storage, "ensure_form_output_structure"):
+                storage.ensure_form_output_structure(slug)
+            if hasattr(storage, "mkdir"):
+                storage.mkdir(f"{output_dir}/{slug}/documents")
+            storage.write_bytes(path, content, mime_type)
+        else:
+            local_path = Path(path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(content)
+        return path
+
     def read_document_bytes(
         self,
         *,

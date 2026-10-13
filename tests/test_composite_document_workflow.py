@@ -7,12 +7,16 @@ import json
 import pytest
 from pypdf import PdfWriter
 from sqlalchemy import select
-from werkzeug.datastructures import FileStorage
+from werkzeug.datastructures import FileStorage, MultiDict
 
-from models import FormSubmission, FormVersion, SubmissionWorkflowEvent
-from services.documents.document_workflow_service import document_step_state, validate_document_step
+from models import FormSubmission, FormVersion, SubmissionTraining, SubmissionWorkflowEvent
+from services.documents.document_workflow_service import (
+    document_item_state,
+    document_step_state,
+    validate_document_step,
+)
 from services.process_instruction_service import build_process_instruction_view
-from services.public_submission_status_service import build_readonly_submission_status
+from services.public_submission_status_service import build_public_submission_status, build_readonly_submission_status
 from services.workflow_service import WorkflowTransitionError
 from test_admin_panel import admin_app, create_form, create_user, login
 from test_signature_verifier import certificate_chain_signed_pdf_factory, signed_pdf_factory
@@ -76,7 +80,9 @@ def composite_env(admin_app, monkeypatch):
         env = SimpleNamespace(app=admin_app, services=services, repo=repo, definition=definition, public_id=public_id, form_id=form_id,
             document=services.document_service.document_workflow, generated=generated, pdf=pdf_bytes, verification=verification)
         env.row = lambda: repo.get_by_id(public_id)
-        env.state = lambda: document_step_state(env.row(), 'paper')
+        env.step_state = lambda: document_step_state(env.row(), 'paper')
+        env.state = lambda: document_item_state(
+            env.row(), 'paper', document_id, primary_document_id=document_id)
         env.file = lambda suffix=b'\n% participant signature\n': FileStorage(stream=BytesIO(pdf_bytes + suffix), filename='signed.pdf', content_type='application/pdf')
         env.enter = lambda: services.workflow_service.advance_after_action(env.row(), definition)
         return env
@@ -100,6 +106,690 @@ def configure_document_fields(env):
         db.commit()
 
 
+def configure_participant_document_stage(env, documents):
+    # Given: a generic participant document stage.
+    step = env.definition["workflow"]["steps"][1]
+    step.update(stage_type="documents", type="document", requires_user_action=True,
+        status="WAITING_FOR_USER_ACTION", action="none", document_lifecycle="group")
+    for key in ("document_id", "document_options"):
+        step.pop(key, None)
+    env.definition["documents"] = documents
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+
+
+def configure_generic_document_stage(env, documents, *, step_id="paper"):
+    step = env.definition["workflow"]["steps"][1]
+    step.update(id=step_id, stage_type="documents", type="document", requires_user_action=True,
+                status="WAITING_FOR_USER_ACTION", action="none", document_lifecycle="group")
+    for key in ("document_id", "document_options", "document_instructions"):
+        step.pop(key, None)
+    env.definition["workflow"]["steps"][0]["next"] = step_id
+    env.definition["documents"] = [{**document, "workflow_step": step_id} for document in documents]
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+
+
+def test_single_declaration_keeps_its_collect_data_flow(composite_env):
+    # Given: a historical single-document composite step with declaration fields.
+    env = composite_env()
+    configure_document_fields(env)
+    # When: the participant enters the step.
+    env.enter()
+    view = env.document.view(env.row(), env.definition)
+    # Expected: the existing single-document form remains available.
+    assert view["substate"] == "collect_data"
+    assert view.get("group")
+    field_names = {
+        field["name"]
+        for field in view["form_definition"]["fields"]
+        if field.get("name")
+    }
+
+    assert "deklaracja_18_lat" in field_names
+    assert "wybor_szkolen" not in field_names
+    assert "wybor_szkolen" not in {
+        field["name"]
+        for field in view["form_definition"]["fields"]
+        if field.get("name")
+    }
+
+
+def test_generic_document_stage_uses_assignment_for_single_declaration(composite_env):
+    env = composite_env()
+    document = deepcopy(env.definition["documents"][0])
+    document["fields"] = [{"name": "answer", "label": "Odpowiedź", "type": "text", "required": True,
+                           "document_usage": {"declaration": True}}]
+    configure_generic_document_stage(env, [document], step_id="docs_1")
+    assert validate_document_step(env.definition["workflow"]["steps"][1], env.definition) == []
+    env.enter()
+    state = document_step_state(env.row(), "docs_1")
+    assert state["documents"]["declaration"]["substate"] == "collect_data"
+    assert build_public_submission_status(env.row(), form_config=env.definition)["can_fill_declaration"]
+    view = env.document.view(env.row(), env.definition)
+    assert view["group"] and view["form_document_id"] == "declaration"
+    assert {field["name"] for field in view["form_definition"]["fields"]} == {"answer"}
+    result = env.document.save_fields(env.row(), env.definition, "docs_1", {"answer": "Tak"},
+                                      document_id="declaration")
+    assert result.success
+    state = document_step_state(env.row(), "docs_1")
+    assert state["documents"]["declaration"]["generated_filename"]
+    assert not state["documents"]["declaration"].get("completed")
+    status = build_public_submission_status(env.row(), form_config=env.definition)
+    assert status["can_download_declaration"] and status["can_upload_signed_declaration"]
+
+
+def test_generic_document_stage_custom_generation_with_declaration_step_id(composite_env):
+    env = composite_env()
+    declaration = deepcopy(env.definition["documents"][0])
+    custom = {"id": "osw_wizerunek", "label": "Oświadczenie wizerunkowe", "kind": "generated_pdf",
+              "template_html": "<p>Wizerunek</p>", "required": True, "signature_required": True,
+              "order": 2}
+    configure_generic_document_stage(env, [declaration, custom], step_id="declaration")
+    env.enter()
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200
+    assert "Oświadczenie wizerunkowe" in page.text and "Dokument testowy" in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    url = (f"/document-steps/{row['form_slug']}/{env.public_id}/declaration/generate/osw_wizerunek"
+           f"?token={row['access_token']}")
+    response = client.post(url, data={"csrf_token": csrf})
+    assert response.status_code == 302
+    item = document_step_state(env.row(), "declaration")["documents"]["osw_wizerunek"]
+    assert item["generated_filename"]
+    assert any(file["document_id"] == "osw_wizerunek" and file["workflow_step_at_upload"] == "declaration"
+               for file in env.services.submission_document_service.list_documents(env.public_id))
+    assert env.document.download(env.row(), env.definition, "declaration", item["generated_filename"]) == env.pdf
+    with pytest.raises(ValueError, match="nie jest dostępny"):
+        env.document.generate_group_document(env.row(), env.definition, "declaration", "other_step")
+
+
+def test_generic_document_stage_single_agreement_with_office_signature(composite_env):
+    env = composite_env("agreement")
+    agreement = deepcopy(env.definition["documents"][0])
+    agreement["lifecycle"] = {"generate": True, "download": True, "upload_required": True,
+                              "participant_signature": True, "office_signature": True,
+                              "signature_verification": True}
+    configure_generic_document_stage(env, [agreement], step_id="participant_contract")
+    env.enter()
+    item = document_step_state(env.row(), "participant_contract")["documents"]["agreement"]
+    assert item["generated_filename"] and not item.get("completed")
+    participant = env.document.upload(env.row(), env.definition, "participant_contract", env.file(),
+                                      document_id="agreement")
+    assert participant["is_valid"] and not item.get("completed")
+    assert env.row()["workflow_step"] == "participant_contract"
+    env.verification["signature_count"] = 2
+    office = env.document.upload(env.row(), env.definition, "participant_contract",
+        env.file(b"\n% participant signature\n\n% office signature\n"),
+        signer="office", document_id="agreement")
+    assert office["is_valid"] and office["completed"]
+    assert env.row()["workflow_step"] == "review"
+
+
+@pytest.mark.parametrize("with_optional", [False, True])
+def test_generic_document_stage_keeps_agreements_per_training(composite_env, with_optional):
+    env = composite_env("agreement")
+    agreement = deepcopy(env.definition["documents"][0])
+    agreement.update(generation_mode="per_training", repeat_over="selected_trainings",
+                     repeat_item_alias="training")
+    agreement["lifecycle"] = {"generate": True, "download": True, "upload_required": True,
+                              "participant_signature": True, "office_signature": True,
+                              "signature_verification": True}
+    documents = [agreement]
+    if with_optional:
+        documents.append({"id": "attachment", "label": "Załącznik", "kind": "uploaded_file",
+                          "required": False, "signature_required": False})
+    configure_generic_document_stage(env, documents, step_id="contracts_1")
+    env.repo.update(env.public_id, {"selected_trainings": json.dumps([
+        {"id": "course-a", "name": "Szkolenie A", "price": "100"},
+        {"id": "course-b", "name": "Szkolenie B", "price": "200"}], ensure_ascii=False)})
+    env.enter()
+    item = document_step_state(env.row(), "contracts_1")["documents"]["agreement"]
+    assert len(item["files"]) == 2
+    assert {file["training_key"] for file in item["files"]} == {"course-a", "course-b"}
+    assert not item["completed"]
+    view = env.document.view(env.row(), env.definition)
+    assert view["group"] and len(view["files"]) == (3 if with_optional else 2)
+    for file in item["files"]:
+        assert env.document.download(env.row(), env.definition, "contracts_1", file["filename"]) == env.pdf
+    metadata = [file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file["document_id"] == "agreement"]
+    assert {file["training_key"] for file in metadata} == {"course-a", "course-b"}
+    with env.repo.session_factory() as db:
+        for key, name in (("course-a", "Szkolenie A"), ("course-b", "Szkolenie B")):
+            db.add(SubmissionTraining(submission_id=env.row()["id"], training_id=key,
+                training_name_snapshot=name, training_price_snapshot="100.00",
+                training_snapshot={"id": key, "name": name, "price": "100"}, status="selected"))
+        db.commit()
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200 and "agreement::course-a" in page.text and "agreement::course-b" in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    bulk = client.post(f"/document-steps/{row['form_slug']}/{env.public_id}/contracts_1/bulk-upload"
+        f"?token={row['access_token']}", data={"csrf_token": csrf,
+            "document_ids": ["agreement::course-a", "agreement::course-b"],
+            "document_files": [(BytesIO(env.pdf + b"\n% participant signature\n"), "a.pdf"),
+                               (BytesIO(env.pdf + b"\n% participant signature\n"), "b.pdf")]},
+        content_type="multipart/form-data")
+    assert bulk.status_code == 302
+    assert env.row()["workflow_step"] == "contracts_1"
+    env.verification["signature_count"] = 2
+    for key in ("course-a", "course-b"):
+        uploaded = env.document.upload(env.row(), env.definition, "contracts_1",
+            env.file(b"\n% participant signature\n\n% office signature\n"),
+            signer="office", document_id="agreement", instance=key)
+        assert uploaded["is_valid"]
+    assert env.row()["workflow_step"] == "review"
+
+
+def test_collection_view_neutralizes_historical_failure_while_waiting_for_selection(composite_env):
+    env = composite_env("agreement")
+    agreement = deepcopy(env.definition["documents"][0])
+    agreement.update(generation_mode="per_training", repeat_over="selected_trainings",
+                     repeat_item_alias="training")
+    configure_generic_document_stage(env, [agreement], step_id="contracts_1")
+    env.enter()
+
+    stored_states = env.row()["document_states"]
+    states = json.loads(stored_states) if isinstance(stored_states, str) else deepcopy(stored_states)
+    step_state = states["workflow_documents"]["contracts_1"]
+    step_state["substate"] = "failed"
+    step_state["documents"]["agreement"].update(
+        substate="failed", error="Historical generation failure")
+    env.repo.update(env.public_id, {"document_states": states})
+
+    view = env.document.view(env.row(), env.definition)
+    assert view["substate"] == "ready"
+    assert view["files"] == []
+    assert not view["can_retry"]
+    assert document_item_state(env.row(), "contracts_1", "agreement")["substate"] == "failed"
+
+    row = env.row()
+    page = env.app.test_client().get(
+        f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200
+    assert 'data-substate="ready"' in page.text
+    assert "błąd przygotowania dokumentu" not in page.text.lower()
+
+
+def test_admin_assignment_keeps_reserved_document_identity(composite_env):
+    from services.admin_form_service import build_form_definition_from_admin_form
+    env = composite_env()
+    workflow = deepcopy(env.definition["workflow"])
+    step = workflow["steps"][1]
+    step.update(id="docs_1", stage_type="document", type="document", document_lifecycle="group",
+                document_id="", document_options={}, action="none", requires_user_action=True)
+    workflow["steps"][0]["next"] = "docs_1"
+    fields = MultiDict({"active_tab": "workflow", "workflow_builder_json": json.dumps(workflow),
+        "workflow_initial_step": "intake", "requires_declaration": "on",
+        "declaration_template_html": "<p>Deklaracja</p>", "documents_config_json": "[]",
+        "reserved_documents_json": '[{"id":"declaration","workflow_step":"docs_1","order":3}]'})
+    saved = build_form_definition_from_admin_form(env.definition, fields)
+    declaration = next(item for item in saved["documents"] if item["id"] == "declaration")
+    assert declaration["workflow_step"] == "docs_1" and declaration["order"] == 3
+    assert saved["workflow"]["steps"][1]["id"] == "docs_1"
+
+
+def test_declaration_with_other_documents_collects_generates_downloads_and_waits(composite_env):
+    # Given: an assigned declaration field, an excluded field, and two other
+    # documents on the same stage (one required and one optional).
+    env = composite_env()
+    env.definition["fields"] = [
+        {"name": "declaration_answer", "label": "Odpowiedź deklaracji", "type": "text",
+         "required": True, "document_usage": {"declaration": True}},
+        {"name": "other_answer", "label": "Inna odpowiedź", "type": "text",
+         "required": True, "document_usage": {"declaration": False}},
+    ]
+    env.definition["documents"].extend([
+        {"id": "custom_a", "label": "Załącznik A", "kind": "uploaded_file",
+         "workflow_step": "paper", "required": True, "signature_required": False},
+        {"id": "custom_b", "label": "Załącznik B", "kind": "uploaded_file",
+         "workflow_step": "paper", "required": False, "signature_required": False},
+        {"id": "other_step", "label": "Inny etap", "kind": "uploaded_file",
+         "workflow_step": "later", "required": False},
+    ])
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+    env.repo.update(env.public_id, {"data_json": {
+        "other_answer": "Odpowiedź z formularza",
+        "ulica": "Przykładowa", "nr_budynku": "12", "nr_lokalu": "3",
+        "kod_pocztowy": "65-001", "miejscowosc": "Zielona Góra"}})
+    env.enter()
+    assert env.step_state()["documents"]["declaration"]["substate"] == "collect_data"
+    assert not any(file["document_id"] == "declaration" for file in
+                   env.services.submission_document_service.list_documents(env.public_id))
+    with pytest.raises(ValueError, match="uzupełnij dane"):
+        env.document.generate_group_document(env.row(), env.definition, "paper", "declaration")
+
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    client = env.app.test_client()
+    row = env.row()
+    page_url = f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}"
+    page = client.get(page_url)
+    assert page.status_code == 200
+    assert "declaration_answer" in page.text and "other_answer" not in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    incomplete_data = dict(env.row()["data_json"])
+    incomplete_data["_form_version_upgrade"] = {
+        "missing_fields": ["declaration_answer"],
+        "invalid_training_ids": [],
+        "missing_documents": [],
+    }
+    env.repo.update(env.public_id, {"data_json": incomplete_data})
+    fields_url = (f"/document-steps/{row['form_slug']}/{env.public_id}/paper/fields"
+                  f"?document_id=declaration&token={row['access_token']}")
+    wrong = client.post(fields_url.replace("document_id=declaration", "document_id=other_step"),
+                        data={"csrf_token": csrf, "declaration_answer": "Tak"})
+    assert wrong.status_code == 404
+    assert not env.step_state()["documents"]["declaration"].get("data_confirmed")
+    invalid = client.post(fields_url.replace("document_id=declaration", "document_id=unknown"),
+                          data={"csrf_token": csrf, "declaration_answer": "Tak"})
+    assert invalid.status_code == 404
+
+    # When: the participant generates the declaration with one submit.
+    saved = client.post(fields_url, data={"csrf_token": csrf, "declaration_answer": "Tak"})
+    assert saved.status_code == 302
+    state = env.step_state()
+    declaration = state["documents"]["declaration"]
+    assert declaration["data_confirmed"] is True and declaration["data_sha256"]
+    assert declaration["generated_filename"] and not declaration.get("regenerate")
+    assert not declaration.get("completed")
+    assert not state.get("completed")
+    assert not state["documents"]["custom_a"].get("completed")
+    assert not state["documents"]["custom_b"].get("completed")
+    metadata = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                    if file["filename"] == declaration["generated_filename"])
+    assert (metadata["document_id"], metadata["workflow_step_at_upload"], metadata["status"]) == (
+        "declaration", "paper", "generated")
+    assert metadata["storage_path"]
+    assert len(env.generated) == 1
+    assert env.generated[0]["context"]["declaration_answer"] == "Tak"
+    assert "other_answer_display" not in env.generated[0]["context"]
+    assert env.generated[0]["context"]["participant_address"] == (
+        "ul. Przykładowa 12/3, 65-001 Zielona Góra")
+
+    # Expected: the group card offers the exact saved PDF, and only both
+    # required uploads complete the stage.
+    group_page = client.get(page_url)
+    assert group_page.status_code == 200
+    download_url = (f"/document-steps/{row['form_slug']}/{env.public_id}/paper/download/declaration/"
+                    f"{declaration['generated_filename']}?token={row['access_token']}")
+    assert download_url.split("?", 1)[0] in group_page.text
+    assert client.get(download_url).data == env.pdf
+    assert client.get(download_url.replace("/download/declaration/", "/download/custom_a/")).status_code == 404
+    bulk_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}"
+    signed = client.post(bulk_url, data={"csrf_token": csrf, "document_ids": ["declaration"],
+        "document_files": [(BytesIO(env.pdf + b"\n% signed declaration"), "signed.pdf")]},
+        content_type="multipart/form-data")
+    assert signed.status_code == 302
+    assert env.step_state()["documents"]["declaration"]["completed"] is True
+    assert env.row()["workflow_step"] == "paper"
+    env.document.start(env.row(), env.definition)
+    assert len(env.generated) == 1
+    assert env.step_state()["documents"]["declaration"]["completed"] is True
+    custom = client.post(bulk_url, data={"csrf_token": csrf, "document_ids": ["custom_a"],
+        "document_files": [(BytesIO(env.pdf), "custom.pdf")]}, content_type="multipart/form-data")
+    assert custom.status_code == 302
+    assert env.row()["workflow_step"] == "review"
+
+
+def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
+    # Given: one generated PDF and one participant supplied PDF on a normal
+    # participant stage; both require verified participant signatures.
+    env = composite_env()
+    documents = [
+        {"id": "statement_a", "label": "Oświadczenie A", "kind": "generated_pdf",
+         "template_html": "<p>{{ submission_id }}</p>", "workflow_step": "paper", "required": True,
+         "signature_required": True, "lifecycle": {"generate": True, "download": True,
+             "upload_required": True, "participant_signature": True, "signature_verification": True}},
+        {"id": "statement_b", "label": "Oświadczenie B", "kind": "uploaded_file",
+         "workflow_step": "paper", "required": True, "signature_required": True,
+         "lifecycle": {"generate": False, "upload_required": True,
+             "participant_signature": True, "signature_verification": True}},
+        {"id": "future_statement", "label": "Późniejszy dokument", "kind": "uploaded_file",
+         "workflow_step": "later", "required": True, "signature_required": True},
+    ]
+    env.definition["workflow"]["steps"].insert(-1, {"id": "later", "stage_type": "user_action",
+        "type": "user_action", "status": "WAITING_FOR_USER_ACTION", "next": "done"})
+    configure_participant_document_stage(env, documents)
+    env.enter()
+    assert env.row()["workflow_step"] == "paper"
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200
+    assert "statement_a" in page.text and "statement_b" in page.text
+    assert 'data-bulk-document-upload' in page.text and 'data-document-upload' not in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    generate_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/generate/statement_a?token={row['access_token']}"
+    # When: the first document is generated and downloaded.
+    assert client.post(generate_url, data={"csrf_token": csrf, "access_token": row["access_token"]}).status_code == 302
+    generated = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                     if file["document_id"] == "statement_a" and file["status"] == "generated")
+    assert client.get(f"/document-steps/{row['form_slug']}/{env.public_id}/paper/download/{generated['filename']}?token={row['access_token']}").status_code == 200
+    assert env.row()["workflow_step"] == "paper"
+    bulk_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}"
+    assert client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["future_statement"], "document_files": [(BytesIO(env.pdf), "later.pdf")]},
+        content_type="multipart/form-data").status_code == 404
+    # When: an unsigned PDF is supplied for A, it is rejected and can be retried.
+    env.verification.update(is_signed=False, validation_status="UNSIGNED", signature_count=0)
+    rejected = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["statement_a"], "document_files": [(BytesIO(env.pdf), "unsigned.pdf")]},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert rejected.status_code == 200 and env.row()["workflow_step"] == "paper"
+    assert not env.step_state().get("documents", {}).get("statement_a", {}).get("completed")
+    env.verification.update(is_signed=True, validation_status="VALID", signature_count=1)
+    # Expected: both explicitly mapped uploads create separate SubmissionFiles;
+    # the first signed document alone cannot advance the stage.
+    first = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["statement_a"],
+        "document_files": [(BytesIO(env.pdf + b"\n% signed A"), "a.pdf")]}, content_type="multipart/form-data")
+    assert first.status_code == 302 and env.row()["workflow_step"] == "paper"
+    assert env.step_state()["documents"]["statement_a"]["completed"]
+    second = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["statement_b"],
+        "document_files": [(BytesIO(env.pdf + b"\n% signed B"), "b.pdf")]}, content_type="multipart/form-data")
+    assert second.status_code == 302 and env.row()["workflow_step"] == "review"
+    files = env.services.submission_document_service.list_documents(env.public_id)
+    assert {file["document_id"] for file in files if file["status"] == "signed"} == {"statement_a", "statement_b"}
+
+
+def test_custom_document_office_signature_waits_for_office(composite_env):
+    # Given: a participant stage whose required custom document needs two signatures.
+    env = composite_env()
+    configure_participant_document_stage(env, [{"id": "office_statement", "label": "Oświadczenie",
+        "kind": "generated_pdf", "template_html": "<p>Dokument</p>", "workflow_step": "paper",
+        "required": True, "signature_required": True,
+        "lifecycle": {"generate": True, "upload_required": True,
+            "participant_signature": True, "office_signature": True}}])
+    env.enter()
+    env.document.generate_group_document(env.row(), env.definition, "paper", "office_statement")
+    # When: the participant uploads a verified signed revision.
+    participant = env.document.upload(env.row(), env.definition, "paper", env.file(),
+        document_id="office_statement")
+    # Expected: the document and stage wait for the office signature.
+    assert participant["is_valid"] and not participant["completed"]
+    assert not env.step_state()["documents"]["office_statement"]["completed"]
+    assert env.row()["workflow_step"] == "paper"
+    env.verification["signature_count"] = 2
+    office_file = FileStorage(stream=BytesIO(env.pdf + b"\n% participant signature\n\n% office signature"),
+        filename="office.pdf", content_type="application/pdf")
+    office = env.document.upload(env.row(), env.definition, "paper", office_file,
+        signer="office", document_id="office_statement")
+    assert office["is_valid"] and office["completed"]
+    assert env.row()["workflow_step"] == "review"
+
+
+@pytest.mark.parametrize("generic", [False, True])
+def test_custom_document_group_required_and_optional_uploads(composite_env, generic):
+    # Given: two required participant files and one optional file on one step.
+    env = composite_env("employment_certificate")
+    env.definition["documents"] = [
+        {"id": "employment_certificate", "label": "Zaświadczenie", "kind": "uploaded_file",
+         "required": True, "signature_required": False, "workflow_step": "paper"},
+        {"id": "participant_statement", "label": "Oświadczenie", "kind": "uploaded_file",
+         "required": True, "signature_required": False, "workflow_step": "paper"},
+        {"id": "optional_attachment", "label": "Załącznik", "kind": "uploaded_file",
+         "required": False, "signature_required": False, "workflow_step": "paper"},
+    ]
+    if generic:
+        configure_generic_document_stage(env, env.definition["documents"])
+    env.enter()
+    assert env.row()["workflow_step"] == "paper"
+    view = env.document.view(env.row(), env.definition)
+    assert view["required_count"] == 2
+    assert {file["document_id"] for file in view["files"]} == {
+        "employment_certificate", "participant_statement", "optional_attachment"}
+    def upload(document_id):
+        return env.document.upload(env.row(), env.definition, "paper",
+            FileStorage(stream=BytesIO(env.pdf), filename=f"{document_id}.pdf", content_type="application/pdf"),
+            document_id=document_id)
+    # When: the optional document and first required document are uploaded.
+    assert upload("optional_attachment")["is_valid"]
+    assert upload("employment_certificate")["is_valid"]
+    # Expected: the workflow still waits for the second required document.
+    assert env.row()["workflow_step"] == "paper"
+    assert env.document.view(env.row(), env.definition)["ready_count"] == 1
+    with pytest.raises(ValueError, match="tym etapie"):
+        upload("foreign_document")
+    assert upload("participant_statement")["completed"]
+    assert env.row()["workflow_step"] == "review"
+    files = env.services.submission_document_service.list_documents(env.public_id)
+    assert {file["document_id"] for file in files} == {
+        "employment_certificate", "participant_statement", "optional_attachment"}
+    assert all(file["workflow_step_at_upload"] == "paper" for file in files)
+
+
+def test_admin_custom_document_config_keeps_builder_and_step(composite_env):
+    from services.admin_form_service import build_form_definition_from_admin_form
+    # Given: an existing generic builder document in the draft definition.
+    env = composite_env()
+    env.definition["documents"].append({"id": "employment_certificate", "label": "Stare",
+        "kind": "generated_pdf", "workflow_step": "paper", "template_source": "builder",
+        "builder_document": {"version": 1, "document_type": "document", "blocks": [
+            {"type": "paragraph", "runs": [{"text": "{{ participant_name }}"}]}]}})
+    submitted = {"documents_config_json": json.dumps([{"id": "employment_certificate",
+        "label": "Zaświadczenie", "participant_label": "Dokument od pracodawcy",
+        "description": "Prześlij dokument", "kind": "generated_pdf", "template_source": "builder",
+        "workflow_step": "paper", "required": True, "signature_required": False,
+        "enabled": True, "order": 2}])}
+    # When: the administrator saves the document metadata.
+    definition = build_form_definition_from_admin_form(env.definition, submitted)
+    document = next(item for item in definition["documents"] if item["id"] == "employment_certificate")
+    # Expected: the selected step and independent flags are versioned; an
+    # already edited DocumentBuilder document is preserved.
+    assert document["workflow_step"] == "paper"
+    assert document["required"] is True and document["signature_required"] is False
+    assert document["builder_document"]["blocks"][0]["type"] == "paragraph"
+
+
+def test_admin_assigns_generated_upload_document_to_participant_stage(composite_env):
+    from services.admin_form_service import build_form_definition_from_admin_form
+    # Given: a participant action with no primary document_id.
+    env = composite_env()
+    configure_participant_document_stage(env, [])
+    payload = {"documents_config_json": json.dumps([{"id": "employment_certificate",
+        "label": "Zaświadczenie", "participant_label": "Zaświadczenie uczestnika",
+        "workflow_step": "paper", "required": True, "signature_required": True,
+        "generate": True, "upload_required": True, "office_signature": True,
+        "template_source": "builder", "enabled": True, "order": 1}])}
+    # When: the admin saves independent lifecycle controls.
+    definition = build_form_definition_from_admin_form(env.definition, payload)
+    document = definition["documents"][0]
+    # Expected: one versioned config supports generate -> download -> signed
+    # upload -> office countersignature on the selected participant stage.
+    assert document["workflow_step"] == "paper"
+    assert document["kind"] == "generated_pdf"
+    assert document["lifecycle"]["generate"] and document["lifecycle"]["upload_required"]
+    assert document["lifecycle"]["participant_signature"] and document["lifecycle"]["office_signature"]
+
+
+def test_admin_custom_document_html_template_is_saved(composite_env):
+    from services.admin_form_service import build_form_definition_from_admin_form
+    # Given: an uploaded source is changed to a generated HTML document.
+    env = composite_env()
+    submitted = {"documents_config_json": json.dumps([{"id": "employment_certificate",
+        "label": "Zaświadczenie", "kind": "generated_pdf", "template_source": "html",
+        "template_html": "<p>{{ participant_name }}</p>", "workflow_step": "paper",
+        "required": True, "signature_required": False, "enabled": True}])}
+    # When: the administrator saves the document configuration.
+    definition = build_form_definition_from_admin_form(env.definition, submitted)
+    # Expected: the HTML source is stored with the versioned document.
+    assert definition["documents"][-1]["template_html"] == "<p>{{ participant_name }}</p>"
+
+
+def test_custom_document_bulk_mapping_and_wrong_document_rejected(composite_env):
+    # Given: the effective FormVersion has two required participant uploads.
+    env = composite_env("employment_certificate")
+    env.definition["documents"] = [
+        {"id": document_id, "label": document_id, "kind": "uploaded_file", "required": True,
+         "signature_required": False, "workflow_step": "paper"}
+        for document_id in ("employment_certificate", "participant_statement")]
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+    env.enter()
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}"
+    def payload(ids):
+        return {"csrf_token": csrf, "access_token": row["access_token"], "document_ids": ids,
+                "document_files": [(BytesIO(env.pdf), "first.pdf"), (BytesIO(env.pdf), "second.pdf")]}
+    # When: a document_id outside this version is submitted, mapping is denied.
+    assert client.post(url, data=payload(["foreign", "participant_statement"]),
+                       content_type="multipart/form-data").status_code == 404
+    assert not env.services.submission_document_service.list_documents(env.public_id)
+    partial = client.post(url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["employment_certificate", "participant_statement"],
+        "document_files": [(BytesIO(env.pdf), "first.pdf"), (BytesIO(b"not a document"), "second.exe")]},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert partial.status_code == 200 and "second.exe" in partial.text
+    assert env.row()["workflow_step"] == "paper"
+    assert {file["document_id"] for file in env.services.submission_document_service.list_documents(env.public_id)} == {"employment_certificate"}
+    # When: the missing document is retried, each SubmissionFile retains its
+    # explicit ID and the workflow advances only after both are accepted.
+    result = client.post(url, data=payload(["employment_certificate", "participant_statement"]),
+                         content_type="multipart/form-data")
+    assert result.status_code == 302
+    assert env.row()["workflow_step"] == "review"
+    files = env.services.submission_document_service.list_documents(env.public_id)
+    assert {file["document_id"] for file in files} == {"employment_certificate", "participant_statement"}
+
+
+def test_admin_custom_document_builder_uses_shared_editor(admin_app):
+    # Given: a custom generated document in an editable form.
+    form_id = create_form(admin_app, slug=f"custom-builder-{uuid4().hex[:8]}", definition_json={
+        "title": "Test", "fields": [], "documents": [{"id": "employment_certificate",
+            "label": "Zaświadczenie", "kind": "generated_pdf", "workflow_step": "paper",
+            "template_source": "builder", "builder_document": {
+                "version": 1, "document_type": "document", "blocks": [{"type": "paragraph",
+                    "runs": [{"text": "{{ participant_name }}"}]}]}}]})
+    create_user(admin_app)
+    client = admin_app.test_client()
+    login(client)
+    editor = client.get(f"/admin/forms/{form_id}/edit?tab=documents")
+    assert editor.status_code == 200 and 'data-custom-documents' in editor.text
+    builder_url = f"/admin/forms/{form_id}/documents/employment_certificate/builder"
+    page = client.get(builder_url)
+    assert page.status_code == 200
+    assert 'data-document-type="document"' in page.text
+    assert 'data-document-id="employment_certificate"' in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    # When: the shared builder saves an edited paragraph.
+    document = {"version": 1, "document_type": "document", "blocks": [{"type": "paragraph",
+        "runs": [{"text": "Zaświadczenie dla {{ participant_name }}"}]}]}
+    saved = client.post(builder_url, data={"csrf_token": csrf, "builder_json": json.dumps(document), "action": "activate"})
+    assert saved.status_code == 200 and saved.json["ok"]
+    with admin_app.extensions["services"].submission_repository.session_factory() as db:
+        from models import Form
+        entry = db.get(Form, form_id).definition_json["documents"][0]
+        assert entry["builder_status"] == "active"
+        assert entry["builder_document"]["document_type"] == "document"
+
+
+def test_version_gap_upload_keeps_current_workflow_step(composite_env):
+    # Given: publication marked a new required file on an already visited step.
+    env = composite_env()
+    env.definition["documents"].append({"id": "employment_certificate", "label": "Zaświadczenie",
+        "kind": "uploaded_file", "required": True, "signature_required": False, "workflow_step": "paper"})
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+    env.repo.update(env.public_id, {"workflow_step": "review", "workflow_stage": "review",
+        "data_json": {"_form_version_upgrade": {"missing_fields": [], "invalid_training_ids": [],
+            "missing_documents": [{"step_id": "paper", "document_id": "employment_certificate",
+                "label": "Zaświadczenie", "kind": "uploaded_file", "signature_required": False}]}}})
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200 and "Zaświadczenie" in page.text
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    url = f"/version-documents/{row['form_slug']}/{env.public_id}/employment_certificate/upload?token={row['access_token']}"
+    accepted = client.post(url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_pdf": (BytesIO(env.pdf), "certificate.pdf")}, content_type="multipart/form-data")
+    assert accepted.status_code == 302
+    assert env.row()["workflow_step"] == "review"
+    assert env.row()["data_json"]["_form_version_upgrade"]["missing_documents"] == []
+    file = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file["document_id"] == "employment_certificate")
+    assert file["workflow_step_at_upload"] == "paper" and file["status"] == "uploaded"
+
+
+def test_version_gap_generated_document_requires_signature(composite_env):
+    # Given: a new required generated PDF on a completed step.
+    env = composite_env()
+    env.definition["documents"].append({"id": "participant_statement", "label": "Oświadczenie",
+        "kind": "generated_pdf", "required": True, "signature_required": True,
+        "workflow_step": "paper", "template_html": "<p>{{ participant_name }}</p>"})
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = deepcopy(env.definition)
+        db.commit()
+    env.repo.update(env.public_id, {"workflow_step": "review", "workflow_stage": "review",
+        "data_json": {"_form_version_upgrade": {"missing_fields": [], "invalid_training_ids": [],
+            "missing_documents": [{"step_id": "paper", "document_id": "participant_statement",
+                "label": "Oświadczenie", "kind": "generated_pdf", "signature_required": True}]}}})
+    row = env.row()
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    client = env.app.test_client()
+    page_url = f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}"
+    page = client.get(page_url)
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    generate_url = f"/version-documents/{row['form_slug']}/{env.public_id}/participant_statement/generate?token={row['access_token']}"
+    assert client.post(generate_url, data={"csrf_token": csrf, "access_token": row["access_token"]}).status_code == 302
+    generated = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                     if file["document_id"] == "participant_statement" and file["status"] == "generated")
+    assert env.row()["data_json"]["_form_version_upgrade"]["missing_documents"]
+    assert client.get(f"/version-documents/{row['form_slug']}/{env.public_id}/participant_statement/download/{generated['filename']}?token={row['access_token']}").status_code == 200
+    upload_url = f"/version-documents/{row['form_slug']}/{env.public_id}/participant_statement/upload?token={row['access_token']}"
+    uploaded = client.post(upload_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_pdf": (BytesIO(env.pdf + b"\n% signed revision"), "signed.pdf")}, content_type="multipart/form-data")
+    assert uploaded.status_code == 302
+    assert env.row()["workflow_step"] == "review"
+    assert env.row()["data_json"]["_form_version_upgrade"]["missing_documents"] == []
+
+
+def test_custom_document_requires_verified_signature(composite_env):
+    # Given: a generated custom PDF whose participant signature is required.
+    env = composite_env("participant_statement")
+    env.definition["documents"][0].update(required=True, signature_required=True, workflow_step="paper")
+    env.enter()
+    assert env.row()["workflow_step"] == "paper"
+    assert not env.state().get("completed")
+    assert env.document.view(env.row(), env.definition)["files"][0]["status"] == "Oczekuje na podpis"
+    # When: the unsigned original is uploaded, signature verification rejects it.
+    env.verification.update(is_signed=False, validation_status="UNSIGNED", signature_count=0)
+    result = env.document.upload(env.row(), env.definition, "paper",
+        FileStorage(stream=BytesIO(env.pdf), filename="unsigned.pdf", content_type="application/pdf"),
+        document_id="participant_statement")
+    assert not result["is_valid"]
+    assert env.row()["workflow_step"] == "paper"
+    # When: a valid signed revision is uploaded, the metadata becomes signed
+    # and only then can the workflow leave the document step.
+    env.verification.update(is_signed=True, validation_status="VALID", signature_count=1)
+    accepted = env.document.upload(env.row(), env.definition, "paper", env.file(),
+        document_id="participant_statement")
+    assert accepted["is_valid"] and accepted["completed"]
+    assert env.row()["workflow_step"] == "review"
+    signed_files = [file for file in env.services.submission_document_service.list_documents(env.public_id)
+                    if file["document_id"] == "participant_statement" and file["signed"]]
+    assert len(signed_files) == 1 and signed_files[0]["status"] == "signed"
+    assert env.document.upload(env.row(), env.definition, "paper", env.file(),
+        document_id="participant_statement")["completed"]
+
+
 def test_document_fields_collect_save_generate_refresh(composite_env):
     env = composite_env()
     configure_document_fields(env)
@@ -115,7 +805,8 @@ def test_document_fields_collect_save_generate_refresh(composite_env):
     page = client.get(page_url)
     assert page.status_code == 200
     assert 'name="deklaracja_18_lat"' in page.text
-    assert 'name="wybor_szkolen"' in page.text and 'Szkolenie A' in page.text
+    assert 'name="wybor_szkolen"' not in page.text
+    assert 'Wybierz szkolenia' not in page.text
     assert '/paper/download/' not in page.text and 'data-document-upload' not in page.text
     csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
     assert client.post(fields_url, data={}).status_code == 400
@@ -123,14 +814,15 @@ def test_document_fields_collect_save_generate_refresh(composite_env):
     result = client.post(fields_url, data={'csrf_token': csrf})
     assert result.status_code == 400
     assert env.generated == []
-    data = {'csrf_token': csrf, 'deklaracja_18_lat': 'Tak', 'wybor_szkolen': 'course-a', 'declaration_note': 'Zapisana wartość'}
+    data = {'csrf_token': csrf, 'deklaracja_18_lat': 'Tak', 'declaration_note': 'Zapisana wartość'}
     assert client.post(fields_url, data={**data, 'document_action': 'save'}).status_code == 302
     assert env.state()['substate'] == 'collect_data' and not env.generated
     assert env.row()['data_json']['initial_value'] == 'preserved'
     from models import SubmissionTraining
     with env.repo.session_factory() as db:
-        training = db.execute(select(SubmissionTraining).where(SubmissionTraining.submission_id == env.row()['id'])).scalar_one()
-        assert training.training_id == 'course-a' and not training.is_locked
+        training = db.execute(select(SubmissionTraining).where(
+            SubmissionTraining.submission_id == env.row()['id'])).scalar_one_or_none()
+        assert training is None
     assert env.row()['workflow_step'] == env.row()['workflow_stage'] == 'paper'
     assert 'Zapisana wartość' in client.get(page_url).text
     assert client.post(fields_url, data=data).status_code == 302
@@ -138,7 +830,7 @@ def test_document_fields_collect_save_generate_refresh(composite_env):
     assert len(env.generated) == 1
     assert env.generated[0]['context']['deklaracja_18_lat'] == 'Tak'
     assert env.generated[0]['context']['declaration_note'] == 'Zapisana wartość'
-    assert env.generated[0]['context']['selected_trainings'][0]['id'] == 'course-a'
+    assert not env.generated[0]['context']['selected_trainings']
     assert '/paper/download/' in client.get(page_url).text
     snapshot = deepcopy(env.row()['data_json'])
     assert client.post(fields_url, data={**data, 'declaration_note': 'Zmieniona'}).status_code == 303
@@ -152,7 +844,7 @@ def test_document_fields_replace_premature_pdf_and_fail_generation(composite_env
     from werkzeug.datastructures import MultiDict
     env = composite_env()
     env.enter()
-    old_file = env.state()['files'][0]['filename']
+    old_file = env.state()['generated_filename']
     configure_document_fields(env)
     assert env.document.view(env.row(), env.definition)['substate'] == 'collect_data'
     with pytest.raises(ValueError):
@@ -172,7 +864,7 @@ def test_document_fields_replace_premature_pdf_and_fail_generation(composite_env
     data['declaration_note'] = 'Poprawiona treść'
     assert env.document.save_fields(env.row(), env.definition, 'paper', data).success
     assert env.state()['substate'] == 'ready'
-    assert env.state()['files'][0]['filename'] != old_file
+    assert env.state()['generated_filename'] != old_file
     old = next(f for f in env.services.submission_document_service.list_documents(env.public_id) if f['filename'] == old_file)
     assert old['status'] == 'superseded'
     with pytest.raises(ValueError):
@@ -260,7 +952,7 @@ def test_document_fields_generation_contains_saved_data(composite_env, monkeypat
     monkeypatch.setattr(env.services.document_service, 'pdf_render_service', PdfRenderService(html_renderer=generate_pdf_from_html))
     assert env.document.save_fields(env.row(), env.definition, 'paper', MultiDict({
         'deklaracja_18_lat': 'Tak', 'wybor_szkolen': 'course-a', 'declaration_note': 'Saved document values'})).success
-    filename = env.state()['files'][0]['filename']
+    filename = env.state()['generated_filename']
     pdf = env.document.download(env.row(), env.definition, 'paper', filename)
     rendered = ''.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
     assert 'Wiek: Tak' in rendered and 'Saved document values' in rendered
@@ -333,7 +1025,9 @@ def test_composite_transition_requires_verified_signature(composite_env, outcome
         events = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.public_submission_id == env.public_id)).scalars().all()
         assert sum(e.source == 'DOCUMENT_STEP_COMPLETED' for e in events) == 1
         assert sum(e.previous_step == 'paper' and e.new_step == 'review' for e in events) == 1
-        assert {'DOCUMENT_GENERATION_STARTED', 'DOCUMENT_GENERATED', 'SIGNED_DOCUMENT_UPLOADED', 'SIGNATURE_VERIFICATION_STARTED', 'SIGNATURE_VERIFICATION_FAILED', 'SIGNATURE_VERIFIED'} <= {e.source for e in events}
+        assert {'DOCUMENT_GROUP_READY', 'SIGNATURE_VERIFICATION_FAILED',
+                'DOCUMENT_STEP_COMPLETED'} <= {
+                    e.source for e in events}
 
 
 def test_composite_instructions(composite_env):
@@ -360,7 +1054,7 @@ def test_composite_declaration_download_upload_access(composite_env):
     row = env.row()
     client = env.app.test_client()
     env.app.config['WTF_CSRF_ENABLED'] = True
-    filename = env.state()['files'][0]['filename']
+    filename = env.state()['generated_filename']
     base = f"/document-steps/{row['form_slug']}/{env.public_id}/paper"
     assert client.get(f'{base}/download/{filename}').status_code == 404
     assert client.get(f'{base}/download/{filename}?token=wrong').status_code == 404
@@ -530,7 +1224,7 @@ def test_agreement_uses_trusted_profile_backend_through_shared_upload_pipeline(
     while original_end < len(signed) and signed[original_end:original_end + 1] in {b'\r', b'\n'}:
         original_end += 1
     original = signed[:original_end]
-    source = env.state()['files'][0]
+    source = {'filename': env.state()['generated_filename']}
     env.services.document_service.document_storage_service.save_pdf(
         storage=env.services.document_service.storage,
         slug=env.row()['form_slug'],
@@ -578,7 +1272,7 @@ def test_composite_office_route_permissions_and_csrf(composite_env):
     page = client.get(f"/admin/forms/{env.form_id}/submissions/{row['id']}")
     assert page.status_code == 200 and 'data-office-document-step' in page.text
     csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
-    filename = env.state()['files'][0]['filename']
+    filename = env.state()['generated_filename']
     assert client.get(f'{base}?filename={filename}').data == env.pdf
     response = client.post(base, data={'csrf_token': csrf, 'document_pdf': (BytesIO(env.pdf + b'\n% office signature\n'), 'office.pdf')})
     assert response.status_code == 302 and env.row()['workflow_stage'] == 'review'
@@ -608,7 +1302,7 @@ def test_composite_recovery_reuses_generated_file_and_verified_signature(composi
     env = composite_env()
     save = env.repo.save_document_step
     def interrupted_save(submission_id, step_id, state, token, event, actor='system', *, field_values=None):
-        if event == 'DOCUMENT_GENERATED':
+        if event == 'DOCUMENT_GROUP_READY':
             raise RuntimeError('Interrupted after file persistence')
         return save(submission_id, step_id, state, token, event, actor, field_values=field_values)
     monkeypatch.setattr(env.repo, 'save_document_step', interrupted_save)
@@ -616,7 +1310,7 @@ def test_composite_recovery_reuses_generated_file_and_verified_signature(composi
         env.enter()
     monkeypatch.setattr(env.repo, 'save_document_step', save)
     env.services.workflow_service.run_automatic_steps(env.row(), env.definition)
-    assert len(env.generated) == 1 and env.state()['files'][0]['training_key'] == ''
+    assert len(env.generated) == 1 and env.state()['generated_filename']
     complete = env.document._complete
     def interrupted_completion(*args):
         raise RuntimeError('Interrupted after verification')
@@ -628,7 +1322,7 @@ def test_composite_recovery_reuses_generated_file_and_verified_signature(composi
     assert env.row()['workflow_stage'] == 'review'
     with env.repo.session_factory() as db:
         events = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.public_submission_id == env.public_id)).scalars().all()
-        assert sum(e.source == 'SIGNATURE_VERIFIED' for e in events) == 1
+        assert sum(e.source == 'DOCUMENT_STEP_COMPLETED' for e in events) == 1
         assert sum(e.source == 'DOCUMENT_STEP_COMPLETED' for e in events) == 1
 
 
@@ -644,8 +1338,9 @@ def test_composite_generation_isolated_between_submissions(composite_env):
         db.commit()
     env.enter()
     env.services.workflow_service.advance_after_action(env.repo.get_by_id(second_id), env.definition)
-    first = env.state()['files'][0]['filename']
-    second = document_step_state(env.repo.get_by_id(second_id), 'paper')['files'][0]['filename']
+    first = env.state()['generated_filename']
+    second = document_item_state(env.repo.get_by_id(second_id), 'paper', 'declaration',
+        primary_document_id='declaration')['generated_filename']
     assert first != second
     assert env.document.download(env.row(), env.definition, 'paper', first) == env.pdf
     assert env.document.download(env.repo.get_by_id(second_id), env.definition, 'paper', second) == env.pdf
@@ -662,7 +1357,10 @@ def test_new_draft_has_one_stage_per_document_without_implicit_decision():
     }))
     steps = definition['workflow']['steps']
     assert [s['id'] for s in steps] == ['submission', 'declaration', 'agreement', 'statement', 'completed']
-    assert all(s['document_lifecycle'] == 'composite' for s in steps[1:-1])
+    assert all(s['stage_type'] == 'documents' and s['document_lifecycle'] == 'group'
+               and not s.get('document_id') for s in steps[1:-1])
+    assert {document['workflow_step'] for document in definition['documents']} == {
+        'declaration', 'agreement', 'statement'}
     assert not any(s['stage_type'] == 'decision' for s in steps)
     assert WorkflowConfigValidator().validate(definition['workflow'], definition) == []
 
@@ -713,18 +1411,19 @@ def test_composite_draft_save_reload_uses_version_documents(admin_app, stale_mir
         assert [(s['id'], s['type'], s.get('next') or '') for s in saved['workflow']['steps']] == [
             (s['id'], s['type'], s.get('next') or '') for s in expected]
         for before, after in zip(expected[1:-1], saved['workflow']['steps'][1:-1]):
-            for key in ('document_id', 'document_lifecycle', 'document_options', 'document_instructions'):
+            for key in ('document_lifecycle', 'document_options', 'document_instructions'):
                 assert after[key] == before[key]
+            assert not after.get('document_id')
         assert [f['name'] for f in saved['fields']] == ['draft_contact']
         assert saved['fields'][0]['availability'] == definition['fields'][0]['availability']
         assert db.get(FormVersion, published_id).definition_json == old_published
         saved_snapshot = deepcopy(saved)
     assert client.get(url).status_code == 200
     bad = deepcopy(definition['workflow'])
-    bad['steps'][1]['document_id'] = ''
+    bad['steps'][1]['next'] = ''
     response = client.post(url, data={**payload, 'name': 'Must not persist', 'workflow_builder_json': json.dumps(bad)})
     assert response.status_code == 400
-    assert 'declaration' in response.text
+    assert 'kolejny etap' in response.text.lower()
     with repo.session_factory() as db:
         assert db.get(FormVersion, draft_id).definition_json == saved_snapshot
         assert db.get(Form, form_id).name != 'Must not persist'
@@ -986,6 +1685,6 @@ def test_composite_uses_real_document_builder_pdf_and_metadata(composite_env, mo
     assert env.state()['substate'] == 'ready'
     files = env.services.document_service.submission_document_service.list_documents(env.public_id)
     assert len(files) == 1 and files[0]['document_id'] == 'declaration'
-    data = env.document.download(env.row(), env.definition, 'paper', env.state()['files'][0]['filename'])
+    data = env.document.download(env.row(), env.definition, 'paper', env.state()['generated_filename'])
     assert data.startswith(b'%PDF-')
     assert 'Deklaracja uczestnika testowego' in ''.join(p.extract_text() for p in PdfReader(BytesIO(data)).pages)

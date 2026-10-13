@@ -298,13 +298,15 @@ class FormConfigService:
             if step_id in used:
                 step_id = f"document_{index + 1}"
             used.add(step_id)
-            steps.append({"id": step_id, "type": "document", "stage_type": "document", "document_lifecycle": "composite",
-                          "document_id": document["id"], "action": "none", "status": "WAITING_FOR_DOCUMENT",
+            document["workflow_step"] = step_id
+            steps.append({"id": step_id, "type": "document", "stage_type": "documents", "document_lifecycle": "group",
+                          "action": "none", "status": "WAITING_FOR_DOCUMENT",
                           "admin_label": document["label"], "user_label": document["label"]})
         steps.append({"id": "completed", "type": "end", "stage_type": "final", "final": True,
                       "admin_label": "Proces zakończony", "user_label": "Proces zakończony", "status": "COMPLETED"})
         for current, following in zip(steps, steps[1:]):
             current["next"] = following["id"]
+        config["documents"] = documents
         config["workflow"] = {"schema_version": 2, "flow_mode": "explicit", "initial_step": "submission", "steps": steps}
         return config
 
@@ -393,8 +395,17 @@ class FormConfigService:
             ("requires_declaration", "declaration", "Deklaracja", "declaration_template_html"),
             ("requires_contract", "agreement", "Umowa", "contract_template_html"),
         ]
+        from services.workflow_config_service import (
+            DOCUMENTS_STAGE_TYPE,
+            workflow_stage_type,
+        )
+        document_steps = {str(step.get("id") or "") for step in workflow.get("steps", [])
+            if workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE and step.get("active", True)}
         composite_documents = {step.get("document_id") for step in workflow.get("steps", [])
-            if step.get("stage_type", step.get("type")) == "document" and step.get("document_lifecycle") == "composite"}
+            if workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE
+            and step.get("document_lifecycle") in {"composite", "group"}}
+        composite_documents.update(document_id for document_id, document in documents_by_id.items()
+            if str(document.get("workflow_step") or "") in document_steps)
         for flag, document_id, label, html_key in requirements:
             if document_id not in documents_by_id and workflow.get(flag):
                 documents_by_id[document_id] = {
@@ -494,6 +505,7 @@ class FormConfigService:
         normalized.setdefault("label", document_id.replace("_", " ").title())
         normalized.setdefault("kind", "generated_pdf")
         normalized.setdefault("signature_required", True)
+        normalized.setdefault("required", True)
         normalized.setdefault("allowed_signatures", ["mszafir", "profil_zaufany"])
         if document_id == "training_agreement":
             normalized.setdefault("repeat_over", "selected_trainings")

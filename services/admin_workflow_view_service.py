@@ -8,6 +8,7 @@ from services.documents.document_workflow_service import document_step_status
 from services.process_service import ProcessStatus
 from services.status_catalog import get_status_label, is_final_status, is_rejected_status
 from services.workflow_service import current_workflow_step, workflow_status_label
+from services.workflow_config_service import DOCUMENTS_STAGE_TYPE, workflow_stage_type
 
 
 APPLICATION_TARGETS = {
@@ -165,7 +166,7 @@ def _configured_sections(submission, workflow, events, decisions):
             action = ("Proces zakończony" if complete else "Wymagana interwencja" if blocked else
                       "Oczekiwanie na decyzję" if step.get("stage_type") == "decision" or step.get("requires_officer_action") or step.get("decisions") else
                       "Wykonaj akcję urzędnika" if step.get("stage_type") == "officer_action" else
-                      "Sprawdź stan dokumentu" if step.get("stage_type") == "document" or step.get("document_id") else
+                      "Sprawdź stan dokumentu" if workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE or step.get("document_id") else
                       "Oczekiwanie na wykonanie akcji etapu")
         elif complete:
             action = "Etap zakończony"

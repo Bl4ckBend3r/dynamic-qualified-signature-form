@@ -8,7 +8,7 @@ from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
 from services.field_availability_service import FieldAvailabilityService
 from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
-from services.workflow_config_service import WorkflowConfigValidator, is_workflow_step_active
+from services.workflow_config_service import WorkflowConfigValidator, is_workflow_step_active, is_participant_stage
 from services.upload_validation import SAFE_ATTACHMENT_EXTENSIONS, SAFE_ATTACHMENT_MIME_TYPES
 
 
@@ -42,6 +42,17 @@ class FormConfigValidator:
             documents = []
         document_ids = self._validate_documents(documents, errors)
         self._validate_workflow(form_config.get("workflow") or {}, document_ids, errors)
+        steps = {step.get("id"): step for step in (form_config.get("workflow") or {}).get("steps") or []
+                 if isinstance(step, dict)}
+        for index, document in enumerate(documents):
+            step_id = str(document.get("workflow_step") or "").strip()
+            if not step_id:
+                continue
+            step = steps.get(step_id)
+            if not step or not is_participant_stage(step, form_config.get("workflow") or {}):
+                errors.append(f"documents[{index}].workflow_step must reference an active participant stage")
+            elif step.get("repeat_over") or step.get("document_id") == "training_agreement":
+                errors.append(f"documents[{index}].workflow_step cannot share a per-training agreement stage")
         if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
             errors.extend(WorkflowConfigValidator().validate(form_config["workflow"], form_config))
         errors.extend(FieldAvailabilityService().validate_config(form_config))
@@ -159,12 +170,35 @@ class FormConfigValidator:
             if not document_id:
                 errors.append(f"documents[{index}].id is required")
             else:
+                if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", document_id):
+                    errors.append(f"documents[{index}].id contains unsupported characters")
+                if document_id in ids:
+                    errors.append(f"documents[{index}].id is duplicated: {document_id}")
                 ids.add(document_id)
             kind = document.get("kind")
-            if not kind:
-                errors.append(f"documents[{index}].kind is required")
-            if kind == "generated_pdf" and not (document.get("template") or document.get("template_html") or document.get("template_source") == "builder" and document.get("builder_document")):
+            if kind not in {"generated_pdf", "uploaded_file"}:
+                errors.append(f"documents[{index}].kind is invalid")
+            if kind == "generated_pdf" and not (document.get("template") or document.get("template_html") or document.get("template_source") == "builder" and document.get("builder_document") or document.get("template_source") == "docx" and document.get("template_metadata")):
                 errors.append(f"documents[{index}].template is required for generated_pdf")
+            for flag in ("required", "signature_required", "enabled"):
+                if flag in document and not isinstance(document[flag], bool):
+                    errors.append(f"documents[{index}].{flag} must be boolean")
+            lifecycle = document.get("lifecycle") or {}
+            if lifecycle and (not isinstance(lifecycle, dict) or any(not isinstance(value, bool)
+                    for key, value in lifecycle.items() if key in {"generate", "download", "upload_required",
+                        "participant_signature", "signature_verification", "office_signature"})):
+                errors.append(f"documents[{index}].lifecycle contains invalid flags")
+            if isinstance(lifecycle, dict) and document_id not in {"declaration", "agreement", "training_agreement"}:
+                generate = lifecycle.get("generate", kind == "generated_pdf")
+                upload_required = lifecycle.get("upload_required", document.get("signature_required", True) or not generate)
+                participant_signature = lifecycle.get("participant_signature", document.get("signature_required", True))
+                office_signature = lifecycle.get("office_signature", False)
+                if not generate and not upload_required or participant_signature and not upload_required:
+                    errors.append(f"documents[{index}] requires generation or upload; participant signature requires upload")
+                if office_signature and not participant_signature:
+                    errors.append(f"documents[{index}].office_signature requires participant signature")
+                if participant_signature and lifecycle.get("signature_verification") is False:
+                    errors.append(f"documents[{index}].signature_verification cannot be disabled for signed uploads")
             if kind == "generated_pdf" and document.get("template"):
                 self._validate_template_exists(document.get("template"), f"documents[{index}].template", errors)
             if document.get("repeat_over") and not document.get("repeat_item_alias"):

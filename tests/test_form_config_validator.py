@@ -4,6 +4,28 @@ from services.form_config_service import FormConfigService
 from validators.form_config_validator import FormConfigValidator
 
 
+@pytest.mark.parametrize("stage_type, rejected, allowed", [
+    ("user_action", False, True), ("document", False, True),
+    ("officer_action", False, False), ("system", False, False),
+    ("final", False, False), ("user_action", True, False),
+])
+def test_custom_document_stage_uses_participant_actor(stage_type, rejected, allowed):
+    # Given: the same custom document and a workflow step with a declared actor.
+    config = {"title": "Form", "fields": [], "documents": [{"id": "extra_statement",
+        "label": "Oświadczenie", "kind": "uploaded_file", "workflow_step": "target",
+        "required": True, "signature_required": True,
+        "lifecycle": {"generate": False, "upload_required": True,
+            "participant_signature": True, "signature_verification": True}}],
+        "workflow": {"flow_mode": "explicit", "initial_step": "target", "steps": [{
+            "id": "target", "stage_type": stage_type, "status": "WAITING_FOR_USER_ACTION",
+            "rejected": rejected, "next": "done"}, {"id": "done", "stage_type": "final",
+            "status": "COMPLETED", "final": True}]}}
+    # When: the versioned configuration is validated.
+    errors = FormConfigValidator(skip_template_check=True).validate(config)
+    # Expected: only participant stages accept the assignment.
+    assert any("workflow_step must reference an active participant stage" in error for error in errors) is not allowed
+
+
 def test_valid_form_config_passes():
     raw = {
         "title": "Form",

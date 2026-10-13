@@ -425,12 +425,12 @@ def build_agreement_template_context(
         "wiek": _first_nonempty(result, "wiek", "age"),
     })
 
-    street = _first_nonempty(result, "address_street", "ulica", "street")
-    building = _first_nonempty(result, "address_building_number", "nr_budynku", "building_number")
-    apartment = _first_nonempty(result, "address_apartment_number", "nr_lokalu", "apartment_number")
-    postal_code = _first_nonempty(result, "address_postal_code", "kod_pocztowy", "postal_code")
-    city = _first_nonempty(result, "address_city", "miejscowosc", "city")
-    voivodeship = _first_nonempty(result, "address_voivodeship", "wojewodztwo", "voivodeship")
+    street = _address_value(result, "address_street", "ulica", "street")
+    building = _address_value(result, "address_building_number", "nr_budynku", "building_number")
+    apartment = _address_value(result, "address_apartment_number", "nr_lokalu", "apartment_number")
+    postal_code = _address_value(result, "address_postal_code", "kod_pocztowy", "postal_code")
+    city = _address_value(result, "address_city", "miejscowosc", "city")
+    voivodeship = _address_value(result, "address_voivodeship", "wojewodztwo", "voivodeship")
     address_lines = _address_lines(street, building, apartment, postal_code, city, voivodeship)
     result.update({
         "address_street": street,
@@ -742,6 +742,23 @@ def _first_nonempty(source: Mapping[str, Any], *names: str) -> str:
     return ""
 
 
+def _address_value(source: Mapping[str, Any], *names: str) -> str:
+    """Read address aliases, including data_json behind empty legacy columns."""
+    submission = _mapping(source.get("submission"))
+    row = _mapping(source.get("row"))
+    sources = (source, _mapping(source.get("data_json")), submission,
+               _mapping(submission.get("data_json")), row, _mapping(row.get("data_json")))
+    for name in names:
+        for values in sources:
+            value = values.get(name)
+            if value is None:
+                continue
+            text = " ".join(str(value).split())
+            if text and text.casefold() not in {"none", "null"}:
+                return text
+    return ""
+
+
 def _project_config(definition: Mapping[str, Any]) -> dict[str, Any]:
     project: dict[str, Any] = {}
     for key in ("settings", "project", "project_config"):
@@ -756,7 +773,7 @@ def _address_lines(street: str, building: str, apartment: str, postal_code: str,
     first = ""
     if street:
         first = ("ul. " + street) if not street.casefold().startswith(("ul.", "aleja", "al.", "plac", "pl.")) else street
-    number = building + ("/" + apartment if apartment else "")
+    number = f"{building}/{apartment}" if building and apartment else building or apartment
     first = " ".join(filter(None, (first, number)))
     second = " ".join(filter(None, (postal_code, city)))
     third = ("woj. " + voivodeship) if voivodeship and not voivodeship.casefold().startswith("woj.") else voivodeship

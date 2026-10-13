@@ -46,7 +46,11 @@ def declaration_document_fields(
 ) -> tuple[Any, ...]:
     """Return fields assigned to declarations, with an all-fields legacy fallback."""
     definition_fields = tuple((form_definition or {}).get("fields") or ())
-    candidates = definition_fields or tuple(fields)
+    candidates = tuple(
+        field
+        for field in (definition_fields or tuple(fields))
+        if str(_field_raw(field, "type") or "") != "training_selection"
+    )
     explicit_assignment = any(
         isinstance(_field_raw(field, "document_usage"), Mapping)
         and "declaration" in _field_raw(field, "document_usage")
@@ -54,12 +58,22 @@ def declaration_document_fields(
     )
     if not explicit_assignment:
         return candidates
-    return tuple(
-        field
-        for field in candidates
-        if isinstance(_field_raw(field, "document_usage"), Mapping)
-        and _field_raw(field, "document_usage").get("declaration") is True
-    )
+    selected = []
+    section = None
+    for field in candidates:
+        field_type = _field_value(field, "type")
+        if field_type == "section":
+            section = field
+            continue
+        usage = _field_raw(field, "document_usage")
+        assigned = isinstance(usage, Mapping) and usage.get("declaration") is True
+        if not assigned:
+            continue
+        if section is not None:
+            selected.append(section)
+            section = None
+        selected.append(field)
+    return tuple(selected)
 
 
 class DeclarationVariableCatalog:
@@ -79,12 +93,18 @@ class DeclarationVariableCatalog:
             fields,
             form_definition=form_definition,
         )
+        data_fields = tuple(field for field in catalog_fields
+            if _field_value(field, "type") not in {"section", "static_text"})
 
         variables = [
             dict(item)
-            for item in AgreementVariableCatalog.variables(catalog_fields)
+            for item in AgreementVariableCatalog.variables(data_fields)
             if item["category"] not in _EXCLUDED_CATEGORIES
         ]
+        for item in variables:
+            if item["name"] == "participant_address":
+                item.update(type="text", example="ul. Przykładowa 12/3, 65-001 Zielona Góra",
+                            description="Gotowy adres uczestnika w jednym wierszu.")
 
         by_name = {
             item["name"]: item
@@ -97,7 +117,7 @@ class DeclarationVariableCatalog:
                 "placeholder": "{{ " + item["name"] + " }}",
             }
 
-        for field in catalog_fields:
+        for field in data_fields:
             name = _field_value(field, "name")
 
             if not name:
@@ -142,7 +162,7 @@ class DeclarationVariableCatalog:
         if include_criteria_technical:
             for criterion in declaration_criteria_catalog(
                 form_definition,
-                fields,
+                data_fields,
             ):
                 prefix = criterion["variable_prefix"]
 
@@ -299,11 +319,14 @@ def build_declaration_render_context(
     fields: Iterable[Any] = (),
 ) -> dict[str, Any]:
     fields = declaration_document_fields(fields, form_definition=form_definition)
+    data_fields = tuple(field for field in fields
+        if _field_value(field, "type") not in {"section", "static_text"})
     result = build_agreement_template_context(
         context,
         form_definition=form_definition,
-        fields=fields,
+        fields=data_fields,
     )
+    result["participant_address"] = result["participant_address_inline"]
     source = _flatten_values(result)
     generated_date = result.get("generated_date") or date.today().strftime("%d.%m.%Y")
     result.update({
@@ -334,7 +357,7 @@ def build_declaration_render_context(
         if definition_field.get("applicant_record"):
             result["applicant_record_id"] = applicant_id
             result["applicant"] = next((record for record in normalized_records if record["record_uuid"] == applicant_id), {})
-    for field in fields:
+    for field in data_fields:
         name = _field_value(field, "name")
         if not name:
             continue
@@ -346,7 +369,7 @@ def build_declaration_render_context(
         if field_type.casefold() in {"checkbox", "boolean", "bool"}:
             normalized = normalize_yes_no_value(value)
             result[f"{name}_yes_no"] = "Tak" if normalized is True else "Nie" if normalized is False else ""
-    for criterion in declaration_criteria_catalog(form_definition, fields):
+    for criterion in declaration_criteria_catalog(form_definition, data_fields):
         field_key = criterion["field_key"]
         prefix = criterion["variable_prefix"]
         value = source.get(field_key, result.get(field_key, ""))
@@ -362,7 +385,7 @@ def build_declaration_render_context(
             f"{prefix}_other_checked": "X" if not missing and normalized is None else "",
             f"{prefix}_other_label": answer if not missing and normalized is None else "",
         })
-    for variable in DeclarationVariableCatalog.variables(fields, form_definition=form_definition):
+    for variable in DeclarationVariableCatalog.variables(data_fields, form_definition=form_definition):
         result.setdefault(variable["name"], "")
     return result
 
@@ -406,7 +429,14 @@ def declaration_preview_context(
     })
     
     if submission is not None:
-        sample.update(_flatten_values(submission))
+        actual = _flatten_values(submission)
+        address_names = ("address_street", "ulica", "street", "address_building_number", "nr_budynku",
+                         "building_number", "address_apartment_number", "nr_lokalu", "apartment_number",
+                         "address_postal_code", "kod_pocztowy", "postal_code", "address_city", "miejscowosc",
+                         "city", "address_voivodeship", "wojewodztwo", "voivodeship")
+        for name in (*address_names, "participant_address", "participant_address_inline"):
+            sample.pop(name, None)
+        sample.update(actual)
     for field in preview_fields:
         field_type = (
             _field_value(field, "field_type")
@@ -532,11 +562,13 @@ def _flatten_values(value: Mapping[str, Any]) -> dict[str, Any]:
         nested = result.get(container_name)
         if isinstance(nested, Mapping):
             for key, item in nested.items():
-                result.setdefault(str(key), item)
+                if result.get(str(key)) in (None, "") and item not in (None, ""):
+                    result[str(key)] = item
             nested_data = nested.get("data_json")
             if isinstance(nested_data, Mapping):
                 for key, item in nested_data.items():
-                    result.setdefault(str(key), item)
+                    if result.get(str(key)) in (None, "") and item not in (None, ""):
+                        result[str(key)] = item
     return result
 
 

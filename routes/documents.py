@@ -377,7 +377,7 @@ def training_selection(submission_id: str):
     if not database_url:
         abort(404)
 
-    access = require_participant_submission_access(submission_id)
+    access = require_participant_submission_access(submission_id, allow_incomplete=True)
     token = access.credential
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
@@ -945,14 +945,27 @@ def show_result(slug: str, submission_id: str):
 
 @bp.get("/document-steps/<slug>/<submission_id>/<step_id>/download/<filename>")
 def download_document_step(slug, submission_id, step_id, filename):
+    return _download_document_step(slug, submission_id, step_id, filename)
+
+
+@bp.get("/document-steps/<slug>/<submission_id>/<step_id>/download/<document_id>/<filename>")
+def download_document_item(slug, submission_id, step_id, document_id, filename):
+    return _download_document_step(slug, submission_id, step_id, filename, document_id=document_id)
+
+
+def _download_document_step(slug, submission_id, step_id, filename, *, document_id=None):
     access = require_participant_submission_access(submission_id, slug=slug)
     definition = get_form_config(slug, submission_id) or {}
     try:
-        content = get_services().document_service.document_workflow.download(access.submission, definition, step_id, filename)
+        content = get_services().document_service.document_workflow.download(
+            access.submission, definition, step_id, filename, document_id=document_id)
     except ValueError:
         abort(404)
-    response = send_file(BytesIO(content), mimetype="application/pdf", as_attachment=True, download_name=filename)
+    from mimetypes import guess_type
+    response = send_file(BytesIO(content), mimetype=guess_type(filename)[0] or "application/octet-stream",
+                         as_attachment=True, download_name=filename)
     response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
@@ -963,7 +976,8 @@ def upload_document_step(slug, submission_id, step_id):
     definition = get_form_config(slug, submission_id) or {}
     try:
         result = get_services().document_service.document_workflow.upload(access.submission, definition, step_id,
-            request.files.get("document_pdf"), instance=request.form.get("instance", ""))
+            request.files.get("document_pdf"), instance=request.form.get("instance", ""),
+            document_id=request.form.get("document_id", ""))
         flash(result.get("message") or ("Dokument został przyjęty." if result["is_valid"] else "Nie udało się zakończyć weryfikacji dokumentu."), "success" if result["is_valid"] else "error")
     except ValueError as exc:
         flash(str(exc), "error")
@@ -971,6 +985,99 @@ def upload_document_step(slug, submission_id, step_id):
         logger.exception("Błąd obsługi etapu dokumentowego")
         flash("Nie udało się zakończyć obsługi dokumentu. Spróbuj ponownie.", "error")
     return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.post("/document-steps/<slug>/<submission_id>/<step_id>/generate/<document_id>")
+def generate_group_document(slug, submission_id, step_id, document_id):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        get_services().document_service.document_workflow.generate_group_document(
+            access.submission, definition, step_id, document_id)
+        flash("Dokument został przygotowany.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.post("/document-steps/<slug>/<submission_id>/<step_id>/bulk-upload")
+def bulk_upload_document_step(slug, submission_id, step_id):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    from services.documents.document_workflow_service import has_document_workflow, step_documents, uses_document_group
+    row = access.submission["row"]
+    step = next((item for item in definition.get("workflow", {}).get("steps", [])
+                 if item.get("id") == step_id and has_document_workflow(definition, item)), None)
+    if not step or (row.get("workflow_step") or row.get("workflow_stage")) != step_id or not uses_document_group(definition, step):
+        abort(404)
+    files = request.files.getlist("document_files")
+    targets = [value.split("::", 1) if "::" in value else [value, ""]
+               for value in request.form.getlist("document_ids")]
+    if (not files or len(files) > 20 or len(files) != len(targets) or
+            len({tuple(target) for target in targets}) != len(targets)):
+        abort(400)
+    documents = {item["id"]: item for item in step_documents(definition, step)}
+    if any(document_id not in documents for document_id, _ in targets):
+        abort(404)
+    # Optional files go first so completing the last required document cannot
+    # advance the workflow before another selected file is processed.
+    selected = sorted(zip(targets, files), key=lambda pair: bool(documents[pair[0][0]].get("required", True)))
+    for (document_id, instance), uploaded in selected:
+        try:
+            result = get_services().document_service.document_workflow.upload(
+                access.submission, definition, step_id, uploaded, document_id=document_id, instance=instance)
+            flash(f"{document_id} — {uploaded.filename}: {result.get('message') or ('Przyjęto.' if result['is_valid'] else 'Odrzucono.')}",
+                  "success" if result["is_valid"] else "error")
+        except ValueError as exc:
+            flash(f"{document_id} — {uploaded.filename}: {exc}", "error")
+        except Exception:
+            logger.exception("Błąd zbiorczego przesyłania dokumentów")
+            flash(f"{document_id} — {uploaded.filename}: nie udało się zapisać pliku.", "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.post("/version-documents/<slug>/<submission_id>/<document_id>/generate")
+def generate_version_document(slug, submission_id, document_id):
+    access = require_participant_submission_access(submission_id, slug=slug, allow_incomplete=True)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        get_services().document_service.document_workflow.generate_version_gap(access.submission, definition, document_id)
+        flash("Dokument został przygotowany.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.post("/version-documents/<slug>/<submission_id>/<document_id>/upload")
+def upload_version_document(slug, submission_id, document_id):
+    access = require_participant_submission_access(submission_id, slug=slug, allow_incomplete=True)
+    require_public_csrf()
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        result = get_services().document_service.document_workflow.upload_version_gap(
+            access.submission, definition, document_id, request.files.get("document_pdf"))
+        flash(result["message"], "success" if result["is_valid"] else "error")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return redirect(documents_to_sign_url(submission_id, access.credential))
+
+
+@bp.get("/version-documents/<slug>/<submission_id>/<document_id>/download/<filename>")
+def download_version_document(slug, submission_id, document_id, filename):
+    access = require_participant_submission_access(submission_id, slug=slug)
+    definition = get_form_config(slug, submission_id) or {}
+    try:
+        content = get_services().document_service.document_workflow.download_version_gap(
+            access.submission, definition, document_id, filename)
+    except ValueError:
+        abort(404)
+    response = send_file(BytesIO(content), mimetype="application/pdf", as_attachment=True, download_name=filename)
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @bp.post("/document-steps/<slug>/<submission_id>/<step_id>/retry")
@@ -996,6 +1103,15 @@ def _render_document_fields(submission, document_step, credential, *, values=Non
     definition = deepcopy(document_step["form_definition"])
     picker = _public_training_picker(submission["submission_id"], credential)
     field_values = dict(values if values is not None else document_step["values"])
+    form_action_kwargs = {
+        "slug": submission["form_slug"],
+        "submission_id": submission["submission_id"],
+        "step_id": document_step["step_id"],
+        "token": credential,
+    }
+    if document_step.get("form_document_id"):
+        form_action_kwargs["document_id"] = document_step["form_document_id"]
+    form_action = url_for("documents.save_document_step_fields", **form_action_kwargs)
     for field in definition["fields"]:
         if values is None and field.get("name") in field_values.get("data_json", {}):
             field_values[field["name"]] = field_values["data_json"][field["name"]]
@@ -1009,25 +1125,43 @@ def _render_document_fields(submission, document_step, credential, *, values=Non
             if selected:
                 field_values[field["name"]] = ",".join(item["id"] for item in selected)
     return render_template("form_page.html", form_definition=definition, slug=submission["form_slug"],
-        form_action=url_for("documents.save_document_step_fields", slug=submission["form_slug"],
-            submission_id=submission["submission_id"], step_id=document_step["step_id"], token=credential),
-        document_mode=True, document_status=document_step["status"], document_instruction=document_step.get("instruction") or {},
+        form_action=form_action, document_mode=True, document_status=document_step["status"], document_instruction=document_step.get("instruction") or {},
         document_back_url=documents_to_sign_url(submission["submission_id"], credential),
         values=field_values, errors=errors or {}, form_error="Popraw wskazane pola." if errors else "")
 
 
 @bp.post("/document-steps/<slug>/<submission_id>/<step_id>/fields")
 def save_document_step_fields(slug, submission_id, step_id):
-    access = require_participant_submission_access(submission_id, slug=slug)
+    access = require_participant_submission_access(
+        submission_id, slug=slug, allow_incomplete=True,
+    )
     require_public_csrf()
     definition = get_form_config(slug, submission_id) or {}
     service = get_services().document_service.document_workflow
+    document_id = str(
+            request.args.get("document_id") or ""
+        ).strip() or None
     try:
-        result = service.save_fields(access.submission, definition, step_id, request.form,
-            generate=request.form.get("document_action") != "save")
+        _, _, selected_document = service._current(
+            access.submission, definition, step_id, document_id=document_id)
+    except ValueError:
+        abort(404)
+    if selected_document is None:
+        abort(404)
+    try:
+        result = service.save_fields(
+                access.submission,
+                definition,
+                step_id,
+                request.form,
+                document_id=document_id,
+                generate=request.form.get("document_action") != "save",
+            )
         if not result.success:
             view = service.view(access.submission["row"], definition)
-            field_values = values_for_rerender(view["form_definition"], request.form, saved_values=result.values)
+            view["form_definition"] = result.declaration_definition
+            view["form_document_id"] = document_id or view.get("form_document_id")
+            field_values = values_for_rerender(result.declaration_definition, request.form, saved_values=result.values)
             return _render_document_fields(access.submission, view, access.credential, values=field_values, errors=result.errors), 400
         flash("Dane dokumentu zostały zapisane.", "success")
     except ValueError as exc:
@@ -1177,6 +1311,25 @@ def build_existing_declaration_result(services, submission: dict, form_config: d
     }
 
 
+def _version_gap_view(submission, submission_id):
+    marker = (((submission.get("row") or {}).get("data_json") or {}).get("_form_version_upgrade") or {})
+    pending = marker.get("missing_documents") or []
+    if not pending:
+        return []
+    definition = get_form_config(submission["form_slug"], submission_id) or {}
+    files = get_services().submission_document_service.list_documents(submission_id)
+    view = []
+    for item in pending:
+        document = get_services().document_service.get_document_by_id(definition, item.get("document_id"))
+        if not document or not document.get("enabled", True):
+            continue
+        generated = next((file for file in files if file.get("document_id") == item["document_id"]
+                          and file.get("workflow_step_at_upload") == item["step_id"]
+                          and file.get("status") == "generated"), None)
+        view.append({**item, "generated_filename": generated["filename"] if generated else ""})
+    return view
+
+
 @bp.route("/do-podpisania", methods=["GET", "POST"])
 def documents_to_sign():
     if request.method == "GET":
@@ -1194,7 +1347,11 @@ def documents_to_sign():
             errors = {}
             result = None
             status_code = 200
-            if not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
+            upgrade_state = ((submission.get("row") or {}).get("data_json") or {}).get("_form_version_upgrade") or {}
+            needs_upgrade_data = bool(upgrade_state.get("missing_fields") or upgrade_state.get("invalid_training_ids"))
+            if needs_upgrade_data:
+                pass  # Show the completion action before any document preparation.
+            elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):
                 errors["submission_id"] = "Wniosek nie został jeszcze zaakceptowany przez urzędnika."
                 status_code = 400
             else:
@@ -1213,6 +1370,8 @@ def documents_to_sign():
                 errors=errors,
                 result=result,
                 access_token=access_token,
+                submission=submission,
+                version_gap_documents=_version_gap_view(submission, submission_id),
             ), status_code
 
         return render_template(
@@ -1267,6 +1426,8 @@ def documents_to_sign():
         errors={},
         result=result,
         access_token=access_token,
+        submission=submission,
+        version_gap_documents=_version_gap_view(submission, submission_id),
     )
 
 @bp.get("/downloads/pdfs/<slug>/<path:filename>")

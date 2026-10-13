@@ -37,11 +37,20 @@ def current_workflow_step(submission, form_config: dict | None = None) -> str:
 
 def workflow_step_document_id(step: Mapping) -> str:
     """Resolve a document step's document, including legacy same-ID steps."""
-    if step.get("document_lifecycle") == "composite":
+    from services.workflow_config_service import (
+        DOCUMENTS_STAGE_TYPE,
+        workflow_stage_type,
+    )
+
+    if step.get("document_lifecycle") in {"composite", "group"}:
         return str(step.get("document_id") or "")
     if step.get("document_id"):
         return str(step["document_id"])
-    if step.get("stage_type") != "document":
+    if workflow_stage_type(step) != DOCUMENTS_STAGE_TYPE:
+        return ""
+    if (step.get("explicit_stage")
+            and str(step.get("action") or "none") == "none"
+            and step.get("document_lifecycle") in {"composite", "group"}):
         return ""
     step_id = str(step.get("id") or "")
     return step_id.removesuffix("_signature") if step_id.endswith("_signature") else step_id
@@ -49,16 +58,23 @@ def workflow_step_document_id(step: Mapping) -> str:
 
 def workflow_document_action(step: Mapping, document_id: str) -> str:
     """Return the action available for a document on this configured step."""
-    if not step or step.get("final") or step.get("document_lifecycle") == "composite":
+    if not step or step.get("final") or step.get("document_lifecycle") in {"composite", "group"}:
+        return ""
+    from services.workflow_config_service import (
+        DOCUMENTS_STAGE_TYPE,
+        workflow_stage_type,
+    )
+
+    if step.get("explicit_stage") and workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE and step.get("action", "none") == "none":
         return ""
     if workflow_step_document_id(step) != document_id:
         return ""
     action = str(step.get("action") or "none")
     if action in {"generate_document", "await_signature"}:
         return action
-    if action == "none" and step.get("stage_type") == "document" and step.get("id") == f"{document_id}_signature":
+    if action == "none" and workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE and step.get("id") == f"{document_id}_signature":
         return "await_signature"
-    if action == "none" and step.get("stage_type") == "document" and step.get("id") == document_id:
+    if action == "none" and workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE and step.get("id") == document_id:
         return "generate_document"
     return ""
 
@@ -98,9 +114,10 @@ class WorkflowService:
 
     @staticmethod
     def _is_decision_step(step: dict) -> bool:
+        from services.workflow_config_service import DOCUMENTS_STAGE_TYPE
         if step.get("stage_type") == "decision" or step.get("type") == "decision":
             return True
-        if step.get("stage_type") in {"officer_action", "automatic", "system", "user_action", "document", "final"} and step.get("explicit_stage"):
+        if step.get("stage_type") in {"officer_action", "automatic", "system", "user_action", DOCUMENTS_STAGE_TYPE, "document", "final"} and step.get("explicit_stage"):
             return False
         return bool(step.get("type") == "manual_decision" or step.get("stage_type") == "officer_action"
                     or step.get("requires_officer_action") or step.get("decisions"))
@@ -142,8 +159,8 @@ class WorkflowService:
         step = self._find_step(form_config, current) or {}
         if step.get("stage_type") == "decision" or step.get("final") or step.get("stage_type") == "final":
             return
-        from services.documents.document_workflow_service import is_document_step, document_step_state
-        if is_document_step(step):
+        from services.documents.document_workflow_service import has_document_workflow, document_step_state
+        if has_document_workflow(form_config, step):
             fresh = self.submission_repository.get_by_id(submission["submission_id"]) or {}
             if self.get_current_step(fresh, form_config) != current or not document_step_state(fresh, current).get("completed"):
                 raise WorkflowTransitionError("Dokument nie spełnia jeszcze wymaganych warunków zakończenia.")
@@ -174,7 +191,11 @@ class WorkflowService:
             while True:
                 current = self.get_current_step(submission, form_config)
                 step = self._find_step(form_config, current) or {}
-                kind = step.get("stage_type")
+                from services.workflow_config_service import (
+                    DOCUMENTS_STAGE_TYPE,
+                    workflow_stage_type,
+                )
+                kind = workflow_stage_type(step)
                 action = step.get("action") or "none"
                 from services.documents.document_workflow_service import is_document_step
                 if is_document_step(step):
@@ -188,7 +209,7 @@ class WorkflowService:
                     continue
                 if kind in {"decision", "final", "user_action", "officer_action"} or step.get("final"):
                     return
-                if kind == "document" and action != "generate_document":
+                if kind == DOCUMENTS_STAGE_TYPE and action != "generate_document":
                     return
                 if current in visited:
                     raise WorkflowTransitionError("Automatyczna pętla workflow wymaga działania użytkownika lub urzędnika.")
@@ -230,10 +251,20 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
+        if getattr(self.submission_repository, "session_factory", None):
+            from services.form_version_service import FormVersionError, FormVersionService
+            with self.submission_repository.session_factory() as db:
+                model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one()
+                if (model.data_json or {}).get("_form_version_upgrade"):
+                    try:
+                        FormVersionService().require_submission_data_complete(db, model)
+                    except FormVersionError as exc:
+                        raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)
-        from services.documents.document_workflow_service import is_document_step, document_step_state
-        old_config = self._find_step(self.definition_for(submission), old_step) or {}
-        if target_step != old_step and is_document_step(old_config) and not document_step_state(submission, old_step).get("completed"):
+        from services.documents.document_workflow_service import has_document_workflow, document_step_state
+        old_definition = self.definition_for(submission)
+        old_config = self._find_step(old_definition, old_step) or {}
+        if target_step != old_step and has_document_workflow(old_definition, old_config) and not document_step_state(submission, old_step).get("completed"):
             raise WorkflowTransitionError("Najpierw zakończ wymagane czynności dokumentu.")
         target_status = str((metadata or {}).get("target_status") or self._status_for_step(target_step))
         side_effects = self._run_side_effects(
@@ -312,12 +343,18 @@ class WorkflowService:
     ):
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
         old_status = getattr(submission, "process_status", None)
+        if db is not None and (submission.data_json or {}).get("_form_version_upgrade"):
+            from services.form_version_service import FormVersionError, FormVersionService
+            try:
+                FormVersionService().require_submission_data_complete(db, submission)
+            except FormVersionError as exc:
+                raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)
-        from services.documents.document_workflow_service import is_document_step, document_step_state
+        from services.documents.document_workflow_service import has_document_workflow, document_step_state
         version = getattr(submission, "form_version", None)
         definition = (version.definition_json if version else {}) or {}
         current_config = self._find_step(definition, old_step) or {}
-        if is_document_step(current_config) and (target_step != old_step or target_status != old_status):
+        if has_document_workflow(definition, current_config) and (target_step != old_step or target_status != old_status):
             if not document_step_state({"document_states": submission.document_states}, old_step).get("completed"):
                 raise WorkflowTransitionError("Najpierw zakończ wymagane czynności dokumentu.")
         transition_allowed = can_transition(old_status, target_status)
@@ -384,8 +421,8 @@ class WorkflowService:
         current_step = self._find_step(form_config, self.get_current_step(submission, form_config))
         if not current_step:
             return []
-        from services.documents.document_workflow_service import is_document_step
-        if is_document_step(current_step):
+        from services.documents.document_workflow_service import has_document_workflow
+        if has_document_workflow(form_config, current_step):
             return []  # Only lifecycle-specific download/upload actions can complete this stage.
         if self._is_decision_step(current_step):
             configured = [item for item in (form_config.get("workflow") or {}).get("decision_types", [])

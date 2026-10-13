@@ -56,7 +56,7 @@ def parse_docx_template(content: bytes, *, document_type: str = "agreement") -> 
         raise DocxTemplateParseError("Plik nie jest poprawnym dokumentem DOCX.") from exc
 
     document_type = str(document_type or "agreement").strip().casefold()
-    if document_type not in {"agreement", "declaration"}:
+    if document_type not in {"agreement", "declaration", "document"}:
         raise DocxTemplateParseError("Nieobsługiwany typ dokumentu DOCX.")
     variables: set[str] = set()
     warnings: list[str] = []

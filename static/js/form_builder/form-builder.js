@@ -44,6 +44,7 @@ if (builder) {
     pesel: "PESEL",
     file: "Załącz plik",
     repeatable_group: "Grupa powtarzalna",
+    static_text: "Tekst informacyjny",
   };
 
   const OPTION_FIELD_TYPES = new Set(["select", "radio", "checkbox"]);
@@ -224,7 +225,20 @@ if (builder) {
       document_usage: { declaration: false },
       options: OPTION_FIELD_TYPES.has(type) ? ["Opcja 1", "Opcja 2"] : [],
     };
+    if (type === "static_text") {
+      fieldData.label = "Treść informacyjna";
+      fieldData.required = false;
+      fieldData.placeholder = "";
+      fieldData.options = [];
+      fieldData.document_usage = { declaration: false };
 
+      fieldData.availability = config.workflowSteps.map((step, index) => ({
+        step: step.id,
+        visible: index === 0,
+        editable: false,
+        required: false,
+      }));
+    }
     if (type === "repeatable_group") {
       fieldData.fields = [];
       fieldData.min_items = 1;

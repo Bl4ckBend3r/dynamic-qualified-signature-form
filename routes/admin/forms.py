@@ -158,6 +158,7 @@ FIELD_TYPES = [
     "pesel",
     "file",
     "repeatable_group",
+    "static_text",
 ]
 FORM_EDITOR_TABS = {
     "basic",
@@ -2138,6 +2139,160 @@ def _builder_document_from_request(document_type: str = "agreement") -> dict:
     return normalize_document_builder_document(value, document_type)
 
 
+def _custom_document_entry(definition: dict, document_id: str) -> dict:
+    if document_id in {"declaration", "agreement", "training_agreement"}:
+        abort(404)
+    document = next((item for item in definition.get("documents") or []
+                     if isinstance(item, dict) and item.get("id") == document_id), None)
+    if not document:
+        abort(404)
+    return document
+
+
+@bp.get("/forms/<int:form_id>/documents/<document_id>/builder")
+@login_required
+def custom_document_builder_view(form_id: int, document_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        definition = normalize_admin_form_definition(form.definition_json or {})
+        document = _custom_document_entry(definition, document_id)
+        fields = active_fields_for_form(db, form.id)
+        submissions = current_app.extensions["services"].submission_repository.list_by_form(form.slug)
+        return render_template("admin/documents/document_builder.html", form=form,
+            document_builder_standalone=True, document_builder_type="document", document_builder_id=document_id,
+            document_builder_title=document.get("label") or "Dokument",
+            document_builder_description=document.get("description") or "Dodatkowy dokument formularza.",
+            document_builder_document=normalize_document_builder_document(
+                document.get("builder_document") or default_document_builder_document("document"), "document"),
+            document_builder_updated_at=document.get("builder_updated_at") or "",
+            document_builder_is_new=not bool(document.get("builder_updated_at")),
+            document_builder_variables=declaration_builder_variable_catalog(fields, form_definition=definition),
+            document_builder_submissions=[{"submission_id": row["submission_id"], "label": row["submission_id"], "trainings": []}
+                for row in submissions[:100] if row.get("submission_id")],
+            document_builder_can_show_html=g.admin_user.role == ROLE_SUPER_ADMIN,
+            document_docx_metadata=document.get("template_metadata") or {},
+            document_builder_docx_url=url_for("admin.custom_document_docx_upload", form_id=form_id, document_id=document_id),
+            document_builder_save_url=url_for("admin.custom_document_builder_save", form_id=form_id, document_id=document_id),
+            document_builder_preview_url=url_for("admin.custom_document_builder_preview", form_id=form_id, document_id=document_id),
+            document_builder_pdf_url=url_for("admin.custom_document_builder_pdf", form_id=form_id, document_id=document_id),
+            document_builder_import_url="")
+
+
+@bp.post("/forms/<int:form_id>/documents/<document_id>/docx")
+@login_required
+def custom_document_docx_upload(form_id: int, document_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        editable_version = _editable_form_version(db, form, materialize=True)
+        definition = deepcopy(form.definition_json or {})
+        entry = _custom_document_entry(definition, document_id)
+        uploaded = request.files.get("custom_docx_template")
+        if not uploaded or not uploaded.filename:
+            flash("Wybierz szablon DOCX.", "error")
+            return redirect(url_for("admin.custom_document_builder_view", form_id=form_id, document_id=document_id))
+        try:
+            metadata = current_app.extensions["services"].agreement_docx_template_service.upload(
+                form_slug=form.slug, filename=uploaded.filename, content=uploaded.read(),
+                fields=active_fields_for_form(db, form.id), uploaded_by_user_id=g.admin_user.id,
+                document_type="document", document_id=document_id, form_definition=definition,
+                version_key=f"{editable_version.version_major}-{editable_version.version_minor}-{editable_version.id}"
+                    if editable_version else None)
+        except (DocxTemplateParseError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.custom_document_builder_view", form_id=form_id, document_id=document_id))
+        entry["template_metadata"] = {key: value for key, value in metadata.items() if key != "builder_document"}
+        if metadata.get("builder_document"):
+            imported = normalize_document_builder_document(metadata["builder_document"], "document")
+            if not validate_document_builder_document(imported, active_fields_for_form(db, form.id),
+                    "document", form_definition=definition):
+                entry["builder_document"] = imported
+        entry["template_source"] = "docx"
+        form.definition_json = definition
+        _sync_editable_form_version(db, form)
+        db.commit()
+        flash("Szablon DOCX zapisano dla dokumentu.", "success")
+        return redirect(url_for("admin.custom_document_builder_view", form_id=form_id, document_id=document_id))
+
+
+@bp.post("/forms/<int:form_id>/documents/<document_id>/builder")
+@login_required
+def custom_document_builder_save(form_id: int, document_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        _editable_form_version(db, form)
+        definition = deepcopy(form.definition_json or {})
+        entry = _custom_document_entry(definition, document_id)
+        fields = active_fields_for_form(db, form.id)
+        try:
+            builder = _builder_document_from_request("document")
+            errors = validate_document_builder_document(builder, fields, "document", form_definition=definition)
+        except ValueError as exc:
+            return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
+        if errors:
+            return jsonify({"ok": False, "errors": [error.as_dict() for error in errors]}), 422
+        action = str(request.form.get("action") or "draft")
+        if action not in {"draft", "activate"}:
+            return jsonify({"ok": False, "error": "Nieprawidłowa czynność."}), 422
+        now = datetime.now().astimezone().isoformat()
+        entry["builder_document"] = builder
+        entry["builder_updated_at"] = now
+        entry["builder_updated_by"] = g.admin_user.id
+        entry["builder_status"] = "active" if action == "activate" else "draft"
+        if action == "activate":
+            entry["builder_active_document"] = builder
+            entry["template_source"] = "builder"
+        form.definition_json = definition
+        _sync_editable_form_version(db, form)
+        db.commit()
+        return jsonify({"ok": True, "status": entry["builder_status"], "updated_at": now})
+
+
+def _custom_document_preview_material(form, document_id, fields):
+    definition = form.definition_json or {}
+    _custom_document_entry(definition, document_id)
+    builder = _builder_document_from_request("document")
+    errors = validate_document_builder_document(builder, fields, "document", form_definition=definition)
+    if errors:
+        raise ValueError(errors[0].message)
+    submission = None
+    submission_id = str(request.form.get("submission_id") or "").strip()
+    if submission_id:
+        submission = current_app.extensions["services"].submission_repository.get_by_id(submission_id)
+        if not submission or submission.get("form_slug") != form.slug:
+            raise ValueError("Wybrane zgłoszenie nie należy do formularza.")
+    context = declaration_preview_context(fields, form_definition=definition, submission=submission)
+    context["pdf_image_url"] = current_app.extensions["services"].document_service.resolve_pdf_image_url(definition)
+    return render_document_builder_template(builder, "document"), context
+
+
+@bp.post("/forms/<int:form_id>/documents/<document_id>/preview")
+@login_required
+def custom_document_builder_preview(form_id: int, document_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        try:
+            template_html, context = _custom_document_preview_material(form, document_id, active_fields_for_form(db, form.id))
+            return jsonify({"ok": True, "html": render_document_html(current_app._get_current_object(), template_html, context)})
+        except (ValueError, UndefinedError) as exc:
+            return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
+
+
+@bp.post("/forms/<int:form_id>/documents/<document_id>/example.pdf")
+@login_required
+def custom_document_builder_pdf(form_id: int, document_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        try:
+            template_html, context = _custom_document_preview_material(form, document_id, active_fields_for_form(db, form.id))
+            pdf = current_app.extensions["services"].document_service.pdf_render_service.render_document_pdf_bytes(
+                app=current_app._get_current_object(), template_name="declaration_template.html",
+                template_html=template_html, context=context)
+        except (ValueError, UndefinedError) as exc:
+            return jsonify({"ok": False, "errors": [{"path": "blocks", "message": str(exc)}]}), 422
+        return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True,
+                         download_name=f"przykladowy_{document_id}.pdf")
+
+
 def _audit_training_catalog_actions(
     form_slug: str,
     actions: list[dict],
@@ -2354,8 +2509,11 @@ def _workflow_editor_context(
         ]
     for decision in normalized.get("decision_settings", []):
         existing_statuses.extend((decision.get("yes_status"), decision.get("no_status")))
+    from services.workflow_config_service import is_participant_stage
     return {
         "workflow_builder": normalized,
+        "participant_workflow_steps": [step for step in normalized.get("steps") or []
+            if is_participant_stage(step, normalized)],
         "workflow_documents_converted": converted,
         "workflow_converted_fields": editor_fields,
         "workflow_decision_catalog": decision_catalog,

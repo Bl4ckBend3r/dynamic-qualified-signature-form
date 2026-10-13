@@ -5,6 +5,10 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from models import Form, FormField, FormSubmission
+from models import SubmissionFile, SubmissionWorkflowEvent
+from form_loader import FIELD_STAGE_INITIAL, extract_submission_data, form_definition_for_stage
+from services.form_submission_mapper import FORM_FIELD_MAP, FORM_SUBMISSION_COLUMNS, STATUS_DEFAULTS, build_submission_from_form, validate_required_submission_fields
+from uuid import uuid4
 from services.admin_form_service import normalize_admin_form_definition
 from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
@@ -24,6 +28,132 @@ SUBMISSION_SORT_FIELDS = {
     "officer_decision",
     "workflow_stage",
 }
+
+
+def editable_submission_definition(form_config: dict) -> dict:
+    """Expose only participant answers that can be changed without altering workflow state."""
+    definition = form_definition_for_stage(form_config, FIELD_STAGE_INITIAL)
+    excluded = {"file", "attachment", "training_selection", "repeatable_group", "checkbox"}
+    technical_columns = set(STATUS_DEFAULTS) | {
+        "id", "submission_id", "form_slug", "form_name", "form_version_id",
+        "created_at", "updated_at", "access_token", "data_json", "pdf_filename",
+    }
+    definition["fields"] = [
+        field for field in definition.get("fields") or []
+        if field.get("type") == "section" or (
+            field.get("name") and field.get("type") not in excluded
+            and FORM_FIELD_MAP.get(str(field["name"]), str(field["name"])) not in technical_columns
+            and not any(field.get(key) for key in ("readonly", "hidden", "system", "technical"))
+        )
+    ]
+    definition.pop("signature", None)
+    return definition
+
+
+def submission_answer_values(submission: FormSubmission, form_config: dict) -> dict:
+    values = dict(submission.data_json or {})
+    for field in form_definition_for_stage(form_config, FIELD_STAGE_INITIAL).get("fields") or []:
+        name = str(field.get("name") or "")
+        if not name or name in values:
+            continue
+        column = FORM_FIELD_MAP.get(name, name)
+        if column in FORM_SUBMISSION_COLUMNS and hasattr(submission, column):
+            value = getattr(submission, column)
+            if value is not None:
+                values[name] = value.isoformat() if hasattr(value, "isoformat") else value
+    return values
+
+
+def submission_edit_block_reason(submission: FormSubmission, related_files) -> str:
+    downstream_filenames = (
+        "signed_pdf_filename", "declaration_filename", "declaration_signed_filename",
+        "agreement_filename", "agreement_signed_filename",
+    )
+    def file_value(item, key):
+        return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+    if any(getattr(submission, key, "") for key in downstream_filenames) or (
+        str(submission.training_agreements or "").strip() not in {"", "[]", "null"}
+    ) or bool(submission.document_states) or any(
+        file_value(item, "signed") or file_value(item, "status") == "signed"
+        or str(file_value(item, "document_type") or "").startswith("signed_")
+        or (file_value(item, "status") == "generated" and file_value(item, "document_type") != "form_pdf")
+        for item in related_files
+    ):
+        return "Edycja jest zablokowana po podpisaniu lub wygenerowaniu dalszych dokumentów."
+    return ""
+
+
+def update_submission_answers(db, submission: FormSubmission, form_config: dict, request_form, *, actor, services) -> dict:
+    """Validate and save editable answers with document regeneration and a value-free audit."""
+    definition = editable_submission_definition(form_config)
+    fields = [field for field in definition["fields"] if field.get("name")]
+    if not fields:
+        return {"ok": False, "errors": {"form": "Ten formularz nie ma pól dostępnych do edycji."}}
+    related_files = db.query(SubmissionFile).filter(SubmissionFile.submission_id == submission.id).all()
+    block_reason = submission_edit_block_reason(submission, related_files)
+    if block_reason:
+        return {"ok": False, "errors": {"form": block_reason}}
+    allowed = {str(field["name"]) for field in fields}
+    posted = {
+        name: value for name, value in extract_submission_data(definition, request_form).items()
+        if name in allowed
+    }
+    existing = submission_answer_values(submission, form_config)
+    merged = {**existing, **posted}
+    errors = services.submission_service._validate(definition, merged)
+    mapped = build_submission_from_form(posted, definition)
+    errors.update(services.submission_service._map_errors_to_form_fields(
+        validate_required_submission_fields(mapped, definition), definition,
+    ))
+    if errors:
+        return {"ok": False, "errors": errors, "values": merged}
+    changed = sorted(name for name in allowed if existing.get(name) != posted.get(name))
+    if not changed:
+        return {"ok": True, "changed": []}
+    qualification_config = form_config.get("qualification_conditions")
+    if qualification_config:
+        evaluator = services.qualification_condition_service
+        all_fields = form_config.get("fields") or []
+        before = evaluator.evaluate(qualification_config, existing, all_fields)
+        after = evaluator.evaluate(qualification_config, merged, all_fields)
+        before_passes = [(item["id"], item["passed"]) for item in before["results"]]
+        after_passes = [(item["id"], item["passed"]) for item in after["results"]]
+        if before_passes != after_passes:
+            return {"ok": False, "errors": {"form": "Zmiana wpływa na kwalifikację. Użyj istniejącego procesu korekty i decyzji."}, "values": merged}
+        if any(item.get("field_name") in changed for item in after["results"]):
+            history = list(existing.get("_qualification_history") or [])
+            history.append(after)
+            merged["_qualification"] = after
+            merged["_qualification_history"] = history
+    mapped_columns = build_submission_from_form(posted, definition)
+    new_filename = f"{services.submission_service.build_pdf_filename(submission.form_slug, submission.submission_id)[:-4]}_edit_{uuid4().hex[:12]}.pdf"
+    snapshot = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
+    services.submission_service._generate_form_pdf(
+        form_slug=submission.form_slug, form_config=form_config,
+        submission_id=submission.submission_id, submission_data=merged,
+        submission=snapshot, pdf_filename=new_filename, require_metadata=True,
+    )
+    for name in changed:
+        column = FORM_FIELD_MAP.get(name, name)
+        if column in FORM_SUBMISSION_COLUMNS and column not in {"id", "data_json"} and column in mapped_columns:
+            setattr(submission, column, mapped_columns[column])
+    submission.data_json = merged
+    submission.pdf_filename = new_filename
+    for item in related_files:
+        if item.document_type == "form_pdf" and item.status == "generated":
+            item.status = "superseded"
+    db.add(SubmissionWorkflowEvent(
+        submission_id=submission.id, public_submission_id=submission.submission_id,
+        form_slug=submission.form_slug, previous_status=submission.process_status,
+        new_status=submission.process_status, previous_step=submission.workflow_step or "",
+        new_step=submission.workflow_step or "", actor_id=actor.id,
+        actor_email=actor.email or "", actor_role=actor.role,
+        reason="Edycja danych zgłoszenia", source="admin_submission_edit",
+        side_effects={"changed_fields": changed, "pdf_regenerated": True},
+    ))
+    db.commit()
+    return {"ok": True, "changed": changed}
 
 
 def admin_status_label(status_id: str, form: Form | None = None) -> str:

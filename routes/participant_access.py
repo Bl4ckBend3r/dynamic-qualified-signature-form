@@ -6,6 +6,10 @@ from typing import Callable
 
 from flask import abort, current_app, request
 
+from models import FormSubmission
+from sqlalchemy import select
+from services.form_version_service import FormVersionError
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +53,7 @@ def resolve_participant_submission_access(
     submission: dict | None = None,
     submission_loader: Callable[[str], dict | None] | None = None,
 ) -> ParticipantSubmissionAccess | None:
+    loaded_from_service = submission is None and submission_loader is None
     if submission is None:
         if submission_loader is None:
             services = current_app.extensions["services"]
@@ -81,6 +86,31 @@ def resolve_participant_submission_access(
     ):
         _access_denied("invalid_credential")
         return None
+    services = current_app.extensions["services"]
+    session_factory = getattr(getattr(services, "submission_repository", None), "session_factory", None)
+    if current_app.config.get("DATABASE_URL") and session_factory and hasattr(services, "form_version_service"):
+        try:
+            with session_factory.begin() as db:
+                record = db.execute(select(FormSubmission).where(
+                    FormSubmission.submission_id == submission_id,
+                    FormSubmission.form_slug == actual_slug,
+                ).with_for_update()).scalar_one_or_none()
+                if record is None:
+                    _access_denied("submission_not_found")
+                    return None
+                version_service = services.form_version_service
+                if record.form_version_id and version_service.is_active_submission(record):
+                    version_service.upgrade_submission(db, record)
+                    version_service.refresh_submission_completion(db, record)
+            if loaded_from_service:
+                submission = services.submission_service.get_submission_context(
+                    submission_id,
+                    form_config_service=services.form_config_service,
+                    storage=services.storage,
+                ) or submission
+        except FormVersionError as exc:
+            logger.warning("participant_version_upgrade_conflict submission_id=%s reason=%s", submission_id, str(exc))
+            abort(409, description="Aktualizacja formularza wymaga interwencji administratora.")
     return ParticipantSubmissionAccess(submission=submission, credential=credential)
 
 
@@ -90,6 +120,7 @@ def require_participant_submission_access(
     slug: str | None = None,
     submission: dict | None = None,
     submission_loader: Callable[[str], dict | None] | None = None,
+    allow_incomplete: bool = False,
 ) -> ParticipantSubmissionAccess:
     access = resolve_participant_submission_access(
         submission_id,
@@ -99,6 +130,21 @@ def require_participant_submission_access(
     )
     if access is None:
         abort(404)
+    if request.method == "POST" and not allow_incomplete:
+        services = current_app.extensions["services"]
+        session_factory = getattr(getattr(services, "submission_repository", None), "session_factory", None)
+        if current_app.config.get("DATABASE_URL") and session_factory and hasattr(services, "form_version_service"):
+            with session_factory.begin() as db:
+                record = db.execute(select(FormSubmission).where(
+                    FormSubmission.submission_id == submission_id,
+                    FormSubmission.form_slug == str(access.submission.get("form_slug") or ""),
+                ).with_for_update()).scalar_one_or_none()
+                if record is None:
+                    abort(404)
+                try:
+                    services.form_version_service.require_submission_data_complete(db, record)
+                except FormVersionError as exc:
+                    abort(409, description=str(exc))
     return access
 
 

@@ -308,6 +308,97 @@ def build_form_definition_from_admin_form(
         if workflow_errors:
             raise ValueError(" ".join(workflow_errors))
     definition["workflow"] = workflow
+    if "documents_config_json" in form_data:
+        raw_documents = json.loads(str(form_data.get("documents_config_json") or "[]"))
+        if not isinstance(raw_documents, list) or len(raw_documents) > 100:
+            raise ValueError("Konfiguracja dokumentów musi być listą maksymalnie 100 pozycji.")
+        reserved = {"declaration", "agreement", "training_agreement"}
+        current = {item["id"]: dict(item) for item in definition.get("documents") or []
+                   if isinstance(item, dict) and item.get("id")}
+        custom = []
+        seen = set()
+        steps = {step.get("id"): step for step in workflow.get("steps") or []}
+        for item in raw_documents:
+            if not isinstance(item, dict):
+                raise ValueError("Nieprawidłowa definicja dokumentu.")
+            document_id = str(item.get("id") or "").strip()
+            if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", document_id) or document_id in reserved or document_id in seen:
+                raise ValueError(f"Nieprawidłowe lub powtórzone ID dokumentu: {document_id}.")
+            seen.add(document_id)
+            step_id = str(item.get("workflow_step") or "").strip()
+            step = steps.get(step_id)
+            from services.workflow_config_service import is_participant_stage
+            if step_id and (not step or not is_participant_stage(step, workflow)):
+                raise ValueError(f"Dokument {document_id} musi wskazywać aktywny etap uczestnika.")
+            existing = current.get(document_id, {})
+            previous_policy = dict(existing.get("lifecycle") or {})
+            generate = item.get("generate", previous_policy.get("generate", item.get("kind") == "generated_pdf")) is True
+            upload_required = item.get("upload_required", previous_policy.get("upload_required", item.get("signature_required") is True or not generate)) is True
+            participant_signature = item.get("signature_required", item.get("participant_signature", True)) is True
+            office_signature = item.get("office_signature", previous_policy.get("office_signature", False)) is True
+            if participant_signature and not upload_required or office_signature and not participant_signature:
+                raise ValueError(f"Dokument {document_id}: podpis wymaga uploadu uczestnika, a podpis urzędu wymaga podpisu uczestnika.")
+            if not generate and not upload_required:
+                raise ValueError(f"Dokument {document_id} wymaga generowania lub uploadu.")
+            kind = "generated_pdf" if generate else "uploaded_file"
+            source = str(item.get("template_source") or "builder")
+            if source not in {"builder", "html", "docx"}:
+                raise ValueError(f"Nieprawidłowe źródło szablonu dokumentu {document_id}.")
+            document = {**existing, "id": document_id, "label": str(item.get("label") or "").strip(),
+                "participant_label": str(item.get("participant_label") or "").strip(),
+                "description": str(item.get("description") or "").strip(), "kind": kind,
+                "required": item.get("required") is True, "signature_required": participant_signature,
+                "workflow_step": step_id, "enabled": item.get("enabled") is True,
+                "order": int(item.get("order") or 0), "template_source": source,
+                "template_html": str(item.get("template_html") or "").strip(),
+                "lifecycle": {**dict(existing.get("lifecycle") or {}), "generate": generate,
+                    "download": True, "upload_required": upload_required,
+                    "participant_signature": participant_signature, "signature_verification": True,
+                    "office_signature": office_signature}}
+            if not document["label"]:
+                raise ValueError(f"Dokument {document_id} wymaga nazwy.")
+            if kind == "generated_pdf" and source == "builder" and not document.get("builder_document"):
+                from services.documents.document_builder_service import default_document_builder_document
+                document["builder_document"] = default_document_builder_document("document")
+            if kind == "generated_pdf" and source == "html" and not document.get("template_html"):
+                raise ValueError(f"Dokument {document_id} wymaga szablonu HTML.")
+            if kind == "generated_pdf" and source == "docx" and not document.get("template_metadata"):
+                raise ValueError(f"Dokument {document_id} wymaga szablonu DOCX.")
+            custom.append(document)
+        definition["documents"] = [item for item in current.values() if item["id"] in reserved] + sorted(custom, key=lambda item: item["order"])
+    if "reserved_documents_json" in form_data:
+        assignments = json.loads(str(form_data.get("reserved_documents_json") or "[]"))
+        if not isinstance(assignments, list) or len(assignments) > 3:
+            raise ValueError("Nieprawidłowe przypisania dokumentów systemowych.")
+        reserved = {"declaration", "agreement", "training_agreement"}
+        by_id = {item["id"]: item for item in definition.get("documents") or []
+                 if isinstance(item, dict) and item.get("id")}
+        steps = {step.get("id"): step for step in workflow.get("steps") or []}
+        seen = set()
+        for assignment in assignments:
+            if not isinstance(assignment, dict):
+                raise ValueError("Nieprawidłowe przypisanie dokumentu systemowego.")
+            document_id = str(assignment.get("id") or "").strip()
+            if document_id not in reserved or document_id in seen or document_id not in by_id:
+                raise ValueError("Nieznany lub powtórzony dokument systemowy.")
+            seen.add(document_id)
+            step_id = str(assignment.get("workflow_step") or "").strip()
+            if step_id:
+                step = steps.get(step_id)
+                from services.workflow_config_service import DOCUMENTS_STAGE_TYPE, workflow_stage_type
+                if (
+                    not step
+                    or workflow_stage_type(step) != DOCUMENTS_STAGE_TYPE
+                    or not step.get("active", True)
+                ):
+                    raise ValueError(f"Dokument {document_id} wymaga aktywnego etapu dokumentowego.")
+            by_id[document_id]["workflow_step"] = step_id
+            if step_id:
+                by_id[document_id]["enabled"] = True
+            try:
+                by_id[document_id]["order"] = int(assignment.get("order") or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Nieprawidłowa kolejność dokumentu {document_id}.") from exc
     if "assignment_mode" in form_data:
         assignment_mode = str(form_data.get("assignment_mode") or "manual").strip()
         if assignment_mode not in {"manual", "round_robin"}:

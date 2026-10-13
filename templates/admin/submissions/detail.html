@@ -26,7 +26,12 @@
             {% if can_view_sensitive_data and (submission.imiona or submission.nazwisko) %}<strong>{{ submission.imiona or '' }} {{ submission.nazwisko or '' }}</strong>{% endif %}
             <span>{{ submission.form_name or form.name }}</span>
             {% if submission.created_at %}<span>Złożono: {{ submission.created_at|business_datetime('%d.%m.%Y, %H:%M') }}</span>{% endif %}
+            <span>Wersja formularza: {{ form_version_label }}</span>
         </div>
+        {% for event in version_upgrade_events %}
+        <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>
+        {% endfor %}
+        {% if version_upgrade_state.get('missing_fields') or version_upgrade_state.get('invalid_training_ids') %}<p class="admin-alert admin-alert-warning">Zgłoszenie wymaga uzupełnienia danych przez uczestnika.</p>{% endif %}
         <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>
         {% for section in workflow_view.sections %}{% if section.is_current %}<a href="#workflow-step-{{ loop.index }}">Przejdź do aktualnego etapu</a>{% endif %}{% endfor %}</div>
     </div>
@@ -34,6 +39,7 @@
         <button type="button" class="admin-button-secondary admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="submission-page-actions">Akcje <span aria-hidden="true">▾</span></button>
         <div id="submission-page-actions" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
             <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Lista zgłoszeń</a>
+            {% if can_edit_submission %}<a role="menuitem" href="{{ url_for('admin.submission_edit', form_id=form.id, submission_pk=submission.id) }}">Edytuj dane zgłoszenia</a>{% endif %}
             {% if can_send_email %}<a role="menuitem" href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
             {% if can_edit_workflow and rollback_options %}<button role="menuitem" type="button" data-admin-modal-target="rollback-stage-dialog">Cofnij etap</button>{% endif %}
             {% if can_return_for_correction and not workflow_view.explicit_flow and submission.process_status != 'RETURNED_FOR_CORRECTION' %}<button role="menuitem" type="button" data-admin-modal-target="return-for-correction-dialog">Wyślij do poprawy</button>{% endif %}
@@ -55,7 +61,7 @@
                 <div><h4>Dokument uczestnika</h4>
                 {% if file.filename %}<a class="admin-button-secondary" href="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id, filename=file.filename) }}">Pobierz: {{ file.label }}</a>{% else %}<p>Dokument nie jest jeszcze dostępny.</p>{% endif %}</div>
                 {% if file.can_upload %}<form class="admin-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin.office_document_step', form_id=form.id, submission_pk=submission.id, step_id=composite_document.step_id) }}" data-required-note="false">
-                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="instance" value="{{ file.instance }}">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="instance" value="{{ file.instance }}"><input type="hidden" name="document_id" value="{{ file.document_id|default(composite_document.document_id) }}">
                     <label for="office-document-{{ loop.index }}"><span>Dokument z podpisem urzędu <span class="required-marker" aria-hidden="true">*</span></span></label>
                     <input id="office-document-{{ loop.index }}" type="file" name="document_pdf" accept="application/pdf,.pdf" required aria-required="true" aria-describedby="office-document-help-{{ loop.index }}">
                     <small id="office-document-help-{{ loop.index }}">* Pole wymagane. Wybierz podpisany plik PDF.</small>

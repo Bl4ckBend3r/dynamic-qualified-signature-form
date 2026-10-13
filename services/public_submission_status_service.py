@@ -15,7 +15,11 @@ from services.process_service import (
     is_yes,
 )
 from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
-from services.workflow_config_service import DEFAULT_STEP_STATUS
+from services.workflow_config_service import (
+    DEFAULT_STEP_STATUS,
+    DOCUMENTS_STAGE_TYPE,
+    workflow_stage_type,
+)
 from services.workflow_service import workflow_document_action, workflow_step_document_id
 
 
@@ -112,7 +116,13 @@ def build_public_submission_status(
         document.get("id") == "declaration" and document.get("enabled", True)
         for document in documents if isinstance(document, Mapping)
     )
-    if explicit_flow and workflow_document_action(configured_step, "declaration") and declaration_enabled:
+    from services.documents.document_workflow_service import (
+        document_step_state, group_document_policy, step_documents, uses_document_group,
+    )
+    active_documents = {item["id"]: item for item in step_documents(form_config or {}, configured_step)} if explicit_flow else {}
+    if "declaration" in active_documents:
+        declaration_required = True
+    elif explicit_flow and workflow_document_action(configured_step, "declaration") and declaration_enabled:
         declaration_required = True
     agreement_required = is_agreement_required(row)
     explicit_status = str(row.get("process_status") or "").strip()
@@ -208,17 +218,39 @@ def build_public_submission_status(
 
     can_generate_agreement = bool(state.can_generate_agreement and accepted and not rejected and not correction and not blocked)
     if explicit_flow:
-        document_id = workflow_step_document_id(configured_step)
-        action = workflow_document_action(configured_step, document_id)
-        active_action = configured_step.get("stage_type") in {"document", "user_action", "system"} and not configured_step.get("final")
-        declaration_stage = active_action and document_id == "declaration"
-        agreement_stage = active_action and document_id in {"agreement", "training_agreement"}
-        can_fill_declaration = bool(declaration_stage and declaration_enabled and action == "generate_document")
-        can_download_declaration = bool(declaration_stage and row.get("declaration_filename"))
-        can_upload_signed_declaration = bool(declaration_stage and action == "await_signature" and can_download_declaration and not is_declaration_signature_valid(row))
-        can_generate_agreement = bool(agreement_stage and action == "generate_document")
-        can_download_agreement = bool(agreement_stage and (row.get("agreement_filename") or row.get("training_agreements")))
-        can_upload_signed_agreement = bool(agreement_stage and action == "await_signature" and can_download_agreement and not agreement_completed)
+        if active_documents and uses_document_group(form_config or {}, configured_step):
+            items = (document_step_state(row, str(configured_step.get("id") or "")).get("documents") or {})
+            declaration_item = items.get("declaration") or {}
+            declaration_document = active_documents.get("declaration")
+            can_fill_declaration = bool(declaration_document and not declaration_item.get("data_confirmed") and
+                                        not declaration_item.get("completed"))
+            can_download_declaration = bool(declaration_item.get("generated_filename") or
+                                            declaration_item.get("uploaded_filename"))
+            can_upload_signed_declaration = bool(declaration_document and
+                group_document_policy(configured_step, declaration_document)["upload_required"] and
+                can_download_declaration and not declaration_item.get("completed"))
+            agreement_document = active_documents.get("agreement") or active_documents.get("training_agreement")
+            agreement_item = items.get(agreement_document["id"]) or {} if agreement_document else {}
+            agreement_policy = group_document_policy(configured_step, agreement_document) if agreement_document else {}
+            can_generate_agreement = bool(agreement_document and agreement_policy["generate"] and
+                                          not agreement_item.get("generated_filename") and not agreement_item.get("completed"))
+            can_download_agreement = bool(agreement_item.get("generated_filename") or agreement_item.get("uploaded_filename"))
+            can_upload_signed_agreement = bool(agreement_document and agreement_policy["upload_required"] and
+                                               can_download_agreement and not agreement_item.get("completed"))
+        else:
+            document_id = workflow_step_document_id(configured_step)
+            action = workflow_document_action(configured_step, document_id)
+            active_action = workflow_stage_type(configured_step) in {
+                DOCUMENTS_STAGE_TYPE, "user_action", "system"
+            } and not configured_step.get("final")
+            declaration_stage = active_action and document_id == "declaration"
+            agreement_stage = active_action and document_id in {"agreement", "training_agreement"}
+            can_fill_declaration = bool(declaration_stage and declaration_enabled and action == "generate_document")
+            can_download_declaration = bool(declaration_stage and row.get("declaration_filename"))
+            can_upload_signed_declaration = bool(declaration_stage and action == "await_signature" and can_download_declaration and not is_declaration_signature_valid(row))
+            can_generate_agreement = bool(agreement_stage and action == "generate_document")
+            can_download_agreement = bool(agreement_stage and (row.get("agreement_filename") or row.get("training_agreements")))
+            can_upload_signed_agreement = bool(agreement_stage and action == "await_signature" and can_download_agreement and not agreement_completed)
         application_status = headline
         description = str(configured_step.get("description") or "")
         next_action = str(configured_step.get("next_action") or ("Oczekuj na rozpatrzenie decyzji." if configured_step.get("stage_type") == "decision" else ""))
@@ -230,8 +262,9 @@ def build_public_submission_status(
         document_status = document_step_status(row, configured_step)
         headline, description, variant = document_status["title"], document_status["message"], document_status["variant"]
         next_action = ""
-        can_fill_declaration = can_generate_agreement = can_download_declaration = can_download_agreement = False
-        can_upload_signed_declaration = can_upload_signed_agreement = False
+        if not uses_document_group(form_config or {}, configured_step):
+            can_fill_declaration = can_generate_agreement = can_download_declaration = can_download_agreement = False
+            can_upload_signed_declaration = can_upload_signed_agreement = False
         blocked = False
         blocking_reason = ""
     from services.instruction_html_service import sanitize_workflow_instruction_html

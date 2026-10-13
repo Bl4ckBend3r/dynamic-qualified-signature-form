@@ -12,6 +12,7 @@ const TYPE_LABELS = {
   pesel: "PESEL",
   file: "Plik",
   repeatable_group: "Grupa powtarzalna",
+  static_text: "Tekst informacyjny",
 };
 const WIDTH_LABELS = {
   quarter: "25%",
@@ -35,6 +36,19 @@ export function initializePropertiesPanel(panel, config, callbacks) {
   const widthHolder = panel.querySelector("[data-width-options]");
   const availabilityHolder = panel.querySelector("[data-availability-settings]");
   const declarationUsage = panel.querySelector('[data-document-usage="declaration"]');
+  const staticTextSetting = panel.querySelector("[data-static-text-setting]");
+  const staticTextContent = panel.querySelector("[data-static-text-content]");
+  const labelSetting = panel.querySelector("[data-label-setting]");
+  const nameSetting = panel.querySelector("[data-name-setting]");
+  const typeSetting = panel.querySelector("[data-type-setting]");
+  const widthSetting = panel.querySelector("[data-width-setting]");
+  const documentsSetting = panel.querySelector("[data-documents-setting]");
+
+  staticTextContent.addEventListener("input", () => {
+    callbacks.update({
+      label: staticTextContent.value,
+    });
+  });
   Object.keys(config.widths).forEach((width) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -88,11 +102,21 @@ export function initializePropertiesPanel(panel, config, callbacks) {
       required: false,
     };
     entry[permission] = checked;
-    if (!entry.visible) {
+
+    if (field.type === "static_text") {
       entry.editable = false;
       entry.required = false;
+    } else {
+      if (!entry.visible) {
+        entry.editable = false;
+        entry.required = false;
+      }
+
+      if (!entry.editable) {
+        entry.required = false;
+      }
     }
-    if (!entry.editable) entry.required = false;
+
     current.set(stepId, entry);
     callbacks.update({
       availability: config.workflowSteps.map((step) =>
@@ -119,12 +143,30 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     empty.hidden = Boolean(field);
     content.hidden = !field;
     if (!field) return;
+    const isStaticText = field.type === "static_text";
+
+    labelSetting.hidden = isStaticText;
+    staticTextSetting.hidden = !isStaticText;
+    nameSetting.hidden = isStaticText;
+    typeSetting.hidden = isStaticText;
+    widthSetting.hidden = isStaticText;
+    documentsSetting.hidden = isStaticText;
+
+    panel.querySelector("[data-name-help]").hidden =
+      isStaticText || !field.id;
+
+    if (isStaticText) {
+      staticTextContent.value = field.label || "";
+    }
     availabilityHolder.replaceChildren();
-    const permissions = [
-      ["visible", "Widoczne"],
-      ["editable", "Edytowalne"],
-      ["required", "Wymagane"],
-    ];
+    const permissions =
+      field.type === "static_text"
+        ? [["visible", "Widoczne"]]
+        : [
+            ["visible", "Widoczne"],
+            ["editable", "Edytowalne"],
+            ["required", "Wymagane"],
+          ];
     config.workflowSteps.forEach((step) => {
       const entry = (field.availability || []).find(
         (candidate) => candidate.step === step.id,

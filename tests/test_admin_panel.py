@@ -793,6 +793,192 @@ def test_super_admin_assigns_submission_and_route_writes_audit(admin_app, admin_
         assert history.reason == "Podział pracy"
 
 
+def test_admin_submission_edit_validates_scopes_and_audits_fields(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={
+        "title": "Edycja zgłoszenia",
+        "fields": [
+            {"type": "text", "name": "imie", "label": "Imię", "required": True},
+            {"type": "email", "name": "email", "label": "E-mail", "required": True},
+        ],
+    })
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="admin-edit-1", form_slug="sample_form", imiona="Jan",
+            email="jan@example.test", data_json={"email": "jan@example.test", "_system": "keep"},
+            pdf_filename="original.pdf",
+        )
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug="sample_form", filename="original.pdf", storage_path="original.pdf",
+            document_type="form_pdf", signed=False, status="generated",
+        ))
+        db.commit()
+        submission_pk = submission.id
+    generated = []
+    original_generate_pdf = admin_app.extensions["services"].submission_service._generate_form_pdf
+    def capture_generated_pdf(**kwargs):
+        generated.append(kwargs["pdf_filename"])
+        return original_generate_pdf(**kwargs)
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
+        capture_generated_pdf,
+    )
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
+    page = admin_client.get(url)
+    assert page.status_code == 200
+    assert 'value="Jan"' in page.get_data(as_text=True)
+    assert admin_client.post(url, data={"imie": "Anna", "email": "anna@example.test"}).status_code == 400
+    invalid = admin_client.post(url, data={
+        "csrf_token": admin_csrf(admin_client), "imie": "Anna", "email": "wrong",
+    })
+    assert invalid.status_code == 400
+    assert not generated
+    response = admin_client.post(url, data={
+        "csrf_token": admin_csrf(admin_client), "imie": "Anna", "email": "anna@example.test",
+        "process_status": "OFFICER_REJECTED", "_system": "overwrite",
+    })
+    assert response.status_code == 302
+    assert len(generated) == 1
+    with factory() as db:
+        updated = db.get(FormSubmission, submission_pk)
+        event = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.source == "admin_submission_edit")).scalar_one()
+        assert updated.imiona == "Anna"
+        assert updated.email == "anna@example.test"
+        assert updated.data_json["_system"] == "keep"
+        assert updated.process_status != "OFFICER_REJECTED"
+        assert updated.pdf_filename == generated[0]
+        assert db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission_pk, SubmissionFile.filename == generated[0])).scalar_one()
+        assert db.execute(select(SubmissionFile.status).where(SubmissionFile.submission_id == submission_pk, SubmissionFile.filename == "original.pdf")).scalar_one() == "superseded"
+        assert event.side_effects["changed_fields"] == ["email", "imie"]
+        assert "Anna" not in str(event.side_effects)
+
+
+def test_admin_submission_edit_blocks_signed_documents(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={"title": "Edycja", "fields": [
+        {"type": "text", "name": "imie", "label": "Imię", "required": True},
+    ]})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(submission_id="admin-edit-signed", form_slug="sample_form", imiona="Jan", data_json={"imie": "Jan"})
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug="sample_form", filename="signed.pdf", storage_path="signed.pdf",
+            document_type="signed_form_pdf", signed=True, status="signed",
+        ))
+        db.commit()
+        submission_pk = submission.id
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
+        lambda **_kwargs: pytest.fail("Signed document must not be regenerated"),
+    )
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert detail.status_code == 200
+    assert "Edytuj dane zgłoszenia" not in detail.get_data(as_text=True)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
+        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna"},
+    )
+    assert response.status_code == 400
+    with factory() as db:
+        assert db.get(FormSubmission, submission_pk).imiona == "Jan"
+
+
+def test_admin_submission_edit_requires_scoped_edit_and_sensitive_permissions(admin_app, admin_client):
+    user_id = create_user(admin_app, email="scoped-editor@example.com", role="form_manager")
+    first_form = create_form(admin_app, slug="editable", definition_json={"title": "Editable", "fields": [
+        {"type": "text", "name": "imie", "label": "Imię", "required": True},
+    ]})
+    second_form = create_form(admin_app, slug="other", definition_json={"title": "Other", "fields": [
+        {"type": "text", "name": "imie", "label": "Imię", "required": True},
+    ]})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        first = FormSubmission(submission_id="scoped-first", form_slug="editable", imiona="Jan", data_json={"imie": "Jan"})
+        second = FormSubmission(submission_id="scoped-second", form_slug="other", imiona="Ewa", data_json={"imie": "Ewa"})
+        db.add_all([first, second])
+        db.commit()
+        first_pk, second_pk = first.id, second.id
+    grant_rbac(admin_app, user_id, ["can_view_submissions", "can_edit_form"], form_id=first_form)
+    login(admin_client, email="scoped-editor@example.com")
+    first_url = f"/admin/forms/{first_form}/submissions/{first_pk}/edit"
+    second_url = f"/admin/forms/{second_form}/submissions/{second_pk}/edit"
+    assert admin_client.get(first_url).status_code == 403
+    grant_rbac(admin_app, user_id, ["can_view_sensitive_data"], form_id=first_form)
+    assert admin_client.get(first_url).status_code == 200
+    assert admin_client.get(second_url).status_code == 403
+
+
+def test_admin_submission_edit_blocks_change_that_reverses_qualification(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={
+        "title": "Qualification",
+        "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "qualification_conditions": {"enabled": True, "conditions": [{
+            "id": "name_condition", "field_name": "imie", "operator": "equals",
+            "expected_value": "Jan", "failure_action": "auto_reject", "is_active": True,
+        }]},
+    })
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(submission_id="qualification-edit", form_slug="sample_form", imiona="Jan", data_json={"imie": "Jan"})
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
+        lambda **_kwargs: pytest.fail("Qualification-changing edit must not generate a PDF"),
+    )
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
+        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna"},
+    )
+    assert response.status_code == 400
+    with factory() as db:
+        assert db.get(FormSubmission, submission_pk).imiona == "Jan"
+
+
+def test_admin_submission_edit_keeps_data_if_pdf_metadata_fails(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={"title": "Edycja", "fields": [
+        {"type": "text", "name": "imie", "label": "Imię", "required": True},
+    ]})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="admin-edit-metadata", form_slug="sample_form", imiona="Jan",
+            data_json={"imie": "Jan"}, pdf_filename="original.pdf",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_document_service,
+        "record_generated_document", lambda **_kwargs: False,
+    )
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
+        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna"},
+    )
+    assert response.status_code == 503
+    assert 'value="Anna"' in response.get_data(as_text=True)
+    with factory() as db:
+        stored = db.get(FormSubmission, submission_pk)
+        assert stored.imiona == "Jan"
+        assert stored.pdf_filename == "original.pdf"
+        assert db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.source == "admin_submission_edit")).scalars().all() == []
+
+
 def test_form_manager_without_assignment_permission_gets_403(admin_app, admin_client):
     manager_id = create_user(admin_app, email="manager@example.com", role="form_manager")
     assignee_id = create_user(admin_app, email="officer2@example.com", role="form_manager")
@@ -4722,11 +4908,8 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
     declaration_response = admin_client.get(
         "/declaration/training_form/training-declaration-1?token=training-secret"
     )
-    declaration_html = declaration_response.get_data(as_text=True)
-
-    assert declaration_response.status_code == 200
-    assert "Excel zaawansowany" not in declaration_html
-    assert "Kadry i płace" not in declaration_html
+    assert declaration_response.status_code == 302
+    assert "/do-podpisania" in declaration_response.headers["Location"]
 
     training_response = admin_client.get(
         "/submissions/training-declaration-1/trainings?token=training-secret"
@@ -4754,7 +4937,7 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
     assert ">10</dd>" in training_html
     assert ">5</dd>" in training_html
     assert "Zostało niewiele miejsc." in training_html
-    assert "Tego komentarza nie pokazuj." not in declaration_html
+    assert "Tego komentarza nie pokazuj." not in training_html
     assert "01.09.2026, 09:00–12:00" in training_html
     assert "Zielona Góra" in training_html
 

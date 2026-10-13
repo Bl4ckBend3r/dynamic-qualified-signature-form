@@ -3,11 +3,17 @@ from __future__ import annotations
 import logging
 import hmac
 import secrets
+import hashlib
+import json
+from contextlib import nullcontext
+from threading import Lock
+from uuid import uuid4
 from pathlib import Path
 
 from flask import Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template, request, send_file, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from database import create_session_factory
 from form_loader import FIELD_STAGE_INITIAL, form_definition_for_stage, normalize_form_definition, values_for_rerender
@@ -27,6 +33,8 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("public_forms", __name__)
 PUBLIC_CSRF_SESSION_KEY = "public_form_csrf_token"
 FORM_VERSION_TOKEN_SALT = "public-form-version"
+FORM_REVIEW_TOKEN_SALT = "public-form-review"
+_CSV_CONFIRM_LOCK = Lock()
 
 
 @bp.get("/sprawdz-status")
@@ -104,6 +112,98 @@ def _version_id_from_token(slug: str, token: str) -> int | None:
         return int(payload.get("version_id"))
     except (TypeError, ValueError):
         return None
+
+
+def _review_fingerprint(values: dict, attachments: list) -> str:
+    payload = {
+        "values": values,
+        "attachments": sorted(
+            (item.field_key, item.original_filename, item.checksum_sha256)
+            for item in attachments
+        ),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def _review_token(slug: str, version_id: int | None, validation: dict) -> str:
+    return URLSafeTimedSerializer(current_app.secret_key, salt=FORM_REVIEW_TOKEN_SALT).dumps({
+        "slug": slug,
+        "version_id": version_id,
+        "submission_id": str(uuid4()),
+        "fingerprint": _review_fingerprint(validation["values"], validation["attachments"]),
+    })
+
+
+def _verified_review_token(slug: str, version_id: int | None, validation: dict, token: str) -> dict | None:
+    try:
+        payload = URLSafeTimedSerializer(current_app.secret_key, salt=FORM_REVIEW_TOKEN_SALT).loads(
+            token, max_age=int(current_app.config.get("FORM_REVIEW_TOKEN_MAX_AGE", 900)),
+        )
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("slug") != slug or payload.get("version_id") != version_id:
+        return None
+    if not payload.get("submission_id") or not hmac.compare_digest(
+        str(payload.get("fingerprint") or ""), _review_fingerprint(validation["values"], validation["attachments"]),
+    ):
+        return None
+    return payload
+
+
+def _review_summary(form_config: dict, values: dict, attachments: list) -> list[dict]:
+    filenames = {}
+    for item in attachments:
+        filenames.setdefault(item.field_key, []).append(item.original_filename)
+    summary = []
+    for field in form_config.get("fields") or []:
+        name = str(field.get("name") or "")
+        if not name or field.get("type") in {"section", "static_text"}:
+            continue
+        value = filenames.get(name) if field.get("type") in {"file", "attachment"} else values.get(name)
+        if value in (None, "", [], False):
+            continue
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        summary.append({"label": str(field.get("label") or name), "value": str(value)})
+    return summary
+
+
+def _rewind_uploaded_files() -> None:
+    for _name, upload in request.files.items(multi=True):
+        upload.stream.seek(0)
+
+
+def _review_json_requested() -> bool:
+    return "application/json" in str(request.headers.get("Accept") or "")
+
+
+def _review_result_response(result: dict):
+    if _review_json_requested():
+        response = jsonify({
+            "ok": True,
+            "result_url": url_for(
+                "documents.show_result", slug=result["form_slug"],
+                submission_id=result["submission_id"], token=result.get("access_token") or "",
+            ),
+        })
+    else:
+        response = make_response(render_template("result.html", result=result))
+    response.headers["Cache-Control"] = "no-store, private"
+    return response
+
+
+def _already_confirmed_response(slug: str, existing: dict):
+    if not _review_json_requested():
+        abort(409, description="To zgłoszenie zostało już wysłane.")
+    response = jsonify({
+        "ok": True,
+        "result_url": url_for(
+            "documents.show_result", slug=slug,
+            submission_id=existing["submission_id"], token=existing.get("access_token") or "",
+        ),
+    })
+    response.headers["Cache-Control"] = "no-store, private"
+    return response
 
 
 @bp.get("/")
@@ -304,6 +404,14 @@ def submit_form_draft(slug: str, token: str):
     csrf_valid, _csrf_missing = _valid_public_csrf(request_data)
     if not csrf_valid:
         abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
+    review_token = str(request_data.get("review_token") or "")
+    if review_token:
+        validation = get_services().submission_service.validate_form(form_config, request_data)
+        if not validation["errors"] and not _verified_review_token(slug, draft.form_version_id, validation, review_token):
+            if _review_json_requested():
+                return jsonify({"ok": False, "error": "Dane zmieniły się od podglądu albo podgląd wygasł. Sprawdź dane ponownie."}), 409
+            abort(409, description="Dane zmieniły się od podglądu albo podgląd wygasł. Sprawdź dane ponownie.")
+        _rewind_uploaded_files()
     session_factory = db_session_factory()
     with session_factory() as db:
         claimed = get_services().form_draft_service.claim_for_submit(db, draft_id=draft.id, raw_token=token)
@@ -324,6 +432,8 @@ def submit_form_draft(slug: str, token: str):
         if not result["ok"]:
             with session_factory() as db:
                 get_services().form_draft_service.release_submit_claim(db, draft.id)
+            if _review_json_requested():
+                return jsonify({"ok": False, "errors": result["errors"], "error": "Popraw wskazane pola."}), 400
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=form_config,
                 errors=result["errors"], values=values_for_rerender(
@@ -339,7 +449,7 @@ def submit_form_draft(slug: str, token: str):
             get_services().form_draft_service.complete(
                 db, draft_id=draft.id, submission_internal_id=submission_internal_id
             )
-        return render_template("result.html", result=result["result"])
+        return _review_result_response(result["result"])
     except Exception:
         with session_factory() as db:
             get_services().form_draft_service.release_submit_claim(db, draft.id)
@@ -403,6 +513,111 @@ def _definition_for_draft(db, form: Form, draft: FormDraft) -> dict:
     ).scalars().all()
     return form_to_definition(form, fields)
 
+
+
+def _review_response(slug: str, form_config: dict, *, version_id: int | None):
+    if not _valid_public_csrf(request.form)[0]:
+        return jsonify({"ok": False, "error": "Sesja formularza wygasła. Odśwież stronę."}), 400
+    validation = get_services().submission_service.validate_form(form_config, request.form)
+    if validation["errors"]:
+        return jsonify({"ok": False, "errors": validation["errors"], "error": "Popraw wskazane pola."}), 400
+    response = jsonify({
+        "ok": True,
+        "summary": _review_summary(form_config, validation["values"], validation["attachments"]),
+        "review_token": _review_token(slug, version_id, validation),
+    })
+    response.headers["Cache-Control"] = "no-store, private"
+    return response
+
+
+@bp.post("/form/<slug>/review")
+def review_submission(slug: str):
+    services = get_services()
+    if current_app.config.get("DATABASE_URL"):
+        _meta, config, version = get_public_db_form_versioned(
+            slug, version_token=str(request.form.get("form_version_token") or ""),
+            require_version_token=True, access_token=str(request.args.get("access") or "").strip(),
+        )
+        if not config or not version:
+            abort(409, description="Wersja formularza wygasła. Otwórz formularz ponownie.")
+    else:
+        config = services.form_config_service.get_form_config(services.storage, slug)
+        version = None
+        if not config:
+            abort(404)
+    return _review_response(slug, form_definition_for_stage(config, FIELD_STAGE_INITIAL), version_id=version.id if version else None)
+
+
+@bp.post("/form/<slug>/draft/<token>/review")
+def review_form_draft(slug: str, token: str):
+    resolved = _resolve_form_draft(slug, token)
+    if not resolved:
+        abort(404)
+    _meta, config, draft = resolved
+    return _review_response(slug, config, version_id=draft.form_version_id)
+
+
+@bp.post("/submit/<slug>/confirm")
+def confirm_submission(slug: str):
+    services = get_services()
+    share_access_token = str(request.args.get("access") or "").strip()
+    version_token = str(request.form.get("form_version_token") or "")
+    if current_app.config.get("DATABASE_URL"):
+        meta, config, version = get_public_db_form_versioned(
+            slug, version_token=version_token, require_version_token=True,
+            access_token=share_access_token,
+        )
+        if not meta or not config or not version:
+            abort(409, description="Wersja formularza wygasła. Otwórz formularz ponownie.")
+    else:
+        meta = services.form_config_service.get_form_meta(services.storage, slug)
+        config = services.form_config_service.get_form_config(services.storage, slug)
+        version = None
+        if not meta or not config:
+            abort(404)
+    if not _valid_public_csrf(request.form)[0]:
+        if _review_json_requested():
+            return jsonify({"ok": False, "error": "Sesja formularza wygasła. Odśwież stronę."}), 400
+        abort(400, description="Sesja formularza wygasła. Odśwież stronę.")
+    initial_config = form_definition_for_stage(config, FIELD_STAGE_INITIAL)
+    validation = services.submission_service.validate_form(initial_config, request.form)
+    review = _verified_review_token(slug, version.id if version else None, validation, str(request.form.get("review_token") or ""))
+    if not review and not validation["errors"]:
+        if _review_json_requested():
+            return jsonify({"ok": False, "error": "Dane zmieniły się od podglądu albo podgląd wygasł. Sprawdź dane ponownie."}), 409
+        abort(409, description="Dane zmieniły się od podglądu albo podgląd wygasł. Sprawdź dane ponownie.")
+    if validation["errors"]:
+        if _review_json_requested():
+            return jsonify({"ok": False, "errors": validation["errors"], "error": "Popraw wskazane pola."}), 400
+        return render_template(
+            "form_page.html", slug=slug, form_meta=meta, form_definition=initial_config,
+            errors=validation["errors"], values=values_for_rerender(initial_config, request.form, validated_values=validation["values"]),
+            form_version_id=version.id if version else None, form_version_token=version_token,
+            form_action=url_for("public_forms.submit", slug=slug, **({"access": share_access_token} if share_access_token else {})),
+            share_access_token=share_access_token,
+            form_error="Sprawdź pola oznaczone poniżej i popraw wskazane błędy.",
+        ), 400
+    with (nullcontext() if current_app.config.get("DATABASE_URL") else _CSV_CONFIRM_LOCK):
+        existing = services.submission_repository.get_by_id(review["submission_id"])
+        if existing:
+            return _already_confirmed_response(slug, existing)
+        _rewind_uploaded_files()
+        try:
+            result = services.submission_service.submit_form(
+                slug, initial_config, request.form,
+                form_version_id=version.id if version else None,
+                submission_id=review["submission_id"],
+            )
+        except IntegrityError:
+            existing = services.submission_repository.get_by_id(review["submission_id"])
+            if existing:
+                return _already_confirmed_response(slug, existing)
+            raise
+    if not result["ok"]:
+        if _review_json_requested():
+            return jsonify({"ok": False, "errors": result["errors"], "error": "Dane wymagają ponownego sprawdzenia."}), 400
+        abort(409, description="Dane wymagają ponownego sprawdzenia.")
+    return _review_result_response(result["result"])
 
 
 @bp.post("/submit/<slug>")
@@ -552,6 +767,7 @@ def correct_submission(slug: str, submission_id: str):
         access = require_participant_submission_access(
             submission_id,
             slug=slug,
+            allow_incomplete=True,
             submission={
                 "submission_id": submission.submission_id,
                 "form_slug": submission.form_slug,
@@ -629,6 +845,104 @@ def correct_submission(slug: str, submission_id: str):
             access_token=token,
         ), 400
     return render_template("result.html", result=result["result"])
+
+
+@bp.route("/form/<slug>/update/<submission_id>", methods=["GET", "POST"])
+def complete_version_upgrade(slug: str, submission_id: str):
+    """Collect only due fields after an active submission moves to a new version."""
+    session_factory = db_session_factory()
+    if not session_factory:
+        abort(404)
+    services = get_services()
+    access = require_participant_submission_access(
+        submission_id, slug=slug, allow_incomplete=True,
+    )
+    token = access.credential
+    with session_factory() as db:
+        form = db.execute(select(Form).where(Form.slug == slug, Form.is_active.is_(True))).scalar_one_or_none()
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == submission_id,
+            FormSubmission.form_slug == slug,
+        ).with_for_update()).scalar_one_or_none()
+        if not form or not submission or not services.form_version_service.is_active_submission(submission):
+            abort(404)
+        version = services.form_version_service.resolve_for_submission(db, submission)
+        if version is None:
+            abort(409, description="Brak opublikowanej wersji zgłoszenia.")
+        definition = version.definition_json or {}
+        form_meta, _ = version_to_public_form(db, form, version)
+        service = services.form_version_service
+        edit_definition = service.completion_form_definition(submission, definition)
+        saved_values = service.submission_values(submission, edit_definition)
+        action = url_for("public_forms.complete_version_upgrade", slug=slug, submission_id=submission_id, token=token)
+        message = "Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane."
+        if request.method == "GET":
+            state = service.refresh_submission_completion(db, submission)
+            db.commit()
+            if state["complete"]:
+                return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
+            return render_template(
+                "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
+                errors=state["errors"], values=saved_values, form_action=action,
+                correction_mode=True, correction_message=message, access_token=token,
+                version_upgrade_mode=True, invalid_training_ids=state["invalid_training_ids"],
+                training_correction_url=url_for("documents.training_selection", submission_id=submission_id, token=token),
+            )
+
+        csrf_valid, _ = _valid_public_csrf(request.form)
+        if not csrf_valid:
+            abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
+        from form_loader import extract_submission_data
+        from services.form_submission_mapper import FORM_FIELD_MAP, FORM_SUBMISSION_COLUMNS, convert_value_for_column
+        from models import SubmissionWorkflowEvent
+
+        submitted = extract_submission_data(edit_definition, request.form)
+        values = {**saved_values, **submitted}
+        attachments, attachment_errors = services.submission_attachment_service.validate_uploads(
+            edit_definition, values, request.files, submission_id=submission_id,
+        )
+        pending_files = {item.field_key for item in attachments}
+        errors = service.submission_data_errors(
+            submission, definition, db=db, values=values, pending_files=pending_files,
+        )
+        errors.update(attachment_errors)
+        if errors:
+            return render_template(
+                "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
+                errors=errors, values=values, form_action=action, correction_mode=True,
+                correction_message=message, access_token=token, version_upgrade_mode=True,
+            ), 400
+
+        if attachments:
+            # The attachment service owns its DB transaction. Release this row lock
+            # before it opens another session (SQLite otherwise deadlocks here).
+            db.commit()
+            services.submission_attachment_service.persist(
+                form_slug=slug, submission_id=submission_id, attachments=attachments,
+                workflow_step=submission.workflow_step, source="participant",
+            )
+            db.refresh(submission)
+        data = dict(submission.data_json or {})
+        data.update(submitted)
+        submission.data_json = data
+        field_types = {field.get("name"): field.get("type") for field in edit_definition["fields"]}
+        for name, value in submitted.items():
+            column = FORM_FIELD_MAP.get(name, name)
+            if column in FORM_SUBMISSION_COLUMNS and column not in {"id", "data_json"} and hasattr(submission, column):
+                setattr(submission, column, convert_value_for_column(column, value, field_type=field_types.get(name)))
+        state = service.refresh_submission_completion(db, submission)
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=slug, previous_status=submission.process_status,
+            new_status=submission.process_status, previous_step=submission.workflow_step,
+            new_step=submission.workflow_step, actor_role="participant",
+            source="form_version_data_completed", reason="Uzupełniono dane po aktualizacji formularza.",
+            side_effects={"field_names": sorted(submitted), "remaining_fields": sorted(state["errors"])},
+        ))
+        db.commit()
+        if not state["complete"]:
+            return redirect(action)
+        return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
 
 
 @bp.get("/kontakt")

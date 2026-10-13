@@ -57,7 +57,24 @@ STATE_CODES = {
 
 
 def is_document_step(step):
-    return step.get("stage_type", step.get("type")) == "document" and step.get("document_lifecycle") == "composite"
+    """Return whether ``step`` uses the document-group runtime.
+
+    A historical action node may still have ``type=document``.  Its explicit
+    generate/await action must remain in the legacy action runtime.
+    """
+    from services.workflow_config_service import (
+        DOCUMENTS_STAGE_TYPE,
+        workflow_stage_type,
+    )
+
+    if workflow_stage_type(step) != DOCUMENTS_STAGE_TYPE:
+        return False
+    if str(step.get("action") or "none") != "none":
+        return False
+    if step.get("document_lifecycle") in {"composite", "group"}:
+        return True
+    raw_stage_type = str(step.get("stage_type") or "").strip()
+    return raw_stage_type == DOCUMENTS_STAGE_TYPE and not step.get("explicit_stage")
 
 
 def document_policy(step, document):
@@ -70,8 +87,81 @@ def document_policy(step, document):
         "participant_signature": participant,
         "office_signature": policy.get("office_signature", False),
         "signature_verification": policy.get("signature_verification", True),
-        "upload_required": policy.get("upload_required", participant),
+        "upload_required": policy.get("upload_required", participant or document.get("kind") != "generated_pdf"),
     }
+
+
+def step_documents(definition, step):
+    """Return all active documents assigned to this workflow step."""
+    from services.form_config_service import FormConfigService
+    from services.workflow_config_service import is_participant_stage
+
+    step_id = str(step.get("id") or "").strip()
+    if not step_id or not is_participant_stage(
+        step,
+        definition.get("workflow") or {},
+    ):
+        return []
+
+    documents = FormConfigService().normalize_documents_config(definition)
+
+    assigned = [
+        document
+        for document in documents
+        if document.get("enabled", True)
+        and str(document.get("workflow_step") or "").strip() == step_id
+    ]
+
+    # Legacy FormVersion: jeden dokument wskazany bezpośrednio przez step.
+    legacy_document_id = str(step.get("document_id") or "").strip()
+    if legacy_document_id and not any(
+        str(document.get("id") or "") == legacy_document_id
+        for document in assigned
+    ):
+        legacy = next((
+            document for document in documents
+            if document.get("enabled", True)
+            and str(document.get("id") or "") == legacy_document_id
+            and not str(document.get("workflow_step") or "").strip()
+        ), None)
+        if legacy:
+            assigned.append(legacy)
+
+    assigned = sorted(
+        assigned,
+        key=lambda document: (
+            int(document.get("order") or 0),
+            str(document.get("id") or ""),
+        ),
+    )
+    from services.documents.declaration_flow_service import DeclarationFlowService
+    for document in assigned:
+        if str(document.get("id") or "") == "declaration":
+            document["fields"] = DeclarationFlowService.submission_document_fields(
+                document,
+                definition,
+            )
+    return assigned
+
+
+def group_document_policy(step, document):
+    legacy_document_id = str(step.get("document_id") or "").strip()
+
+    legacy_step_policy = (
+        step
+        if legacy_document_id
+        and str(document.get("id") or "") == legacy_document_id
+        else {}
+    )
+
+    return document_policy(legacy_step_policy, document)
+
+def uses_document_group(definition, step):
+    return is_document_step(step) and bool(step_documents(definition, step))
+
+
+def has_document_workflow(definition, step):
+    return uses_document_group(definition, step)
 
 
 def document_states(row):
@@ -85,6 +175,105 @@ def document_step_state(row, step_id):
     return deepcopy((document_states(row).get("workflow_documents") or {}).get(step_id) or {})
 
 
+def document_item_state(
+    row,
+    step_id,
+    document_id,
+    *,
+    primary_document_id="",
+):
+    """Return state of one document inside a workflow document stage.
+
+    New document stages always keep per-document state under
+    state["documents"][document_id]. Legacy single-document stages may keep
+    their primary document state directly on the workflow step.
+    """
+    state = document_step_state(row, step_id)
+    documents = state.get("documents")
+
+    if isinstance(documents, dict):
+        item = documents.get(document_id)
+
+        if isinstance(item, dict):
+            return deepcopy(item)
+
+    # Legacy single-document FormVersion only.
+    if (
+        primary_document_id
+        and document_id == primary_document_id
+    ):
+        return deepcopy({
+            key: value
+            for key, value in state.items()
+            if key != "documents"
+        })
+
+    return {}
+
+
+def ensure_document_item_state(state, document_id, *, primary_document_id=""):
+    """Return mutable state for a document, preserving legacy primary state."""
+    documents = state.setdefault("documents", {})
+
+    item = documents.get(document_id)
+    if isinstance(item, dict):
+        return item
+
+    if primary_document_id and document_id == primary_document_id:
+        legacy = {
+            key: deepcopy(value)
+            for key, value in state.items()
+            if key not in {"documents", "completed"}
+        }
+        item = legacy
+    else:
+        item = {}
+
+    documents[document_id] = item
+    return item
+
+def required_step_documents(definition, step):
+    return [
+        document
+        for document in step_documents(definition, step)
+        if document.get("required", True)
+    ]
+
+
+def document_group_completed(state, definition, step):
+    required = required_step_documents(definition, step)
+
+    if not required:
+        return bool(step_documents(definition, step))
+
+    documents_state = state.get("documents")
+    primary_document_id = str(step.get("document_id") or "")
+
+    if not isinstance(documents_state, dict):
+        return bool(
+            len(required) == 1
+            and required[0].get("id") == primary_document_id
+            and state.get("completed")
+        )
+
+    for document in required:
+        document_id = str(document.get("id") or "")
+        item_state = documents_state.get(document_id) or {}
+
+        if item_state.get("completed"):
+            continue
+
+        # Compatibility with an already completed legacy primary document.
+        if (
+            document_id == primary_document_id
+            and state.get("completed")
+        ):
+            continue
+
+        return False
+
+    return True
+
 def requirements_satisfied(state, policy):
     roles = (["participant"] if policy["upload_required"] else []) + (["office"] if policy["office_signature"] else [])
     return bool(state.get("files") and roles and all(all(state.get("signatures", {}).get(f.get("training_key") or "document", {}).get(role) for role in roles) for f in state["files"]))
@@ -92,7 +281,25 @@ def requirements_satisfied(state, policy):
 
 def document_step_status(row, step):
     state = document_step_state(row, step["id"])
-    substate = state.get("substate", "generating")
+    items = [item for item in (state.get("documents") or {}).values()
+             if isinstance(item, dict)]
+    if items:
+        item_substates = [str(item.get("substate") or "") for item in items]
+        substate = next((candidate for candidate in (
+            "verification_error", "verification_failed", "failed", "collect_data",
+            "generating", "awaiting_office_signature", "ready", "upload",
+        ) if candidate in item_substates), "")
+        if not substate:
+            if all(item.get("completed") for item in items):
+                substate = "completed"
+            elif any(item.get("uploaded_filename") and not item.get("completed") for item in items):
+                substate = "awaiting_office_signature"
+            elif any(item.get("generated_filename") for item in items):
+                substate = "ready"
+            else:
+                substate = "upload"
+    else:
+        substate = state.get("substate", "generating")
     label = (
             step.get("label")
             or step.get("user_label")
@@ -137,25 +344,31 @@ def document_step_status(row, step):
 
 
 def validate_document_step(step, form_config):
-    from services.form_config_service import FormConfigService
-    documents = FormConfigService().normalize_documents_config(form_config)
-    document = next((d for d in documents if d.get("id") == step.get("document_id") and d.get("enabled", True)), None)
-    if not document:
-        return ["Etap dokumentowy musi wskazywać istniejący, włączony dokument."]
+    documents = step_documents(form_config, step)
+    if not documents:
+        return ["Etap dokumentowy musi mieć przypisany co najmniej jeden włączony dokument."]
     errors = []
     if not step.get("next") or step.get("final") or step.get("transitions"):
         errors.append("Złożony etap dokumentowy wymaga jednego kolejnego etapu.")
     if not isinstance(step.get("document_options", {}), dict):
         return [*errors, "Przebieg dokumentu musi być obiektem konfiguracji."]
-    policy = document_policy(step, document)
-    if any(not isinstance(value, bool) for value in policy.values()):
-        errors.append("Ustawienia przebiegu dokumentu muszą być wartościami logicznymi.")
-    if policy["participant_signature"] and not policy["upload_required"]:
-        errors.append("Podpis uczestnika wymaga możliwości wgrania dokumentu.")
-    if not policy["generate"] and not policy["upload_required"] and not policy["office_signature"]:
-        errors.append("Dokument musi być generowany lub przyjmowany przez upload.")
-    if policy["generate"] and not any(document.get(k) for k in ("template", "template_html", "builder_document", "template_metadata")):
-        errors.append("Generowany dokument wymaga skonfigurowanego szablonu.")
+    waiting_for_collection_selection = False
+
+    for document in documents:
+        policy = group_document_policy(step, document)
+        if not isinstance(document.get("required", True), bool) or not isinstance(document.get("signature_required", True), bool):
+            errors.append(f"Dokument {document['id']} wymaga logicznych ustawień wymagania i podpisu.")
+        if any(not isinstance(value, bool) for value in policy.values()):
+            errors.append(f"Dokument {document['id']} ma nieprawidłowe ustawienia przebiegu.")
+        if policy["participant_signature"] and not policy["upload_required"]:
+            errors.append(f"Dokument {document['id']}: podpis uczestnika wymaga uploadu.")
+        if policy["office_signature"] and not policy["participant_signature"]:
+            errors.append(f"Dokument {document['id']}: podpis urzędu wymaga podpisu uczestnika.")
+        if not policy["generate"] and not policy["upload_required"]:
+            errors.append(f"Dokument {document['id']} wymaga generowania lub uploadu.")
+        if policy["generate"] and not any(document.get(key) for key in
+                ("template", "template_html", "builder_document", "template_metadata")):
+            errors.append(f"Dokument {document['id']} wymaga szablonu.")
     instructions = step.get("document_instructions", {})
     if not isinstance(instructions, dict) or any(key not in DOCUMENT_SUBSTATES or not isinstance(value, dict) for key, value in instructions.items()):
         errors.append("Instrukcje dokumentu wskazują nieobsługiwany podetap lub mają błędny format.")
@@ -209,16 +422,25 @@ class DocumentWorkflowService:
         for step in definition.get("workflow", {}).get("steps", []):
             if not is_document_step(step):
                 continue
-            collection = self.documents.get_document_by_id(definition, step.get("document_id")) or {}
+            collection = next((item for item in step_documents(definition, step)
+                               if self._is_collection_document(item)), {})
             if collection.get("repeat_over") != "selected_trainings" and collection.get("generation_mode") != "per_training":
                 continue
             state = (states.get("workflow_documents") or {}).get(step["id"])
-            if not state or not state.get("files"):
+            if not state:
                 continue
-            files = {file.get("training_key"): file for file in state["files"]}
-            if set(files) == set(selected):
+            grouped = uses_document_group(definition, step)
+            target = (state.get("documents") or {}).get(collection["id"], {}) if grouped else state
+
+            files = {
+                file.get("training_key"): file
+                for file in target.get("files") or []
+            }
+
+            if set(files) == set(selected) and target.get("substate") != "failed":
                 continue
-            state["files"] = [
+
+            target["files"] = [
                 files.get(key) or {
                     "filename": "",
                     "training_key": key,
@@ -226,6 +448,11 @@ class DocumentWorkflowService:
                 }
                 for key, item in selected.items()
             ]
+
+            target["completed"] = False
+            target["substate"] = "ready"
+            target["data_confirmed"] = True
+
             state["completed"] = False
             state["substate"] = "ready"
             state["status"] = DocumentState.READY.value
@@ -233,8 +460,30 @@ class DocumentWorkflowService:
         document = self.documents.get_document_by_id(definition, "declaration")
         if not document:
             return
-        declaration_states = [state for state in (states.get("workflow_documents") or {}).values()
-                              if state.get("document_id") == "declaration"]
+        declaration_steps = [
+            step
+            for step in definition.get("workflow", {}).get("steps", [])
+            if any(
+                item.get("id") == "declaration"
+                for item in step_documents(definition, step)
+            )
+        ]
+        declaration_states = []
+        for step in declaration_steps:
+            state = (
+                (states.get("workflow_documents") or {})
+                .get(step["id"], {})
+            )
+
+            documents_state = state.get("documents") or {}
+            item = documents_state.get("declaration")
+
+            # Kompatybilność historycznych FormVersion, które przechowywały
+            # pojedynczą deklarację bezpośrednio w stanie etapu.
+            if item is None and str(step.get("document_id") or "") == "declaration":
+                item = state
+
+            declaration_states.append(item or {})
         if not (str(submission.declaration_generated or "").lower() == "tak"
                 or (submission.data_json or {}).get("_signed_declaration_snapshot")
                 or any(state.get("files") or state.get("data_confirmed") for state in declaration_states)):
@@ -276,8 +525,7 @@ class DocumentWorkflowService:
             return
         if float(states.get("document_operation_until") or 0) > time.time():
             raise ValueError("Dokument jest już przetwarzany. Odśwież status za chwilę.")
-        steps = [s for s in definition.get("workflow", {}).get("steps", [])
-                 if is_document_step(s) and s.get("document_id") == "declaration"]
+        steps = declaration_steps
         data = dict(submission.data_json or {})
         snapshot = data.pop("_signed_declaration_snapshot", None)
         now = datetime.now(timezone.utc)
@@ -287,16 +535,36 @@ class DocumentWorkflowService:
             submission.data_json = data
         affected = False
         for step in steps:
-            state = (states.get("workflow_documents") or {}).get(step["id"], {})
-            if not state.get("files") and not state.get("data_confirmed"):
+            state = (
+                (states.get("workflow_documents") or {})
+                .get(step["id"], {})
+            )
+
+            documents_state = state.get("documents") or {}
+            item = documents_state.get("declaration")
+
+            # Legacy: starsze wersje trzymały stan deklaracji bezpośrednio
+            # na poziomie workflow_documents[step_id].
+            if item is None and str(step.get("document_id") or "") == "declaration":
+                item = state
+
+            item = item or {}
+
+            if (
+                not item.get("files")
+                and not item.get("data_confirmed")
+                and not item.get("generated_filename")
+            ):
                 continue
             affected = True
-            states["workflow_documents"][step["id"]] = {
-                "document_id": "declaration", "substate": "collect_data",
+            replacement = {"document_id": "declaration", "substate": "collect_data",
                 "status": DocumentState.PENDING.value, "data_confirmed": False, "regenerate": True}
-            submission.workflow_stage = submission.workflow_step = step["id"]
-            submission.process_status = step["status"]
-            submission.final_outcome = ""
+            if str(step.get("document_id") or "") == "declaration" and not state.get("documents"):
+                # Legacy state pozostawiamy w dotychczasowym formacie.
+                state.update(replacement)
+            else:
+                # Nowy model: zawsze per-document nested state.
+                state.setdefault("documents", {})["declaration"] = replacement
         if affected or snapshot or str(submission.declaration_generated or "").lower() == "tak":
             for file in db.query(SubmissionFile).filter(SubmissionFile.submission_id == submission.id,
                     SubmissionFile.document_id == "declaration", SubmissionFile.status != "superseded").all():
@@ -312,17 +580,86 @@ class DocumentWorkflowService:
     def repository(self):
         return self.documents.submission_repository
 
-    def _current(self, submission, definition, expected_step=None):
-        row = self.repository.get_by_id(self.documents._submission_id(submission))
+
+    def _resolve_step_document(self, definition, step, document_id=None):
+        documents = step_documents(definition, step)
+
+        target_document_id = str(document_id or "").strip()
+
+        if not target_document_id:
+            # Legacy single-document FormVersion.
+            target_document_id = str(
+                step.get("document_id") or ""
+            ).strip()
+
+        if not target_document_id:
+            raise ValueError("Nie wskazano dokumentu.")
+
+        document = next(
+            (
+                item
+                for item in documents
+                if str(item.get("id") or "") == target_document_id
+            ),
+            None,
+        )
+
+        if document is None:
+            raise ValueError(
+                "Dokument nie jest dostępny na tym etapie."
+            )
+
+        return document
+
+    def _current(
+        self,
+        submission,
+        definition,
+        expected_step=None,
+        *,
+        document_id=None,
+    ):
+        row = self.repository.get_by_id(
+            self.documents._submission_id(submission)
+        )
+
         if not row:
             raise ValueError("Nie znaleziono zgłoszenia.")
+
         current = row.get("workflow_step") or row.get("workflow_stage")
-        step = next((s for s in definition.get("workflow", {}).get("steps", []) if s.get("id") == current), {})
-        if not is_document_step(step) or (expected_step and current != expected_step):
+
+        step = next(
+            (
+                item
+                for item in definition.get("workflow", {}).get("steps", [])
+                if item.get("id") == current
+            ),
+            {},
+        )
+
+        if not has_document_workflow(definition, step) or (
+            expected_step and current != expected_step
+        ):
             raise ValueError("Etap dokumentowy nie jest już aktywny.")
-        document = self.documents.get_document_by_id(definition, step.get("document_id"))
-        if not document or not document.get("enabled", True):
-            raise ValueError("Brak skonfigurowanego dokumentu.")
+
+        if not step_documents(definition, step):
+            raise ValueError("Etap dokumentowy nie ma przypisanych dokumentów.")
+
+        document = None
+
+        if document_id:
+            document = self._resolve_step_document(
+                definition,
+                step,
+                document_id,
+            )
+        elif step.get("document_id"):
+            # Legacy FormVersion.
+            document = self._resolve_step_document(
+                definition,
+                step,
+            )
+
         return row, step, document
 
     def _claim(self, row, step):
@@ -338,340 +675,1120 @@ class DocumentWorkflowService:
         state["status"] = STATE_CODES.get(substate, DocumentState.PENDING.value)
         if substate == "completed" and not state.get("signature_required", True):
             state["status"] = DocumentState.READY.value
-        state["document_id"] = step["document_id"]
+        legacy_document_id = str(step.get("document_id") or "").strip()
+
+        if legacy_document_id and not state.get("documents"):
+            # Kompatybilność starego single-document state.
+            state["document_id"] = legacy_document_id
         if not self.repository.save_document_step(row["submission_id"], step["id"], state, token, event, actor, field_values=field_values):
             raise ValueError("Etap zmienił się podczas obsługi dokumentu.")
 
-    def _files(self, row, step):
-        return [f for f in self.documents.submission_document_service.list_documents(row["submission_id"])
-                if f.get("document_id") == step["document_id"] and f.get("workflow_step_at_upload") == step["id"]
-                and f.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}]
+    def _files(self, row, step, document_id=None):
+        target_document_id = str(
+            document_id or ""
+        ).strip()
+
+        if not target_document_id:
+            # Legacy FormVersion.
+            target_document_id = str(
+                step.get("document_id") or ""
+            ).strip()
+
+        if not target_document_id:
+            return []
+
+        return [
+            file
+            for file in self.documents.submission_document_service.list_documents(
+                row["submission_id"]
+            )
+            if file.get("document_id") == target_document_id
+            and file.get("workflow_step_at_upload") == step["id"]
+            and file.get("status")
+            not in {
+                "superseded",
+                "rejected",
+                "rejected_no_capacity",
+            }
+        ]
+
+    def _document_state(self, row, step, document):
+        step_state = document_step_state(row, step["id"])
+
+        item_state = ensure_document_item_state(
+            step_state,
+            document["id"],
+            primary_document_id=str(step.get("document_id") or ""),
+        )
+
+        return step_state, item_state
 
     @staticmethod
     def needs_data(document, state):
-        return (any(f.get("name") and f.get("type") not in {"section", "static_text"} for f in document.get("fields") or [])
+        from services.documents.declaration_template_context_service import declaration_document_fields
+
+        fields = document.get("fields") or []
+        if document.get("id") == "declaration":
+            fields = declaration_document_fields(fields)
+        return (any(f.get("name") and f.get("type") not in {"section", "static_text"} for f in fields)
                 and not state.get("data_confirmed") and not state.get("completed")
                 and not any(state.get("signatures", {}).values()))
 
-    def save_fields(self, submission, definition, step_id, form_data, *, generate=True):
-        row, step, document = self._current(submission, definition, step_id)
+    def save_fields(self, submission, definition, step_id, form_data, *, document_id=None, generate=True,):
+        row, step, document = self._current(
+            submission,
+            definition,
+            step_id,
+            document_id=document_id,
+        )
+
+        if document is None:
+            raise ValueError(
+                "Nie wskazano dokumentu do zapisania danych."
+            )
+
         token = self._claim(row, step)
+
         try:
             row = self.repository.get_by_id(row["submission_id"])
-            state = document_step_state(row, step_id)
-            if (state.get("data_confirmed") and state.get("files")) or state.get("completed") or any(state.get("signatures", {}).values()):
-                raise ValueError("Dane wygenerowanego dokumentu są zablokowane. Zmiana wymaga korekty dokumentu.")
-            flow, data = current_app.extensions["services"].declaration_flow_service.validate_document_fields(
-                document, row, form_data, self.repository)
+            step_state = document_step_state(row, step_id)
+
+            state = ensure_document_item_state(
+                step_state,
+                document["id"],
+                primary_document_id=str(step.get("document_id") or ""),
+            )
+
+            if (
+                state.get("completed")
+                or state.get("uploaded_filename")
+                or state.get("office_filename")
+                or (
+                    state.get("data_confirmed")
+                    and (
+                        state.get("files")
+                        or state.get("generated_filename")
+                    )
+                )
+                or any(state.get("signatures", {}).values())
+            ):
+                raise ValueError(
+                    "Dane wygenerowanego dokumentu są zablokowane. "
+                    "Zmiana wymaga korekty dokumentu."
+                )
+
+            flow, data = current_app.extensions[
+                "services"
+            ].declaration_flow_service.validate_document_fields(
+                document,
+                row,
+                form_data,
+                self.repository,
+            )
+
             if not flow.success:
                 return flow
-            current_app.extensions["services"].declaration_flow_service.save_document_training_selection(
-                document, row, form_data, current_app.extensions["services"])
+
+            current_app.extensions[
+                "services"
+            ].declaration_flow_service.save_document_training_selection(
+                document,
+                row,
+                form_data,
+                current_app.extensions["services"],
+            )
+
             saved_row = self.repository.get_by_id(row["submission_id"])
-            for field in document.get("fields") or []:
+
+            for field in flow.declaration_definition["fields"]:
                 if field.get("type") == "training_selection":
-                    data[field["name"]] = saved_row.get("selected_trainings") or "[]"
+                    data[field["name"]] = (
+                        saved_row.get("selected_trainings") or "[]"
+                    )
+
             state["data_confirmed"] = generate
+
             if generate:
-                state["data_sha256"] = sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-                # Old, prematurely generated PDFs must never be reused after collecting data.
-                for file in self._files(row, step):
+                state["data_sha256"] = sha256(
+                    json.dumps(
+                        data,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+
+                for file in self._files(
+                    row,
+                    step,
+                    document["id"],
+                ):
                     if not file.get("signed"):
-                        if not self.repository.record_file(row["submission_id"], {**file, "status": "superseded"}):
-                            raise RuntimeError("Nie udało się zastąpić poprzedniej wersji dokumentu.")
-                state["files"] = []
+                        if not self.repository.record_file(
+                            row["submission_id"],
+                            {**file, "status": "superseded"},
+                        ):
+                            raise RuntimeError(
+                                "Nie udało się zastąpić poprzedniej wersji dokumentu."
+                            )
+
+                state.pop("generated_filename", None)
                 state["regenerate"] = True
-            self._save(row, step, state, token, "collect_data", "DOCUMENT_FIELDS_SAVED", "participant", field_values=data)
+
+            state["substate"] = "collect_data"
+
+            self._save(
+                row,
+                step,
+                step_state,
+                token,
+                "collect_data",
+                "DOCUMENT_FIELDS_SAVED",
+                "participant",
+                field_values=data,
+            )
+
         finally:
-            self.repository.release_document_operation(row["submission_id"], token)
+            self.repository.release_document_operation(
+                row["submission_id"],
+                token,
+            )
+
         if generate:
-            self.documents.workflow_service.run_automatic_steps(self.repository.get_by_id(row["submission_id"]), definition)
+            self.documents.workflow_service.run_automatic_steps(
+                self.repository.get_by_id(row["submission_id"]),
+                definition,
+            )
+
         return flow
 
-    def start(self, submission, definition):
-        row, step, document = self._current(submission, definition)
+    @staticmethod
+    def _group_satisfied(state, documents, step):
+        items = state.get("documents") or {}
+        return bool(documents) and all(
+            not document.get("required", True) or bool((items.get(document["id"]) or {}).get("completed"))
+            for document in documents
+        )
+
+    @staticmethod
+    def _is_collection_document(document):
+        return bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
+
+    def _prepare_group_collection(self, row, step, definition, document, item, policy):
+        collection_field = document.get("repeat_over") or "selected_trainings"
+        if policy["generate"]:
+            records = self.documents.generate_documents_for_collection(
+                row, definition, document["id"], collection_field,
+                document.get("repeat_item_alias") or "training")
+        else:
+            records = [{"id": source["id"], "training_name": source.get("name") or source["id"],
+                        "filename": ""} for source in parse_training_snapshots(row.get(collection_field))]
+        if not records:
+            raise ValueError("Brak danych wymaganych do wygenerowania dokumentu.")
+        instances = item.setdefault("instances", {})
+        item["files"] = []
+        for record in records:
+            key = str(record.get("id") or record.get("training_id") or "")
+            if not key:
+                raise ValueError("Dokument szkolenia nie ma identyfikatora.")
+            source = instances.setdefault(key, {})
+            source["generated_filename"] = record.get("filename") or ""
+            if not policy["upload_required"] and not policy["office_signature"]:
+                source["completed"] = True
+            item["files"].append({"training_key": key, "filename": source["generated_filename"],
+                                  "label": record.get("training_name") or record.get("name") or key})
+        item["generated_filename"] = item["files"][0]["filename"]
+        item["completed"] = all(instances[file["training_key"]].get("completed") for file in item["files"])
+        item["substate"] = "completed" if item["completed"] else "ready" if policy["generate"] else "upload"
+        item.pop("regenerate", None)
+        return records
+
+    def _start_group(self, row, step, definition):
+        documents = step_documents(definition, step)
         token = self._claim(row, step)
         context_token = self.documents._document_operation_token.set(token)
         try:
-            row.update(self.repository.get_by_id(row["submission_id"]))
-            state = document_step_state(self.repository.get_by_id(row["submission_id"]), step["id"])
+            row = self.repository.get_by_id(row["submission_id"])
+            state = document_step_state(row, step["id"])
+            for document in documents:
+                ensure_document_item_state(state, document["id"],
+                    primary_document_id=str(step.get("document_id") or ""))
             if state.get("completed"):
-                return True
-            if self.needs_data(document, state):
-                if state.get("substate") != "collect_data":
-                    self._save(row, step, state, token, "collect_data", "DOCUMENT_DATA_REQUESTED")
-                return False
-            policy = document_policy(step, document)
-            state["signature_required"] = bool(policy["participant_signature"] or policy["office_signature"])
-            if requirements_satisfied(state, policy):
+                if self._group_satisfied(state, documents, step):
+                    return True
+                state["completed"] = False
+            items = state["documents"]
+            for document in documents:
+                item = items[document["id"]]
+                policy = group_document_policy(step, document)
+                existing = [file for file in self.documents.submission_document_service.list_documents(row["submission_id"])
+                            if file.get("document_id") == document["id"] and file.get("workflow_step_at_upload") == step["id"]
+                            and int(file.get("id") or 0) > int(item.get("minimum_file_id") or 0)
+                            and file.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}]
+                if item.get("completed") and existing:
+                    continue
+                if item.get("completed") and not existing:
+                    item.pop("completed", None)
+                    item.pop("generated_filename", None)
+                signed = next((file for file in reversed(existing) if file.get("signed")), None)
+                if signed:
+                    item.update(uploaded_filename=signed["filename"],
+                                completed=not policy["office_signature"])
+                    item["substate"] = "awaiting_office_signature" if policy["office_signature"] else "completed"
+                    continue
+                if self.needs_data(document, item):
+                    item["substate"] = "collect_data"
+                    continue
+                if self._is_collection_document(document):
+                    collection_field = document.get("repeat_over") or "selected_trainings"
+
+                    if not parse_training_snapshots(row.get(collection_field)):
+                        item["files"] = []
+                        item.pop("generated_filename", None)
+                        item["completed"] = False
+                        item["substate"] = "ready"
+                        continue
+
+                    try:
+                        self._prepare_group_collection(
+                            row,
+                            step,
+                            definition,
+                            document,
+                            item,
+                            policy,
+                        )
+                    except Exception:
+                        item["substate"] = "failed"
+                        item["data_confirmed"] = False
+                        self._save(
+                            row,
+                            step,
+                            state,
+                            token,
+                            "failed",
+                            "DOCUMENT_GENERATION_FAILED",
+                        )
+                        raise
+
+                    continue
+                if item.get("generated_filename") and any(file.get("filename") == item["generated_filename"]
+                    for file in existing):
+                    continue
+                item.pop("generated_filename", None)
+                if not policy["generate"]:
+                    item["substate"] = "upload"
+                    continue
+                generated = next((file for file in reversed(existing) if file.get("status") == "generated"), None)
+                if not generated:
+                    try:
+                        generated = self.documents.generate_document(row, definition, document["id"])
+                    except Exception:
+                        item["substate"] = "failed"
+                        item["data_confirmed"] = False
+                        self._save(row, step, state, token, "failed", "DOCUMENT_GENERATION_FAILED")
+                        raise
+                item["generated_filename"] = generated["filename"]
+                item["substate"] = "ready"
+                item.pop("regenerate", None)
+                if not policy["upload_required"] and not policy["office_signature"]:
+                    item["completed"] = True
+                    item["substate"] = "completed"
+            state["signature_required"] = any(group_document_policy(step, item)["participant_signature"] for item in documents)
+            if self._group_satisfied(state, documents, step):
                 self._complete(row, step, state, token)
                 return True
-            collection = bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
-            pending_collection = collection and any(not file.get("filename") for file in state.get("files", []))
-            if state.get("substate") not in {None, "collect_data", "generating", "failed"} and not (state.get("substate") == "ready" and pending_collection):
-                return False
-            if policy["generate"]:
-                self._save(row, step, state, token, "generating", "DOCUMENT_GENERATION_STARTED")
-                generated = [f for f in self._files(row, step) if not f.get("signed")] if not state.get("regenerate") else []
-                if collection:
-                    generated = self.documents.generate_documents_for_collection(row, definition, step["document_id"], document.get("repeat_over") or "selected_trainings", document.get("repeat_item_alias") or "training")
-                elif not generated:
-                    generated = [self.documents.generate_document(row, definition, step["document_id"])]
-                if not generated or any(not f.get("filename") for f in generated):
-                    raise ValueError("Nie udało się wygenerować wszystkich dokumentów.")
-                state["files"] = [{"filename": f["filename"], "training_key": str(f.get("training_key") or (f.get("id") if collection else "") or ""), "training_name": str(f.get("training_name") or ""), "label": f.get("training_name") or document["label"]} for f in generated]
-                state.pop("regenerate", None)
-                self._save(row, step, state, token, "ready", "DOCUMENT_GENERATED")
-            else:
-                state["files"] = [{"filename": "", "training_key": ""}]
-                self._save(row, step, state, token, "upload" if policy["upload_required"] else "awaiting_office_signature", "DOCUMENT_UPLOAD_REQUESTED")
-            if not policy["participant_signature"] and not policy["upload_required"]:
-                if policy["office_signature"]:
-                    self._save(row, step, state, token, "awaiting_office_signature", "OFFICE_SIGNATURE_REQUESTED")
-                else:
-                    self._complete(row, step, state, token)
-            return bool(state.get("completed"))
-        except Exception:
-            # Leave failed generation retryable; successfully saved files are reused.
-            if 'state' in locals() and state.get("substate") == "generating":
-                self._save(row, step, state, token, "failed", "DOCUMENT_GENERATION_FAILED")
-            raise
+            self._save(row, step, state, token, "upload", "DOCUMENT_GROUP_READY")
+            return False
         finally:
             self.documents._document_operation_token.reset(context_token)
             self.repository.release_document_operation(row["submission_id"], token)
+
+    def generate_group_document(self, submission, definition, step_id, document_id):
+        row, step, document = self._current(submission, definition, step_id, document_id=document_id)
+        if not uses_document_group(definition, step) or not group_document_policy(step, document)["generate"]:
+            raise ValueError("Generowanie tego dokumentu jest wyłączone.")
+        token = self._claim(row, step)
+        context_token = self.documents._document_operation_token.set(token)
+        try:
+            row = self.repository.get_by_id(row["submission_id"])
+            state = document_step_state(row, step_id)
+            item = ensure_document_item_state(state, document_id,
+                primary_document_id=str(step.get("document_id") or ""))
+            if state.get("completed") or item.get("completed"):
+                raise ValueError("Dokument został już ukończony.")
+            if self.needs_data(document, item):
+                raise ValueError("Najpierw uzupełnij dane dokumentu.")
+            if not self._is_collection_document(document) and (item.get("uploaded_filename") or
+                    any(file.get("signed") for file in self._files(row, step, document_id))):
+                raise ValueError("Podpisany dokument jest już zapisany.")
+            policy = group_document_policy(step, document)
+            try:
+                if self._is_collection_document(document):
+                    records = self._prepare_group_collection(row, step, definition, document, item, policy)
+                    existing = {"filename": records[0]["filename"], "document_id": document_id}
+                else:
+                    existing = next((file for file in reversed(self._files(row, step, document_id))
+                                     if file.get("status") == "generated" and
+                                     int(file.get("id") or 0) > int(item.get("minimum_file_id") or 0)), None)
+                    if not existing:
+                        existing = self.documents.generate_document(row, definition, document_id)
+                    item["generated_filename"] = existing["filename"]
+                    item["substate"] = "ready"
+                    item.pop("regenerate", None)
+                    if not policy["upload_required"] and not policy["office_signature"]:
+                        item["completed"] = True
+                        item["substate"] = "completed"
+            except Exception:
+                item["substate"] = "failed"
+                item["data_confirmed"] = False
+                self._save(row, step, state, token, "failed", "DOCUMENT_GENERATION_FAILED")
+                raise
+            if self._group_satisfied(state, step_documents(definition, step), step):
+                self._complete(row, step, state, token)
+                completed = True
+            else:
+                self._save(row, step, state, token, "upload", "DOCUMENT_GROUP_FILE_GENERATED", "participant")
+                completed = False
+        finally:
+            self.documents._document_operation_token.reset(context_token)
+            self.repository.release_document_operation(row["submission_id"], token)
+        if completed:
+            self.documents.workflow_service.advance_after_action(self.repository.get_by_id(row["submission_id"]), definition)
+        return existing
+
+    def _upload_group(self, submission, definition, step_id, uploaded_file, document_id, signer="participant", instance=""):
+        if not uploaded_file or not uploaded_file.filename:
+            raise ValueError("Wybierz plik dokumentu.")
+        current = self.repository.get_by_id(
+            self.documents._submission_id(submission)
+        )
+        configured_step = next(
+            (
+                candidate
+                for candidate in definition.get("workflow", {}).get("steps", [])
+                if candidate.get("id") == step_id
+            ),
+            {},
+        )
+        requested_document_id = str(
+            document_id or configured_step.get("document_id") or ""
+        ).strip()
+        if current and (current.get("workflow_step") or current.get("workflow_stage")) != step_id:
+            document = self._resolve_step_document(
+                definition,
+                configured_step,
+                requested_document_id,
+            )
+            state = document_step_state(current, step_id)
+            item = document_item_state(
+                current,
+                step_id,
+                document["id"],
+                primary_document_id=str(configured_step.get("document_id") or ""),
+            )
+            target = (
+                (item.get("instances") or {}).get(instance, {})
+                if self._is_collection_document(document)
+                else item
+            )
+            if state.get("completed") and target.get("completed"):
+                accepted_filename = (
+                    target.get("office_filename")
+                    if signer == "office"
+                    else target.get("uploaded_filename")
+                )
+                data = uploaded_file.read()
+                metadata = self.documents.submission_document_service.list_documents(
+                    current["submission_id"]
+                )
+                if any(
+                    file.get("filename") == accepted_filename
+                    and file.get("checksum_sha256") == sha256(data).hexdigest()
+                    for file in metadata
+                ):
+                    return {
+                        "is_valid": True,
+                        "completed": True,
+                        "result": "VALID_SIGNATURE",
+                        "message": VERIFICATION_MESSAGES["VALID_SIGNATURE"],
+                    }
+            raise ValueError("Etap dokumentowy nie jest już aktywny.")
+        row, step, _ = self._current(
+            submission,
+            definition,
+            step_id,
+        )
+
+        document_id = str(document_id or "").strip()
+
+        if not document_id:
+            # Legacy single-document FormVersion.
+            document_id = str(step.get("document_id") or "").strip()
+
+        if not document_id:
+            raise ValueError("Nie wskazano dokumentu.")
+
+        document = self._resolve_step_document(
+            definition,
+            step,
+            document_id,
+        )
+        documents = step_documents(definition, step)
+        collection = self._is_collection_document(document)
+        if collection and not instance or not collection and instance:
+            raise ValueError("Wskaż właściwy dokument szkolenia.")
+        policy = group_document_policy(step, document)
+        if signer not in {"participant", "office"} or not (policy["office_signature"] if signer == "office" else policy["upload_required"]):
+            raise ValueError("Wgrywanie tego dokumentu jest wyłączone.")
+        token = self._claim(row, step)
+        completed = False
+        try:
+            state = document_step_state(self.repository.get_by_id(row["submission_id"]), step_id)
+            if state.get("completed"):
+                raise ValueError("Etap dokumentowy został już zakończony.")
+            item = ensure_document_item_state(
+                state,
+                document_id,
+                primary_document_id=str(step.get("document_id") or ""),
+            )
+            source = next((file for file in item.get("files") or [] if file.get("training_key") == instance), None) if collection else None
+            if collection and not source:
+                raise ValueError("Dokument nie należy do wybranego szkolenia.")
+            target = item.setdefault("instances", {}).setdefault(instance, {}) if collection else item
+            if signer == "participant" and policy["generate"] and not target.get("generated_filename"):
+                raise ValueError("Najpierw wygeneruj dokument do podpisu.")
+            office_source = target.get("uploaded_filename") or (
+                target.get("generated_filename") if not policy["upload_required"] else "")
+            if target.get("completed") or signer == "office" and (not office_source or target.get("office_filename")):
+                raise ValueError("Ten dokument został już przyjęty.")
+            metadata = self.documents.submission_document_service.list_documents(row["submission_id"])
+            data = uploaded_file.read()
+            existing_signed = next((file for file in reversed(metadata)
+                if signer == "participant" and file.get("document_id") == document_id and file.get("workflow_step_at_upload") == step_id
+                   and (not collection or file.get("training_key") == instance)
+                   and int(file.get("id") or 0) > int(item.get("minimum_file_id") or 0)
+                   and file.get("signed") and file.get("status") == "signed"), None)
+            if existing_signed:
+                if existing_signed.get("checksum_sha256") != sha256(data).hexdigest():
+                    raise ValueError("Podpisany dokument jest już zapisany.")
+                target.update(
+                    uploaded_filename=existing_signed["filename"],
+                    completed=not policy["office_signature"],
+                    substate=("awaiting_office_signature" if policy["office_signature"] else "completed"),
+                )
+                if collection:
+                    item["completed"] = bool(item.get("files")) and all(
+                        (item.get("instances") or {}).get(file["training_key"], {}).get("completed")
+                        for file in item["files"])
+                completed = self._group_satisfied(state, documents, step)
+                if completed:
+                    self._complete(row, step, state, token)
+                else:
+                    self._save(row, step, state, token, target["substate"], "DOCUMENT_GROUP_FILE_RECOVERED", signer)
+                self.repository.release_document_operation(row["submission_id"], token)
+                token = None
+                if completed:
+                    self.documents.workflow_service.advance_after_action(
+                        self.repository.get_by_id(row["submission_id"]), definition)
+                return {"is_valid": True, "completed": completed, "result": "VALID_SIGNATURE",
+                        "message": "Dokument został przyjęty."}
+            requires_signature = bool(policy[f"{signer}_signature"])
+            validate_pdf_upload(uploaded_file.filename, data, uploaded_file.mimetype)
+            mime_type = "application/pdf"
+            extension = "pdf"
+            digest = sha256(data).hexdigest()
+            step_key = sha256(step_id.encode("utf-8")).hexdigest()[:12]
+            document_key = sha256(document_id.encode("utf-8")).hexdigest()[:12]
+            filename = f"{row['submission_id']}-{step_key}-{document_key}-{signer}-{digest[:16]}-{uuid4().hex[:8]}.{extension}"
+            try:
+                storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage,
+                    slug=row["form_slug"], filename=filename, document_bytes=data,
+                    document_type=self.documents._storage_document_type(document_id),
+                    signed=requires_signature)
+            except Exception:
+                target["verification_result"] = "VERIFICATION_ERROR"
+                target["substate"] = "verification_error"
+                self._save(row, step, state, token, "verification_error", "DOCUMENT_STORAGE_FAILED", signer)
+                return {"is_valid": False, "completed": False, "result": "VERIFICATION_ERROR",
+                        "message": VERIFICATION_MESSAGES["VERIFICATION_ERROR"]}
+            verification = {}
+            outcome = "VALID_SIGNATURE"
+            if requires_signature:
+                try:
+                    verification = dict(current_app.extensions["services"].document_signing_service.verify_stored_pdf(
+                        data, current_app.config["TEMP_DIR"], storage=self.documents.storage, slug=row["form_slug"],
+                        filename=filename, storage_path=storage_path,
+                        allowed_signatures=document.get("allowed_signatures", []) if signer == "participant" else None))
+                    outcome = signature_verification_result(verification,
+                        document.get("allowed_signatures", []) if signer == "participant" else None)
+                    original_name = office_source if signer == "office" else target.get("generated_filename")
+                    if outcome == "VALID_SIGNATURE" and original_name:
+                        original = self.documents.read_document_bytes_for_download(row, original_name,
+                            signed=signer == "office" and policy["participant_signature"])
+                        if not data.startswith(original) or data == original:
+                            outcome = "INVALID_SIGNATURE"
+                            verification["reason_code"] = "DOCUMENT_REVISION_MISMATCH"
+                    if signer == "office" and policy["participant_signature"] and int(verification.get("signature_count") or 0) < 2:
+                        outcome = "INVALID_SIGNATURE"
+                        verification["reason_code"] = "MISSING_COUNTERSIGNATURE"
+                except Exception:
+                    outcome = "VERIFICATION_ERROR"
+                    verification["reason_code"] = "VERIFIER_EXCEPTION"
+            accepted = outcome == "VALID_SIGNATURE"
+            verification["result_code"] = outcome
+            recorded = self.documents.submission_document_service.record_document_metadata(
+                submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename,
+                file_bytes=data, document_id=document_id,
+                document_type=self.documents.workflow_upload_metadata_type(document_id, signer=signer,
+                    signed=requires_signature), original_filename=uploaded_file.filename,
+                storage_path=storage_path, workflow_step_at_upload=step_id, training_key=instance,
+                agreement_number=next((file.get("agreement_number") or "" for file in metadata
+                    if file.get("filename") == target.get("generated_filename")), ""), mime_type=mime_type,
+                signed=bool(accepted and requires_signature),
+                status="signed" if accepted and requires_signature else "uploaded" if accepted else "rejected",
+                signature_status=str(verification.get("validation_status") or "not_required").lower(),
+                signature_validation_result=verification)
+            if not recorded:
+                target["verification_result"] = "VERIFICATION_ERROR"
+                target["substate"] = "verification_error"
+                self._save(row, step, state, token, "verification_error", "DOCUMENT_METADATA_FAILED", signer)
+                return {"is_valid": False, "completed": False, "result": "VERIFICATION_ERROR",
+                        "message": VERIFICATION_MESSAGES["VERIFICATION_ERROR"]}
+            current_app.logger.info(
+                "signature_verification_result submission_id=%s document_id=%s result=%s reason_code=%s "
+                "detected_signature_type=%s verifier_backend=%s provider_allowed=%s signature_count=%s "
+                "cryptographic_valid=%s document_integrity_valid=%s certificate_chain_valid=%s timestamp_valid=%s",
+                row["submission_id"], document_id, outcome,
+                verification.get("reason_code") or outcome,
+                verification.get("detected_signature_type") or verification.get("signature_type"),
+                verification.get("verifier_backend"), verification.get("provider_allowed"),
+                verification.get("signature_count"), verification.get("cryptographic_valid"),
+                verification.get("document_integrity_valid"), verification.get("certificate_chain_valid"),
+                verification.get("timestamp_valid"),
+            )
+            if not accepted:
+                target["verification_result"] = outcome
+                target["substate"] = "verification_error" if outcome == "VERIFICATION_ERROR" else "verification_failed"
+                self._save(row, step, state, token, target["substate"], "SIGNATURE_VERIFICATION_FAILED", signer)
+                return {"is_valid": False, "completed": False, "result": outcome,
+                        "message": VERIFICATION_MESSAGES.get(outcome, "Nie udało się zweryfikować podpisu.")}
+            target.pop("verification_result", None)
+            if signer == "participant" and requires_signature and document_id in {"declaration", "agreement", "training_agreement"}:
+                self.documents.record_composite_participant_signature(row, {**step, "document_id": document_id},
+                    data, filename, instance, verification)
+            if signer == "office":
+                self.documents.record_composite_office_signature(row, {**step, "document_id": document_id}, filename, instance)
+                target.update(office_filename=filename, completed=True)
+                target["substate"] = "completed"
+            else:
+                target.update(uploaded_filename=filename, completed=not policy["office_signature"])
+                target["substate"] = "awaiting_office_signature" if policy["office_signature"] else "completed"
+            if collection:
+                item["completed"] = bool(item.get("files")) and all(
+                    (item.get("instances") or {}).get(file["training_key"], {}).get("completed")
+                    for file in item["files"])
+            if self._group_satisfied(state, documents, step):
+                self._complete(row, step, state, token)
+                completed = True
+            else:
+                self._save(row, step, state, token, "upload", "DOCUMENT_GROUP_FILE_ACCEPTED", signer)
+        finally:
+            if token:
+                self.repository.release_document_operation(row["submission_id"], token)
+        if completed:
+            self.documents.workflow_service.advance_after_action(self.repository.get_by_id(row["submission_id"]), definition)
+        return {"is_valid": True, "completed": completed, "result": "VALID_SIGNATURE",
+                "message": "Dokument został przyjęty."}
+
+    def _download_group(self, row, step, definition, filename, signer="participant", document_id=None):
+        documents = step_documents(definition, step)
+
+        for document in documents:
+            if document_id and document["id"] != document_id:
+                continue
+            item = document_item_state(
+                row,
+                step["id"],
+                document["id"],
+                primary_document_id=str(step.get("document_id") or ""),
+            )
+            if self.needs_data(document, item):
+                continue
+            allowed_names = {item.get("generated_filename"), item.get("uploaded_filename"), item.get("office_filename")}
+            for instance in (item.get("instances") or {}).values():
+                allowed_names.update({instance.get("generated_filename"), instance.get("uploaded_filename"),
+                                      instance.get("office_filename")})
+            if filename not in allowed_names:
+                continue
+            if signer == "participant" and not group_document_policy(step, document)["download"]:
+                break
+            metadata = self.documents.submission_document_service.list_documents(row["submission_id"])
+            file = next((file for file in metadata if file.get("filename") == filename
+                         and file.get("document_id") == document["id"]
+                         and file.get("workflow_step_at_upload") == step["id"]
+                          and file.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}), None)
+            if file:
+                content = self.documents.document_storage_service.read_document_bytes(
+                    storage=self.documents.storage, slug=row["form_slug"], filename=filename,
+                    metadata=file, submission_id=row["submission_id"], strict_metadata=True)
+                if ((row.get("workflow_step") or row.get("workflow_stage")) == step["id"]
+                        and signer == "participant"
+                        and group_document_policy(step, document)["upload_required"]
+                        and item.get("substate") == "ready"):
+                    token = self._claim(row, step)
+                    try:
+                        fresh = document_step_state(self.repository.get_by_id(row["submission_id"]), step["id"])
+                        current_item = ensure_document_item_state(fresh, document["id"],
+                            primary_document_id=str(step.get("document_id") or ""))
+                        current_item["substate"] = "awaiting_signature"
+                        self._save(row, step, fresh, token, "awaiting_signature", "DOCUMENT_DOWNLOADED", "participant")
+                    finally:
+                        self.repository.release_document_operation(row["submission_id"], token)
+                return content
+        raise ValueError("Dokument nie jest dostępny do pobrania.")
+
+    def _view_group(self, row, step, definition, signer="participant"):
+        documents = step_documents(definition, step)
+        state = document_step_state(row, step["id"])
+
+        required_count = sum(
+            bool(document.get("required", True))
+            for document in documents
+        )
+
+        ready_count = sum(
+            bool(document.get("required", True))
+            and bool(
+                document_item_state(
+                    row,
+                    step["id"],
+                    document["id"],
+                    primary_document_id=str(step.get("document_id") or ""),
+                ).get("completed")
+            )
+            for document in documents
+        )
+        files = []
+        generation_actions = []
+        form_definition = None
+        form_document_id = ""
+        form_values = None
+        waiting_for_collection_selection = False
+        for document in documents:
+            item = document_item_state(
+                row,
+                step["id"],
+                document["id"],
+                primary_document_id=str(step.get("document_id") or ""),
+            )
+
+            policy = group_document_policy(step, document)
+            needs_data = (
+                signer == "participant"
+                and self.needs_data(document, item)
+            )
+
+            if needs_data and form_definition is None:
+                operational_document = current_app.extensions[
+                    "services"
+                ].declaration_flow_service.operational_document(
+                    document,
+                    row,
+                    self.repository,
+                )
+
+                form_definition = current_app.extensions[
+                    "services"
+                ].declaration_flow_service.document_fields_definition(
+                    operational_document
+                )
+
+                form_document_id = document["id"]
+                form_values = dict(row)
+            if self._is_collection_document(document):
+                collection_field = document.get("repeat_over") or "selected_trainings"
+                if (
+                    not parse_training_snapshots(row.get(collection_field))
+                    and not item.get("files")
+                    and not item.get("generated_filename")
+                    and not item.get("uploaded_filename")
+                    and not item.get("office_filename")
+                ):
+                    waiting_for_collection_selection = True
+                    collection_field = document.get("repeat_over") or "selected_trainings"
+                    selected_collection = parse_training_snapshots(row.get(collection_field))
+
+                    if (
+                        signer == "participant"
+                        and policy["generate"]
+                        and selected_collection
+                        and not item.get("completed")
+                        and not any(
+                            (instance or {}).get("generated_filename")
+                            for instance in (item.get("instances") or {}).values()
+                        )
+                    ):
+                        generation_actions.append({
+                            "document_id": document["id"],
+                            "label": document.get("participant_label")
+                            or document.get("label")
+                            or "Dokument",
+                        })
+                for source in item.get("files") or []:
+                    key = source.get("training_key") or ""
+                    target = (item.get("instances") or {}).get(key) or {}
+                    filename = (target.get("office_filename") or target.get("uploaded_filename") or
+                                target.get("generated_filename") or "")
+                    office_source = target.get("uploaded_filename") or (
+                        target.get("generated_filename") if not policy["upload_required"] else "")
+                    can_upload = (bool(policy["office_signature"] and office_source and not target.get("office_filename"))
+                                  if signer == "office" else bool(policy["upload_required"] and
+                                      (not policy["generate"] or target.get("generated_filename")) and
+                                      not target.get("completed") and not target.get("uploaded_filename")))
+                    files.append({"document_id": document["id"], "instance": key,
+                                  "label": self._public_file_label(row, document, source),
+                                  "description": document.get("description") or "",
+                                  "filename": filename if policy["download"] or signer == "office" else "",
+                                  "required": bool(document.get("required", True)),
+                                  "signature_required": policy["participant_signature"],
+                                  "office_signature_required": policy["office_signature"],
+                                 "can_generate": bool(
+                                    policy["generate"]
+                                    and not needs_data
+                                    and bool(parse_training_snapshots(
+                                        row.get(document.get("repeat_over") or "selected_trainings")
+                                    ))
+                                    and not target.get("generated_filename")
+                                    and not target.get("completed")
+                                   ),
+                                  "can_upload": can_upload,
+                                  "verification_result": target.get("verification_result") or "",
+                                  "verification_message": VERIFICATION_MESSAGES.get(target.get("verification_result"), ""),
+                                  "signed": bool(target.get("office_filename")),
+                                  "completed": bool(target.get("completed")),
+                                  "status": "Gotowy" if target.get("completed") else
+                                      "Oczekuje na podpis urzędu" if target.get("uploaded_filename") and policy["office_signature"] else
+                                      "Oczekuje na podpis" if filename else "Brak dokumentu",
+                                  "accept": ".pdf,application/pdf"})
+                continue
+            filename = (item.get("uploaded_filename") or item.get("generated_filename") or "") if signer == "office" else (
+                item.get("office_filename") or item.get("uploaded_filename") or item.get("generated_filename") or "")
+            office_source = item.get("uploaded_filename") or (
+                item.get("generated_filename") if not policy["upload_required"] else "")
+            can_upload = (bool(policy["office_signature"] and office_source and not item.get("office_filename"))
+                          if signer == "office" else bool(policy["upload_required"] and
+                              (not policy["generate"] or item.get("generated_filename")) and
+                              not item.get("completed") and not item.get("uploaded_filename")))
+            if item.get("substate") == "failed" and not filename:
+                continue
+            files.append({"document_id": document["id"], "label": document.get("participant_label") or document["label"],
+                          "description": document.get("description") or "", "filename": filename if policy["download"] or signer == "office" else "",
+                          "required": bool(document.get("required", True)), "signature_required": policy["participant_signature"],
+                          "office_signature_required": policy["office_signature"],
+                          "can_generate": bool(
+                                policy["generate"]
+                                and not needs_data
+                                and not item.get("generated_filename")
+                                and not item.get("completed")
+                            ),
+                          "verification_result": item.get("verification_result") or "",
+                          "verification_message": VERIFICATION_MESSAGES.get(item.get("verification_result"), ""),
+                          "signed": bool(item.get("office_filename")), "instance": "",
+                          "completed": bool(item.get("completed")), "can_upload": can_upload,
+                          "status": (
+                                "Uzupełnij dane"
+                                if needs_data
+                                else "Gotowy"
+                                if item.get("completed")
+                                else "Oczekuje na podpis urzędu"
+                                if item.get("uploaded_filename") and policy["office_signature"]
+                                else "Oczekuje na podpis"
+                                if filename and policy["participant_signature"]
+                                else "Brak dokumentu"
+                            ),
+                          "accept": ".pdf,application/pdf"})
+        instruction = step.get("user_instruction") or step.get("description") or (
+            f"Na tym etapie wymaganych jest {required_count} dokumentów. "
+            f"{sum(bool(group_document_policy(step, document)['participant_signature']) for document in documents)} wymaga podpisu elektronicznego.")
+        can_generate = any(file["can_generate"] for file in files)
+        aggregate_status = document_step_status(row, step)
+        aggregate_substate = (
+            "collect_data"
+            if form_definition is not None
+            else aggregate_status["substate"]
+        )
+        if (
+            aggregate_substate == "failed"
+            and waiting_for_collection_selection
+        ):
+            aggregate_substate = "ready"
+        return {"step_id": step["id"], "label": step.get("admin_label") or "Dokumenty", "group": True,
+                "files": files, "generation_actions": generation_actions, "required_count": required_count, "ready_count": ready_count,
+                "status": {"title": step.get("label") or "Dokumenty", "message": instruction},
+                "instruction": (step.get("document_instructions") or {}).get(aggregate_substate) or {},
+                "substate": aggregate_substate, "policy": {}, "can_generate": can_generate,
+                "can_retry": can_generate or aggregate_substate in {"failed", "verification_error", "verification_failed"}, "form_definition": form_definition,
+                "form_document_id": form_document_id, "values": form_values or dict(row),}
+
+    def version_gap_files(self, submission, definition, document_id):
+        item = self.documents._version_gap_entry(submission, definition, document_id)
+        row = self.repository.get_by_id(self.documents._submission_id(submission))
+        files = self.documents.submission_document_service.list_documents(row["submission_id"])
+        return [file for file in files if file.get("document_id") == document_id
+                and file.get("workflow_step_at_upload") == item["step_id"]
+                and file.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}]
+
+    def generate_version_gap(self, submission, definition, document_id):
+        document = self.documents.get_document_by_id(definition, document_id)
+        if not document or document.get("kind") != "generated_pdf":
+            raise ValueError("Ten dokument nie jest generowany przez system.")
+        existing = next((file for file in self.version_gap_files(submission, definition, document_id)
+                         if file.get("status") == "generated"), None)
+        if existing:
+            return existing
+        result = self.documents.generate_document(submission, definition, document_id, version_gap=True)
+        self._refresh_version_gap(submission)
+        return result
+
+    def upload_version_gap(self, submission, definition, document_id, uploaded_file):
+        if not uploaded_file or not uploaded_file.filename:
+            raise ValueError("Wybierz plik dokumentu.")
+        marker = self.documents._version_gap_entry(submission, definition, document_id)
+        document = self.documents.get_document_by_id(definition, document_id)
+        row = self.repository.get_by_id(self.documents._submission_id(submission))
+        files = self.version_gap_files(row, definition, document_id)
+        if any(file.get("status") in {"signed", "uploaded"} for file in files):
+            raise ValueError("Dokument został już przyjęty.")
+        signature_required = bool(document.get("signature_required", True))
+        if document.get("kind") == "generated_pdf" and not signature_required:
+            raise ValueError("Ten dokument kończy się po wygenerowaniu.")
+        data = uploaded_file.read()
+        validate_pdf_upload(uploaded_file.filename, data, uploaded_file.mimetype)
+        mime_type, extension = "application/pdf", "pdf"
+        generated = next((file for file in files if file.get("status") == "generated"), None)
+        if document.get("kind") == "generated_pdf" and not generated:
+            raise ValueError("Najpierw wygeneruj dokument.")
+        digest = sha256(data).hexdigest()
+        filename = f"{row['submission_id']}-{sha256(document_id.encode()).hexdigest()[:12]}-upgrade-{digest[:16]}.{extension}"
+        storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage,
+            slug=row["form_slug"], filename=filename, document_bytes=data,
+            document_type=self.documents._storage_document_type(document_id), signed=signature_required)
+        verification, outcome = {}, "VALID_SIGNATURE"
+        if signature_required:
+            try:
+                verification = dict(current_app.extensions["services"].document_signing_service.verify_stored_pdf(
+                    data, current_app.config["TEMP_DIR"], storage=self.documents.storage, slug=row["form_slug"],
+                    filename=filename, storage_path=storage_path,
+                    allowed_signatures=document.get("allowed_signatures", [])))
+                outcome = signature_verification_result(verification, document.get("allowed_signatures", []))
+                if outcome == "VALID_SIGNATURE" and generated:
+                    original = self.documents.read_document_bytes_for_download(row, generated["filename"], signed=False)
+                    if not data.startswith(original) or data == original:
+                        outcome = "INVALID_SIGNATURE"
+                        verification["reason_code"] = "DOCUMENT_REVISION_MISMATCH"
+            except Exception:
+                outcome = "VERIFICATION_ERROR"
+                verification["reason_code"] = "VERIFIER_EXCEPTION"
+        accepted = outcome == "VALID_SIGNATURE"
+        verification["result_code"] = outcome
+        recorded = self.documents.submission_document_service.record_document_metadata(
+            submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename, file_bytes=data,
+            document_id=document_id, document_type=self.documents.workflow_upload_metadata_type(document_id,
+                signer="participant", signed=signature_required), original_filename=uploaded_file.filename,
+            storage_path=storage_path, workflow_step_at_upload=marker["step_id"], mime_type=mime_type,
+            signed=bool(signature_required and accepted),
+            status="signed" if signature_required and accepted else "uploaded" if accepted else "rejected",
+            signature_status=str(verification.get("validation_status") or "not_required").lower(),
+            signature_validation_result=verification)
+        if not recorded:
+            raise ValueError("Nie udało się zapisać metadanych dokumentu.")
+        if accepted:
+            self._refresh_version_gap(submission)
+        return {"is_valid": accepted, "result": outcome,
+                "message": "Dokument został przyjęty." if accepted else VERIFICATION_MESSAGES.get(outcome, "Nie udało się zweryfikować podpisu.")}
+
+    def _refresh_version_gap(self, submission):
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.form_version_service import FormVersionService
+        with self.repository.session_factory() as db:
+            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id ==
+                self.documents._submission_id(submission)).with_for_update()).scalar_one()
+            FormVersionService().refresh_submission_completion(db, model)
+            db.commit()
+
+    def download_version_gap(self, submission, definition, document_id, filename):
+        row = self.repository.get_by_id(self.documents._submission_id(submission))
+        file = next((file for file in self.version_gap_files(row, definition, document_id)
+                     if file.get("filename") == filename and file.get("status") == "generated"), None)
+        if not file:
+            raise ValueError("Dokument nie jest dostępny.")
+        return self.documents.document_storage_service.read_document_bytes(
+            storage=self.documents.storage, slug=row["form_slug"], filename=filename,
+            metadata=file, submission_id=row["submission_id"], strict_metadata=True)
+
+    def start(self, submission, definition):
+        row, step, _ = self._current(
+            submission,
+            definition,
+        )
+
+        return self._start_group(
+            row,
+            step,
+            definition,
+        )
 
     def _complete(self, row, step, state, token):
         if not state.get("completed"):
             state["completed"] = True
             self._save(row, step, state, token, "completed", "DOCUMENT_STEP_COMPLETED")
 
-    def download(self, submission, definition, step_id, filename, *, signer="participant"):
-        # Downloads from completed steps remain available to the same participant.
-        row = self.repository.get_by_id(self.documents._submission_id(submission))
-        step = next((s for s in definition.get("workflow", {}).get("steps", []) if s.get("id") == step_id and is_document_step(s)), None)
+    def download(
+        self,
+        submission,
+        definition,
+        step_id,
+        filename,
+        *,
+        signer="participant",
+        document_id=None,
+    ):
+        # Dokumenty z zakończonych etapów pozostają dostępne dla uczestnika.
+        row = self.repository.get_by_id(
+            self.documents._submission_id(submission)
+        )
+
+        step = next(
+            (
+                item
+                for item in definition.get("workflow", {}).get("steps", [])
+                if item.get("id") == step_id
+                and has_document_workflow(definition, item)
+            ),
+            None,
+        )
+
         if not step:
             raise ValueError("Nie znaleziono dokumentu.")
-        document = self.documents.get_document_by_id(definition, step["document_id"])
-        if self.needs_data(document, document_step_state(row, step_id)):
-            raise ValueError("Najpierw uzupełnij dane dokumentu.")
-        if signer == "participant" and not document_policy(step, document)["download"] or not any(f["filename"] == filename for f in self._files(row, step)):
-            raise ValueError("Dokument nie jest dostępny do pobrania.")
-        file = next(f for f in self._files(row, step) if f["filename"] == filename)
-        data = self.documents.read_document_bytes_for_download(row, filename, signed=bool(file.get("signed")))
-        state = document_step_state(row, step_id)
-        if (row.get("workflow_step") or row.get("workflow_stage")) == step_id:
-            token = self._claim(row, step)
-            try:
-                state = document_step_state(self.repository.get_by_id(row["submission_id"]), step_id)
-                next_state = "awaiting_signature" if signer == "participant" and state.get("substate") == "ready" and document_policy(step, document)["participant_signature"] else state["substate"]
-                self._save(row, step, state, token, next_state, "DOCUMENT_DOWNLOADED", signer)
-            finally:
-                self.repository.release_document_operation(row["submission_id"], token)
-        else:
-            self.documents.workflow_service._record_workflow_event(row["submission_id"],
-                previous_step=step_id, new_step=step_id, previous_status=row.get("process_status"), new_status=row.get("process_status"),
-                actor=signer, reason="Pobranie dokumentu", decision_code="", user_message="",
-                side_effects={"document_id": step["document_id"], "filename": filename}, source="DOCUMENT_DOWNLOADED")
-        return data
 
-    def upload(self, submission, definition, step_id, uploaded_file, *, signer="participant", instance=""):
-        if signer not in {"participant", "office"} or not uploaded_file or not uploaded_file.filename:
-            raise ValueError("Wybierz plik PDF.")
-        current = self.repository.get_by_id(self.documents._submission_id(submission))
-        prior = document_step_state(current, step_id)
-        if prior.get("completed"):
-            previous_filename = prior.get("signatures", {}).get(instance or "document", {}).get(signer)
-            metadata = self.documents.submission_document_service.list_documents(current["submission_id"])
-            digest = sha256(uploaded_file.read()).hexdigest()
-            if any(f["filename"] == previous_filename and f.get("checksum_sha256") == digest for f in metadata):
-                return {"is_valid": True, "completed": True, "result": "VALID_SIGNATURE", "message": VERIFICATION_MESSAGES["VALID_SIGNATURE"]}
-            raise ValueError("Etap dokumentowy został już zakończony.")
-        row, step, document = self._current(submission, definition, step_id)
-        previous = document_step_state(row, step_id)
-        if previous.get("completed") or requirements_satisfied(previous, document_policy(step, document)):
-            self.documents.workflow_service.run_automatic_steps(row, definition)
-            return {"is_valid": True, "completed": True}
-        token = self._claim(row, step)
-        completed = False
-        try:
-            state = document_step_state(self.repository.get_by_id(row["submission_id"]), step_id)
-            policy = document_policy(step, document)
-            if state.get("completed"):
-                return {"is_valid": True, "completed": True}
-            if signer == "office" and not policy["office_signature"] or signer == "participant" and not policy["upload_required"]:
-                raise ValueError("Ten podpis lub upload nie jest wymagany.")
-            files = state.get("files") or []
-            source = next((f for f in files if f.get("training_key", "") == instance), None)
-            if not source or self.needs_data(document, state) or state.get("substate") in {"collect_data", "generating", "failed"}:
-                raise ValueError("Najpierw przygotuj dokument.")
-            key = instance or "document"
-            signatures = state.setdefault("signatures", {}).setdefault(key, {})
-            if signer == "office" and policy["upload_required"] and not signatures.get("participant"):
-                raise ValueError("Dokument wymaga najpierw podpisu uczestnika.")
-            if signatures.get(signer):
-                return {"is_valid": True, "completed": False}
-            data = uploaded_file.read()
-            validate_pdf_upload(uploaded_file.filename, data, uploaded_file.mimetype)
-            requires_signature = policy[f"{signer}_signature"]
-            instance_name = sha256(instance.encode()).hexdigest()[:12] if instance else "document"
-            filename = f"{row['submission_id']}-{step_id}-{instance_name}-{signer}-{sha256(data).hexdigest()[:16]}.pdf"
-            try:
-                storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage, slug=row["form_slug"], filename=filename,
-                    document_bytes=data, document_type=self.documents._storage_document_type(step["document_id"]), signed=requires_signature)
-            except Exception:
-                state["verification_result"] = "VERIFICATION_ERROR"
-                self._save(row, step, state, token, "verification_error", "DOCUMENT_STORAGE_FAILED", signer)
-                self._log_verification(row, step, None, {"upload_sha256": sha256(data).hexdigest()}, "VERIFICATION_ERROR", "STORAGE_WRITE_ERROR")
-                return {"is_valid": False, "completed": False, "result": "VERIFICATION_ERROR", "message": VERIFICATION_MESSAGES["VERIFICATION_ERROR"]}
-            # Persist the uploaded artifact even when verification fails; it is never accepted as signed.
-            metadata = dict(submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename, file_bytes=data,
-                document_id=step["document_id"], document_type=self.documents.workflow_upload_metadata_type(step["document_id"], signer=signer, signed=requires_signature),
-                agreement_number=next((f.get("agreement_number", "") for f in self._files(row, step) if f["filename"] == source.get("filename")), ""),
-                original_filename=uploaded_file.filename, storage_path=storage_path, training_key=instance, workflow_step_at_upload=step_id)
-            pending_metadata = {**metadata, "document_type": f"uploaded_{step['document_id']}_{signer}"}
-            self._save(row, step, state, token, "upload", "SIGNED_DOCUMENT_UPLOADED", signer)
-            verification = {}
-            outcome = "VALID_SIGNATURE"
-            if requires_signature:
-                self._save(row, step, state, token, "verifying", "SIGNATURE_VERIFICATION_STARTED", signer)
-                try:
-                    verification = dict(current_app.extensions["services"].document_signing_service.verify_stored_pdf(
-                        data, current_app.config["TEMP_DIR"], storage=self.documents.storage, slug=row["form_slug"],
-                        filename=filename, storage_path=storage_path,
-                        allowed_signatures=document.get("allowed_signatures", []) if signer == "participant" else None))
-                    outcome = signature_verification_result(verification, document.get("allowed_signatures", []) if signer == "participant" else None)
-                    if outcome == "VALID_SIGNATURE":
-                        original_filename = (signatures.get("participant") or source.get("filename")) if signer == "office" else source.get("filename")
-                        if original_filename:
-                            try:
-                                original = self.documents.read_document_bytes_for_download(row, original_filename,
-                                    signed=bool(signer == "office" and signatures.get("participant") and policy["participant_signature"]))
-                            except Exception:
-                                verification["reason_code"] = "STORAGE_READ_ERROR"
-                                raise
-                            if not data.startswith(original) or data == original:
-                                outcome = "INVALID_SIGNATURE"
-                                verification["reason_code"] = "DOCUMENT_REVISION_MISMATCH"
-                        if signer == "office" and policy["participant_signature"] and int(verification.get("signature_count") or 0) < 2:
-                            outcome = "INVALID_SIGNATURE"
-                            verification["reason_code"] = "MISSING_COUNTERSIGNATURE"
-                except Exception:
-                    verification.update(validation_status="ERROR", reason_code=verification.get("reason_code") if verification.get("reason_code") == "STORAGE_READ_ERROR" else "VERIFIER_EXCEPTION")
-                    outcome = "VERIFICATION_ERROR"
-            valid = outcome == "VALID_SIGNATURE"
-            verification["result_code"] = outcome
-            recorded = self.documents.submission_document_service.record_document_metadata(**(metadata if valid else pending_metadata), signed=requires_signature,
-                status="signed" if valid and requires_signature else "uploaded" if valid else "rejected",
-                signature_status=str(verification.get("validation_status") or "not_required").lower(), signature_validation_result=verification)
-            if not recorded:
-                state["verification_result"] = "VERIFICATION_ERROR"
-                self._save(row, step, state, token, "verification_error", "DOCUMENT_METADATA_FAILED", signer)
-                self._log_verification(row, step, None, verification, "VERIFICATION_ERROR", "METADATA_WRITE_ERROR")
-                return {"is_valid": False, "completed": False, "result": "VERIFICATION_ERROR", "message": VERIFICATION_MESSAGES["VERIFICATION_ERROR"]}
-            file = next((f for f in self.documents.submission_document_service.list_documents(row["submission_id"]) if f["filename"] == filename), {})
-            self._log_verification(row, step, file.get("id"), verification, outcome, verification.get("reason_code") or outcome)
-            state["verification_result"] = outcome
-            if not valid:
-                substate = "verification_error" if outcome == "VERIFICATION_ERROR" else "verification_failed"
-                self._save(row, step, state, token, substate, "SIGNATURE_VERIFICATION_FAILED", signer)
-                return {"is_valid": False, "completed": False, "result": outcome, "message": VERIFICATION_MESSAGES[outcome]}
-            try:
-                if signer == "participant" and requires_signature:
-                    self.documents.record_composite_participant_signature(row, step, data, filename, instance, verification)
-                elif signer == "office":
-                    self.documents.record_composite_office_signature(row, step, filename, instance)
-            except ValueError:
-                self.documents.submission_document_service.record_document_metadata(**pending_metadata, signed=requires_signature,
-                    status="rejected_no_capacity", signature_status=str(verification.get("validation_status") or "").lower(), signature_validation_result=verification)
-                self._save(row, step, state, token, "verification_failed", "DOCUMENT_ACCEPTANCE_FAILED", signer)
-                raise
-            signatures[signer] = filename
-            self._save(row, step, state, token, f"{signer}_signed", "SIGNATURE_VERIFIED" if requires_signature else "DOCUMENT_UPLOAD_ACCEPTED", signer)
-            required = (["participant"] if policy["upload_required"] else []) + (["office"] if policy["office_signature"] else [])
-            completed = all(all(state["signatures"].get(f.get("training_key") or "document", {}).get(role) for role in required) for f in files)
-            if completed:
-                self._save(row, step, state, token, "signed", "DOCUMENT_SIGNED", signer)
-                self._complete(row, step, state, token)
-            else:
-                waiting_office = policy["office_signature"] and all(state["signatures"].get(f.get("training_key") or "document", {}).get("participant") for f in files)
-                self._save(row, step, state, token, "awaiting_office_signature" if waiting_office else "awaiting_signature", "DOCUMENT_SIGNATURE_REQUESTED")
-        finally:
-            self.repository.release_document_operation(row["submission_id"], token)
-        if completed:
-            fresh = self.repository.get_by_id(row["submission_id"])
-            self.documents.workflow_service.advance_after_action(fresh, definition)
-        return {"is_valid": True, "completed": completed, "result": "VALID_SIGNATURE", "message": VERIFICATION_MESSAGES["VALID_SIGNATURE"]}
-
-    @staticmethod
-    def _log_verification(row, step, file_id, verification, result, reason_code):
-        current_app.logger.info(
-            "signature_verification_result submission_id=%s document_id=%s file_id=%s result=%s provider=%s reason_code=%s "
-            "detected_signature_type=%s verifier_backend=%s provider_allowed=%s signature_count=%s "
-            "cryptographic_valid=%s document_integrity_valid=%s certificate_chain_valid=%s timestamp_valid=%s "
-            "upload_sha256=%s storage_sha256=%s verifier_sha256=%s",
-            row["submission_id"], step["document_id"], file_id, result, verification.get("provider") or "unknown", reason_code,
-            verification.get("detected_signature_type"), verification.get("verifier_backend"), verification.get("provider_allowed"),
-            verification.get("signature_count"), verification.get("cryptographic_valid"), verification.get("document_integrity_valid"),
-            verification.get("certificate_chain_valid"), verification.get("timestamp_valid"),
-            verification.get("upload_sha256"), verification.get("storage_sha256"), verification.get("verifier_sha256"))
+        return self._download_group(
+            row,
+            step,
+            definition,
+            filename,
+            signer,
+            document_id,
+        )
+    def upload(
+        self,
+        submission,
+        definition,
+        step_id,
+        uploaded_file,
+        *,
+        signer="participant",
+        instance="",
+        document_id="",
+    ):
+        return self._upload_group(
+            submission,
+            definition,
+            step_id,
+            uploaded_file,
+            document_id,
+            signer,
+            instance,
+        )
 
     def view(self, row, definition, *, signer="participant"):
         step = self.documents.composite_step(row, definition)
+
         if not step:
             return None
-        document = self.documents.get_document_by_id(definition, step["document_id"])
-        policy = document_policy(step, document)
-        state = document_step_state(row, step["id"])
-        substate = state.get("substate", "generating")
-        collect_data = (self.needs_data(document, state) or substate == "collect_data" and not state.get("data_confirmed")
-            or substate == "failed" and bool(document.get("fields")) and not state.get("files"))
-        if collect_data:
-            substate = "collect_data"
-        busy = float(document_states(row).get("document_operation_until") or 0) > time.time()
-        collection = bool(document.get("repeat_over") or document.get("generation_mode") == "per_training")
-        sources = [] if collect_data else list(state.get("files", []))
-        if collection and not collect_data:
-            existing_keys = {str(source.get("training_key") or "") for source in sources}
-            sources.extend({"filename": "", "training_key": item["id"], "label": item["name"]}
-                           for item in parse_training_snapshots(row.get("selected_trainings"))
-                           if item["id"] not in existing_keys)
-        pending_collection = collection and any(not source.get("filename") for source in sources)
-        can_generate = bool(policy["generate"] and pending_collection and substate in {"ready", "failed", "generating"} and not busy
-            and not state.get("completed") and (row.get("workflow_step") or row.get("workflow_stage")) == step["id"])
-        files = []
-        for source in sources:
-            signatures = state.get("signatures", {}).get(source.get("training_key") or "document", {})
-            filename = (signatures.get("participant") or source.get("filename")) if signer == "office" else source.get("filename")
-            can_upload = bool(filename) and not state.get("completed") and substate not in {"generating", "failed"} and not busy and not signatures.get(signer)
-            can_upload = can_upload and (policy["upload_required"] if signer == "participant" else policy["office_signature"] and (not policy["upload_required"] or bool(signatures.get("participant"))))
-            files.append({"filename": filename if policy["download"] or signer == "office" else "", "instance": source.get("training_key", ""),
-                          "label": self._public_file_label(row, document, source),
-                          "can_upload": bool(can_upload), "signed": bool(signatures.get(signer)),
-                          "pending_generation": bool(collection and not source.get("filename"))})
-        status = document_step_status(row, step)
-        if collect_data:
-            status.update(title=document["label"], message="Uzupełnij dane wymagane do przygotowania deklaracji.", substate="collect_data")
-        return {"step_id": step["id"], "label": step.get("admin_label") or document["label"], "document_id": step["document_id"],
-                "substate": substate, "files": files, "policy": policy, "status": status,
-                "can_generate": can_generate,
-                "form_definition": current_app.extensions["services"].declaration_flow_service.document_fields_definition(
-                    current_app.extensions["services"].declaration_flow_service.operational_document(document, row, self.repository)) if collect_data else None,
-                "instruction": (step.get("document_instructions") or {}).get(substate) or {},
-                "values": dict(row),
-                "can_retry": not busy and (substate in {"failed", "generating"} or bool(state.get("completed")))}
+
+        return self._view_group(
+            row,
+            step,
+            definition,
+            signer,
+        )
 
     def completed_files(self, row, definition):
         files = []
+
         for step in definition.get("workflow", {}).get("steps", []):
+            documents = step_documents(definition, step)
+
+            if not documents:
+                continue
+
             state = document_step_state(row, step.get("id"))
-            if not is_document_step(step) or not state.get("completed"):
+
+            if not state.get("completed"):
                 continue
-            document = self.documents.get_document_by_id(definition, step["document_id"])
-            if not document_policy(step, document)["download"]:
-                continue
-            for source in state.get("files", []):
-                signatures = state.get("signatures", {}).get(source.get("training_key") or "document", {})
-                filename = signatures.get("office") or signatures.get("participant") or source.get("filename")
-                if filename:
-                    files.append({"step_id": step["id"], "label": self._public_file_label(row, document, source), "filename": filename})
+
+            for document in documents:
+                item = document_item_state(
+                    row,
+                    step["id"],
+                    document["id"],
+                    primary_document_id=str(step.get("document_id") or ""),
+                )
+
+                if self._is_collection_document(document):
+                    for source in item.get("files") or []:
+                        key = source.get("training_key") or ""
+
+                        instance = (
+                            (item.get("instances") or {}).get(key)
+                            or {}
+                        )
+
+                        filename = (
+                            instance.get("office_filename")
+                            or instance.get("uploaded_filename")
+                            or instance.get("generated_filename")
+                        )
+
+                        if (
+                            filename
+                            and group_document_policy(
+                                step,
+                                document,
+                            )["download"]
+                        ):
+                            files.append({
+                                "step_id": step["id"],
+                                "document_id": document["id"],
+                                "label": self._public_file_label(
+                                    row,
+                                    document,
+                                    source,
+                                ),
+                                "filename": filename,
+                            })
+
+                    continue
+
+                filename = (
+                    item.get("office_filename")
+                    or item.get("uploaded_filename")
+                    or item.get("generated_filename")
+                )
+
+                if (
+                    filename
+                    and group_document_policy(
+                        step,
+                        document,
+                    )["download"]
+                ):
+                    files.append({
+                        "step_id": step["id"],
+                        "document_id": document["id"],
+                        "label": document["label"],
+                        "filename": filename,
+                    })
+
         return files

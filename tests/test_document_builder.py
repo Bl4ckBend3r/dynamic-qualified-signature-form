@@ -2,6 +2,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from docx import Document
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -13,13 +14,93 @@ from services.documents.declaration_template_context_service import (
     declaration_variable_catalog,
 )
 from services.documents.document_builder_service import (
+    document_builder_block_types,
     normalize_inline_runs,
     normalize_document_builder_document,
     render_document_builder_template,
     validate_document_builder_document,
 )
 from services.documents.docx_template_parser import parse_docx_template
+from services.documents.agreement_docx_template_service import AgreementDocxTemplateService
+from testing_support import InMemoryStorage
 from services.form_config_service import FormConfigService
+
+
+@pytest.mark.parametrize("document_type", ["declaration", "agreement"])
+def test_dotted_fields_are_shared_layout_blocks_with_default_labels(document_type):
+    document = {"version": 1, "blocks": [{"type": "dotted_fields"}]}
+
+    normalized = normalize_document_builder_document(document, document_type)
+    template = render_document_builder_template(normalized, document_type)
+
+    assert "dotted_fields" in document_builder_block_types(document_type)
+    assert normalized["blocks"] == [{
+        "type": "dotted_fields",
+        "left_label": "miejscowość i data",
+        "right_label": "podpis",
+    }]
+    assert validate_document_builder_document(document, document_type=document_type) == []
+    assert template.count('class="document-dotted-fields__line"') == 2
+    assert template.count('class="document-dotted-fields__label"') == 2
+    assert "miejscowość i data" in template and "podpis" in template
+    assert normalize_document_builder_document(normalized, document_type) == normalized
+
+
+def test_dotted_fields_keep_custom_labels_and_block_order():
+    document = {"blocks": [
+        {"type": "paragraph", "content": "Przed"},
+        {"type": "dotted_fields", "left_label": "Miejsce podpisania", "right_label": "Podpis osoby"},
+        {"type": "paragraph", "content": "Po"},
+    ]}
+
+    normalized = normalize_document_builder_document(document, "declaration")
+    template = render_document_builder_template(normalized, "declaration")
+
+    assert [block["type"] for block in normalized["blocks"]] == ["paragraph", "dotted_fields", "paragraph"]
+    assert template.index("Przed") < template.index("Miejsce podpisania") < template.index("Po")
+    assert "Podpis osoby" in template
+    assert validate_document_builder_document(normalized, document_type="declaration") == []
+
+
+def test_dotted_fields_escape_html_and_jinja_in_labels():
+    document = {"blocks": [{
+        "type": "dotted_fields",
+        "left_label": '\"><img src=x onerror=alert(1)>',
+        "right_label": "{{ missing_variable }} {% if secret %}",
+    }]}
+
+    template = render_document_builder_template(document, "agreement")
+    rendered = SandboxedEnvironment(autoescape=True).from_string(template).render()
+
+    assert "<img" not in template and "<img" not in rendered
+    assert "{{ missing_variable }}" not in template
+    assert "{% if secret %}" not in template
+    assert "&#123;&#123;" in template
+    assert validate_document_builder_document(document, document_type="agreement") == []
+
+
+def test_dotted_fields_reject_empty_label_and_leave_older_documents_unchanged():
+    old = {"version": 1, "blocks": [{"type": "paragraph", "content": "Dotychczasowy dokument"}]}
+    original = json.loads(json.dumps(old))
+    normalized = normalize_document_builder_document(old, "agreement")
+    assert old == original
+    assert [block["type"] for block in normalized["blocks"]] == ["paragraph"]
+    assert "document-dotted-fields" not in render_document_builder_template(old, "agreement")
+    assert validate_document_builder_document(old, document_type="agreement") == []
+
+    invalid = {"blocks": [{"type": "dotted_fields", "left_label": "", "right_label": "Podpis"}]}
+    assert any("etykiet" in error.message for error in validate_document_builder_document(invalid, document_type="agreement"))
+
+
+def test_dotted_fields_are_available_in_shared_editor_without_submission_fields():
+    root = Path(__file__).resolve().parents[1]
+    editor = (root / "templates/admin/forms/_document_builder.html").read_text(encoding="utf-8")
+    script = (root / "static/js/agreement_builder.js").read_text(encoding="utf-8")
+
+    assert 'data-builder-add="dotted_fields"' in editor
+    assert 'data-builder-field="left_label"' in script
+    assert 'data-builder-field="right_label"' in script
+    assert 'data-builder-move="up"' in script and 'data-builder-remove' in script
 
 
 def test_inline_runs_are_merged_persisted_and_rendered_without_breaking_jinja():
@@ -327,6 +408,68 @@ def test_declaration_catalog_uses_assigned_fields_and_legacy_keeps_all_fields():
     assert "imie" not in names
 
 
+def test_declaration_field_filter_keeps_nonempty_section_and_assigned_text():
+    from services.documents.declaration_flow_service import DeclarationFlowService
+
+    fields = [
+        {"type": "section", "label": "Pusta sekcja"},
+        {"name": "excluded", "label": "Poza deklaracją", "type": "text",
+         "document_usage": {"declaration": False}},
+        {"type": "section", "label": "Sekcja deklaracji"},
+        {"name": "intro", "type": "static_text", "content": "Treść deklaracji",
+         "document_usage": {"declaration": True}},
+        {"name": "included", "label": "W deklaracji", "type": "text",
+         "document_usage": {"declaration": True}},
+        {"type": "section", "label": "Informacja"},
+        {"name": "note", "type": "static_text", "content": "Ważna informacja",
+         "document_usage": {"declaration": True}},
+    ]
+    document = {"id": "declaration", "label": "Deklaracja", "fields": fields}
+    definition = DeclarationFlowService.document_fields_definition(document)
+    assert [field.get("name") or field.get("label") for field in definition["fields"]] == [
+        "Sekcja deklaracji", "intro", "included", "Informacja", "note"]
+    from services.documents.declaration_template_context_service import declaration_variable_catalog
+    variable_names = {item["name"] for item in declaration_variable_catalog(fields)}
+    assert "included" in variable_names
+    assert "note" not in variable_names and "note_display" not in variable_names
+
+    legacy = [{key: value for key, value in field.items() if key != "document_usage"}
+              for field in fields]
+    assert "excluded" in {field.get("name") for field in
+                          DeclarationFlowService.document_fields_definition({**document, "fields": legacy})["fields"]}
+
+
+def test_declaration_address_uses_submission_data_behind_empty_columns():
+    from services.documents.declaration_template_context_service import (
+        build_declaration_render_context, declaration_preview_context,
+    )
+
+    # Given: legacy DB columns are blank while the submission JSON has the address.
+    address = {"ulica": "Przykładowa", "nr_budynku": "12", "nr_lokalu": "3",
+               "kod_pocztowy": "65-001", "miejscowosc": "Zielona Góra"}
+    row = {**{name: "" for name in address}, "data_json": address}
+    context = build_declaration_render_context(row)
+    assert context["participant_address"] == "ul. Przykładowa 12/3, 65-001 Zielona Góra"
+    assert context["participant_address_inline"] == context["participant_address"]
+
+    # Expected: no empty slash or punctuation when address parts are missing.
+    no_apartment = build_declaration_render_context({"data_json": {**address, "nr_lokalu": ""}})
+    assert no_apartment["participant_address"] == "ul. Przykładowa 12, 65-001 Zielona Góra"
+    partial = build_declaration_render_context({"data_json": {
+        "ulica": "null", "nr_budynku": None, "nr_lokalu": "None",
+        "kod_pocztowy": "65-001", "miejscowosc": "Zielona Góra"}})
+    assert partial["participant_address"] == "65-001 Zielona Góra"
+    aliases = build_declaration_render_context({"data_json": {
+        "street": "  Polna  ", "building_number": "4", "postal_code": "65-001", "city": "Zielona   Góra"}})
+    assert aliases["participant_address"] == "ul. Polna 4, 65-001 Zielona Góra"
+
+    # When: preview uses a real, partial submission, its example address is cleared.
+    preview = declaration_preview_context(submission={"ulica": "", "data_json": {
+        "kod_pocztowy": "65-001", "miejscowosc": "Zielona Góra"}})
+    assert preview["participant_address"] == "65-001 Zielona Góra"
+    assert declaration_preview_context(submission={"data_json": {}})["participant_address"] == ""
+
+
 def test_docx_import_preserves_inline_styles_and_whole_split_jinja_token():
     document = Document()
     paragraph = document.add_paragraph()
@@ -387,3 +530,20 @@ def test_form_config_preserves_selected_template_sources_for_both_document_types
     declaration = next(item for item in normalized["documents"] if item["id"] == "declaration")
     assert agreement["template_source"] == "docx"
     assert declaration["template_source"] == "html"
+
+
+def test_custom_docx_uses_existing_parser_and_isolated_template_path():
+    # Given: a DOCX template for an additional generated document.
+    source = Document()
+    source.add_paragraph("Zaświadczenie dla {{ participant_name }}")
+    buffer = BytesIO()
+    source.save(buffer)
+    storage = InMemoryStorage({})
+    service = AgreementDocxTemplateService(storage)
+    # When: the shared DOCX service imports it with a generic document ID.
+    metadata = service.upload(form_slug="form", filename="certificate.docx", content=buffer.getvalue(),
+        fields=[], uploaded_by_user_id=1, document_type="document", document_id="employment_certificate",
+        form_definition={"fields": []}, version_key="1-1-2")
+    # Expected: the template is version scoped and the renderer sees its text.
+    assert "/employment_certificate/versions/1-1-2/" in metadata["storage_path"]
+    assert "{{ participant_name }}" in service.parse_stored_template(metadata).html

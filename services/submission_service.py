@@ -80,13 +80,12 @@ class SubmissionService:
         submission_id: str | None = None,
     ) -> dict:
         submission_id = submission_id or str(uuid4())
-        submission_data = extract_submission_data(form_config, request_form)
-        submission_data = apply_pesel_derived_values(form_config, submission_data)
-        mapped_submission, map_meta = build_submission_from_form(
-            submission_data,
-            form_config,
-            include_metadata=True,
-        )
+        validation = self.validate_form(form_config, request_form)
+        submission_data = validation["values"]
+        mapped_submission = validation["mapped_submission"]
+        attachments = validation["attachments"]
+        errors = validation["errors"]
+        map_meta = validation["map_meta"]
         logger.info(
             "Mapowanie formularza %s: pola zapisane=%s; pola pominiete=%s.",
             form_slug,
@@ -94,18 +93,6 @@ class SubmissionService:
             ", ".join(map_meta["skipped_fields"]) or "-",
         )
 
-        errors = self._validate(form_config, submission_data)
-        attachments, attachment_errors = self.submission_attachment_service.validate_uploads(
-            form_config,
-            submission_data,
-            request.files if has_request_context() else None,
-        )
-        errors.update(attachment_errors)
-        mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
-        mapped_errors = self._map_errors_to_form_fields(mapped_errors, form_config)
-        errors.update({key: value for key, value in mapped_errors.items() if key not in errors})
-        consent_errors = self.compliance_service.validate_acceptances(form_config, submission_data)
-        errors.update({key: value for key, value in consent_errors.items() if key not in errors})
         if errors:
             return {
                 "ok": False,
@@ -241,6 +228,30 @@ class SubmissionService:
             "values": submission_data,
             "submission": submission,
             "result": result,
+        }
+
+    def validate_form(self, form_config: dict, request_form) -> dict:
+        """Validate an initial submission without writing a submission or documents."""
+        submission_data = extract_submission_data(form_config, request_form)
+        submission_data = apply_pesel_derived_values(form_config, submission_data)
+        mapped_submission, map_meta = build_submission_from_form(
+            submission_data, form_config, include_metadata=True,
+        )
+        errors = self._validate(form_config, submission_data)
+        attachments, attachment_errors = self.submission_attachment_service.validate_uploads(
+            form_config, submission_data, request.files if has_request_context() else None,
+        )
+        errors.update(attachment_errors)
+        mapped_errors = validate_required_submission_fields(mapped_submission, form_config)
+        errors.update({key: value for key, value in self._map_errors_to_form_fields(mapped_errors, form_config).items() if key not in errors})
+        consent_errors = self.compliance_service.validate_acceptances(form_config, submission_data)
+        errors.update({key: value for key, value in consent_errors.items() if key not in errors})
+        return {
+            "values": submission_data,
+            "mapped_submission": mapped_submission,
+            "map_meta": map_meta,
+            "attachments": attachments,
+            "errors": errors,
         }
 
     def create_submission(
@@ -522,6 +533,7 @@ class SubmissionService:
         submission_data: dict,
         submission: dict,
         pdf_filename: str,
+        require_metadata: bool = False,
     ) -> None:
         pdf_context = {
             "form_definition": form_config,
@@ -545,9 +557,7 @@ class SubmissionService:
             logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
         finally:
             tmp_pdf_path.unlink(missing_ok=True)
-        self.submission_repository.update(submission_id, {"pdf_filename": pdf_filename})
-        submission["pdf_filename"] = pdf_filename
-        self.submission_document_service.record_generated_document(
+        metadata_recorded = self.submission_document_service.record_generated_document(
             submission_id=submission_id,
             form_slug=form_slug,
             filename=pdf_filename,
@@ -556,6 +566,12 @@ class SubmissionService:
             document_type=SubmissionDocumentType.FORM_PDF,
             storage=self.storage,
         )
+        if require_metadata and not metadata_recorded:
+            raise RuntimeError("Nie udało się zapisać metadanych wygenerowanego PDF.")
+        updated = self.submission_repository.update(submission_id, {"pdf_filename": pdf_filename})
+        if require_metadata and not updated:
+            raise RuntimeError("Nie udało się powiązać wygenerowanego PDF ze zgłoszeniem.")
+        submission["pdf_filename"] = pdf_filename
         if self.audit_log_service:
             self.audit_log_service.log_event(
                 "PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename}
@@ -805,13 +821,16 @@ class SubmissionService:
         definition = self.workflow_service.definition_for(row) if self.workflow_service else {}
         if definition.get("workflow", {}).get("flow_mode") == "explicit":
             step = self.workflow_service._find_step(definition, self.workflow_service.get_current_step(row, definition)) or {}
+            from services.documents.document_workflow_service import uses_document_group
+            from services.workflow_config_service import DOCUMENTS_STAGE_TYPE, workflow_stage_type
             document_id = workflow_step_document_id(step)
             can_sign_documents = (
-                step.get("stage_type") in {"document", "user_action"}
-                and bool(workflow_document_action(step, document_id))
+                workflow_stage_type(step) in {DOCUMENTS_STAGE_TYPE, "user_action"}
+                and (
+                    uses_document_group(definition, step)
+                    or bool(workflow_document_action(step, document_id))
+                )
             )
-            if step.get("document_lifecycle") == "composite":
-                can_sign_documents = True
             can_view_status_details = True
         return {
             "submission_id": submission_id,

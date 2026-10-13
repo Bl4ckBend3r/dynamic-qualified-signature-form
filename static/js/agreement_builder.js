@@ -52,7 +52,7 @@
           const documentType = String(
             button.dataset.documentType || "agreement",
           );
-          const identity = `${documentType}:${formId}`;
+          const identity = `${button.dataset.documentId || documentType}:${formId}`;
           const builderUrl = button.dataset.builderUrl;
           const launcher = button.closest(
             '[data-source-panel="builder"], .agreement-builder-launcher, .document-builder-launcher',
@@ -324,7 +324,7 @@
     const formId = Number(root.dataset.formId);
     const localKey =
       root.dataset.storageKey ||
-      `document-builder:${documentType}:form:${formId}:v${BUILDER_SCHEMA_VERSION}`;
+      `document-builder:${root.dataset.documentId || documentType}:form:${formId}:v${BUILDER_SCHEMA_VERSION}`;
     const legacyLocalKey =
       root.dataset.legacyStorageKey ||
       `document-builder-${documentType}-draft-${formId}`;
@@ -466,6 +466,11 @@
           type: "signatures",
           left_label: "Beneficjent",
           right_label: "Uczestnik projektu",
+        },
+        dotted_fields: {
+          type: "dotted_fields",
+          left_label: "miejscowość i data",
+          right_label: "podpis",
         },
         form_field: {
           type: "form_field",
@@ -725,6 +730,10 @@
           block.show_number = block.show_number !== false;
           block.show_header = block.show_header !== false;
         }
+        if (block.type === "dotted_fields") {
+          block.left_label = String(block.left_label ?? "miejscowość i data");
+          block.right_label = String(block.right_label ?? "podpis");
+        }
         delete block.style;
       });
       return model;
@@ -792,6 +801,8 @@
         return Boolean(
           String(block.left_label || block.right_label || "").trim(),
         );
+      if (block.type === "dotted_fields")
+        return Boolean(String(block.left_label || block.right_label || "").trim());
       if (block.type === "form_field")
         return Boolean(String(block.field || "").trim());
       if (block.type === "criteria_table")
@@ -1189,6 +1200,8 @@ function runsMarkup(holder) {
         body = `<fieldset><legend>Dane uczestnika</legend>${choices.map(([value, label]) => `<label><input type="checkbox" data-builder-array="fields" data-index="${index}" value="${value}" ${(block.fields || []).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</fieldset>`;
       } else if (block.type === "signatures") {
         body = `<div class="agreement-builder-block__signature-config"><label>Lewa strona<input data-builder-field="left_label" data-index="${index}" value="${escapeHtml(block.left_label || "")}"></label><label>Prawa strona<input data-builder-field="right_label" data-index="${index}" value="${escapeHtml(block.right_label || "")}"></label></div>`;
+      } else if (block.type === "dotted_fields") {
+        body = `<div class="agreement-builder-block__signature-config"><label>Etykieta lewej linii<input data-builder-field="left_label" data-index="${index}" value="${escapeHtml(block.left_label || "")}"></label><label>Etykieta prawej linii<input data-builder-field="right_label" data-index="${index}" value="${escapeHtml(block.right_label || "")}"></label></div>`;
       } else if (block.type === "form_field") {
         const fieldVariables = variables.filter(
           (item) =>

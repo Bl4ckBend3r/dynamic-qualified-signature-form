@@ -174,6 +174,23 @@ STATUS_TO_STAGE_ALIASES = {
 }
 
 
+DOCUMENTS_STAGE_TYPE = "documents"
+
+
+def workflow_stage_type(step):
+    kind = str(
+        step.get("stage_type")
+        or step.get("type")
+        or ""
+    ).strip()
+
+    # Kompatybilność historycznych FormVersion.
+    if kind in {"document", "declaration", "agreement"}:
+        return DOCUMENTS_STAGE_TYPE
+
+    return kind
+
+
 def normalize_decision_assignments(decisions: Any, steps: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Resolve historic decision-to-stage fields into the canonical ``step_id``."""
     by_id = {str(step.get("id") or "").strip(): step for step in steps}
@@ -369,6 +386,26 @@ def is_workflow_step_active(step: Mapping[str, Any], workflow: Mapping[str, Any]
     return bool(step.get("active", True))
 
 
+def is_participant_stage(step: Mapping[str, Any], workflow: Mapping[str, Any]) -> bool:
+    """Classify a stage by its workflow actor, without interpreting its ID."""
+    if not is_workflow_step_active(step, workflow):
+        return False
+
+    if (
+        step.get("final")
+        or step.get("rejected")
+        or step.get("requires_officer_action")
+    ):
+        return False
+
+    if step.get("requires_user_action"):
+        return True
+
+    kind = workflow_stage_type(step)
+
+    return kind in {"user_action", DOCUMENTS_STAGE_TYPE}
+
+
 def active_workflow_steps(workflow: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         dict(step)
@@ -451,7 +488,12 @@ def collapse_draft_document_stages(definition: Mapping[str, Any]) -> dict:
             continue
         action = step.get("action") if step.get("action") not in {None, "none"} else step.get("type")
         phase = phase or _DOCUMENT_ACTION_PHASES.get(action, "")
-        if not phase and not is_document_step(step) and step.get("type") != "document" and step.get("stage_type") != "document":
+        if (
+            not phase
+            and not is_document_step(step)
+            and step.get("type") != "document"
+            and workflow_stage_type(step) != DOCUMENTS_STAGE_TYPE
+        ):
             continue
         phases[step["id"]] = (document_id, phase)
 
@@ -525,7 +567,12 @@ def collapse_draft_document_stages(definition: Mapping[str, Any]) -> dict:
             instruction.setdefault("next_action", "")
         label = {"declaration": "Deklaracja", "agreement": "Umowa", "training_agreement": "Umowa"}.get(document["id"], document.get("label") or document["id"])
         merged = deepcopy(first)
-        merged.update(id=canonical_id, type="document", stage_type="document", document_lifecycle="composite", action="none",
+        merged.update(
+                      id=canonical_id,
+                      type="document",
+                      stage_type=DOCUMENTS_STAGE_TYPE,
+                      document_lifecycle="composite",
+                      action="none",
                       document_id=document["id"], document_options=policy, document_instructions=instructions,
                       admin_label=label, label=label, next=exit_id, requires_user_action=False, requires_officer_action=False,
                       triggers=triggers)
@@ -602,6 +649,26 @@ class WorkflowConfigNormalizer:
             for step, raw in zip(source["steps"], [s for s in raw_steps if isinstance(s, Mapping)]):
                 for key in ("id", "admin_label", "user_label"):
                     step[key] = str(raw.get(key) or "").strip()
+                raw_kind = str(raw.get("stage_type") or raw.get("type") or "system").strip()
+                step["stage_type"] = ({
+                    "manual_decision": "decision",
+                    "end": "final",
+                    "form_submit": "user_action",
+                    "generate_document": "system",
+                    "upload_document": DOCUMENTS_STAGE_TYPE,
+                    "document": DOCUMENTS_STAGE_TYPE,
+                    "declaration": DOCUMENTS_STAGE_TYPE,
+                    "agreement": DOCUMENTS_STAGE_TYPE,
+                }.get(raw_kind, raw_kind))
+                # An explicit graph declares its actor and outcome; technical IDs
+                # must never turn an ordinary document stage into a rejection.
+                step["rejected"] = bool(raw.get("rejected", False))
+                step["requires_user_action"] = bool(
+                    raw.get(
+                        "requires_user_action",
+                        step.get("stage_type") in {"user_action", DOCUMENTS_STAGE_TYPE},
+                    )
+                )
                 # Preserve invalid input for validation instead of silently repairing it.
                 raw_transitions = raw.get("transitions", [])
                 if not isinstance(raw_transitions, list) or any(not isinstance(t, Mapping) or not isinstance(t.get("when", {}), Mapping) for t in raw_transitions):
@@ -705,8 +772,11 @@ class WorkflowConfigNormalizer:
             return "final"
         if item.get("type") in {"manual_decision", "decision"}:
             return "decision"
-        if item.get("document_id") or any(token in step_id for token in ("declaration", "agreement")):
-            return "document"
+        if item.get("document_id") or any(
+            token in step_id
+            for token in ("declaration", "agreement")
+        ):
+            return DOCUMENTS_STAGE_TYPE
         if item.get("type") == "manual_decision" or item.get("requires_officer_action"):
             return "officer_action"
         if item.get("requires_user_action"):
@@ -874,13 +944,24 @@ class WorkflowConfigValidator:
                 kind = step.get("stage_type")
                 if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", step["id"]):
                     errors.append(f"ID etapu „{step['id']}” musi być stabilnym identyfikatorem technicznym.")
-                if kind not in {"user_action", "officer_action", "system", "automatic", "decision", "document", "final"}:
+                if kind not in {
+                    "user_action",
+                    "officer_action",
+                    "system",
+                    "automatic",
+                    "decision",
+                    DOCUMENTS_STAGE_TYPE,
+                    "final",
+                }:
                     errors.append(f"Etap „{step['admin_label']}” ma nieobsługiwany typ.")
                 if step.get("invalid_transitions"):
                     errors.append(f"Etap „{step['admin_label']}”: przejścia muszą być tablicą JSON.")
                 if step.get("action", "none") not in {"none", "generate_document", "await_signature"}:
                     errors.append(f"Etap „{step['admin_label']}” ma nieobsługiwaną akcję.")
-                if step.get("action") == "await_signature" and kind not in {"user_action", "document"}:
+                if (
+                    step.get("action") == "await_signature"
+                    and kind not in {"user_action", DOCUMENTS_STAGE_TYPE}
+                ):
                     errors.append("Oczekiwanie na podpis wymaga etapu Dokument lub Akcja użytkownika.")
                 if kind == "decision":
                     if step.get("decision_scope") not in {"submission", "item"}:

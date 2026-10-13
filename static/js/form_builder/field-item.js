@@ -12,6 +12,7 @@ const TYPE_LABELS = {
   pesel: "PESEL",
   file: "Plik",
   repeatable_group: "Grupa powtarzalna",
+  static_text: "Tekst informacyjny",
 };
 
 export function createFieldItem(field, index, selected, actions) {
@@ -166,6 +167,15 @@ function toolButton(text, label, className = "") {
 }
 
 function previewControl(field, actions) {
+  if (field.type === "static_text") {
+    const text = document.createElement("p");
+
+    text.className = "form-builder__static-text-preview";
+    text.textContent = field.label || "Tekst informacyjny";
+
+    return text;
+  }
+
   /*
    * repeatable_group jest kontenerem
    * dla normalnych createFieldItem().

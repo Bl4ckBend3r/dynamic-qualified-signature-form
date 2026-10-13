@@ -55,6 +55,10 @@ def draft_app(monkeypatch, Session):
         def __init__(self):
             self.calls = []
 
+        def validate_form(self, _config, payload):
+            values = {"email": payload.get("email", ""), "note": payload.get("note", "")}
+            return {"errors": {} if values["note"] else {"note": "required"}, "values": values, "attachments": []}
+
         def submit_form(self, slug, config, payload, *, form_version_id=None, submission_id=None):
             self.calls.append((config, form_version_id))
             if not payload.get("note"):
@@ -84,6 +88,7 @@ def draft_app(monkeypatch, Session):
     monkeypatch.setattr(public_forms, "db_session_factory", lambda: Session)
     documents = Blueprint("documents", __name__)
     documents.add_url_rule("/documents", "documents_to_sign", lambda: "")
+    documents.add_url_rule("/result/<slug>/<submission_id>", "show_result", lambda slug, submission_id: f"{slug}:{submission_id}")
     app.register_blueprint(documents)
     app.register_blueprint(public_forms.bp)
     @app.context_processor
@@ -133,6 +138,34 @@ def test_create_hash_resume_autosave_and_no_submission(tmp_path, monkeypatch):
         assert draft.email == "user@example.test"
         assert db.execute(select(FormSubmission)).scalars().all() == []
     assert submission.calls == []
+
+
+def test_draft_review_confirms_with_pinned_version_and_json_result(tmp_path, monkeypatch):
+    Session = database(tmp_path)
+    app, _, submission_service = draft_app(monkeypatch, Session)
+    client = app.test_client()
+    token = create_draft(client)
+    review_url = f"/form/draft-form/draft/{token}/review"
+    invalid = client.post(review_url, data={"email": "user@example.test", "note": ""})
+    assert invalid.status_code == 400
+    preview = client.post(review_url, data={"email": "user@example.test", "note": "ready"})
+    assert preview.status_code == 200
+    with Session() as db:
+        assert db.execute(select(FormSubmission)).scalars().all() == []
+        version_id = db.execute(select(FormDraft.form_version_id)).scalar_one()
+    submit_url = f"/form/draft-form/draft/{token}/submit"
+    stale = client.post(submit_url, data={
+        "email": "user@example.test", "note": "changed", "review_token": preview.json["review_token"],
+    }, headers={"Accept": "application/json"})
+    assert stale.status_code == 409
+    confirmed = client.post(submit_url, data={
+        "email": "user@example.test", "note": "ready", "review_token": preview.json["review_token"],
+    }, headers={"Accept": "application/json"})
+    assert confirmed.status_code == 200
+    assert client.get(confirmed.json["result_url"]).status_code == 200
+    assert submission_service.calls[-1][1] == version_id
+    with Session() as db:
+        assert db.execute(select(FormDraft.status)).scalar_one() == "submitted"
 
 
 def test_wrong_expired_and_expiration_job(tmp_path, monkeypatch):

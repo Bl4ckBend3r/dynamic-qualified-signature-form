@@ -88,7 +88,8 @@ class SubmissionTrainingService:
         if field is None:
             version = getattr(submission, "form_version", None)
             field = TrainingCatalogService.get_training_field(version or form)
-        return bool(field and field.get("enabled", True) and form.training_selection_open
+        upgrade_needs_correction = bool(((submission.data_json or {}).get("_form_version_upgrade") or {}).get("invalid_training_ids"))
+        return bool(field and field.get("enabled", True) and (form.training_selection_open or upgrade_needs_correction)
                     and (document_collection or cls.is_training_selection_unlocked(form, submission)))
 
     @staticmethod
@@ -384,11 +385,12 @@ class SubmissionTrainingService:
             if key not in catalog
             and (row.status in ACTIVE_STATUSES or row.is_locked)
         }
-        if selected - set(catalog) - historical:
+        version_upgrade = bool((submission.data_json or {}).get("_form_version_upgrade"))
+        if selected - set(catalog) - (set() if version_upgrade else historical):
             raise TrainingSelectionError(
                 "Wybrano szkolenie, które nie jest już dostępne."
             )
-        protected = locked | historical
+        protected = locked | (set() if version_upgrade else historical)
         selected |= protected
         if field.get("required") and not selected:
             raise TrainingSelectionError("Wybierz co najmniej jedno szkolenie.")
@@ -446,6 +448,10 @@ class SubmissionTrainingService:
                     row.status, row.unselected_at = "selected", None
                 row.updated_at = now
             elif row is not None and training_id not in protected:
+                row.status, row.unselected_at, row.updated_at = "unselected", now, now
+        if version_upgrade:
+            for training_id in historical - protected:
+                row = rows[training_id]
                 row.status, row.unselected_at, row.updated_at = "unselected", now, now
         db.flush()
         submission.selected_trainings = json.dumps(

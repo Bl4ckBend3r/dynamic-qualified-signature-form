@@ -47,25 +47,26 @@ class AgreementDocxTemplateService:
         fields: Iterable[Any],
         uploaded_by_user_id: int | None,
         document_type: str = "agreement",
+        document_id: str = "",
         form_definition: Mapping[str, Any] | None = None,
         version_key: str | None = None,
     ) -> dict:
         document_type = str(document_type or "agreement").strip().casefold()
-        if document_type not in {"agreement", "declaration"}:
+        if document_type not in {"agreement", "declaration", "document"}:
             raise ValueError("Nieobsługiwany typ dokumentu.")
-        label = "umowy" if document_type == "agreement" else "deklaracji"
+        label = "umowy" if document_type == "agreement" else "deklaracji" if document_type == "declaration" else "dokumentu"
         if Path(filename or "").suffix.casefold() != ".docx":
             raise ValueError(f"Szablon {label} musi być plikiem DOCX.")
         parsed = parse_docx_template(content, document_type=document_type)
-        if document_type == "declaration":
+        if document_type in {"declaration", "document"}:
             from services.documents.declaration_template_context_service import DeclarationVariableCatalog
 
             known = DeclarationVariableCatalog.context_names(fields, form_definition=form_definition)
         else:
             known = AgreementVariableCatalog.context_names(fields)
         unknown = sorted(set(parsed.variables) - known)
-        storage_path = self.storage_path(form_slug, document_type=document_type, version_key=version_key)
-        self._ensure_directory(form_slug, document_type=document_type, version_key=version_key)
+        storage_path = self.storage_path(form_slug, document_type=document_type, document_id=document_id, version_key=version_key)
+        self._ensure_directory(form_slug, document_type=document_type, document_id=document_id, version_key=version_key)
         self.storage.write_bytes(storage_path, content, DOCX_MIME_TYPE)
         return {
             "storage_path": storage_path,
@@ -149,26 +150,33 @@ class AgreementDocxTemplateService:
         form_slug: str,
         *,
         document_type: str = "agreement",
+        document_id: str = "",
         version_key: str | None = None,
     ) -> str:
-        filename = "agreement-template.docx" if document_type == "agreement" else "declaration-template.docx"
+        from re import fullmatch
+        if document_type == "document" and not fullmatch(r"[a-z][a-z0-9_]{1,63}", document_id):
+            raise ValueError("Nieprawidłowe ID dokumentu.")
+        directory = document_id if document_type == "document" else document_type
+        filename = f"{directory}-template.docx"
         version_segment = f"/versions/{self._safe_version_key(version_key)}" if version_key else ""
-        return f"{self.storage.output_dir}/{form_slug}/templates/{document_type}{version_segment}/{filename}"
+        return f"{self.storage.output_dir}/{form_slug}/templates/{directory}{version_segment}/{filename}"
 
     def _ensure_directory(
         self,
         form_slug: str,
         *,
         document_type: str = "agreement",
+        document_id: str = "",
         version_key: str | None = None,
     ) -> None:
+        directory = document_id if document_type == "document" else document_type
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}")
         self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates")
-        self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{document_type}")
+        self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{directory}")
         if version_key:
-            self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/versions")
+            self.storage.mkdir(f"{self.storage.output_dir}/{form_slug}/templates/{directory}/versions")
             self.storage.mkdir(
-                f"{self.storage.output_dir}/{form_slug}/templates/{document_type}/versions/{self._safe_version_key(version_key)}"
+                f"{self.storage.output_dir}/{form_slug}/templates/{directory}/versions/{self._safe_version_key(version_key)}"
             )
 
     @staticmethod

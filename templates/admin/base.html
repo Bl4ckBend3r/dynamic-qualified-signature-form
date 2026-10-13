@@ -86,9 +86,19 @@
             <span>Admin</span>
             <small>{{ app_name }}</small>
           </a>
-          <button class="theme-toggle theme-toggle--admin" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw">
-            <span class="theme-toggle__icon" data-theme-icon aria-hidden="true">☾</span>
-            <span data-theme-label>Ciemny</span>
+          <button
+            class="theme-toggle"
+            type="button"
+            data-theme-toggle
+            aria-label="Włącz ciemny motyw"
+            title="Włącz ciemny motyw"
+            aria-pressed="false"
+          >
+            <span class="theme-toggle__track" aria-hidden="true">
+              <span class="theme-toggle__sun">☀</span>
+              <span class="theme-toggle__moon">☾</span>
+              <span class="theme-toggle__thumb"></span>
+            </span>
           </button>
           {% if g.admin_user %}
           <nav class="admin-nav" aria-label="Menu administracyjne">
@@ -116,7 +126,9 @@
               >Szablony maili</a
             >
 
-            {% if has_permission('can_manage_site') or has_permission('can_manage_users') or has_permission('can_manage_roles') %}
+            {% if has_permission('can_manage_site') or
+            has_permission('can_manage_users') or
+            has_permission('can_manage_roles') %}
             <div class="admin-nav-dropdown">
               <button
                 type="button"
@@ -128,15 +140,22 @@
               </button>
 
               <div class="admin-nav-dropdown-menu" hidden>
-                
-                {% if has_permission('can_manage_site') %}<a href="{{ url_for('admin.system_mail_settings') }}"
+                {% if has_permission('can_manage_site') %}<a
+                  href="{{ url_for('admin.system_mail_settings') }}"
                   >Poczta systemowa</a
-                >{% endif %}
-                {% if g.admin_user.role == 'super_admin' %}<a href="{{ url_for('admin.decision_types') }}">Typy decyzji</a>{% endif %}
-                {% if has_permission('can_manage_users') %}<a href="{{ url_for('admin.users_list') }}">Użytkownicy</a>{% endif %}
-                {% if has_permission('can_manage_roles') %}<a href="{{ url_for('admin.roles_list') }}">Role i uprawnienia</a>{% endif %}
-                {% if has_permission('can_manage_site') %}
-                <a href="{{ url_for('admin.business_calendars') }}">Kalendarze SLA</a>
+                >{% endif %} {% if g.admin_user.role == 'super_admin' %}<a
+                  href="{{ url_for('admin.decision_types') }}"
+                  >Typy decyzji</a
+                >{% endif %} {% if has_permission('can_manage_users') %}<a
+                  href="{{ url_for('admin.users_list') }}"
+                  >Użytkownicy</a
+                >{% endif %} {% if has_permission('can_manage_roles') %}<a
+                  href="{{ url_for('admin.roles_list') }}"
+                  >Role i uprawnienia</a
+                >{% endif %} {% if has_permission('can_manage_site') %}
+                <a href="{{ url_for('admin.business_calendars') }}"
+                  >Kalendarze SLA</a
+                >
                 <a href="{{ url_for('admin.global_mail_footer_edit') }}"
                   >Stopka ogólna maili</a
                 >
@@ -155,8 +174,16 @@
             </div>
             {% endif %}
 
-            <form method="post" action="{{ url_for('admin.logout') }}" class="admin-logout-form">
-              <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+            <form
+              method="post"
+              action="{{ url_for('admin.logout') }}"
+              class="admin-logout-form"
+            >
+              <input
+                type="hidden"
+                name="csrf_token"
+                value="{{ admin_csrf_token() }}"
+              />
               <button type="submit" class="admin-nav-link">Wyloguj</button>
             </form>
           </nav>

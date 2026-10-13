@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from pdf_generator import ensure_document_root, inject_pdf_styles, write_pdf_from_html
+from services.documents.document_builder_service import render_document_builder_template
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,51 @@ def test_preview_a4_content_box_keeps_real_dimensions_and_wraps_long_content():
     assert metrics["fontSize"] == "14px"
     assert metrics["fits"] is True
     assert metrics["paragraphFits"] is True
+
+
+@pytest.mark.parametrize("document_type", ["declaration", "agreement"])
+def test_dotted_fields_preview_and_pdf_share_two_column_a4_layout(tmp_path, document_type):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    css = (PROJECT_ROOT / "static" / "css" / "document_template.css").read_text(encoding="utf-8")
+    content = render_document_builder_template({"blocks": [{"type": "dotted_fields"}]}, document_type)
+    html = f'<!doctype html><html class="agreement-preview-document"><head><style>{css}</style></head><body>{content}</body></html>'
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page(viewport={"width": 1000, "height": 900})
+        page.set_content(html)
+        metrics = page.evaluate("""() => {
+            const section = document.querySelector('.document-dotted-fields');
+            const fields = [...section.querySelectorAll('.document-dotted-fields__field')];
+            const lines = [...section.querySelectorAll('.document-dotted-fields__line')];
+            const box = section.getBoundingClientRect();
+            const cells = fields.map(field => field.getBoundingClientRect());
+            return {
+                breakInside: getComputedStyle(section).breakInside,
+                widths: cells.map(cell => cell.width / box.width),
+                sameRow: Math.abs(cells[0].top - cells[1].top) < 1,
+                gap: cells[1].left - cells[0].right,
+                lines: lines.map(line => getComputedStyle(line).borderBottomStyle),
+                fits: section.scrollWidth <= section.clientWidth,
+            };
+        }""")
+        browser.close()
+
+    assert metrics["breakInside"] == "avoid"
+    assert all(0.40 <= width <= 0.45 for width in metrics["widths"])
+    assert metrics["sameRow"] and metrics["gap"] > 0 and metrics["fits"]
+    assert metrics["lines"] == ["dotted", "dotted"]
+
+    output = tmp_path / f"{document_type}-dotted-fields.pdf"
+    write_pdf_from_html(html, output)
+    pypdf = pytest.importorskip("pypdf")
+    pdf = pypdf.PdfReader(str(output))
+    assert len(pdf.pages) == 1
+    assert "miejscowość i data" in pdf.pages[0].extract_text()
+    assert "podpis" in pdf.pages[0].extract_text()
 
 
 def test_pdf_renderer_applies_single_eighteen_millimeter_horizontal_margin(tmp_path):

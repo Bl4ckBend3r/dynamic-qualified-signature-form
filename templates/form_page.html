@@ -4,7 +4,9 @@ endblock %}
 {% block content %}
 
 <div class="back-link">
-  {% if document_mode %}
+  {% if admin_edit_mode %}
+  <a href="{{ admin_back_url }}">← Powrót do zgłoszenia</a>
+  {% elif document_mode %}
   <a href="{{ document_back_url }}">← Powrót do dokumentów</a>
   {% else %}
   <a href="{{ url_for('public_forms.index') }}">← Powrót do listy formularzy</a>
@@ -50,7 +52,14 @@ endblock %}
   <div>{{ document_instruction.description|trusted_html }}</div>
   {% endif %} {% if document_instruction.next_action %}
   <div>{{ document_instruction.next_action|trusted_html }}</div>
-  {% endif %} {% endif %} {% if correction_mode %}
+  {% endif %} {% endif %} {% if version_upgrade_mode|default(false) %}
+  <div class="alert alert-warning" role="status">
+    <strong>Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane.</strong>
+    {% if invalid_training_ids|default([]) %}
+    <p>Wybór szkolenia wymaga poprawy. <a href="{{ training_correction_url }}">Popraw wybór szkolenia</a>.</p>
+    {% endif %}
+  </div>
+  {% elif correction_mode %}
   <div class="alert alert-warning" role="status">
     <strong>Zgłoszenie zostało wysłane do poprawy.</strong>
     {% if correction_message %}
@@ -71,13 +80,19 @@ endblock %}
   </div>
   {% endif %}
   <form
+    id="public-submission-form"
     method="post"
     enctype="multipart/form-data"
     action="{{ form_action or url_for('public_forms.submit', slug=slug) }}"
     novalidate
     class="dynamic-form"
+    {% if not document_mode and not correction_mode and not admin_edit_mode %}
+    data-review-url="{{ url_for('public_forms.review_form_draft', slug=slug, token=draft_token) if draft_mode else url_for('public_forms.review_submission', slug=slug, access=share_access_token) }}"
+    data-confirm-url="{{ form_action if draft_mode else url_for('public_forms.confirm_submission', slug=slug, access=share_access_token) }}"
+    {% endif %}
   >
-    <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}" />
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() if admin_edit_mode else public_csrf_token() }}" />
+    {% if not document_mode and not correction_mode and not admin_edit_mode %}<input type="hidden" name="review_token" value="" />{% endif %}
     {% if form_version_token %}
     <input type="hidden" name="form_version_id" value="{{ form_version_id }}" />
     <input
@@ -517,8 +532,8 @@ endblock %}
         >Wersja robocza jest aktywna.</span
       >{% endif %}
       <button type="submit" class="btn-primary">
-        {{ form_definition.submit_label if document_mode else "Wyślij poprawione
-        zgłoszenie" if correction_mode else "Wyślij" }}
+        {{ form_definition.submit_label if document_mode else "Uzupełnij dane" if version_upgrade_mode|default(false) else "Wyślij poprawione
+        zgłoszenie" if correction_mode else "Zapisz zmiany" if admin_edit_mode else "Sprawdź dane przed wysłaniem" }}
       </button>
     </div>
     {% if draft_mode %}
@@ -528,6 +543,17 @@ endblock %}
     </p>
     {% endif %}
   </form>
+  {% if not document_mode and not correction_mode and not admin_edit_mode %}
+  <section class="form-review-panel" data-form-review hidden aria-labelledby="form-review-title">
+    <h3 id="form-review-title">Sprawdź dane przed wysłaniem</h3>
+    <p>Potwierdź, że poniższe dane i załączniki są poprawne.</p>
+    <div data-form-review-summary></div>
+    <div class="submit-row">
+      <button type="button" class="btn-secondary" data-form-review-back>Wróć do edycji</button>
+      <button type="submit" form="public-submission-form" class="btn-primary" data-review-confirm>Potwierdź i wyślij</button>
+    </div>
+  </section>
+  {% endif %}
   {% if draft_enabled and not correction_mode and not draft_mode %}
   <details class="draft-resend-panel">
     <summary>Mam zapisaną wersję roboczą</summary>
@@ -557,6 +583,110 @@ endblock %}
 
 <script>
       document.addEventListener("DOMContentLoaded", function () {
+          const reviewForm = document.querySelector("#public-submission-form[data-review-url]");
+          const reviewPanel = document.querySelector("[data-form-review]");
+          if (reviewForm && reviewPanel) {
+              const reviewSummary = reviewPanel.querySelector("[data-form-review-summary]");
+              const reviewBack = reviewPanel.querySelector("[data-form-review-back]");
+              const reviewConfirm = reviewPanel.querySelector("[data-review-confirm]");
+              let reviewing = false;
+              let pending = false;
+              function showReviewError(data) {
+                  const allErrors = Object.entries(data.errors || {});
+                  const firstError = allErrors[0];
+                  let alert = document.querySelector(".form-validation-summary");
+                  if (!alert) {
+                      alert = document.createElement("div");
+                      alert.className = "alert alert-error form-validation-summary";
+                      alert.setAttribute("role", "alert");
+                      reviewForm.before(alert);
+                  }
+                  alert.replaceChildren();
+                  const heading = document.createElement("strong");
+                  heading.textContent = data.error || "Nie udało się sprawdzić danych.";
+                  alert.append(heading);
+                  if (allErrors.length) {
+                      const list = document.createElement("ul");
+                      for (const [name, error] of allErrors) {
+                          const item = document.createElement("li");
+                          const control = reviewForm.elements.namedItem(name);
+                          const field = control?.length ? control[0] : control;
+                          const label = field?.closest(".form-row")?.querySelector("label, .field-group-label")?.textContent?.trim();
+                          item.textContent = `${label || name}: ${error}`;
+                          list.append(item);
+                      }
+                      alert.append(list);
+                  }
+                  const field = firstError && reviewForm.elements.namedItem(firstError[0]);
+                  (field?.length ? field[0] : field)?.focus?.();
+                  alert.scrollIntoView({block: "center"});
+              }
+              reviewBack.addEventListener("click", () => {
+                  reviewPanel.hidden = true;
+                  reviewForm.hidden = false;
+                  reviewing = false;
+                  reviewForm.querySelector('[name="review_token"]').value = "";
+                  reviewForm.scrollIntoView({block: "start"});
+              });
+              reviewForm.addEventListener("submit", async (event) => {
+                  const submitter = event.submitter;
+                  if (submitter?.hasAttribute("formaction")) return;
+                  event.preventDefault();
+                  if (pending) return;
+                  pending = true;
+                  const button = submitter || reviewForm.querySelector('.submit-row button[type="submit"]:not([formaction])');
+                  if (button) button.disabled = true;
+                  try {
+                      const confirming = submitter === reviewConfirm && reviewing;
+                      const response = await fetch(confirming ? reviewForm.dataset.confirmUrl : reviewForm.dataset.reviewUrl, {
+                          method: "POST", body: new FormData(reviewForm), credentials: "same-origin",
+                          headers: {"Accept": "application/json"},
+                      });
+                      const data = await response.json();
+                      if (!response.ok || !data.ok) {
+                          if (confirming) {
+                              reviewPanel.hidden = true;
+                              reviewForm.hidden = false;
+                              reviewing = false;
+                              reviewForm.querySelector('[name="review_token"]').value = "";
+                          }
+                          showReviewError(data);
+                          return;
+                      }
+                      if (confirming) {
+                          window.location.assign(data.result_url);
+                          return;
+                      }
+                      reviewSummary.replaceChildren();
+                      const list = document.createElement("dl");
+                      list.className = "form-review-list";
+                      for (const item of data.summary || []) {
+                          const label = document.createElement("dt");
+                          label.textContent = item.label;
+                          const value = document.createElement("dd");
+                          value.textContent = item.value;
+                          list.append(label, value);
+                      }
+                      reviewSummary.append(list);
+                      reviewForm.querySelector('[name="review_token"]').value = data.review_token;
+                      reviewing = true;
+                      reviewForm.hidden = true;
+                      reviewPanel.hidden = false;
+                      reviewPanel.scrollIntoView({block: "start"});
+                      reviewBack.focus();
+                  } catch (_error) {
+                      if (reviewing) {
+                          reviewPanel.hidden = true;
+                          reviewForm.hidden = false;
+                          reviewing = false;
+                      }
+                      showReviewError({error: "Nie udało się sprawdzić danych. Spróbuj ponownie."});
+                  } finally {
+                      pending = false;
+                      if (button) button.disabled = false;
+                  }
+              });
+          }
           {% if draft_mode and autosave_url %}
           (() => {
               const form = document.querySelector(".dynamic-form");
@@ -655,6 +785,7 @@ endblock %}
               });
           });
           const dynamicRows = document.querySelectorAll("[data-visible-field]");
+          const preserveConditionalValues = {{ 'true' if admin_edit_mode else 'false' }};
 
           function getFieldValue(fieldName) {
               const radioChecked = document.querySelector(`input[name="${fieldName}"][type="radio"]:checked`);
@@ -685,7 +816,7 @@ endblock %}
                   row.style.display = visible ? "" : "none";
 
                   row.querySelectorAll("input, select, textarea").forEach(el => {
-                      if (!visible) {
+                      if (!visible && !preserveConditionalValues) {
                           if (el.type === "checkbox" || el.type === "radio") {
                               el.checked = false;
                           } else {
@@ -1048,7 +1179,7 @@ endblock %}
           }
 
           const peselName = findFieldName(peselAliases, "pesel");
-          if (peselName) {
+          if (peselName && !preserveConditionalValues) {
               document.querySelectorAll(selectorForName(peselName)).forEach(el => {
                   el.addEventListener("input", updateFromPesel);
                   el.addEventListener("change", updateFromPesel);

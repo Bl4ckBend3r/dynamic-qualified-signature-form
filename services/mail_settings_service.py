@@ -194,7 +194,7 @@ class MailSettingsService:
         logo_position = str(form_data.get("layout_logo_position") or DEFAULT_LAYOUT["logo_position"]).strip()
         logo_alignment = str(form_data.get("layout_logo_alignment") or DEFAULT_LAYOUT["logo_alignment"]).strip()
         return {
-            "platform_name": str(form_data.get("layout_platform_name") or DEFAULT_LAYOUT["platform_name"]).strip()[:255],
+            "platform_name": str(form_data.get("layout_platform_name", "")).strip()[:255],
             "primary_color": primary,
             "accent_color": accent,
             "footer_html": sanitize_content_html(str(form_data.get("layout_footer_html") or "").strip())[:50_000],

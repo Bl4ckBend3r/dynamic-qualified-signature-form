@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
+from flask import abort, current_app, flash, g, make_response, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -42,7 +42,7 @@ from services.submission_internal_note_service import (
     SubmissionInternalNotePermissionError,
 )
 from services.decision_definition_service import DecisionDefinitionError
-from form_loader import has_additional_fields_after_acceptance
+from form_loader import has_additional_fields_after_acceptance, values_for_rerender
 from services.admin_workflow_view_service import build_admin_workflow_view
 from services.beneficiary_agreement_service import (
     AGREEMENT_DECISION_ROLES,
@@ -64,6 +64,10 @@ from services.admin_submission_service import (
     submission_status_label,
     submission_step_label,
     submission_value,
+    editable_submission_definition,
+    submission_answer_values,
+    submission_edit_block_reason,
+    update_submission_answers,
 )
 from services.workflow_service import current_workflow_step
 from services.process_service import ProcessStatus
@@ -382,6 +386,17 @@ def submission_detail(form_id: int, submission_pk: int):
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
+        from services.form_version_service import FormVersionError
+
+        version_service = current_app.extensions["services"].form_version_service
+        if submission.form_version_id and version_service.is_active_submission(submission):
+            try:
+                version_service.upgrade_submission(db, submission)
+                version_service.refresh_submission_completion(db, submission)
+                db.commit()
+            except FormVersionError as exc:
+                db.rollback()
+                abort(409, description=str(exc))
         if request.method == "POST":
             requested_status = request.form.get("process_status", "").strip()
             if requested_status and requested_status != submission.process_status:
@@ -624,6 +639,9 @@ def submission_detail(form_id: int, submission_pk: int):
             detail_view=detail_view,
             files=files,
             workflow_history=workflow_history,
+            form_version_label=submission.form_version.version_label if submission.form_version else "—",
+            version_upgrade_events=[item for item in workflow_history.get("events") or [] if item.get("source") == "form_version_upgrade"],
+            version_upgrade_state=(submission.data_json or {}).get("_form_version_upgrade") or {},
             decision_history=decision_history,
             workflow_view=workflow_view,
             composite_document=services.document_service.document_workflow.view(
@@ -653,6 +671,7 @@ def submission_detail(form_id: int, submission_pk: int):
             repeatable_groups=repeatable_groups,
             repeatable_item_decisions=repeatable_item_decisions,
             can_view_sensitive_data=can_view_sensitive_data,
+            can_edit_submission=can_manage and can_view_sensitive_data and not submission_edit_block_reason(submission, files),
             **action_permissions,
             internal_notes=internal_notes,
             notes_search=notes_search,
@@ -661,6 +680,53 @@ def submission_detail(form_id: int, submission_pk: int):
             can_manage_internal_notes=can_manage_internal_notes,
             deadline_history=deadline_history,
         )
+
+
+@bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/edit", methods=["GET", "POST"])
+@login_required
+def submission_edit(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_edit_form")
+        services = current_app.extensions["services"]
+        if not services.permission_service.has_permission(db, g.admin_user, "can_view_submissions", form=form):
+            abort(403)
+        if not services.permission_service.has_permission(db, g.admin_user, "can_view_sensitive_data", form=form):
+            abort(403)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        config = _submission_form_config(db, form, submission)
+        definition = editable_submission_definition(config)
+        errors = {}
+        form_error = ""
+        response_status = 200
+        values = submission_answer_values(submission, config)
+        if request.method == "POST":
+            response_status = 400
+            try:
+                result = update_submission_answers(
+                    db, submission, config, request.form, actor=g.admin_user, services=services,
+                )
+            except RuntimeError:
+                db.rollback()
+                current_app.logger.exception("admin_submission_edit_document_failed submission_pk=%s", submission_pk)
+                result = {"ok": False, "errors": {"form": "Nie udało się bezpiecznie zaktualizować dokumentu. Dane nie zostały zmienione."}}
+                response_status = 503
+            if result["ok"]:
+                flash("Zapisano dane zgłoszenia.", "success")
+                return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+            errors = result["errors"]
+            values = values_for_rerender(definition, request.form, saved_values=values)
+            form_error = errors.get("form") or "Sprawdź pola oznaczone poniżej."
+        response = make_response(render_template(
+            "form_page.html", slug=form.slug, form_meta={}, form_definition=definition,
+            errors=errors, values=values, form_error=form_error,
+            form_action=url_for("admin.submission_edit", form_id=form.id, submission_pk=submission.id),
+            admin_edit_mode=True,
+            admin_back_url=url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id),
+        ), response_status)
+        response.headers["Cache-Control"] = "no-store, private"
+        return response
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/internal-notes")
@@ -1784,7 +1850,7 @@ def office_document_step(form_id, submission_pk, step_id):
             response.headers["Cache-Control"] = "private, no-store"
             return response
         result = services.document_service.document_workflow.upload(row, definition, step_id, request.files.get("document_pdf"),
-            signer="office", instance=request.form.get("instance", ""))
+            signer="office", instance=request.form.get("instance", ""), document_id=request.form.get("document_id", ""))
         flash("Podpis urzędu został przyjęty." if result["is_valid"] else "Nie udało się potwierdzić podpisu urzędu.", "success" if result["is_valid"] else "error")
     except ValueError as exc:
         if request.method == "GET":

@@ -13,7 +13,7 @@ from services.mail_template_service import sanitize_content_html
 
 
 BUILDER_VERSION = 1
-DOCUMENT_TYPES = {"agreement", "declaration"}
+DOCUMENT_TYPES = {"agreement", "declaration", "document"}
 MAX_LIST_LEVEL = 3
 ORDERED_LIST_MARKERS = {
     "decimal-dot",
@@ -42,6 +42,7 @@ _COMMON_BLOCK_TYPES = {
     "table",
     "participant_data",
     "signatures",
+    "dotted_fields",
     "project_info",
     "page_break",
 }
@@ -71,11 +72,20 @@ class DocumentBuilderValidationError:
 
 def document_builder_block_types(document_type: str) -> set[str]:
     normalized_type = _document_type(document_type)
-    specific = _AGREEMENT_BLOCK_TYPES if normalized_type == "agreement" else _DECLARATION_BLOCK_TYPES
+    specific = (_AGREEMENT_BLOCK_TYPES if normalized_type == "agreement" else
+                _DECLARATION_BLOCK_TYPES if normalized_type == "declaration" else set())
     return _COMMON_BLOCK_TYPES | specific
 
 
 def default_document_builder_document(document_type: str = "agreement") -> dict[str, Any]:
+    if _document_type(document_type) == "document":
+        return {"version": BUILDER_VERSION, "document_type": "document", "blocks": [
+            {"type": "heading", "level": 1, "format": {"alignment": "center"},
+             "runs": [{"text": "Dokument", "bold": True, "italic": False, "underline": False}]},
+            {"type": "paragraph", "format": {"alignment": "left"},
+             "runs": [{"text": "Treść dokumentu dla {{ participant_name }}.", "bold": False,
+                       "italic": False, "underline": False}]},
+        ]}
     if _document_type(document_type) == "declaration":
         return {
             "version": BUILDER_VERSION,
@@ -184,6 +194,9 @@ def normalize_document_builder_document(value: Any, document_type: str = "agreem
             block["fields"] = [item for item in block.get("fields") or [] if item in {"email", "telefon", "phone"}]
         elif block_type == "participant_signature":
             block["label"] = _plain_label(block.get("label") or "Czytelny podpis uczestnika")
+        elif block_type == "dotted_fields":
+            block["left_label"] = _plain_label(block.get("left_label", "miejscowość i data"))
+            block["right_label"] = _plain_label(block.get("right_label", "podpis"))
         elif block_type == "criteria_table":
             criteria = []
             used = set()
@@ -288,6 +301,9 @@ def validate_document_builder_document(
         elif block_type == "signatures":
             if not str(block.get("left_label") or "").strip() or not str(block.get("right_label") or "").strip():
                 errors.append(DocumentBuilderValidationError(path, "Sekcja podpisów wymaga etykiety lewej i prawej strony."))
+        elif block_type == "dotted_fields":
+            if not block["left_label"] or not block["right_label"]:
+                errors.append(DocumentBuilderValidationError(path, "Oba pola kropkowane wymagają etykiet."))
         elif block_type == "project_info":
             if not isinstance(block.get("fields"), list) or not block.get("fields"):
                 errors.append(DocumentBuilderValidationError(path + ".fields", "Wybierz co najmniej jedną informację o projekcie."))
@@ -374,6 +390,13 @@ def _render_block(block: Mapping[str, Any], document_type: str) -> str:
         return f'<div class="document-form-field"><span>{label}:</span><strong>{{{{ {field_name}{suffix} }}}}</strong></div>'
     if block_type == "signatures":
         return _render_signatures(str(block.get("left_label") or ""), str(block.get("right_label") or ""))
+    if block_type == "dotted_fields":
+        fields = "".join(
+            '<div class="document-dotted-fields__field"><div class="document-dotted-fields__line"></div>'
+            f'<div class="document-dotted-fields__label">{_literal_label(block.get(key))}</div></div>'
+            for key in ("left_label", "right_label")
+        )
+        return f'<section class="document-dotted-fields">{fields}</section>'
     if block_type == "participant_signature":
         label = html.escape(str(block.get("label") or "Czytelny podpis uczestnika"))
         return '<section class="document-signatures document-signatures--participant"><div class="document-signature"><div class="document-signature__line"></div>' + f'<div class="document-signature__label">{label}</div></div></section>'
@@ -721,6 +744,11 @@ def _sanitize_builder_content(value: Any) -> str:
 
 def _plain_label(value: Any) -> str:
     return re.sub(r"<[^>]+>", "", html.unescape(str(value or ""))).strip()
+
+
+def _literal_label(value: Any) -> str:
+    # Labels are layout text, never Jinja expressions or HTML supplied by an editor.
+    return html.escape(str(value or "")).replace("{", "&#123;").replace("}", "&#125;")
 
 
 def _visible_inline(value: Any) -> bool:

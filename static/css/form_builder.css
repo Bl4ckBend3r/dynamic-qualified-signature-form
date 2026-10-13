@@ -18,6 +18,14 @@
     border-bottom: 1px solid var(--builder-border);
 }
 
+.form-builder__static-text-preview {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid currentColor;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
 .form-builder__toolbar h2, .form-builder__toolbar p,
 .form-builder__canvas-heading h3, .form-builder__properties h3 { margin: 0; }
 .form-builder__toolbar p { margin-top: 4px; color: var(--color-text-muted); font-size: .92rem; }

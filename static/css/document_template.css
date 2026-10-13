@@ -556,6 +556,10 @@ html.agreement-preview-document body {
 .document-signature { text-align: center; }
 .document-signature__line { height: 14mm; border-bottom: 1px dotted #222; }
 .document-signature__label { margin-top: 2mm; font-size: 9pt; }
+.document-dotted-fields { display: grid; grid-template-columns: 43% 43%; justify-content: space-between; width: 100%; margin: 12mm 0 6mm; break-inside: avoid; page-break-inside: avoid; }
+.document-dotted-fields__field { min-width: 0; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+.document-dotted-fields__line { height: 13mm; border-bottom: 1pt dotted #222; }
+.document-dotted-fields__label { margin-top: 2mm; font-size: 9pt; overflow-wrap: anywhere; }
 .document-participant-data, .document-project-info { display: grid; gap: 6pt; max-width: 100%; margin: 10pt 0 14pt; padding: 10pt 12pt; border: 1px solid #b8b8b8; page-break-inside: avoid; break-inside: avoid; }
 .document-participant-data__row, .document-project-info__row { display: grid; grid-template-columns: 42mm 1fr; gap: 4mm; }
 .document-participant-data__row > span, .document-project-info__row > span { color: #444; font-weight: 700; }

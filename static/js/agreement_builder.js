@@ -590,7 +590,10 @@
         const run = {
           // Browser editing engines may leave caret markers in rich text.
           // They are technical nodes, unlike ordinary spaces, NBSP and line breaks.
-          text: String(item.text ?? "").replace(/[\u0000\u200B\u200C\u200D\u2060\uFEFF]/g, ""),
+          text: String(item.text ?? "").replace(
+            /[\u0000\u200B\u200C\u200D\u2060\uFEFF]/g,
+            "",
+          ),
           bold: item.bold === true,
           italic: item.italic === true,
           underline: item.underline === true,
@@ -802,7 +805,9 @@
           String(block.left_label || block.right_label || "").trim(),
         );
       if (block.type === "dotted_fields")
-        return Boolean(String(block.left_label || block.right_label || "").trim());
+        return Boolean(
+          String(block.left_label || block.right_label || "").trim(),
+        );
       if (block.type === "form_field")
         return Boolean(String(block.field || "").trim());
       if (block.type === "criteria_table")
@@ -963,39 +968,36 @@
     }
 
     function repeatableVariableForRun(text) {
-  const match = String(text || "").match(
-    /^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/
-  );
+      const match = String(text || "").match(/^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/);
 
-  if (!match) return null;
+      if (!match) return null;
 
-  return variables.find(
-    (item) =>
-      item.name === match[1] &&
-      item.type === "repeatable_group"
-  ) || null;
-}
+      return (
+        variables.find(
+          (item) => item.name === match[1] && item.type === "repeatable_group",
+        ) || null
+      );
+    }
 
-function runsMarkup(holder) {
-  return normalizeRuns(holder?.runs, holder?.content || "")
-    .map((run, runIndex) => {
-      const repeatableVariable =
-        repeatableVariableForRun(run.text);
+    function runsMarkup(holder) {
+      return normalizeRuns(holder?.runs, holder?.content || "")
+        .map((run, runIndex) => {
+          const repeatableVariable = repeatableVariableForRun(run.text);
 
-      const repeatableClass = repeatableVariable
-        ? " is-repeatable-variable"
-        : "";
+          const repeatableClass = repeatableVariable
+            ? " is-repeatable-variable"
+            : "";
 
-      const repeatableAttribute = repeatableVariable
-        ? ` data-repeatable-variable-label="${escapeHtml(
-            repeatableVariable.label
-          )}"`
-        : "";
+          const repeatableAttribute = repeatableVariable
+            ? ` data-repeatable-variable-label="${escapeHtml(
+                repeatableVariable.label,
+              )}"`
+            : "";
 
-      return `<span class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}${repeatableClass}" data-builder-run="${runIndex}" data-bold="${run.bold}" data-italic="${run.italic}" data-underline="${run.underline}"${repeatableAttribute}>${escapeHtml(run.text)}</span>`;
-    })
-    .join("");
-}
+          return `<span class="document-builder-run${run.bold ? " is-bold" : ""}${run.italic ? " is-italic" : ""}${run.underline ? " is-underline" : ""}${repeatableClass}" data-builder-run="${runIndex}" data-bold="${run.bold}" data-italic="${run.italic}" data-underline="${run.underline}"${repeatableAttribute}>${escapeHtml(run.text)}</span>`;
+        })
+        .join("");
+    }
 
     function editable(value, field, index, extra = "") {
       const rich =
@@ -2078,10 +2080,13 @@ function runsMarkup(holder) {
 
     function requestClose() {
       if (!builderState.dirty) {
-        window.close();
+        window.history.back();
         return;
       }
-      if (typeof closeDialog?.showModal === "function") closeDialog.showModal();
+
+      if (typeof closeDialog?.showModal === "function") {
+        closeDialog.showModal();
+      }
     }
 
     async function downloadPdf() {
@@ -2461,12 +2466,12 @@ function runsMarkup(holder) {
       if (event.target.closest("[data-builder-close-discard]")) {
         builderState.dirty = false;
         closeDialog?.close();
-        window.close();
+        window.history.back();
       }
       if (event.target.closest("[data-builder-close-save]")) {
         if (await save("draft")) {
           closeDialog?.close();
-          window.close();
+          window.history.back();
         }
       }
     });

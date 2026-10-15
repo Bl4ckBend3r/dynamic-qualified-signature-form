@@ -152,6 +152,9 @@ def serialize_builder_fields(
             "id": field.id,
             "name": field.name,
             "label": field.label or field.name,
+            "content_html": str(
+                config.get("content_html") or ""
+            ),
             "document_label": document_labels.get(
                 field.name,
                 config.get("document_label", ""),
@@ -183,6 +186,12 @@ def serialize_builder_fields(
                     "data_classification",
                     "normal",
                 )
+            ),
+            "allowed_extensions": deepcopy(
+                config.get("allowed_extensions") or ["pdf"]
+            ),
+            "verify_electronic_signature": bool(
+                config.get("verify_electronic_signature", False)
             ),
             "options": deepcopy(
                 field.options or []
@@ -380,6 +389,7 @@ def apply_builder_state(
             {
                 "name": name,
                 "label": field.label,
+                "content_html": str(item.get("content_html") or ""),
                 "type": field_type,
                 "required": field.required,
                 "options": deepcopy(field.options),
@@ -392,6 +402,15 @@ def apply_builder_state(
                         (item.get("document_usage") or {}).get("declaration")
                     )
                 },
+                "allowed_extensions": [
+                    str(extension).lower().lstrip(".")
+                    for extension in (
+                        item.get("allowed_extensions") or ["pdf"]
+                    )
+                ],
+                "verify_electronic_signature": bool(
+                    item.get("verify_electronic_signature", False)
+                ),
                 "data_classification": classification,
             }
         )

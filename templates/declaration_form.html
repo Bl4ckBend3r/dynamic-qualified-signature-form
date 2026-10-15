@@ -34,7 +34,7 @@ endblock %} {% block content %}
     </section>
 
     {% elif field.type == "static_text" %}
-    <div class="static-text">{{ field.label|safe }}</div>
+    <div class="static-text">{{ field.label|trusted_html }}</div>
 
     {% else %} {% set value = values.get(field.name, field.default) %} {% set
     has_error = errors.get(field.name) %}

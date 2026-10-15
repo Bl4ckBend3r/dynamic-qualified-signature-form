@@ -15,6 +15,67 @@ const TYPE_LABELS = {
   static_text: "Tekst informacyjny",
 };
 
+function sanitizeStaticTextPreview(value) {
+  const allowedTags = new Set([
+    "P",
+    "BR",
+    "STRONG",
+    "B",
+    "EM",
+    "I",
+    "U",
+    "UL",
+    "OL",
+    "LI",
+    "A",
+  ]);
+
+  const template = document.createElement("template");
+  template.innerHTML = String(value || "");
+
+  const sanitizeNode = (node) => {
+    [...node.children].forEach((element) => {
+      if (!allowedTags.has(element.tagName)) {
+        element.replaceWith(...element.childNodes);
+        return;
+      }
+
+      [...element.attributes].forEach((attribute) => {
+        const allowed =
+          element.tagName === "A" &&
+          ["href", "target", "title"].includes(attribute.name);
+
+        if (!allowed) {
+          element.removeAttribute(attribute.name);
+        }
+      });
+
+      if (element.tagName === "A") {
+        const href = String(element.getAttribute("href") || "").trim();
+
+        if (
+          href &&
+          !href.startsWith("https://") &&
+          !href.startsWith("http://") &&
+          !href.startsWith("mailto:")
+        ) {
+          element.removeAttribute("href");
+        }
+
+        if (element.getAttribute("target") === "_blank") {
+          element.setAttribute("rel", "noopener noreferrer");
+        }
+      }
+
+      sanitizeNode(element);
+    });
+  };
+
+  sanitizeNode(template.content);
+
+  return template.innerHTML;
+}
+
 export function createFieldItem(field, index, selected, actions) {
   const item = document.createElement("article");
 
@@ -67,7 +128,18 @@ export function createFieldItem(field, index, selected, actions) {
 
   head.append(label, tools);
 
-  item.append(head, previewControl(field, actions));
+  item.append(head);
+
+  if (field.type !== "static_text" && field.content_html) {
+    const information = document.createElement("div");
+
+    information.className = "form-builder__static-text-preview";
+    information.innerHTML = sanitizeStaticTextPreview(field.content_html);
+
+    item.append(information);
+  }
+
+  item.append(previewControl(field, actions));
 
   /*
    * stopPropagation jest ważne dla pól
@@ -168,10 +240,10 @@ function toolButton(text, label, className = "") {
 
 function previewControl(field, actions) {
   if (field.type === "static_text") {
-    const text = document.createElement("p");
+    const text = document.createElement("div");
 
     text.className = "form-builder__static-text-preview";
-    text.textContent = field.label || "Tekst informacyjny";
+    text.innerHTML = sanitizeStaticTextPreview(field.content_html || "");
 
     return text;
   }

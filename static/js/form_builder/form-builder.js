@@ -226,7 +226,8 @@ if (builder) {
       options: OPTION_FIELD_TYPES.has(type) ? ["Opcja 1", "Opcja 2"] : [],
     };
     if (type === "static_text") {
-      fieldData.label = "Treść informacyjna";
+      fieldData.label = "Tekst informacyjny";
+      fieldData.content_html = "";
       fieldData.required = false;
       fieldData.placeholder = "";
       fieldData.options = [];
@@ -238,6 +239,10 @@ if (builder) {
         editable: false,
         required: false,
       }));
+    }
+    if (type === "file") {
+      fieldData.allowed_extensions = ["pdf"];
+      fieldData.verify_electronic_signature = false;
     }
     if (type === "repeatable_group") {
       fieldData.fields = [];

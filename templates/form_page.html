@@ -191,20 +191,33 @@ endblock %}
       %}
     >
      {% if field.type != "checkbox" %}
-            <label for="{{ field.name }}">
-                {{ field.label|trusted_html }}
-                {% if field.required %}
-                    <span class="required required-marker" aria-hidden="true">*</span>
-                {% endif %}
-            </label>
-        {% elif (field.options or [])|length > 1 %}
-            <div class="field-group-label" id="{{ field.name }}-group-label">
-                {{ field.label|trusted_html }}
-                {% if field.required %}
-                    <span class="required required-marker" aria-hidden="true">*</span>
-                {% endif %}
+        <label for="{{ field.name }}">
+            {{ field.label|trusted_html }}
+            {% if field.required %}
+                <span class="required required-marker" aria-hidden="true">*</span>
+            {% endif %}
+        </label>
+
+        {% if field.content_html %}
+            <div class="static-text">
+                {{ field.content_html|trusted_html }}
             </div>
         {% endif %}
+
+    {% elif (field.options or [])|length > 1 %}
+        <div class="field-group-label" id="{{ field.name }}-group-label">
+            {{ field.label|trusted_html }}
+            {% if field.required %}
+                <span class="required required-marker" aria-hidden="true">*</span>
+            {% endif %}
+        </div>
+
+        {% if field.content_html %}
+            <div class="static-text">
+                {{ field.content_html|trusted_html }}
+            </div>
+        {% endif %}
+    {% endif %}
 
         {% if field.type == "repeatable_group" %}
       <div

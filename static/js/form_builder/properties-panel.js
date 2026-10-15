@@ -34,11 +34,16 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     typeSelect.append(option);
   });
   const widthHolder = panel.querySelector("[data-width-options]");
-  const availabilityHolder = panel.querySelector("[data-availability-settings]");
-  const declarationUsage = panel.querySelector('[data-document-usage="declaration"]');
-  const staticTextSetting = panel.querySelector("[data-static-text-setting]");
+  const availabilityHolder = panel.querySelector(
+    "[data-availability-settings]",
+  );
+  const declarationUsage = panel.querySelector(
+    '[data-document-usage="declaration"]',
+  );
+  const fileSettings = panel.querySelector("[data-file-settings]");
   const staticTextContent = panel.querySelector("[data-static-text-content]");
   const labelSetting = panel.querySelector("[data-label-setting]");
+  const staticTextSetting = panel.querySelector("[data-static-text-setting]");
   const nameSetting = panel.querySelector("[data-name-setting]");
   const typeSetting = panel.querySelector("[data-type-setting]");
   const widthSetting = panel.querySelector("[data-width-setting]");
@@ -46,7 +51,7 @@ export function initializePropertiesPanel(panel, config, callbacks) {
 
   staticTextContent.addEventListener("input", () => {
     callbacks.update({
-      label: staticTextContent.value,
+      content_html: staticTextContent.value,
     });
   });
   Object.keys(config.widths).forEach((width) => {
@@ -78,6 +83,12 @@ export function initializePropertiesPanel(panel, config, callbacks) {
           .split(/\r?\n/)
           .map((item) => item.trim())
           .filter(Boolean);
+      if (control.dataset.property === "allowed_extensions") {
+        value = String(value || "")
+          .split(",")
+          .map((item) => item.trim().toLowerCase().replace(/^\./, ""))
+          .filter(Boolean);
+      }
       callbacks.update({ [control.dataset.property]: value });
     });
   });
@@ -119,17 +130,16 @@ export function initializePropertiesPanel(panel, config, callbacks) {
 
     current.set(stepId, entry);
     callbacks.update({
-      availability: config.workflowSteps.map((step) =>
-        current.get(step.id) || {
-          step: step.id,
-          visible: false,
-          editable: false,
-          required: false,
-        },
+      availability: config.workflowSteps.map(
+        (step) =>
+          current.get(step.id) || {
+            step: step.id,
+            visible: false,
+            editable: false,
+            required: false,
+          },
       ),
-      required: Boolean(
-        current.get(config.workflowSteps[0]?.id)?.required,
-      ),
+      required: Boolean(current.get(config.workflowSteps[0]?.id)?.required),
     });
   };
 
@@ -144,20 +154,19 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     content.hidden = !field;
     if (!field) return;
     const isStaticText = field.type === "static_text";
+    const isFile = field.type === "file";
+    fileSettings.hidden = !isFile;
 
     labelSetting.hidden = isStaticText;
-    staticTextSetting.hidden = !isStaticText;
+    staticTextSetting.hidden = false;
     nameSetting.hidden = isStaticText;
     typeSetting.hidden = isStaticText;
     widthSetting.hidden = isStaticText;
     documentsSetting.hidden = isStaticText;
 
-    panel.querySelector("[data-name-help]").hidden =
-      isStaticText || !field.id;
+    panel.querySelector("[data-name-help]").hidden = isStaticText || !field.id;
 
-    if (isStaticText) {
-      staticTextContent.value = field.label || "";
-    }
+    staticTextContent.value = field.content_html || "";
     availabilityHolder.replaceChildren();
     const permissions =
       field.type === "static_text"
@@ -175,7 +184,8 @@ export function initializePropertiesPanel(panel, config, callbacks) {
       row.className = "form-builder__availability-row";
       const label = document.createElement("strong");
       label.className = "form-builder__availability-stage";
-      label.textContent = step.admin_label || step.user_label || step.label || step.id;
+      label.textContent =
+        step.admin_label || step.user_label || step.label || step.id;
       row.append(label);
       const controls = document.createElement("div");
       controls.className = "form-builder__availability-controls";

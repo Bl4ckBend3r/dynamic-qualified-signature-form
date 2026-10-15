@@ -8,6 +8,7 @@ from typing import Protocol
 
 from form_loader import evaluate_visible_if
 from services.upload_validation import UploadValidationError, validate_attachment_upload
+from signature_verifier import signature_verification_result, verify_signed_pdf_bytes
 
 
 ATTACHMENT_DOCUMENT_TYPE = "submission_attachment"
@@ -122,6 +123,50 @@ class SubmissionAttachmentService:
                         else "Nie można potwierdzić bezpieczeństwa pliku. Spróbuj ponownie później."
                     )
                     break
+
+                if bool(field.get("verify_electronic_signature", False)):
+                    if detected_mime != "application/pdf":
+                        errors[key] = (
+                            "Weryfikacja podpisu elektronicznego jest dostępna wyłącznie dla plików PDF."
+                        )
+                        break
+
+                    try:
+                        verification = verify_signed_pdf_bytes(content)
+                        signature_result = signature_verification_result(verification)
+                    except Exception:
+                        errors[key] = (
+                            "Nie udało się zweryfikować podpisu elektronicznego. "
+                            "Spróbuj ponownie później."
+                        )
+                        break
+
+                    signature_errors = {
+                        "NO_SIGNATURE": (
+                            "Plik PDF nie zawiera podpisu elektronicznego."
+                        ),
+                        "INVALID_SIGNATURE": (
+                            "Podpis elektroniczny pliku jest nieprawidłowy."
+                        ),
+                        "UNSUPPORTED_SIGNATURE": (
+                            "Format podpisu elektronicznego nie jest obsługiwany."
+                        ),
+                        "SIGNATURE_TYPE_NOT_ALLOWED": (
+                            "Typ podpisu elektronicznego nie jest dozwolony."
+                        ),
+                        "VERIFICATION_ERROR": (
+                            "Nie można potwierdzić poprawności podpisu elektronicznego. "
+                            "Spróbuj ponownie później."
+                        ),
+                    }
+
+                    if signature_result != "VALID_SIGNATURE":
+                        errors[key] = signature_errors.get(
+                            signature_result,
+                            "Nie udało się potwierdzić poprawności podpisu elektronicznego.",
+                        )
+                        break
+
                 prepared.append(
                     PreparedAttachment(
                         field_key=key,

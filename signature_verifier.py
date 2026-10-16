@@ -5,7 +5,11 @@ import logging
 from pathlib import Path
 import os
 import tempfile
+
+from collections.abc import Mapping
 from typing import Any
+
+from asn1crypto import x509 as asn1_x509
 
 from pypdf import PdfReader
 from cryptography.hazmat.primitives import hashes
@@ -23,6 +27,31 @@ from services.signatures.trusted_profile import (
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+def _install_asn1crypto_postal_address_compatibility_patch() -> None:
+    original_property = asn1_x509.NameTypeAndValue.prepped_value
+
+    def patched_prepped_value(self):
+        native = self["value"].native
+
+        if self["type"].dotted == "2.5.4.16" and isinstance(native, Mapping):
+            if self._prepped is None:
+                normalized = " ".join(
+                    str(value).strip()
+                    for value in native.values()
+                    if value is not None and str(value).strip()
+                )
+                self._prepped = self._ldap_string_prep(normalized)
+
+            return self._prepped
+
+        return original_property.fget(self)
+
+    asn1_x509.NameTypeAndValue.prepped_value = property(
+        patched_prepped_value
+    )
+
+
+_install_asn1crypto_postal_address_compatibility_patch()
 
 class SignatureTrustConfigurationError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
@@ -712,10 +741,16 @@ def _verify_signed_pdf_with_pyhanko(pdf_path: Path) -> dict:
                     message_digest_matches = intact if signed_attrs_present else None
                     signature_type = _qualification_signature_type(status, classification["signature_type"])
                 except Exception as exc:
+                    logger.exception(
+                        "pyhanko_signature_verification_failed error_type=%s error=%s",
+                        exc.__class__.__name__,
+                        str(exc),
+                    )
+
                     intact = valid = trusted = revocation_checked = False
                     revoked = False
                     docmdp_ok = False
-                    error = exc.__class__.__name__
+                    error = f"{exc.__class__.__name__}: {exc}"
                     verification_error = True
                     accepted = False
                     signing_time = None

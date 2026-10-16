@@ -78,15 +78,53 @@ class MailDispatchService:
         from models import EmailLog, SubmissionDecision
 
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+        definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         workflow = definition.get("workflow") or {}
         item_event = decision is not None
-        if workflow.get("flow_mode") == "explicit":
-            step = step_config or next((s for s in workflow.get("steps", []) if s.get("id") == decision.workflow_step), {})
+
+        if workflow.get("flow_mode") == "explicit" and not item_event:
+            if not workflow.get("send_email_notifications", False):
+                return None
+
+            decision_value = str(submission.officer_decision or "").strip().lower()
+
+            notification_id = {
+                "accepted": "application_accepted",
+                "rejected": "application_rejected",
+                "correction": "correction_required",
+            }.get(decision_value)
+
+            config = next(
+                (
+                    item
+                    for item in workflow.get("email_notifications") or []
+                    if isinstance(item, dict)
+                    and item.get("id") == notification_id
+                ),
+                {},
+            )
+
+            enabled = bool(
+                config.get("enabled", False)
+                and config.get("automatic", False)
+            )
+
+        elif workflow.get("flow_mode") == "explicit":
+            step = step_config or next(
+                (
+                    s
+                    for s in workflow.get("steps", [])
+                    if s.get("id") == decision.workflow_step
+                ),
+                {},
+            )
             config = step.get("decision_email") or {}
             enabled = config.get("enabled", False)
+
         else:
             config = (group_config or {}).get("decision_email") or {}
             enabled = config.get("automatic", False)
+
         if not enabled:
             return None
         template_type = str(config.get("template_type") or "repeatable_item_decision")

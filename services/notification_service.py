@@ -35,11 +35,11 @@ class NotificationService:
 
         subject = f"Nowe zgłoszenie: {form_title}"
         text_body = (
-            "Dzień dobry,\\n\\n"
-            "Do formularza wpłynął nowy wniosek.\\n\\n"
-            f"Formularz: {form_title}\\n"
-            f"ID zgłoszenia: {submission_id}\\n\\n"
-            "Szczegóły wniosku są dostępne w panelu administratora.\\n"
+            "Dzień dobry,\n\n"
+            "Do formularza wpłynął nowy wniosek.\n\n"
+            f"Formularz: {form_title}\n"
+            f"ID zgłoszenia: {submission_id}\n\n"
+            "Szczegóły wniosku są dostępne w panelu administratora.\n"
         )
         html_body = (
             "<p>Dzień dobry,</p>"

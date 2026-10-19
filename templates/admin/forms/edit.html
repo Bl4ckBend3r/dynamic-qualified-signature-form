@@ -35,6 +35,21 @@
         <label class="admin-check"><input type="checkbox" name="is_active" {% if form.is_active %}checked{% endif %}><span>Aktywny</span></label>
         <label class="admin-check"><input type="checkbox" name="is_public" {% if form.is_public %}checked{% endif %}><span>Widoczny publicznie</span></label>
     </div>
+    {% set notification = (form.definition_json or {}).get('submission_notification', {}) %}
+    <div class="admin-section">
+        <h2>Powiadomienia o nowych zgłoszeniach</h2>
+        <p>Wiadomość zostanie wysłana wyłącznie po pomyślnym złożeniu nowego wniosku. Inne działania użytkownika nie wywołują tego powiadomienia.</p>
+        <div class="admin-form-grid">
+            <label class="admin-check">
+                <input type="checkbox" name="submission_notification_enabled" {% if (request.form.get('submission_notification_enabled') == 'on' if request.method == 'POST' else notification.get('enabled', false)) %}checked{% endif %}>
+                <span>Wysyłaj powiadomienie e-mail o nowym zgłoszeniu</span>
+            </label>
+            <label>
+                <span>Adres e-mail przypisany do formularza</span>
+                <input type="email" name="submission_notification_email" maxlength="320" value="{{ request.form.get('submission_notification_email', '') if request.method == 'POST' else notification.get('email', '') }}" placeholder="np. koordynator@example.com">
+            </label>
+        </div>
+    </div>
     {% if g.admin_user.role == "super_admin" %}
         <div class="admin-section">
             <h2>Uprawnienia</h2>

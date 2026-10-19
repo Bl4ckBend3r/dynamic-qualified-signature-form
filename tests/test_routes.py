@@ -106,6 +106,77 @@ def test_submit_valid_form_generates_pdf_and_csv_row(client, app, valid_form_dat
     assert storage.saved_pdfs
 
 
+def test_submission_notification_sent_once_only_when_form_enabled(client, app, valid_form_data, monkeypatch):
+    import app as app_module
+
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "submission_notification": {
+            "enabled": True,
+            "email": "koordynator@example.com",
+        },
+    }
+    sent = []
+    app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    monkeypatch.setattr(app_module, "validate_submission", lambda *args, **kwargs: {})
+
+    response = client.post("/submit/formularz_zgloszeniowy", data=valid_form_data)
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert sent[0]["to_emails"] == ["koordynator@example.com"]
+    assert "Nowe zgłoszenie:" in sent[0]["subject"]
+
+    submission_id = app.testing_storage.csv_rows[0]["submission_id"]
+    assert submission_id in sent[0]["text_body"]
+    client.get(f"/result/formularz_zgloszeniowy/{submission_id}")
+    assert len(sent) == 1
+
+
+def test_submission_notification_off_or_invalid_form_does_not_send(client, app, valid_form_data, monkeypatch):
+    import app as app_module
+
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "submission_notification": {
+            "enabled": False,
+            "email": "koordynator@example.com",
+        },
+    }
+    sent = []
+    app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    monkeypatch.setattr(app_module, "validate_submission", lambda *args, **kwargs: {})
+
+    response = client.post("/submit/formularz_zgloszeniowy", data=valid_form_data)
+    assert response.status_code == 200
+    assert sent == []
+
+    app.testing_storage.form_definition["submission_notification"]["enabled"] = True
+    response = client.post("/submit/formularz_zgloszeniowy", data={})
+    assert response.status_code == 400
+    assert sent == []
+
+
+def test_submission_notification_smtp_error_does_not_lose_application(client, app, valid_form_data, monkeypatch):
+    import app as app_module
+
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "submission_notification": {
+            "enabled": True,
+            "email": "koordynator@example.com",
+        },
+    }
+    def smtp_error(**_kwargs):
+        raise RuntimeError("SMTP unavailable")
+
+    app.extensions["notification_service"].smtp_sender = smtp_error
+    monkeypatch.setattr(app_module, "validate_submission", lambda *args, **kwargs: {})
+
+    response = client.post("/submit/formularz_zgloszeniowy", data=valid_form_data)
+    assert response.status_code == 200
+    assert len(app.testing_storage.csv_rows) == 1
+
+
 def test_submit_creates_submission_through_service(client, app, valid_form_data, monkeypatch):
     import app as app_module
 

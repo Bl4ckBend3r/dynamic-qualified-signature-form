@@ -2449,6 +2449,7 @@ def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
             "workflow_name": "Po imporcie",
             "workflow_initial_step": "submission",
             "requires_declaration": "on",
+            "declaration_document_name": "Oświadczenie uczestnika",
             "declaration_template_html": "<p>Deklaracja {{ first_name }}</p>",
             "workflow_json": json.dumps(definition["workflow"], ensure_ascii=False),
             "is_active": "on",
@@ -2466,6 +2467,7 @@ def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
         assert workflow["declaration_template_html"] == "<p>Deklaracja {{ first_name }}</p>"
         declaration = next(document for document in form.definition_json["documents"] if document["id"] == "declaration")
         assert declaration["template_html"] == "<p>Deklaracja {{ first_name }}</p>"
+        assert declaration["participant_label"] == "Oświadczenie uczestnika"
 
 
 def test_workflow_edit_shows_tooltips_and_conditional_html_fields(admin_app, admin_client):

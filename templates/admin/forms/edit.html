@@ -850,8 +850,8 @@
             <article class="admin-section" data-custom-document>
                 <div class="admin-form-grid">
                     <label><span>ID techniczne</span><input data-custom-field="id" pattern="[a-z][a-z0-9_]{1,63}" required></label>
-                    <label><span>Nazwa</span><input data-custom-field="label" required></label>
-                    <label><span>Etykieta dla uczestnika</span><input data-custom-field="participant_label"></label>
+                    <label><span>Nazwa administracyjna</span><input data-custom-field="label" required></label>
+                    <label><span>Nazwa dokumentu</span><input data-custom-field="participant_label" placeholder="np. Oświadczenie uczestnika"><small>Widoczna dla uczestnika. Puste pole używa nazwy administracyjnej.</small></label>
                     <label><span>Etap workflow</span><select data-custom-field="workflow_step">
                         <option value="">Nieprzypisany</option>
                         {% for step in participant_workflow_steps %}
@@ -1095,6 +1095,8 @@
             </div>
             <div class="workflow-document-fields">
                 <div class="document-template-configuration" data-document-source-scope data-document-type="declaration" data-form-tab-only="declaration" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
+                    {% set declaration_document = form.workflow_editor_documents|default([])|selectattr('id', 'equalto', 'declaration')|first|default({}) %}
+                    <label><span>Nazwa dokumentu</span><input name="declaration_document_name" value="{{ declaration_document.get('participant_label', '') }}" placeholder="{{ declaration_document.get('label') or 'Deklaracja' }}"><small>Widoczna dla uczestnika. Puste pole zachowuje dotychczasową nazwę.</small></label>
                     {% set document_type = 'declaration' %}
                     {% set selected_source = workflow.get('declaration_template_source', 'builder') %}
                     {% set source_input_name = 'declaration_template_source' %}
@@ -1533,7 +1535,7 @@ window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson 
             assigned.sort((a, b) => Number(a.order || 0) - Number(b.order || 0)).forEach((item, index) => {
                 const row = document.createElement('p');
                 const policy = item.lifecycle || {};
-                row.textContent = `${item.label || item.id} — ${item.required === false ? 'opcjonalny' : 'wymagany'} · ${policy.participant_signature ?? item.signature_required ? 'podpis uczestnika' : 'bez podpisu uczestnika'} · ${policy.office_signature ? 'podpis urzędu' : 'bez podpisu urzędu'} · ${policy.generate ?? item.kind === 'generated_pdf' ? 'generowany' : 'bez generowania'} · ${policy.upload_required ? 'upload PDF' : 'bez uploadu'} `;
+                row.textContent = `${item.participant_label || item.label || item.id} — ${item.required === false ? 'opcjonalny' : 'wymagany'} · ${policy.participant_signature ?? item.signature_required ? 'podpis uczestnika' : 'bez podpisu uczestnika'} · ${policy.office_signature ? 'podpis urzędu' : 'bez podpisu urzędu'} · ${policy.generate ?? item.kind === 'generated_pdf' ? 'generowany' : 'bez generowania'} · ${policy.upload_required ? 'upload PDF' : 'bez uploadu'} `;
                 const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'admin-button-secondary compact'; edit.textContent = 'Edytuj dokument';
                 edit.addEventListener('click', () => { document.querySelector(`[data-form-tab-target="${reserved.has(item.id) ? item.id === 'declaration' ? 'declaration' : 'agreement' : 'documents'}"]`)?.click();
                     if (!reserved.has(item.id)) [...list.querySelectorAll('[data-custom-document]')].find(entry => entry.querySelector('[data-custom-field="id"]').value === item.id)?.scrollIntoView({block: 'center'}); });
@@ -1552,7 +1554,7 @@ window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson 
             });
             const choice = section.querySelector('[data-stage-document-choice]');
             const selected = choice.value;
-            choice.replaceChildren(new Option('Wybierz dokument', ''), ...window.workflowDocuments.filter(item => item.id && item.workflow_step !== stageId).map(item => new Option(item.label || item.id, item.id)));
+            choice.replaceChildren(new Option('Wybierz dokument', ''), ...window.workflowDocuments.filter(item => item.id && item.workflow_step !== stageId).map(item => new Option(item.participant_label || item.label || item.id, item.id)));
             choice.value = selected;
         });
     }

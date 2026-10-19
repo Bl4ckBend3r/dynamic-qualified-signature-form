@@ -1182,6 +1182,8 @@ def build_documents_to_sign_result(
 ) -> dict:
     services = get_services()
     form_config = get_form_config(submission["form_slug"], submission_id) or {}
+    declaration_config = services.document_service.get_document_by_id(form_config, DocumentType.DECLARATION) or {}
+    declaration_label = declaration_config.get("participant_label") or declaration_config.get("label") or "Deklaracja"
     training_picker = _public_training_picker(submission_id, access_token)
     row = submission["row"]
     document_step = services.document_service.document_workflow.view(row, form_config)
@@ -1207,6 +1209,7 @@ def build_documents_to_sign_result(
         )
         result["access_token"] = access_token
         result["training_picker"] = training_picker
+        result["declaration_label"] = declaration_label
         return result
 
     declaration = build_existing_declaration_result(services, submission, form_config)
@@ -1278,6 +1281,7 @@ def build_documents_to_sign_result(
     )
     result["access_token"] = access_token
     result["training_picker"] = training_picker
+    result["declaration_label"] = declaration_label
     result["completed_document_files"] = completed_document_files
     result["form_slug"] = submission["form_slug"]
     training_field = get_training_selection_field(form_config)
@@ -1326,7 +1330,8 @@ def _version_gap_view(submission, submission_id):
         generated = next((file for file in files if file.get("document_id") == item["document_id"]
                           and file.get("workflow_step_at_upload") == item["step_id"]
                           and file.get("status") == "generated"), None)
-        view.append({**item, "generated_filename": generated["filename"] if generated else ""})
+        view.append({**item, "label": document.get("participant_label") or document.get("label") or item.get("label"),
+                     "generated_filename": generated["filename"] if generated else ""})
     return view
 
 

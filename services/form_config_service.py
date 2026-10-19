@@ -131,6 +131,9 @@ class FormConfigService:
         for key, value in document.items():
             if key == "id":
                 continue
+            if key == "participant_label" and value == "":
+                merged[key] = ""
+                continue
             if value in (None, "", [], {}):
                 continue
             merged[key] = value

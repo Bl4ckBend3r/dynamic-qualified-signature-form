@@ -161,6 +161,7 @@
         {% for file in result.completed_document_files %}<p><a href="{{ url_for('documents.download_document_item', slug=result.form_slug, submission_id=result.submission_id, step_id=file.step_id, document_id=file.document_id, filename=file.filename, token=result.access_token) }}">Pobierz: {{ file.label }}</a></p>{% endfor %}
     </section>
     {% endif %}
+    {% set declaration_name = result.declaration_label|default('Deklaracja') if result else 'Deklaracja' %}
     {% if result and result.document_step %}
         {% set document = result.document_step %}
         <section class="result-box" data-composite-document data-substate="{{ document.substate }}">
@@ -290,7 +291,7 @@
                 <div class="card document-stage-card" data-stage="additional-fields">
                     <div class="card-header">
                         <h3>Wniosek został zaakceptowany</h3>
-                        <p>Uzupełnij dodatkowe informacje, aby pobrać deklarację.</p>
+                        <p>Uzupełnij dodatkowe informacje, aby pobrać dokument: {{ declaration_name }}.</p>
                     </div>
                     <form method="post" action="{{ result.additional_action_url }}" class="dynamic-form" novalidate>
                         <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
@@ -373,7 +374,7 @@
                     data-download-replace-card
                 >
                     {% if result.declaration_filename %}
-                        <p><strong>Deklaracja:</strong> {{ result.declaration_filename }}</p>
+                        <p><strong>{{ declaration_name }}:</strong> {{ result.declaration_filename }}</p>
                     {% endif %}
 
                     <div class="download-links document-download-links">
@@ -382,7 +383,7 @@
                                 class="btn-primary"
                                 href="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
                             >
-                                Wypełnij deklarację
+                                {{ 'Wypełnij deklarację' if declaration_name == 'Deklaracja' else 'Wypełnij: ' ~ declaration_name }}
                             </a>
                         {% endif %}
 
@@ -394,7 +395,7 @@
                                 data-edit-url="{{ url_for('documents.declaration_form', slug=result.form_slug, submission_id=result.submission_id, token=result.access_token|default('')) }}"
                                 data-edit-title="Edytuj deklarację"{% endif %}
                             >
-                                Pobierz deklarację PDF
+                                {{ 'Pobierz deklarację PDF' if declaration_name == 'Deklaracja' else 'Pobierz: ' ~ declaration_name }}
                             </a>
                         {% else %}
                             <button
@@ -404,7 +405,7 @@
                                 aria-disabled="true"
                                 title="Deklaracja PDF będzie dostępna po wypełnieniu deklaracji i spełnieniu wymaganych warunków."
                             >
-                                Pobierz deklarację PDF
+                                {{ 'Pobierz deklarację PDF' if declaration_name == 'Deklaracja' else 'Pobierz: ' ~ declaration_name }}
                             </button>
                         {% endif %}
                     </div>
@@ -414,7 +415,7 @@
             {% if show_declaration_upload %}
                 <div class="card upload-card document-stage-card" data-stage="declaration-upload">
                     <div class="card-header">
-                        <h3>Wgraj podpisaną deklarację</h3>
+                        <h3>{{ 'Wgraj podpisaną deklarację' if declaration_name == 'Deklaracja' else 'Wgraj podpisany dokument: ' ~ declaration_name }}</h3>
                         <p>Wgraj deklarację podpisaną elektronicznie. Akceptowane podpisy: mSzafir lub Profil Zaufany.</p>
                     </div>
 
@@ -434,7 +435,7 @@
                                 >
                                 <span class="upload-dropzone__inner">
                                     <span class="upload-dropzone__icon" aria-hidden="true">⇧</span>
-                                    <span class="upload-dropzone__title">Przeciągnij i upuść podpisaną deklarację PDF</span>
+                                    <span class="upload-dropzone__title">{{ 'Przeciągnij i upuść podpisaną deklarację PDF' if declaration_name == 'Deklaracja' else 'Przeciągnij i upuść podpisany PDF: ' ~ declaration_name }}</span>
                                     <span class="upload-dropzone__description">albo kliknij tutaj, aby wybrać plik z dysku</span>
                                     <span class="upload-dropzone__filename" data-upload-filename>Nie wybrano pliku</span>
                                 </span>
@@ -442,7 +443,7 @@
                         </div>
 
                         <div class="submit-row">
-                            <button type="submit" class="btn-primary">Wyślij podpisaną deklarację</button>
+                            <button type="submit" class="btn-primary">{{ 'Wyślij podpisaną deklarację' if declaration_name == 'Deklaracja' else 'Prześlij podpisany dokument: ' ~ declaration_name }}</button>
                         </div>
                     </form>
                 </div>

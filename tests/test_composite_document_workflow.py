@@ -446,6 +446,7 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
     env = composite_env()
     documents = [
         {"id": "statement_a", "label": "Oświadczenie A", "kind": "generated_pdf",
+         "participant_label": "Oświadczenie uczestnika",
          "template_html": "<p>{{ submission_id }}</p>", "workflow_step": "paper", "required": True,
          "signature_required": True, "lifecycle": {"generate": True, "download": True,
              "upload_required": True, "participant_signature": True, "signature_verification": True}},
@@ -484,7 +485,10 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
     assert env.row()["workflow_step"] == "paper"
     generated_page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
     first_card = generated_page.text.split('data-document-card="statement_a"', 1)[1].split('</article>', 1)[0]
+    assert "Oświadczenie uczestnika" in first_card
+    assert "Oświadczenie A" not in first_card
     assert first_card.index('Pobierz dokument') < first_card.index('Wgraj podpisany dokument (PDF)')
+    assert env.document.view(env.row(), env.definition, signer="office")["files"][0]["label"] == "Oświadczenie uczestnika"
     bulk_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}"
     without_csrf = client.post(bulk_url, data={"access_token": row["access_token"],
         "document_ids": ["statement_b"], "document_files": [(BytesIO(env.pdf), "b.pdf")]},
@@ -529,6 +533,8 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
     assert first.status_code == 302 and env.row()["workflow_step"] == "review"
     files = env.services.submission_document_service.list_documents(env.public_id)
     assert {file["document_id"] for file in files if file["status"] == "signed"} == {"statement_a", "statement_b"}
+    assert next(file["label"] for file in env.document.completed_files(env.row(), env.definition)
+                if file["document_id"] == "statement_a") == "Oświadczenie uczestnika"
 
 
 def test_document_cards_fit_mobile_and_both_themes(composite_env, tmp_path):
@@ -679,7 +685,56 @@ def test_admin_custom_document_config_keeps_builder_and_step(composite_env):
     # already edited DocumentBuilder document is preserved.
     assert document["workflow_step"] == "paper"
     assert document["required"] is True and document["signature_required"] is False
+    assert document["label"] == "Zaświadczenie"
+    assert document["participant_label"] == "Dokument od pracodawcy"
     assert document["builder_document"]["blocks"][0]["type"] == "paragraph"
+
+
+def test_admin_declaration_document_name_uses_existing_versioned_config(composite_env):
+    from services.admin_form_service import build_form_definition_from_admin_form
+
+    env = composite_env()
+    named = build_form_definition_from_admin_form(env.definition, {
+        "requires_declaration": "on",
+        "declaration_document_name": "Oświadczenie uczestnika",
+    })
+    declaration = next(document for document in named["documents"] if document["id"] == "declaration")
+    assert declaration["participant_label"] == "Oświadczenie uczestnika"
+    assert declaration["id"] == "declaration"
+
+    renamed = build_form_definition_from_admin_form(named, {
+        "requires_declaration": "on",
+        "declaration_document_name": "Oświadczenie o spełnianiu kryteriów udziału",
+    })
+    declaration = next(document for document in renamed["documents"] if document["id"] == "declaration")
+    assert declaration["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
+    unnamed = build_form_definition_from_admin_form(renamed, {
+        "requires_declaration": "on", "declaration_document_name": "",
+    })
+    declaration = next(document for document in unnamed["documents"] if document["id"] == "declaration")
+    assert declaration["participant_label"] == ""
+    assert declaration["label"] == "Dokument testowy"
+
+
+def test_admin_document_name_fields_are_shown_in_document_settings(admin_app):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug=f"named-document-{uuid4().hex[:8]}", definition_json={
+        "title": "Oświadczenia", "fields": [],
+        "documents": [
+            {"id": "declaration", "label": "Deklaracja", "participant_label": "Oświadczenie uczestnika"},
+            {"id": "statement", "label": "Oświadczenia", "participant_label": "Oświadczenie o regulaminie"},
+        ],
+        "workflow": {"requires_declaration": True},
+    })
+    client = admin_app.test_client()
+    login(client)
+    page = client.get(f"/admin/forms/{form_id}/edit?tab=documents")
+    assert page.status_code == 200
+    assert '<span>Nazwa dokumentu</span><input data-custom-field="participant_label"' in page.text
+    assert 'name="declaration_document_name" value="Oświadczenie uczestnika"' in page.text
+    config_json = page.text.split('<script type="application/json" data-custom-documents-initial>', 1)[1].split('</script>', 1)[0]
+    configured = json.loads(config_json)
+    assert next(item for item in configured if item["id"] == "statement")["participant_label"] == "Oświadczenie o regulaminie"
 
 
 def test_admin_assigns_generated_upload_document_to_participant_stage(composite_env):

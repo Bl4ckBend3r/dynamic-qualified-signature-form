@@ -330,6 +330,67 @@ def test_publish_leaves_final_submission_on_historical_version(tmp_path):
         assert final.workflow_step == "submission"
 
 
+def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch):
+    database_url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="named-statement")
+        original = deepcopy(form.definition_json)
+        original["workflow"] = {"flow_mode": "explicit", "schema_version": 2,
+            "initial_step": "submission", "steps": [
+                {"id": "submission", "stage_type": "user_action", "type": "form_submit",
+                 "admin_label": "Zgłoszenie", "user_label": "Zgłoszenie",
+                 "status": "FORM_SUBMITTED", "next": "paper"},
+                {"id": "paper", "stage_type": "documents", "type": "document",
+                 "admin_label": "Oświadczenia", "user_label": "Oświadczenia",
+                 "document_lifecycle": "group", "status": "WAITING_FOR_USER_ACTION", "next": "done"},
+                {"id": "done", "stage_type": "final", "type": "end", "final": True,
+                 "admin_label": "Koniec", "user_label": "Koniec",
+                 "status": "COMPLETED"}]}
+        original["documents"] = [{"id": "statement", "label": "Oświadczenia",
+            "participant_label": "Oświadczenie uczestnika", "kind": "uploaded_file",
+            "workflow_step": "paper", "required": True, "signature_required": False}]
+        form.definition_json = original
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        historical = FormSubmission(submission_id="finished-statement", form_slug=form.slug,
+            form_version_id=first.id, process_status="COMPLETED", workflow_step="done")
+        db.add(historical)
+        draft = service.clone_to_draft(db, form, first, actor_id=None)
+        changed = deepcopy(draft.definition_json)
+        changed["documents"][0]["participant_label"] = "Oświadczenie o spełnianiu kryteriów udziału"
+        from services.admin_form_service import validate_admin_form_config
+        assert not (errors := validate_admin_form_config(changed)), errors
+        service.update_definition(draft, changed)
+        service.publish(db, form, draft, actor_id=None)
+        old_id, new_id = first.id, draft.id
+
+    app = Flask(__name__)
+    app.config.update(DATABASE_URL=database_url)
+    app.extensions["services"] = SimpleNamespace(
+        form_version_service=service, form_config_service=FormConfigService())
+    monkeypatch.setattr(document_routes, "create_session_factory", lambda _url: Session)
+    with app.app_context():
+        old_config = document_routes.get_form_config("named-statement", "finished-statement")
+        new_config = document_routes.get_form_config("named-statement")
+    with Session() as db:
+        assert db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == "finished-statement")).scalar_one().form_version_id == old_id
+        assert db.get(FormVersion, old_id).definition_json["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
+        assert db.get(FormVersion, new_id).definition_json["documents"][0]["id"] == "statement"
+    assert old_config["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
+    assert new_config["documents"][0]["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
+    legacy = FormConfigService().normalize_form_config({"process": {"documents": [
+        {"id": "statement", "label": "Oświadczenia"}]}})
+    assert legacy["documents"][0]["label"] == "Oświadczenia"
+    assert not legacy["documents"][0].get("participant_label")
+    cleared = FormConfigService().normalize_form_config({
+        "process": {"documents": [{"id": "statement", "label": "Oświadczenia",
+            "participant_label": "Stara nazwa"}]},
+        "documents": [{"id": "statement", "participant_label": ""}],
+    })
+    assert cleared["documents"][0]["participant_label"] == ""
+
+
 def test_participant_access_lazily_upgrades_missed_active_submission(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()

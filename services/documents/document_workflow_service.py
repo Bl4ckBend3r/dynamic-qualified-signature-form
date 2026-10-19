@@ -91,6 +91,10 @@ def document_policy(step, document):
     }
 
 
+def participant_document_label(document):
+    return str(document.get("participant_label") or document.get("label") or "").strip() or "Dokument"
+
+
 def step_documents(definition, step):
     """Return all active documents assigned to this workflow step."""
     from services.form_config_service import FormConfigService
@@ -407,7 +411,12 @@ class DocumentWorkflowService:
 
     def _public_file_label(self, row, document, source):
         if str(document.get("id") or "") not in {"agreement", "training_agreement"}:
-            return str(source.get("label") or document.get("label") or "Dokument")
+            name = participant_document_label(document)
+            if str(document.get("participant_label") or "").strip():
+                instance_label = str(source.get("label") or "").strip()
+                generic_label = str(document.get("label") or "").strip()
+                return f"{name} — {instance_label}" if instance_label and instance_label not in {name, generic_label} else name
+            return str(source.get("label") or name)
         training_name = self._training_name(row, source)
         return f"Umowa - {training_name}" if training_name else "Umowa"
 
@@ -1430,9 +1439,7 @@ class DocumentWorkflowService:
                     ):
                         generation_actions.append({
                             "document_id": document["id"],
-                            "label": document.get("participant_label")
-                            or document.get("label")
-                            or "Dokument",
+                            "label": participant_document_label(document),
                         })
                 for source in item.get("files") or []:
                     key = source.get("training_key") or ""
@@ -1481,7 +1488,7 @@ class DocumentWorkflowService:
                               not item.get("completed") and not item.get("uploaded_filename")))
             if item.get("substate") == "failed" and not filename:
                 continue
-            files.append({"document_id": document["id"], "label": document.get("participant_label") or document["label"],
+            files.append({"document_id": document["id"], "label": participant_document_label(document),
                           "description": document.get("description") or "", "filename": filename if policy["download"] or signer == "office" else "",
                           "required": bool(document.get("required", True)), "signature_required": policy["participant_signature"],
                           "office_signature_required": policy["office_signature"],
@@ -1787,7 +1794,7 @@ class DocumentWorkflowService:
                     files.append({
                         "step_id": step["id"],
                         "document_id": document["id"],
-                        "label": document["label"],
+                        "label": participant_document_label(document),
                         "filename": filename,
                     })
 

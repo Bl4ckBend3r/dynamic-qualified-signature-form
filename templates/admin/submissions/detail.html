@@ -55,7 +55,7 @@
     <div data-office-document-step>
         {% for file in composite_document.files %}
         <article class="admin-submission-document" id="submission-document-{{ loop.index }}">
-            <header class="admin-section-heading"><h3>{{ composite_document.label }}</h3><span class="admin-badge">{{ 'Podpis urzędu złożony' if file.signed else composite_document.status.message }}</span></header>
+            <header class="admin-section-heading"><h3>{{ file.label }}</h3><span class="admin-badge">{{ 'Podpis urzędu złożony' if file.signed else composite_document.status.message }}</span></header>
             <p>{{ file.label }}</p>
             <div class="admin-document-fields">
                 <div><h4>Dokument uczestnika</h4>

@@ -433,7 +433,13 @@ def build_form_definition_from_admin_form(
             raise ValueError(" ".join(qualification_errors))
         definition["qualification_conditions"] = qualification_config
     definition = apply_training_selection_from_admin_form(definition, form_data)
-    return normalize_admin_form_definition(definition)
+    definition = normalize_admin_form_definition(definition)
+    if "declaration_document_name" in form_data:
+        declaration = next((document for document in definition.get("documents") or []
+                            if document.get("id") == "declaration"), None)
+        if declaration is not None:
+            declaration["participant_label"] = str(form_data.get("declaration_document_name") or "").strip()
+    return definition
 
 
 def _workflow_decision_settings(form_data, existing: list[dict]) -> list[dict]:

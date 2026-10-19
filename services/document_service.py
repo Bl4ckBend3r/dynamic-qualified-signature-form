@@ -1296,6 +1296,32 @@ def build_participant_name(row: Mapping[str, Any]) -> str:
 
     return full_name or "Uczestnik"
 
+def build_participant_address(row: Mapping[str, Any]) -> str:
+    def get_value(key: str) -> str:
+        return str(row.get(key) or "").strip()
+
+    ulica = get_value("ulica")
+    budynek = get_value("nr_budynku")
+    lokal = get_value("nr_lokalu")
+    kod = get_value("kod_pocztowy")
+    miejscowosc = get_value("miejscowosc")
+
+    numer = f"{budynek}/{lokal}" if budynek and lokal else budynek
+
+    adres_ulicy = " ".join(filter(None, [
+        f"ul. {ulica}" if ulica else "",
+        numer,
+    ]))
+
+    adres_miejscowosci = " ".join(filter(None, [
+        kod,
+        miejscowosc,
+    ]))
+
+    return ", ".join(filter(None, [
+        adres_ulicy,
+        adres_miejscowosci,
+    ]))
 
 def get_project_documents_config(form_definition: Mapping[str, Any]) -> dict:
     process = form_definition.get("process") or {}
@@ -1397,6 +1423,7 @@ def build_document_pdf_context(
         "form_definition": form_definition,
         "submission_id": submission_id,
         "participant_name": build_participant_name(row),
+        "participant_address": build_participant_address(row),
         "submission": row,
         "submission_view": submission_view,
         "consents_view": consents_view,

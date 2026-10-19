@@ -1,5 +1,6 @@
 from copy import deepcopy
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 import json
@@ -460,13 +461,19 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
     configure_participant_document_stage(env, documents)
     env.enter()
     assert env.row()["workflow_step"] == "paper"
-    env.app.config.update(PUBLIC_CSRF_ENABLED=True)
+    env.app.config.update(PUBLIC_CSRF_ENABLED=True, WTF_CSRF_ENABLED=True)
     client = env.app.test_client()
     row = env.row()
     page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
     assert page.status_code == 200
     assert "statement_a" in page.text and "statement_b" in page.text
-    assert 'data-bulk-document-upload' in page.text and 'data-document-upload' not in page.text
+    assert 'data-bulk-document-upload' not in page.text and 'data-document-upload' not in page.text
+    assert 'Wgraj podpisane dokumenty' not in page.text
+    for document_id in ('statement_a', 'statement_b'):
+        card = page.text.split(f'data-document-card="{document_id}"', 1)[1].split('</article>', 1)[0]
+        assert f'name="document_ids" value="{document_id}"' in card
+        assert 'name="document_files"' in card and '<select' not in card
+        assert 'Wgraj podpisany dokument (PDF)' in card
     csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
     generate_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/generate/statement_a?token={row['access_token']}"
     # When: the first document is generated and downloaded.
@@ -475,7 +482,20 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
                      if file["document_id"] == "statement_a" and file["status"] == "generated")
     assert client.get(f"/document-steps/{row['form_slug']}/{env.public_id}/paper/download/{generated['filename']}?token={row['access_token']}").status_code == 200
     assert env.row()["workflow_step"] == "paper"
+    generated_page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    first_card = generated_page.text.split('data-document-card="statement_a"', 1)[1].split('</article>', 1)[0]
+    assert first_card.index('Pobierz dokument') < first_card.index('Wgraj podpisany dokument (PDF)')
     bulk_url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}"
+    without_csrf = client.post(bulk_url, data={"access_token": row["access_token"],
+        "document_ids": ["statement_b"], "document_files": [(BytesIO(env.pdf), "b.pdf")]},
+        content_type="multipart/form-data")
+    assert without_csrf.status_code == 400
+    without_access = client.post(bulk_url.split("?", 1)[0], data={"csrf_token": csrf,
+        "document_ids": ["statement_b"], "document_files": [(BytesIO(env.pdf), "b.pdf")]},
+        content_type="multipart/form-data")
+    assert without_access.status_code in {403, 404}
+    assert not any(file["document_id"] == "statement_b"
+                   for file in env.services.submission_document_service.list_documents(env.public_id))
     assert client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
         "document_ids": ["future_statement"], "document_files": [(BytesIO(env.pdf), "later.pdf")]},
         content_type="multipart/form-data").status_code == 404
@@ -487,19 +507,90 @@ def test_participant_stage_generated_and_own_pdf_bulk_flow(composite_env):
     assert rejected.status_code == 200 and env.row()["workflow_step"] == "paper"
     assert not env.step_state().get("documents", {}).get("statement_a", {}).get("completed")
     env.verification.update(is_signed=True, validation_status="VALID", signature_count=1)
-    # Expected: both explicitly mapped uploads create separate SubmissionFiles;
-    # the first signed document alone cannot advance the stage.
-    first = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
-        "document_ids": ["statement_a"],
-        "document_files": [(BytesIO(env.pdf + b"\n% signed A"), "a.pdf")]}, content_type="multipart/form-data")
-    assert first.status_code == 302 and env.row()["workflow_step"] == "paper"
-    assert env.step_state()["documents"]["statement_a"]["completed"]
+    # When: the participant uses the upload in the second card first.
     second = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
         "document_ids": ["statement_b"],
         "document_files": [(BytesIO(env.pdf + b"\n% signed B"), "b.pdf")]}, content_type="multipart/form-data")
-    assert second.status_code == 302 and env.row()["workflow_step"] == "review"
+    assert second.status_code == 302 and env.row()["workflow_step"] == "paper"
+    state = env.step_state()["documents"]
+    assert not state.get("statement_a", {}).get("completed")
+    assert state["statement_b"]["completed"]
+    assert env.document.view(env.row(), env.definition)["ready_count"] == 1
+    status_page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert "1 z 2 wymaganych dokumentów ukończone" in status_page.text
+    assert 'data-document-card="statement_a"' in status_page.text
+    assert 'data-document-card="statement_b"' in status_page.text
+    assert {file["document_id"] for file in env.services.submission_document_service.list_documents(env.public_id)
+            if file["status"] == "signed"} == {"statement_b"}
+    # Expected: the first document completes only after its own upload.
+    first = client.post(bulk_url, data={"csrf_token": csrf, "access_token": row["access_token"],
+        "document_ids": ["statement_a"],
+        "document_files": [(BytesIO(env.pdf + b"\n% signed A"), "a.pdf")]}, content_type="multipart/form-data")
+    assert first.status_code == 302 and env.row()["workflow_step"] == "review"
     files = env.services.submission_document_service.list_documents(env.public_id)
     assert {file["document_id"] for file in files if file["status"] == "signed"} == {"statement_a", "statement_b"}
+
+
+def test_document_cards_fit_mobile_and_both_themes(composite_env, tmp_path):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    env = composite_env()
+    configure_participant_document_stage(env, [
+        {"id": document_id, "label": label, "kind": "generated_pdf",
+         "template_html": "<p>{{ submission_id }}</p>", "workflow_step": "paper",
+         "required": True, "signature_required": True,
+         "lifecycle": {"generate": True, "download": True, "upload_required": True,
+                       "participant_signature": True, "signature_verification": True}}
+        for document_id, label in (("statement_a", "Oświadczenie A"),
+                                   ("statement_b", "Oświadczenie B"))
+    ])
+    env.enter()
+    client = env.app.test_client()
+    row = env.row()
+    url = f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}"
+    csrf = client.get(url).text.split('name="csrf_token" value="')[1].split('"')[0]
+    for document_id in ("statement_a", "statement_b"):
+        response = client.post(
+            f"/document-steps/{row['form_slug']}/{env.public_id}/paper/generate/{document_id}",
+            data={"csrf_token": csrf, "access_token": row["access_token"]})
+        assert response.status_code == 302
+    html = client.get(url).text
+    css_root = Path(__file__).resolve().parents[1] / "static" / "css"
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        page.route("**/*", lambda route: route.abort())
+        page.set_content(html)
+        for name in ("style.css", "documents_to_sign.css"):
+            page.add_style_tag(content=(css_root / name).read_text(encoding="utf-8"))
+        for theme in ("light", "dark"):
+            page.locator("html").evaluate("(element, value) => element.setAttribute('data-theme', value)", theme)
+            for width in (390, 1280):
+                page.set_viewport_size({"width": width, "height": 900})
+                cards = page.locator(".document-stage-file")
+                assert cards.count() == 2
+                for card in cards.all():
+                    layout = card.evaluate("""element => {
+                        const style = getComputedStyle(element);
+                        const bounds = element.getBoundingClientRect();
+                        const download = element.querySelector('.document-stage-file__download');
+                        const upload = element.querySelector('.document-stage-file__upload');
+                        return {border: style.borderTopWidth, radius: style.borderTopLeftRadius,
+                            padding: style.paddingLeft, background: style.backgroundColor,
+                            left: bounds.left, right: bounds.right,
+                            downloadBottom: download?.getBoundingClientRect().bottom,
+                            uploadTop: upload?.getBoundingClientRect().top,
+                            overflow: element.scrollWidth > element.clientWidth};
+                    }""")
+                    assert layout["border"] != "0px" and layout["radius"] != "0px"
+                    assert layout["padding"] != "0px" and layout["background"] != "rgba(0, 0, 0, 0)"
+                    assert layout["left"] >= 0 and layout["right"] <= width
+                    assert layout["downloadBottom"] <= layout["uploadTop"]
+                    assert not layout["overflow"]
+                page.screenshot(path=str(tmp_path / f"document-cards-{theme}-{width}.png"), full_page=True)
+        browser.close()
 
 
 def test_custom_document_office_signature_waits_for_office(composite_env):

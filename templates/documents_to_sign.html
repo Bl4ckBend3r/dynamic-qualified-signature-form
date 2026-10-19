@@ -189,51 +189,30 @@
                 </button>
             </form>
             {% endfor %}
+            <div class="document-stage-files">
             {% for file in document.files %}
-                <div class="composite-document-file">
-                    <h4>{{ file.label }}{% if file.required %} — wymagany{% else %} — opcjonalny{% endif %}</h4>
+                <article class="composite-document-file document-stage-file" data-document-card="{{ file.document_id }}{% if file.instance %}::{{ file.instance }}{% endif %}">
+                    <h4>{{ file.label }} <span class="document-stage-file__requirement">{{ 'wymagany' if file.required else 'opcjonalny' }}</span></h4>
                     {% if file.description %}<p>{{ file.description }}</p>{% endif %}
                     <p>Status: {{ file.status }}</p>
                     <p>{{ 'Wymagany podpis uczestnika' if file.signature_required else 'Podpis uczestnika niewymagany' }}{% if file.office_signature_required %} · Wymagany podpis urzędu{% endif %}</p>
                     {% if file.verification_message %}<p role="alert">{{ file.verification_message }}</p>{% endif %}
                     {% if file.can_generate %}<form method="post" action="{{ url_for('documents.generate_group_document', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, document_id=file.document_id) }}"><input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ result.access_token }}"><button type="submit" class="btn-primary">Wygeneruj dokument</button></form>{% endif %}
-                    {% if file.filename %}<p><a class="btn-secondary" href="{{ url_for('documents.download_document_item', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, document_id=file.document_id, filename=file.filename, token=result.access_token) }}">Pobierz dokument</a></p>{% endif %}
-                </div>
+                    {% if file.filename %}<p class="document-stage-file__download"><a class="btn-secondary" href="{{ url_for('documents.download_document_item', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id, document_id=file.document_id, filename=file.filename, token=result.access_token) }}">Pobierz dokument</a></p>{% endif %}
+                    {% if file.can_upload %}
+                    <form class="document-stage-file__upload" method="post" enctype="multipart/form-data" action="{{ url_for('documents.bulk_upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+                        <input type="hidden" name="access_token" value="{{ result.access_token }}">
+                        <input type="hidden" name="document_ids" value="{{ file.document_id }}{% if file.instance %}::{{ file.instance }}{% endif %}">
+                        <label>{{ 'Wgraj podpisany dokument (PDF)' if file.signature_required else 'Wgraj dokument (PDF)' }}
+                            <input type="file" name="document_files" accept=".pdf,application/pdf" required>
+                        </label>
+                        <button type="submit" class="btn-primary">Prześlij podpisany dokument</button>
+                    </form>
+                    {% endif %}
+                </article>
             {% endfor %}
-            {% if document.files|selectattr('can_upload')|list %}
-            <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.bulk_upload_document_step', slug=result.form_slug, submission_id=result.submission_id, step_id=document.step_id) }}" data-bulk-document-upload>
-                <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
-                <input type="hidden" name="access_token" value="{{ result.access_token }}">
-                <h4>Wgraj podpisane dokumenty</h4>
-                <div data-bulk-document-rows><div class="composite-document-file" data-bulk-document-row>
-                    <label>Dokument <select name="document_ids" required><option value="">Wybierz dokument</option>{% for file in document.files if file.can_upload %}<option value="{{ file.document_id }}{% if file.instance %}::{{ file.instance }}{% endif %}">{{ file.label }}</option>{% endfor %}</select></label>
-                    <label>Plik PDF <input type="file" name="document_files" accept=".pdf,application/pdf" required></label>
-                </div></div>
-                <button type="button" class="btn-secondary" data-add-bulk-document-row>+ Dodaj kolejny plik</button>
-                <button type="submit" class="btn-primary">Wgraj podpisane dokumenty</button>
-            </form>
-            <script>
-            (() => {
-                const form = document.querySelector('[data-bulk-document-upload]');
-                if (!form) return;
-                const rows = form.querySelector('[data-bulk-document-rows]');
-                form.querySelector('[data-add-bulk-document-row]').addEventListener('click', () => {
-                    if (rows.children.length >= 20) return;
-                    const row = rows.firstElementChild.cloneNode(true);
-                    row.querySelector('select').value = '';
-                    row.querySelector('input[type="file"]').value = '';
-                    rows.append(row);
-                });
-                form.addEventListener('submit', event => {
-                    const ids = [...rows.querySelectorAll('select')].map(item => item.value);
-                    if (ids.some(id => !id) || new Set(ids).size !== ids.length) {
-                        event.preventDefault();
-                        window.alert('Każdemu plikowi przypisz inny dokument.');
-                    }
-                });
-            })();
-            </script>
-            {% endif %}
+            </div>
             {% else %}
             {% for file in document.files %}
                 <div class="composite-document-file">

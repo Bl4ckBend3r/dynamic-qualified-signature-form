@@ -31,6 +31,13 @@ class FormConfigService:
         config["fields"] = self.normalize_fields_config(config.get("fields") or [])
         config["documents"] = self.normalize_documents_config(config)
         config["notifications"] = self.normalize_notifications_config(config)
+        raw_new_submission_notification = config.get("new_submission_notification")
+        notification = raw_new_submission_notification if isinstance(raw_new_submission_notification, Mapping) else {}
+        config["new_submission_notification"] = {
+            **notification,
+            "enabled": notification.get("enabled") is True,
+            "recipient_email": str(notification.get("recipient_email") or "").strip(),
+        }
         config["rules"] = self.normalize_rules_config(config)
         config["qualification_conditions"] = QualificationConditionService().normalize_config(
             config.get("qualification_conditions"),

@@ -4,7 +4,7 @@ import string
 import re
 from pathlib import Path
 
-from form_loader import SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
+from form_loader import EMAIL_REGEX, SUPPORTED_FIELD_STAGES, SUPPORTED_FIELD_TYPES
 from services.field_availability_service import FieldAvailabilityService
 from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
@@ -58,6 +58,13 @@ class FormConfigValidator:
         errors.extend(FieldAvailabilityService().validate_config(form_config))
         self._validate_rules(form_config.get("rules") or [], errors)
         self._validate_notifications(form_config.get("notifications") or [], errors)
+        notification = form_config.get("new_submission_notification") or {}
+        if isinstance(notification, dict):
+            recipient = str(notification.get("recipient_email") or "").strip()
+            if notification.get("enabled") and not recipient:
+                errors.append("Powiadomienia o nowych zgłoszeniach wymagają adresu e-mail odbiorcy.")
+            elif recipient and not EMAIL_REGEX.fullmatch(recipient):
+                errors.append("Niepoprawny adres e-mail odbiorcy powiadomień o nowych zgłoszeniach.")
         errors.extend(
             QualificationConditionService().validate_config(
                 form_config.get("qualification_conditions"),

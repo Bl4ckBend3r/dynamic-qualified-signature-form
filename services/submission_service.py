@@ -200,6 +200,17 @@ class SubmissionService:
             submission=submission,
             pdf_filename=pdf_filename,
         )
+        admin_notification = form_config.get("new_submission_notification") or {}
+        if (
+            self.mail_dispatch_service
+            and isinstance(admin_notification, dict)
+            and admin_notification.get("enabled") is True
+            and hasattr(self.mail_dispatch_service, "dispatch_new_submission_notification")
+        ):
+            try:
+                self.mail_dispatch_service.dispatch_new_submission_notification(submission_id)
+            except Exception as exc:
+                current_app.logger.exception("new_submission_notification_failed error=%s", exc.__class__.__name__)
 
         result = {
             "submission_id": submission_id,

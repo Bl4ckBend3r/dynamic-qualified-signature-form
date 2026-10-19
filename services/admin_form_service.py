@@ -434,6 +434,12 @@ def build_form_definition_from_admin_form(
         definition["qualification_conditions"] = qualification_config
     definition = apply_training_selection_from_admin_form(definition, form_data)
     definition = normalize_admin_form_definition(definition)
+    if form_data.get("new_submission_notification_present") == "1":
+        definition["new_submission_notification"] = {
+            **definition.get("new_submission_notification", {}),
+            "enabled": form_data.get("new_submission_notification_enabled") == "on",
+            "recipient_email": str(form_data.get("new_submission_notification_email") or "").strip(),
+        }
     if "declaration_document_name" in form_data:
         declaration = next((document for document in definition.get("documents") or []
                             if document.get("id") == "declaration"), None)

@@ -103,6 +103,43 @@ def test_simple_dynamic_form_accepts_displayed_training_value_and_saves(app, cli
     assert app.testing_storage.csv_rows[0]["data_json"]["wybrane_szkolenie"] == "Kompetencje cyfrowe"
 
 
+def test_admin_notice_runs_only_after_successful_initial_submit(app, client, monkeypatch):
+    app.testing_storage.form_definition = _simple_form_definition()
+    app.testing_storage.form_definition["new_submission_notification"] = {
+        "enabled": True, "recipient_email": "office@example.org"}
+    app.config["WTF_CSRF_ENABLED"] = True
+    submission_service = app.extensions["services"].submission_service
+    dispatcher = app.extensions["services"].mail_dispatch_service
+    notices = []
+    monkeypatch.setattr(dispatcher, "dispatch_new_submission_notification",
+                        lambda submission_id: notices.append((submission_id, bool(app.testing_storage.csv_rows[0].get("pdf_filename")))))
+    csrf = _public_csrf(client)
+    invalid = client.post(FORM_URL, data={**_simple_form_data(), "imie": "", "csrf_token": csrf})
+    assert invalid.status_code == 400 and notices == []
+    result = client.post(FORM_URL, data={**_simple_form_data(), "csrf_token": csrf})
+    assert result.status_code == 200
+    assert len(notices) == 1 and notices[0][1] is True
+
+    monkeypatch.setattr(submission_service, "_generate_form_pdf", lambda **kwargs: (_ for _ in ()).throw(OSError("PDF failed")))
+    failed = client.post(FORM_URL, data={**_simple_form_data(), "csrf_token": csrf})
+    assert failed.status_code == 500
+    assert len(notices) == 1
+
+
+def test_admin_notice_failure_does_not_fail_successful_submission(app, client, monkeypatch):
+    app.testing_storage.form_definition = _simple_form_definition()
+    app.testing_storage.form_definition["new_submission_notification"] = {
+        "enabled": True, "recipient_email": "office@example.org"}
+    app.config["WTF_CSRF_ENABLED"] = True
+    dispatcher = app.extensions["services"].mail_dispatch_service
+    def failed_notice(_submission_id):
+        raise OSError("SMTP unavailable")
+    monkeypatch.setattr(dispatcher, "dispatch_new_submission_notification", failed_notice)
+    result = client.post(FORM_URL, data={**_simple_form_data(), "csrf_token": _public_csrf(client)})
+    assert result.status_code == 200
+    assert len(app.testing_storage.csv_rows) == 1
+
+
 def test_invalid_training_value_is_shown_at_select(app, client, caplog):
     app.testing_storage.form_definition = _simple_form_definition()
     app.config["WTF_CSRF_ENABLED"] = True

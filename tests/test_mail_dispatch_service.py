@@ -1,8 +1,13 @@
 from types import SimpleNamespace
+import re
 
 import pytest
+from sqlalchemy import select
 
 from services.mail_dispatch_service import MailDispatchRequest, MailDispatchService
+from database import create_session_factory
+from models import EmailLog, Form, FormSubmission, FormVersion
+from test_admin_panel import admin_app, create_form
 
 
 def test_render_template_uses_platform_placeholders():
@@ -298,3 +303,81 @@ def test_dispatch_raw_missing_recipient_is_safe_and_logged():
     assert result.status == "skipped"
     assert db.rows[0].status == "skipped"
     assert "Brak odbiorcy" in db.rows[0].error_message
+
+
+def _seed_new_submission_notice(app, slug, *, enabled, recipient):
+    definition = {"title": f"Formularz {slug}", "fields": [],
+                  "new_submission_notification": {"enabled": enabled, "recipient_email": recipient}}
+    form_id = create_form(app, slug=slug, definition_json=definition)
+    factory = create_session_factory(app.config["DATABASE_URL"])
+    with factory() as db:
+        version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+                              version_label="1.0", status="published", definition_json=definition)
+        db.add(version)
+        db.flush()
+        submission = FormSubmission(submission_id=f"submission-{slug}", form_slug=slug,
+                                    form_version_id=version.id, pesel="12345678901",
+                                    process_status="FORM_SUBMITTED")
+        db.add(submission)
+        db.commit()
+    return form_id, f"submission-{slug}"
+
+
+def test_new_submission_notice_is_per_form_version_and_idempotent(admin_app):
+    first_id, first = _seed_new_submission_notice(admin_app, "notice-first", enabled=True,
+                                                   recipient="first@example.org")
+    _, second = _seed_new_submission_notice(admin_app, "notice-second", enabled=True,
+                                            recipient="second@example.org")
+    _, disabled = _seed_new_submission_notice(admin_app, "notice-disabled", enabled=False,
+                                              recipient="third@example.org")
+    sent = []
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.get(Form, first_id).definition_json = {"title": "Zmieniona wersja",
+            "fields": [], "new_submission_notification": {"enabled": True, "recipient_email": "new@example.org"}}
+        db.commit()
+    with admin_app.app_context():
+        assert dispatcher.dispatch_new_submission_notification(first).sent
+        assert dispatcher.dispatch_new_submission_notification(second).sent
+        assert dispatcher.dispatch_new_submission_notification(disabled).status == "skipped"
+        assert dispatcher.dispatch_new_submission_notification(first).status == "skipped"
+    assert [item["to_emails"] for item in sent] == [["first@example.org"], ["second@example.org"]]
+    assert "Formularz notice-first" in sent[0]["subject"]
+    assert first in sent[0]["text_body"]
+    assert re.search(r"Data wpływu: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", sent[0]["text_body"])
+    assert "12345678901" not in str(sent)
+    assert all(item["attachments"] == [] for item in sent)
+    with factory() as db:
+        logs = db.execute(select(EmailLog).where(EmailLog.event_type == "new_submission_admin")).scalars().all()
+        assert len(logs) == 2 and all(log.status == "sent" for log in logs)
+        submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == first)).scalar_one()
+        submission.process_status = "WAITING_FOR_OFFICER_DECISION"
+        db.commit()
+    assert admin_app.extensions["services"].submission_document_service.record_generated_document(
+        submission_id=first, form_slug="notice-first", filename="extra.pdf",
+        file_bytes=b"%PDF-1.4\n", document_id="extra", document_type="extra")
+    with admin_app.app_context():
+        assert dispatcher.dispatch_new_submission_notification(first).status == "skipped"
+    assert len(sent) == 2
+
+
+def test_new_submission_notice_smtp_failure_keeps_submission(admin_app):
+    _, public_id = _seed_new_submission_notice(admin_app, "notice-failure", enabled=True,
+                                               recipient="office@example.org")
+    calls = []
+    def failing_sender(**kwargs):
+        calls.append(kwargs)
+        raise OSError("SMTP unavailable")
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    dispatcher.smtp_sender = failing_sender
+    with admin_app.app_context():
+        assert dispatcher.dispatch_new_submission_notification(public_id).status == "failed"
+        assert dispatcher.dispatch_new_submission_notification(public_id).status == "skipped"
+    assert len(calls) == 1
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        assert db.execute(select(FormSubmission.id).where(FormSubmission.submission_id == public_id)).scalar_one()
+        log = db.execute(select(EmailLog).where(EmailLog.event_type == "new_submission_admin")).scalar_one()
+        assert log.status == "failed"

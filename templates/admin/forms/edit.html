@@ -711,6 +711,14 @@
     </section>
     {% set form_smtp = form.smtp_config or {} %}
     <section class="admin-form-tab-panel" id="form-tab-emails" role="tabpanel" data-form-tab-panel="emails" {% if active_tab != 'emails' %}hidden{% endif %}>
+    {% set new_submission_notification = form.workflow_editor_definition.get('new_submission_notification') or {} %}
+    <div class="admin-section">
+        <h2>Powiadomienia o nowych zgłoszeniach</h2>
+        <p>Jedna wiadomość na adres odbiorcy po złożeniu nowego wniosku. Używa ustawień SMTP tego formularza.</p>
+        <input type="hidden" name="new_submission_notification_present" value="1">
+        <label class="admin-check"><input type="checkbox" name="new_submission_notification_enabled" {% if new_submission_notification.get('enabled') %}checked{% endif %}><span>Wysyłaj powiadomienia e-mail</span></label>
+        <div class="admin-form-grid"><label><span>Adres e-mail odbiorcy</span><input type="email" name="new_submission_notification_email" value="{{ new_submission_notification.get('recipient_email', '') }}" autocomplete="email"></label></div>
+    </div>
     <div class="admin-section" data-mail-settings>
         <h2>Ustawienia wysyłki e-mail</h2>
         <div class="admin-form-grid">

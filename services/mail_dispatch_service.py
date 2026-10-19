@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from html import escape
@@ -9,6 +10,7 @@ import mimetypes
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from flask import current_app, url_for
 from sqlalchemy.exc import SQLAlchemyError
@@ -27,6 +29,7 @@ from services.training_availability_service import TrainingAvailabilityService
 
 
 logger = logging.getLogger(__name__)
+NEW_SUBMISSION_ADMIN_EVENT = "new_submission_admin"
 
 
 @dataclass(frozen=True)
@@ -628,6 +631,63 @@ class MailDispatchService:
                 event_type="correction_accepted",
                 event_id=f"correction:{submission.correction_completed_at.isoformat()}",
                 files=self.submission_repository.list_submission_files(submission_id),
+            )
+            self._commit_email_log(db)
+            return result
+
+    def dispatch_new_submission_notification(self, submission_id: str) -> MailDispatchResult:
+        """Notify the configured administrator once for a completed initial submission."""
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from form_loader import EMAIL_REGEX
+        from models import EmailLog, Form, FormSubmission
+        from sqlalchemy import select
+
+        with create_session_factory(database_url)() as db:
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            submission = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == submission_id).with_for_update()).scalar_one_or_none()
+            if submission is None:
+                return MailDispatchResult("skipped", error_message="Brak zgłoszenia.")
+            definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
+            notification = definition.get("new_submission_notification") or {}
+            if not isinstance(notification, dict) or notification.get("enabled") is not True:
+                return MailDispatchResult("skipped", error_message="Powiadomienia wyłączone.")
+            recipient = str(notification.get("recipient_email") or "").strip()
+            if not EMAIL_REGEX.fullmatch(recipient):
+                return MailDispatchResult("skipped", error_message="Niepoprawny adres odbiorcy.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            if form is None:
+                return MailDispatchResult("skipped", error_message="Brak formularza.")
+            already_recorded = db.execute(select(EmailLog.id).where(
+                EmailLog.submission_id == submission.id,
+                EmailLog.event_type == NEW_SUBMISSION_ADMIN_EVENT,
+                EmailLog.status.in_(("pending", "sent", "failed")),
+            )).first()
+            if already_recorded:
+                return MailDispatchResult("skipped", error_message="Powiadomienie zostało już zarejestrowane.")
+
+            title = " ".join(str(definition.get("title") or form.title or form.name or form.slug).split())
+            public_id = str(submission.submission_id)
+            submitted_at = submission.created_at
+            if isinstance(submitted_at, datetime):
+                if submitted_at.tzinfo is None:
+                    submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+                submitted_at = submitted_at.astimezone(ZoneInfo(current_app.config.get("APP_TIMEZONE") or "Europe/Warsaw"))
+                received = submitted_at.strftime("%d.%m.%Y %H:%M")
+            else:
+                received = str(submitted_at or "")
+            subject = f"Nowe zgłoszenie — {title}"
+            text_body = f"Formularz: {title}\nIdentyfikator zgłoszenia: {public_id}\nData wpływu: {received}"
+            html_body = (f"<p>Nowe zgłoszenie w formularzu: {escape(title)}</p>"
+                         f"<p>Identyfikator zgłoszenia: {escape(public_id)}<br>"
+                         f"Data wpływu: {escape(received)}</p>")
+            result = self.dispatch_raw(
+                event_type=NEW_SUBMISSION_ADMIN_EVENT, recipient=recipient, subject=subject,
+                html_body=html_body, text_body=text_body, db=db, form=form, submission=submission,
             )
             self._commit_email_log(db)
             return result

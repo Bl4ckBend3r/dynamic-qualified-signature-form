@@ -905,6 +905,16 @@ def form_edit(form_id: int):
                     request.form,
                     allow_advanced_json=g.admin_user.role == ROLE_SUPER_ADMIN,
                 )
+                current_notification = current_app.extensions["services"].form_config_service.normalize_form_config(
+                    current_definition
+                ).get("new_submission_notification")
+                if (
+                    updated_definition.get("new_submission_notification") != current_notification
+                    and not current_app.extensions["services"].permission_service.has_permission(
+                        db, g.admin_user, "can_edit_form", form=form,
+                    )
+                ):
+                    abort(403)
                 current_training_field = TrainingCatalogService.get_training_field(
                     current_definition
                 )
@@ -1020,6 +1030,7 @@ def form_edit(form_id: int):
             )
             if validation_errors:
                 active_tab = _tab_for_form_error(validation_errors, active_tab, request.form)
+                form.workflow_editor_definition = updated_definition
                 flash("Nie można zapisać workflow: " + " ".join(validation_errors), "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)

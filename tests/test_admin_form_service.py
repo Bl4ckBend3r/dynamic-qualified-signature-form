@@ -31,6 +31,31 @@ from services.admin_form_service import (
 from services.training_catalog_service import TrainingCatalogService
 
 
+def test_new_submission_notification_admin_round_trip_and_validation():
+    original = normalize_admin_form_definition({"title": "Wniosek", "fields": []})
+    assert original["new_submission_notification"] == {"enabled": False, "recipient_email": ""}
+    enabled = build_form_definition_from_admin_form(original, {
+        "new_submission_notification_present": "1",
+        "new_submission_notification_enabled": "on",
+        "new_submission_notification_email": "first@example.org",
+    })
+    assert enabled["new_submission_notification"] == {"enabled": True, "recipient_email": "first@example.org"}
+    changed = build_form_definition_from_admin_form(enabled, {
+        "new_submission_notification_present": "1",
+        "new_submission_notification_enabled": "on",
+        "new_submission_notification_email": "second@example.org",
+    })
+    assert changed["new_submission_notification"]["recipient_email"] == "second@example.org"
+    invalid = build_form_definition_from_admin_form(changed, {
+        "new_submission_notification_present": "1",
+        "new_submission_notification_enabled": "on",
+        "new_submission_notification_email": "invalid-address",
+    })
+    assert any("Niepoprawny adres e-mail" in error for error in validate_admin_form_config(invalid))
+    disabled = build_form_definition_from_admin_form(changed, {"new_submission_notification_present": "1"})
+    assert disabled["new_submission_notification"] == {"enabled": False, "recipient_email": ""}
+
+
 def test_build_definition_from_html_detects_basic_fields():
     definition = build_definition_from_html(
         '<label>Imię</label><input name="imie" required><textarea name="opis"></textarea>',

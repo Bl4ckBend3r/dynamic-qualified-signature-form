@@ -2470,6 +2470,56 @@ def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
         assert declaration["participant_label"] == "Oświadczenie uczestnika"
 
 
+def test_new_submission_notification_editor_saves_draft_and_requires_form_permission(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="admin-notice-settings",
+                          definition_json={"title": "Wniosek", "fields": []})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        admin_app.extensions["services"].form_version_service.create_initial_version(
+            db, db.get(Form, form_id), actor_id=None, status="draft")
+        db.commit()
+    login(admin_client)
+    page = admin_client.get(f"/admin/forms/{form_id}/edit?tab=emails")
+    assert page.status_code == 200
+    assert "Powiadomienia o nowych zgłoszeniach" in page.get_data(as_text=True)
+    token = page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    payload = {"csrf_token": token, "active_tab": "emails", "name": "Wniosek",
+               "slug": "admin-notice-settings", "title": "Wniosek",
+               "new_submission_notification_present": "1",
+               "new_submission_notification_enabled": "on",
+               "new_submission_notification_email": "office@example.org"}
+    without_csrf = admin_client.post(f"/admin/forms/{form_id}/edit", data={
+        key: value for key, value in payload.items() if key != "csrf_token"})
+    assert without_csrf.status_code in (400, 403)
+    invalid = admin_client.post(f"/admin/forms/{form_id}/edit", data={
+        **payload, "new_submission_notification_email": "invalid-address"})
+    assert invalid.status_code == 400
+    assert 'name="new_submission_notification_email" value="invalid-address"' in invalid.get_data(as_text=True)
+    assert admin_client.post(f"/admin/forms/{form_id}/edit", data=payload).status_code == 302
+    with factory() as db:
+        form = db.get(Form, form_id)
+        assert form.definition_json["new_submission_notification"] == {
+            "enabled": True, "recipient_email": "office@example.org"}
+        version = db.execute(select(FormVersion).where(FormVersion.form_id == form_id)).scalars().first()
+        assert version and version.definition_json["new_submission_notification"]["recipient_email"] == "office@example.org"
+
+    user_id = create_user(admin_app, email="workflow-only-notice@example.org", role="form_manager")
+    grant_rbac(admin_app, user_id, ["can_edit_workflow"], form_id=form_id)
+    limited = admin_app.test_client()
+    login(limited, email="workflow-only-notice@example.org")
+    assert limited.get(f"/admin/forms/{form_id}/edit?tab=emails").status_code == 403
+    workflow_page = limited.get(f"/admin/forms/{form_id}/edit?tab=workflow")
+    assert workflow_page.status_code == 200
+    workflow_token = workflow_page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    denied = limited.post(f"/admin/forms/{form_id}/edit", data={
+        **payload, "csrf_token": workflow_token, "active_tab": "workflow",
+        "new_submission_notification_email": "stolen@example.org"})
+    assert denied.status_code == 403
+    with factory() as db:
+        assert db.get(Form, form_id).definition_json["new_submission_notification"]["recipient_email"] == "office@example.org"
+
+
 def test_workflow_edit_shows_tooltips_and_conditional_html_fields(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(

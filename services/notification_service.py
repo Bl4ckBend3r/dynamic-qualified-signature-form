@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
+from form_loader import EMAIL_REGEX
 from flask import current_app, render_template, render_template_string
 from jinja2 import TemplateNotFound
 
@@ -14,6 +16,63 @@ class NotificationService:
         self.audit_log_service = audit_log_service
         self.storage = storage
         self.smtp_sender = smtp_sender or _send_email
+
+    def notify_submission_received(self, submission: dict, form_config: dict) -> bool:
+        """Notify the address configured for this form once a new application is saved."""
+        settings = form_config.get("submission_notification") or {}
+        if not isinstance(settings, dict) or settings.get("enabled") is not True:
+            return False
+
+        recipient = str(settings.get("email") or "").strip()
+        if not EMAIL_REGEX.fullmatch(recipient):
+            current_app.logger.warning("Pomijam powiadomienie o zgloszeniu: brak poprawnego adresu e-mail.")
+            return False
+
+        form_title = " ".join(str(submission.get("form_name") or form_config.get("title") or "Formularz").splitlines()).strip()
+        submission_id = str(submission.get("submission_id") or "").strip()
+        if not submission_id:
+            return False
+
+        subject = f"Nowe zgłoszenie: {form_title}"
+        text_body = (
+            "Dzień dobry,\\n\\n"
+            "Do formularza wpłynął nowy wniosek.\\n\\n"
+            f"Formularz: {form_title}\\n"
+            f"ID zgłoszenia: {submission_id}\\n\\n"
+            "Szczegóły wniosku są dostępne w panelu administratora.\\n"
+        )
+        html_body = (
+            "<p>Dzień dobry,</p>"
+            "<p>Do formularza wpłynął nowy wniosek.</p>"
+            f"<p><strong>Formularz:</strong> {escape(form_title)}</p>"
+            f"<p><strong>ID zgłoszenia:</strong> {escape(submission_id)}</p>"
+            "<p>Szczegóły wniosku są dostępne w panelu administratora.</p>"
+        )
+        self.smtp_sender(
+            smtp_host=current_app.config["SMTP_HOST"],
+            smtp_port=current_app.config["SMTP_PORT"],
+            smtp_user=current_app.config["SMTP_USER"],
+            smtp_password=current_app.config["SMTP_PASSWORD"],
+            mail_from=current_app.config["MAIL_FROM"],
+            to_emails=[recipient],
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            use_tls=current_app.config.get("SMTP_USE_TLS", True),
+            use_ssl=current_app.config.get("SMTP_USE_SSL", False),
+            timeout=current_app.config.get("SMTP_TIMEOUT", 30),
+        )
+        if self.audit_log_service:
+            try:
+                self.audit_log_service.log_event(
+                    "FORM_SUBMISSION_NOTIFICATION_SENT",
+                    submission_id,
+                    submission.get("form_slug", ""),
+                    metadata={"recipient": recipient},
+                )
+            except Exception:
+                current_app.logger.exception("Nie udalo sie zapisac audytu powiadomienia o nowym zgloszeniu.")
+        return True
 
     def notify_event(
         self,

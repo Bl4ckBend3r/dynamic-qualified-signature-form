@@ -1852,3 +1852,65 @@ def test_declaration_download_disabled_before_declaration_form_is_completed(admi
     with session_factory() as db:
         submission = db.query(FormSubmission).filter_by(submission_id="decl-1").one()
         assert submission.declaration_generated != "Tak"
+
+
+def test_form_submission_notification_can_be_enabled_and_disabled(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="notifications", name="Powiadomienia")
+    login(admin_client)
+    page = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    assert 'name="submission_notification_enabled"' in page
+    assert 'name="submission_notification_email"' in page
+    token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    base_data = {
+        "csrf_token": token,
+        "name": "Powiadomienia",
+        "slug": "notifications",
+        "title": "Powiadomienia",
+        "sort_order": "0",
+        "submission_notification_email": "koordynator@example.com",
+    }
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={**base_data, "submission_notification_enabled": "on"},
+    )
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Form, form_id).definition_json["submission_notification"] == {
+            "enabled": True,
+            "email": "koordynator@example.com",
+        }
+
+    response = admin_client.post(f"/admin/forms/{form_id}/edit", data=base_data)
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Form, form_id).definition_json["submission_notification"] == {
+            "enabled": False,
+            "email": "koordynator@example.com",
+        }
+
+
+def test_form_submission_notification_rejects_invalid_email(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="notifications", name="Powiadomienia")
+    login(admin_client)
+    page = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/edit",
+        data={
+            "csrf_token": token,
+            "name": "Powiadomienia",
+            "slug": "notifications",
+            "title": "Powiadomienia",
+            "sort_order": "0",
+            "submission_notification_enabled": "on",
+            "submission_notification_email": "bledny-adres",
+        },
+    )
+    assert response.status_code == 400
+    assert "Adres e-mail do powiadomień jest niepoprawny." in response.get_data(as_text=True)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert "submission_notification" not in db.get(Form, form_id).definition_json

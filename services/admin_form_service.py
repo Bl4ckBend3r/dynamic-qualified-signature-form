@@ -9,6 +9,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 from form_loader import (
+    EMAIL_REGEX,
     FIELD_STAGE_INITIAL,
     SUPPORTED_FIELD_STAGES,
     has_additional_fields_after_acceptance,
@@ -63,7 +64,17 @@ def validate_admin_form_config(form_definition: dict) -> list[str]:
     except Exception as exc:
         return [str(exc)]
     validator = FormConfigValidator(skip_template_check=True)
-    return validator.validate(form_definition)
+    errors = validator.validate(form_definition)
+    notification = form_definition.get("submission_notification") or {}
+    if not isinstance(notification, dict):
+        errors.append("Konfiguracja powiadomień musi być obiektem.")
+    else:
+        recipient = str(notification.get("email") or "").strip()
+        if notification.get("enabled") is True and not recipient:
+            errors.append("Podaj adres e-mail do powiadomień o nowych zgłoszeniach.")
+        elif recipient and not EMAIL_REGEX.fullmatch(recipient):
+            errors.append("Adres e-mail do powiadomień jest niepoprawny.")
+    return errors
 
 
 def build_form_definition_from_admin_form(current_definition: dict, form_data) -> dict:
@@ -77,6 +88,10 @@ def build_form_definition_from_admin_form(current_definition: dict, form_data) -
     workflow["contract_template_html"] = form_data.get("contract_template_html", "").strip()
     definition["workflow"] = workflow
     definition = apply_training_selection_from_admin_form(definition, form_data)
+    definition["submission_notification"] = {
+        "enabled": form_data.get("submission_notification_enabled") == "on",
+        "email": str(form_data.get("submission_notification_email") or "").strip(),
+    }
     return normalize_admin_form_definition(definition)
 
 

@@ -216,6 +216,29 @@ unblock_document
 
 ## Notifications
 
+### E-mail after a new application is received
+
+In the administrator panel open **Formularze → Edytuj → Powiadomienia o nowych zgłoszeniach**.
+Enter the email address assigned to this form and turn on **Wysyłaj powiadomienie e-mail o nowym zgłoszeniu**.
+The setting is independent for each form, is turned off by default, and can be disabled without removing the saved address.
+
+For JSON-based forms (without the database administration panel) the same configuration is:
+
+```json
+"submission_notification": {
+  "enabled": true,
+  "email": "koordynator@example.com"
+}
+```
+
+The notification is sent once per successful new form submission, after the application and its PDF are saved.
+It contains the form title and submission ID; it is **not** sent for status changes, signing, file uploads or admin actions.
+A failed SMTP delivery does not cancel the saved application. Configure `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in the environment.
+No database migration is required (the setting is stored in the form definition JSON).
+
+### Other workflow notifications
+
 Notifications are configured in form JSON and can use templates stored in Nextcloud.
 
 Example event after the participant uploads a correctly signed agreement:

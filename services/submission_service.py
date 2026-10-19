@@ -135,6 +135,14 @@ class SubmissionService:
         if self.audit_log_service:
             self.audit_log_service.log_event("PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename})
 
+        # Only a completed, persisted new submission triggers this notification.
+        # SMTP failures must not invalidate a successfully received application.
+        if self.notification_service:
+            try:
+                self.notification_service.notify_submission_received(submission, form_config)
+            except Exception:
+                logger.exception("Nie udalo sie wyslac powiadomienia o nowym zgloszeniu %s.", submission_id)
+
         result = {
             "submission_id": submission_id,
             "form_slug": form_slug,

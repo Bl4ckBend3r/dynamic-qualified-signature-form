@@ -1477,7 +1477,8 @@ def test_return_for_correction_action_is_visible_and_uses_application_prefix(adm
     assert response.status_code == 200
     assert "Wyślij do poprawy" in html
     assert f'/aplikacja/admin/submissions/{submission_id}/return-for-correction' in html
-    assert 'name="clear_submission" checked' in html
+    assert 'name="clear_submission"' in html
+    assert 'name="clear_submission" checked' not in html
     assert 'name="send_email" checked' in html
     assert 'class="admin-modal admin-modal-backdrop"' in html
     assert 'role="dialog" aria-modal="true" aria-labelledby="return-for-correction-title"' in html
@@ -1489,6 +1490,27 @@ def test_return_for_correction_action_is_visible_and_uses_application_prefix(adm
     assert 'document.body.classList.toggle("admin-modal-open"' in html
     assert 'if (event.key === "Escape")' in html
     assert 'dialog.returnFocusTarget?.focus()' in html
+
+
+def test_return_for_correction_action_is_visible_in_explicit_document_stage(admin_app, admin_client):
+    create_user(admin_app)
+    definition = {"title": "Rollback Form", "fields": [], "workflow": {
+        "flow_mode": "explicit", "initial_step": "intake", "steps": [
+            {"id": "intake", "stage_type": "user_action", "next": "agreement_signature"},
+            {"id": "agreement_signature", "stage_type": "documents", "status": "AGREEMENT_WAITING_FOR_SIGNATURE"},
+            {"id": "done", "stage_type": "final", "final": True, "status": "COMPLETED"},
+        ],
+    }}
+    form_id = create_form(admin_app, slug="rollback_form", definition_json=definition)
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert f"/admin/submissions/{submission_id}/return-for-correction" in html
+    assert 'data-admin-modal-target="return-for-correction-dialog"' in html
 
 
 def test_return_for_correction_endpoint_clears_state_and_sends_email(admin_app, admin_client, monkeypatch):
@@ -1838,6 +1860,65 @@ def test_participant_can_refill_returned_submission_and_conditions_are_evaluated
         assert submission.data_json["_correction_history"][0]["reason"] == "Ponowna próba"
         events = db.query(SubmissionWorkflowEvent).filter_by(public_submission_id=submission.submission_id).all()
         assert any(event.source == "auto_rejected_by_condition" for event in events)
+
+
+def test_participant_correction_resumes_document_stage_and_preserves_history(
+    admin_app, admin_client, form_definition, valid_form_data, monkeypatch,
+):
+    definition = dict(form_definition)
+    definition["workflow"] = {
+        "flow_mode": "explicit", "initial_step": "intake",
+        "steps": [
+            {"id": "intake", "type": "form_submit", "stage_type": "user_action", "next": "documents"},
+            {"id": "documents", "stage_type": "documents", "status": "DECLARATION_WAITING_FOR_SIGNATURE"},
+        ],
+    }
+    definition["qualification_conditions"] = {"enabled": True, "conditions": [{
+        "id": "age-rule", "field_name": "wiek", "operator": "greater_than_or_equal",
+        "expected_value": "18", "failure_action": "auto_reject", "is_active": True,
+    }]}
+    form_id = create_form(admin_app, slug="resume_documents", definition_json=definition, is_active=True, is_public=True)
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        form = db.get(Form, form_id)
+        sync_form_fields(db, form, definition)
+        submission = FormSubmission(
+            submission_id="resume-documents-uuid", form_slug=form.slug, access_token="resume-secret",
+            process_status="RETURNED_FOR_CORRECTION", workflow_step="returned_for_correction",
+            correction_required="Tak", data_json={
+                "later_answer": "zachowaj",
+                "_correction_history": [{"previous_step": "documents", "previous_status": "DECLARATION_WAITING_FOR_SIGNATURE", "reason": "Popraw dane"}],
+                "_qualification_history": [{"passed": True}],
+            },
+        )
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=form.slug, document_id="declaration", document_type="declaration",
+            filename="old-declaration.pdf", storage_path="output/resume_documents/pdf/old-declaration.pdf",
+            status="generated",
+        ))
+        db.commit()
+
+    def fake_generate_pdf(*, output_path, **_kwargs):
+        Path(output_path).write_bytes(b"%PDF-1.4\n% correction test\n")
+
+    monkeypatch.setattr("services.submission_service.generate_pdf", fake_generate_pdf)
+    response = admin_client.post(
+        "/form/resume_documents/correction/resume-documents-uuid?token=resume-secret",
+        data=valid_form_data,
+    )
+    assert response.status_code == 200
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="resume-documents-uuid").one()
+        assert submission.process_status == "DECLARATION_WAITING_FOR_SIGNATURE"
+        assert submission.workflow_step == submission.workflow_stage == "documents"
+        assert submission.data_json["later_answer"] == "zachowaj"
+        assert len(submission.data_json["_qualification_history"]) == 2
+        assert db.query(SubmissionFile).filter_by(filename="old-declaration.pdf").one().status == "generated"
+        event = db.query(SubmissionWorkflowEvent).filter_by(source="correction_resubmitted").one()
+        assert (event.previous_step, event.new_step) == ("returned_for_correction", "documents")
 
 
 def test_admin_requires_login(admin_client):

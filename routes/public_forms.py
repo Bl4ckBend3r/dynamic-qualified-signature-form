@@ -604,14 +604,26 @@ def confirm_submission(slug: str):
         _rewind_uploaded_files()
         try:
             result = services.submission_service.submit_form(
-                slug, initial_config, request.form,
+                slug,
+                initial_config,
+                request.form,
                 form_version_id=version.id if version else None,
                 submission_id=review["submission_id"],
             )
         except IntegrityError:
-            existing = services.submission_repository.get_by_id(review["submission_id"])
+            existing = services.submission_repository.get_by_id(
+                review["submission_id"]
+            )
             if existing:
                 return _already_confirmed_response(slug, existing)
+            raise
+        except Exception as exc:
+            logger.exception(
+                "public_confirm_failed slug=%s submission_id=%s error=%s",
+                slug,
+                review.get("submission_id"),
+                exc,
+            )
             raise
     if not result["ok"]:
         if _review_json_requested():

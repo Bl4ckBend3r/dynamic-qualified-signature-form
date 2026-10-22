@@ -1,7 +1,13 @@
 services:
   migrate:
     build: .
-    command: ["alembic", "upgrade", "head"]
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        alembic upgrade head
+        python -m scripts.deployment.deploy_form_versions
     restart: "no"
     env_file:
       - .env

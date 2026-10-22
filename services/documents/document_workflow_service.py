@@ -55,6 +55,38 @@ STATE_CODES = {
     "completed": DocumentState.SIGNED.value,
 }
 
+def _signature_document_message(
+    *,
+    signature_valid: bool,
+    signature_outcome: str,
+    document_status: str,
+) -> str:
+    if signature_valid:
+        signature_message = "Podpis zweryfikowano poprawnie."
+    else:
+        detail = VERIFICATION_MESSAGES.get(
+            signature_outcome,
+            "Weryfikacja podpisu zakończyła się niepowodzeniem.",
+        )
+        signature_message = (
+            f"Podpis nie został zweryfikowany poprawnie. {detail}"
+        )
+
+    if document_status == "VALID":
+        document_message = "Dokument zweryfikowano poprawnie."
+    elif document_status == "INVALID":
+        document_message = (
+            "Dokument jest niepoprawny. "
+            "Wgrany plik nie odpowiada dokumentowi "
+            "wygenerowanemu przez system."
+        )
+    else:
+        document_message = (
+            "Nie udało się zweryfikować poprawności dokumentu."
+        )
+
+    return f"{signature_message} {document_message}"
+
 
 def is_document_step(step):
     """Return whether ``step`` uses the document-group runtime.
@@ -1222,27 +1254,114 @@ class DocumentWorkflowService:
                         "message": VERIFICATION_MESSAGES["VERIFICATION_ERROR"]}
             verification = {}
             outcome = "VALID_SIGNATURE"
+            verification_message = "Dokument został przyjęty."
+
             if requires_signature:
+                signature_outcome = "VERIFICATION_ERROR"
+                signature_valid = False
+
+                document_valid = True
+                document_status = "VALID"
+                document_reason_code = "OK"
+
                 try:
-                    verification = dict(current_app.extensions["services"].document_signing_service.verify_stored_pdf(
-                        data, current_app.config["TEMP_DIR"], storage=self.documents.storage, slug=row["form_slug"],
-                        filename=filename, storage_path=storage_path,
-                        allowed_signatures=document.get("allowed_signatures", []) if signer == "participant" else None))
-                    outcome = signature_verification_result(verification,
-                        document.get("allowed_signatures", []) if signer == "participant" else None)
-                    original_name = office_source if signer == "office" else target.get("generated_filename")
-                    if outcome == "VALID_SIGNATURE" and original_name:
-                        original = self.documents.read_document_bytes_for_download(row, original_name,
-                            signed=signer == "office" and policy["participant_signature"])
-                        if not data.startswith(original) or data == original:
-                            outcome = "INVALID_SIGNATURE"
-                            verification["reason_code"] = "DOCUMENT_REVISION_MISMATCH"
-                    if signer == "office" and policy["participant_signature"] and int(verification.get("signature_count") or 0) < 2:
-                        outcome = "INVALID_SIGNATURE"
-                        verification["reason_code"] = "MISSING_COUNTERSIGNATURE"
+                    verification = dict(
+                        current_app.extensions[
+                            "services"
+                        ].document_signing_service.verify_stored_pdf(
+                            data,
+                            current_app.config["TEMP_DIR"],
+                            storage=self.documents.storage,
+                            slug=row["form_slug"],
+                            filename=filename,
+                            storage_path=storage_path,
+                            allowed_signatures=(
+                                document.get("allowed_signatures", [])
+                                if signer == "participant"
+                                else None
+                            ),
+                        )
+                    )
+
+                    signature_outcome = signature_verification_result(
+                        verification,
+                        (
+                            document.get("allowed_signatures", [])
+                            if signer == "participant"
+                            else None
+                        ),
+                    )
+                    signature_valid = signature_outcome == "VALID_SIGNATURE"
+
                 except Exception:
-                    outcome = "VERIFICATION_ERROR"
+                    verification = dict(verification or {})
                     verification["reason_code"] = "VERIFIER_EXCEPTION"
+
+                original_name = (
+                    office_source
+                    if signer == "office"
+                    else target.get("generated_filename")
+                )
+
+                if original_name:
+                    try:
+                        original = self.documents.read_document_bytes_for_download(
+                            row,
+                            original_name,
+                            signed=(
+                                signer == "office"
+                                and policy["participant_signature"]
+                            ),
+                        )
+
+                        document_valid = data.startswith(original)
+
+                        if not document_valid:
+                            document_status = "INVALID"
+                            document_reason_code = "DOCUMENT_REVISION_MISMATCH"
+
+                    except Exception:
+                        document_valid = False
+                        document_status = "ERROR"
+                        document_reason_code = "DOCUMENT_READ_ERROR"
+
+                if (
+                    signer == "office"
+                    and policy["participant_signature"]
+                    and int(verification.get("signature_count") or 0) < 2
+                ):
+                    signature_outcome = "INVALID_SIGNATURE"
+                    signature_valid = False
+                    verification["reason_code"] = "MISSING_COUNTERSIGNATURE"
+
+                verification["signature_result_code"] = signature_outcome
+                verification["document_validation_status"] = document_status
+                verification["document_reason_code"] = document_reason_code
+
+                if not signature_valid:
+                    outcome = signature_outcome
+                    verification["reason_code"] = (
+                        verification.get("reason_code")
+                        or signature_outcome
+                    )
+
+                elif not document_valid:
+                    outcome = (
+                        "VERIFICATION_ERROR"
+                        if document_status == "ERROR"
+                        else "INVALID_SIGNATURE"
+                    )
+                    verification["reason_code"] = document_reason_code
+
+                else:
+                    outcome = "VALID_SIGNATURE"
+                    verification["reason_code"] = "OK"
+
+                verification_message = _signature_document_message(
+                    signature_valid=signature_valid,
+                    signature_outcome=signature_outcome,
+                    document_status=document_status,
+                )
             accepted = outcome == "VALID_SIGNATURE"
             verification["result_code"] = outcome
             recorded = self.documents.submission_document_service.record_document_metadata(
@@ -1277,11 +1396,30 @@ class DocumentWorkflowService:
             )
             if not accepted:
                 target["verification_result"] = outcome
-                target["substate"] = "verification_error" if outcome == "VERIFICATION_ERROR" else "verification_failed"
-                self._save(row, step, state, token, target["substate"], "SIGNATURE_VERIFICATION_FAILED", signer)
-                return {"is_valid": False, "completed": False, "result": outcome,
-                        "message": VERIFICATION_MESSAGES.get(outcome, "Nie udało się zweryfikować podpisu.")}
+                target["verification_message"] = verification_message
+                target["substate"] = (
+                    "verification_error"
+                    if outcome == "VERIFICATION_ERROR"
+                    else "verification_failed"
+                )
+                self._save(
+                    row,
+                    step,
+                    state,
+                    token,
+                    target["substate"],
+                    "SIGNATURE_VERIFICATION_FAILED",
+                    signer,
+                )
+                return {
+                    "is_valid": False,
+                    "completed": False,
+                    "result": outcome,
+                    "message": verification_message,
+                }
+
             target.pop("verification_result", None)
+            target.pop("verification_message", None)
             if signer == "participant" and requires_signature and document_id in {"declaration", "agreement", "training_agreement"}:
                 self.documents.record_composite_participant_signature(row, {**step, "document_id": document_id},
                     data, filename, instance, verification)
@@ -1306,8 +1444,12 @@ class DocumentWorkflowService:
                 self.repository.release_document_operation(row["submission_id"], token)
         if completed:
             self.documents.workflow_service.advance_after_action(self.repository.get_by_id(row["submission_id"]), definition)
-        return {"is_valid": True, "completed": completed, "result": "VALID_SIGNATURE",
-                "message": "Dokument został przyjęty."}
+        return {
+            "is_valid": True,
+            "completed": completed,
+            "result": "VALID_SIGNATURE",
+            "message": verification_message,
+        }
 
     def _download_group(self, row, step, definition, filename, signer="participant", document_id=None):
         documents = step_documents(definition, step)
@@ -1470,7 +1612,13 @@ class DocumentWorkflowService:
                                    ),
                                   "can_upload": can_upload,
                                   "verification_result": target.get("verification_result") or "",
-                                  "verification_message": VERIFICATION_MESSAGES.get(target.get("verification_result"), ""),
+                                "verification_message": (
+                                    target.get("verification_message")
+                                    or VERIFICATION_MESSAGES.get(
+                                        target.get("verification_result"),
+                                        "",
+                                    )
+                                ),
                                   "signed": bool(target.get("office_filename")),
                                   "completed": bool(target.get("completed")),
                                   "status": "Gotowy" if target.get("completed") else
@@ -1498,8 +1646,14 @@ class DocumentWorkflowService:
                                 and not item.get("generated_filename")
                                 and not item.get("completed")
                             ),
-                          "verification_result": item.get("verification_result") or "",
-                          "verification_message": VERIFICATION_MESSAGES.get(item.get("verification_result"), ""),
+                        "verification_result": item.get("verification_result") or "",
+                        "verification_message": (
+                            item.get("verification_message")
+                            or VERIFICATION_MESSAGES.get(
+                                item.get("verification_result"),
+                                "",
+                            )
+                        ),
                           "signed": bool(item.get("office_filename")), "instance": "",
                           "completed": bool(item.get("completed")), "can_upload": can_upload,
                           "status": (
@@ -1580,22 +1734,93 @@ class DocumentWorkflowService:
         storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage,
             slug=row["form_slug"], filename=filename, document_bytes=data,
             document_type=self.documents._storage_document_type(document_id), signed=signature_required)
-        verification, outcome = {}, "VALID_SIGNATURE"
+        verification = {}
+        outcome = "VALID_SIGNATURE"
+        verification_message = "Dokument został przyjęty."
+
         if signature_required:
+            signature_outcome = "VERIFICATION_ERROR"
+            signature_valid = False
+
+            document_valid = True
+            document_status = "VALID"
+            document_reason_code = "OK"
+
             try:
-                verification = dict(current_app.extensions["services"].document_signing_service.verify_stored_pdf(
-                    data, current_app.config["TEMP_DIR"], storage=self.documents.storage, slug=row["form_slug"],
-                    filename=filename, storage_path=storage_path,
-                    allowed_signatures=document.get("allowed_signatures", [])))
-                outcome = signature_verification_result(verification, document.get("allowed_signatures", []))
-                if outcome == "VALID_SIGNATURE" and generated:
-                    original = self.documents.read_document_bytes_for_download(row, generated["filename"], signed=False)
-                    if not data.startswith(original) or data == original:
-                        outcome = "INVALID_SIGNATURE"
-                        verification["reason_code"] = "DOCUMENT_REVISION_MISMATCH"
+                verification = dict(
+                    current_app.extensions[
+                        "services"
+                    ].document_signing_service.verify_stored_pdf(
+                        data,
+                        current_app.config["TEMP_DIR"],
+                        storage=self.documents.storage,
+                        slug=row["form_slug"],
+                        filename=filename,
+                        storage_path=storage_path,
+                        allowed_signatures=document.get(
+                            "allowed_signatures",
+                            [],
+                        ),
+                    )
+                )
+
+                signature_outcome = signature_verification_result(
+                    verification,
+                    document.get("allowed_signatures", []),
+                )
+                signature_valid = signature_outcome == "VALID_SIGNATURE"
+
             except Exception:
-                outcome = "VERIFICATION_ERROR"
+                verification = dict(verification or {})
                 verification["reason_code"] = "VERIFIER_EXCEPTION"
+
+            if generated:
+                try:
+                    original = self.documents.read_document_bytes_for_download(
+                        row,
+                        generated["filename"],
+                        signed=False,
+                    )
+
+                    document_valid = data.startswith(original)
+
+                    if not document_valid:
+                        document_status = "INVALID"
+                        document_reason_code = "DOCUMENT_REVISION_MISMATCH"
+
+                except Exception:
+                    document_valid = False
+                    document_status = "ERROR"
+                    document_reason_code = "DOCUMENT_READ_ERROR"
+
+            verification["signature_result_code"] = signature_outcome
+            verification["document_validation_status"] = document_status
+            verification["document_reason_code"] = document_reason_code
+
+            if not signature_valid:
+                outcome = signature_outcome
+                verification["reason_code"] = (
+                    verification.get("reason_code")
+                    or signature_outcome
+                )
+
+            elif not document_valid:
+                outcome = (
+                    "VERIFICATION_ERROR"
+                    if document_status == "ERROR"
+                    else "INVALID_SIGNATURE"
+                )
+                verification["reason_code"] = document_reason_code
+
+            else:
+                outcome = "VALID_SIGNATURE"
+                verification["reason_code"] = "OK"
+
+            verification_message = _signature_document_message(
+                signature_valid=signature_valid,
+                signature_outcome=signature_outcome,
+                document_status=document_status,
+            )
         accepted = outcome == "VALID_SIGNATURE"
         verification["result_code"] = outcome
         recorded = self.documents.submission_document_service.record_document_metadata(
@@ -1611,8 +1836,11 @@ class DocumentWorkflowService:
             raise ValueError("Nie udało się zapisać metadanych dokumentu.")
         if accepted:
             self._refresh_version_gap(submission)
-        return {"is_valid": accepted, "result": outcome,
-                "message": "Dokument został przyjęty." if accepted else VERIFICATION_MESSAGES.get(outcome, "Nie udało się zweryfikować podpisu.")}
+        return {
+            "is_valid": accepted,
+            "result": outcome,
+            "message": verification_message,
+        }
 
     def _refresh_version_gap(self, submission):
         from sqlalchemy import select

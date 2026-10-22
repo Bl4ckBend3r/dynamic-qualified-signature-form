@@ -9,6 +9,8 @@ from sqlalchemy import select
 from models import FormSubmission, SubmissionFile, SubmissionWorkflowEvent
 from services.form_submission_mapper import BOOLEAN_COLUMNS, DATE_COLUMNS, FORM_FIELD_MAP, INTEGER_COLUMNS
 from services.process_service import ProcessStatus
+from services.status_catalog import is_final_status
+from services.workflow_state_service import final_outcome_for_status
 
 
 SUPERSEDED_FILE_STATUS = "superseded"
@@ -30,6 +32,16 @@ class SubmissionCorrectionResult:
 class SubmissionCorrectionService:
     ALLOWED_ROLES = {"admin", "super_admin"}
 
+    @staticmethod
+    def can_return_for_correction(submission: FormSubmission, form_config: Mapping[str, Any]) -> bool:
+        status = str(submission.process_status or "")
+        if not status or status == ProcessStatus.RETURNED_FOR_CORRECTION.value or is_final_status(status):
+            return False
+        step_id = str(submission.workflow_step or submission.workflow_stage or "")
+        step = next((item for item in ((form_config.get("workflow") or {}).get("steps") or [])
+                     if isinstance(item, Mapping) and str(item.get("id") or "") == step_id), {})
+        return not (step.get("final") or step.get("stage_type") == "final")
+
     def return_for_correction(
         self,
         db,
@@ -40,14 +52,15 @@ class SubmissionCorrectionService:
         message_to_user: str,
         clear_submission: bool,
         actor,
+        authorized: bool = False,
     ) -> SubmissionCorrectionResult:
-        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
-            raise SubmissionCorrectionError("Skieruj zgłoszenie do poprawy przez opcję decyzji skonfigurowaną w bieżącym etapie.")
+        if not self.can_return_for_correction(submission, form_config):
+            raise SubmissionCorrectionError("Zgłoszenia na tym etapie nie można wysłać do poprawy.")
         normalized_reason = str(reason or "").strip()
         if not normalized_reason:
             raise SubmissionCorrectionError("Podaj powód wysłania zgłoszenia do poprawy.")
         actor_role = str(getattr(actor, "role", "") or "").strip()
-        if actor_role not in self.ALLOWED_ROLES:
+        if not authorized and actor_role not in self.ALLOWED_ROLES:
             raise PermissionError("Brak uprawnień do wysłania zgłoszenia do poprawy.")
 
         previous_status = str(submission.process_status or "")
@@ -86,6 +99,7 @@ class SubmissionCorrectionService:
                 "actor_email": str(getattr(actor, "email", "") or ""),
                 "actor_role": actor_role,
                 "previous_status": previous_status,
+                "previous_step": previous_step,
             }
         )
         system_data["_correction_history"] = history
@@ -95,6 +109,8 @@ class SubmissionCorrectionService:
         }
         submission.process_status = ProcessStatus.RETURNED_FOR_CORRECTION.value
         submission.workflow_step = "returned_for_correction"
+        submission.workflow_stage = "returned_for_correction"
+        submission.final_outcome = final_outcome_for_status(ProcessStatus.RETURNED_FOR_CORRECTION.value).value
         submission.correction_required = "Tak"
         submission.correction_message = str(message_to_user or "").strip() or normalized_reason
         submission.correction_fields = ",".join(

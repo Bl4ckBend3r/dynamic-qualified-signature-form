@@ -1,5 +1,6 @@
-from types import SimpleNamespace
+from datetime import datetime, timezone
 import re
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -305,7 +306,7 @@ def test_dispatch_raw_missing_recipient_is_safe_and_logged():
     assert "Brak odbiorcy" in db.rows[0].error_message
 
 
-def _seed_new_submission_notice(app, slug, *, enabled, recipient):
+def _seed_new_submission_notice(app, slug, *, enabled, recipient, submitted_at=None):
     definition = {"title": f"Formularz {slug}", "fields": [],
                   "new_submission_notification": {"enabled": enabled, "recipient_email": recipient}}
     form_id = create_form(app, slug=slug, definition_json=definition)
@@ -318,6 +319,8 @@ def _seed_new_submission_notice(app, slug, *, enabled, recipient):
         submission = FormSubmission(submission_id=f"submission-{slug}", form_slug=slug,
                                     form_version_id=version.id, pesel="12345678901",
                                     process_status="FORM_SUBMITTED")
+        if submitted_at is not None:
+            submission.created_at = submitted_at
         db.add(submission)
         db.commit()
     return form_id, f"submission-{slug}"
@@ -346,7 +349,7 @@ def test_new_submission_notice_is_per_form_version_and_idempotent(admin_app):
     assert [item["to_emails"] for item in sent] == [["first@example.org"], ["second@example.org"]]
     assert "Formularz notice-first" in sent[0]["subject"]
     assert first in sent[0]["text_body"]
-    assert re.search(r"Data wpływu: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", sent[0]["text_body"])
+    assert re.search(r"Data wpływu: \d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2}", sent[0]["text_body"])
     assert "12345678901" not in str(sent)
     assert all(item["attachments"] == [] for item in sent)
     with factory() as db:
@@ -361,6 +364,52 @@ def test_new_submission_notice_is_per_form_version_and_idempotent(admin_app):
     with admin_app.app_context():
         assert dispatcher.dispatch_new_submission_notification(first).status == "skipped"
     assert len(sent) == 2
+
+
+@pytest.mark.parametrize("submitted_at, expected", [
+    (datetime(2026, 1, 15, 10, 11, 12, tzinfo=timezone.utc), "15.01.2026, 11:11:12"),
+    (datetime(2026, 7, 15, 10, 11, 12, tzinfo=timezone.utc), "15.07.2026, 12:11:12"),
+    (datetime(2026, 3, 29, 0, 59, 59, tzinfo=timezone.utc), "29.03.2026, 01:59:59"),
+    (datetime(2026, 3, 29, 1, 0, 0, tzinfo=timezone.utc), "29.03.2026, 03:00:00"),
+    (datetime(2026, 10, 25, 0, 59, 59, tzinfo=timezone.utc), "25.10.2026, 02:59:59"),
+    (datetime(2026, 10, 25, 1, 0, 0, tzinfo=timezone.utc), "25.10.2026, 02:00:00"),
+])
+def test_new_submission_notice_uses_persisted_time_in_warsaw(admin_app, submitted_at, expected):
+    _, public_id = _seed_new_submission_notice(
+        admin_app, "notice-time", enabled=True, recipient="office@example.org",
+        submitted_at=submitted_at,
+    )
+    admin_app.config["APP_TIMEZONE"] = "UTC"
+    sent = []
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+
+    with admin_app.app_context():
+        assert dispatcher.dispatch_new_submission_notification(public_id).sent
+
+    assert f"Data wpływu: {expected}" in sent[0]["text_body"]
+    assert f"Data wpływu: {expected}" in sent[0]["html_body"]
+
+
+def test_new_submission_creation_persists_full_utc_timestamp(admin_app):
+    definition = {"title": "Formularz czasu", "fields": []}
+    create_form(admin_app, slug="notice-created-at", definition_json=definition)
+    service = admin_app.extensions["services"].submission_service
+
+    before = datetime.now(timezone.utc)
+    with admin_app.app_context():
+        submission = service.create_submission(
+            "notice-created-at", definition, {}, dispatch_received=False, start_workflow=False,
+        )
+    after = datetime.now(timezone.utc)
+
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        saved = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == submission["submission_id"]
+        )).scalar_one()
+        stored_at = saved.created_at.replace(tzinfo=timezone.utc) if saved.created_at.tzinfo is None else saved.created_at
+    assert before <= stored_at <= after
 
 
 def test_new_submission_notice_smtp_failure_keeps_submission(admin_app):

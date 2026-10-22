@@ -113,3 +113,50 @@ def test_return_requires_reason_and_admin_role(db):
             db, submission, form_config={}, reason="Powód", message_to_user="", clear_submission=True,
             actor=SimpleNamespace(role="form_manager"),
         )
+
+
+@pytest.mark.parametrize(
+    ("step", "status", "stage_type"),
+    [
+        ("intake", "FORM_SUBMITTED", "user_action"),
+        ("documents", "DECLARATION_WAITING_FOR_SIGNATURE", "documents"),
+        ("decision", "WAITING_FOR_OFFICER_DECISION", "decision"),
+    ],
+)
+def test_explicit_stage_return_preserves_origin_files_and_history(db, step, status, stage_type):
+    submission = make_submission(db)
+    submission.process_status = status
+    submission.workflow_step = step
+    submission.workflow_stage = step
+    submission.data_json = {"wiek": "45", "later_answer": "zachowaj", "_qualification_history": [{"passed": True}]}
+    config = {"fields": [{"name": "wiek"}], "workflow": {
+        "flow_mode": "explicit", "initial_step": "intake",
+        "steps": [{"id": step, "stage_type": stage_type}],
+    }}
+
+    SubmissionCorrectionService().return_for_correction(
+        db, submission, form_config=config, reason="Popraw dane", message_to_user="Uzupełnij wiek",
+        clear_submission=False, actor=SimpleNamespace(id=7, email="admin@example.com", role="admin"),
+    )
+    db.flush()
+
+    origin = submission.data_json["_correction_history"][-1]
+    assert (origin["previous_step"], origin["previous_status"]) == (step, status)
+    assert submission.data_json["later_answer"] == "zachowaj"
+    assert submission.data_json["_qualification_history"] == [{"passed": True}]
+    assert submission.workflow_step == submission.workflow_stage == "returned_for_correction"
+    assert db.scalar(select(SubmissionFile)).status == "generated"
+    event = db.scalars(select(SubmissionWorkflowEvent).order_by(SubmissionWorkflowEvent.id.desc())).first()
+    assert (event.previous_step, event.new_step) == (step, "returned_for_correction")
+
+
+def test_final_stage_cannot_be_returned_for_correction(db):
+    submission = make_submission(db)
+    submission.process_status = "COMPLETED"
+    submission.workflow_step = "done"
+    config = {"workflow": {"flow_mode": "explicit", "steps": [{"id": "done", "stage_type": "final"}]}}
+    with pytest.raises(SubmissionCorrectionError):
+        SubmissionCorrectionService().return_for_correction(
+            db, submission, form_config=config, reason="Powód", message_to_user="",
+            clear_submission=False, actor=SimpleNamespace(role="admin"),
+        )

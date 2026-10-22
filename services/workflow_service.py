@@ -251,6 +251,8 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
+        if str(submission.get("process_status") or "") in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
+            raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
         if getattr(self.submission_repository, "session_factory", None):
             from services.form_version_service import FormVersionError, FormVersionService
             with self.submission_repository.session_factory() as db:
@@ -343,6 +345,8 @@ class WorkflowService:
     ):
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
         old_status = getattr(submission, "process_status", None)
+        if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
+            raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
         if db is not None and (submission.data_json or {}).get("_form_version_upgrade"):
             from services.form_version_service import FormVersionError, FormVersionService
             try:

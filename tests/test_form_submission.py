@@ -211,9 +211,54 @@ def test_failed_qualification_saves_submission_and_sets_auto_rejected(app, clien
     assert row["workflow_step"] == "auto_rejected"
     assert row["data_json"]["_qualification"]["passed"] is False
     assert row["data_json"]["_qualification"]["failed_conditions"][0]["actual_value"] == "36"
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert sent[0][0] == row["submission_id"]
     assert sent[0][1]["passed"] is False
+    assert sent[1] == ("received", row["submission_id"])
+
+def test_failed_qualification_requiring_officer_decision_still_sends_submission_received(
+    app,
+    client,
+    valid_form_data,
+    monkeypatch,
+):
+    app.testing_storage.form_definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [{
+            "id": "age-officer-condition",
+            "field_name": "wiek",
+            "field_label": "Wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "99",
+            "failure_action": "officer_decision",
+            "user_message": "Wniosek wymaga dodatkowej weryfikacji.",
+            "officer_message": "Wiek poniżej progu.",
+            "is_active": True,
+        }],
+    }
+
+    sent = []
+    mail_dispatch = app.extensions["services"].mail_dispatch_service
+    monkeypatch.setattr(
+        mail_dispatch,
+        "dispatch_submission_received",
+        lambda submission_id: sent.append(("received", submission_id)),
+    )
+
+    response = client.post(
+        FORM_URL,
+        data=_prepare(valid_form_data),
+        follow_redirects=True,
+    )
+
+    row = app.testing_storage.csv_rows[0]
+
+    assert response.status_code == 200
+    assert row["process_status"] == "FORM_SUBMITTED"
+    assert row["workflow_step"] == "officer_decision"
+    assert row["officer_decision"] == ""
+    assert "Wiek" in row["officer_decision_reason"]
+    assert sent == [("received", row["submission_id"])]
 
 
 def test_all_qualification_conditions_pass_and_normal_flow_continues(app, client, valid_form_data):
@@ -233,3 +278,69 @@ def test_all_qualification_conditions_pass_and_normal_flow_continues(app, client
     assert row["process_status"] == "WAITING_FOR_OFFICER_DECISION"
     assert row["workflow_step"] == "officer_review"
     assert row["data_json"]["_qualification"]["passed"] is True
+
+
+def test_explicit_workflow_rejects_all_failed_qualification_conditions_before_advancing(
+    app, client, valid_form_data, monkeypatch,
+):
+    from services.workflow_service import WorkflowTransitionError
+    import pytest
+
+    definition = app.testing_storage.form_definition
+    definition["workflow"] = {
+        "flow_mode": "explicit", "initial_step": "intake",
+        "steps": [
+            {"id": "intake", "type": "form_submit", "stage_type": "user_action", "status": "FORM_SUBMITTED", "next": "review"},
+            {"id": "review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
+        ],
+    }
+    definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [
+            {"id": "age", "field_name": "wiek", "field_label": "Wiek", "operator": "greater_than_or_equal", "expected_value": "99", "failure_action": "auto_reject", "is_active": True},
+            {"id": "region", "field_name": "wojewodztwo", "field_label": "Województwo", "operator": "equals", "expected_value": "inne", "failure_action": "auto_reject", "is_active": True},
+        ],
+    }
+
+    events = []
+    repository = app.extensions["services"].submission_repository
+    monkeypatch.setattr(repository, "record_workflow_event", lambda submission_id, event: events.append(event) or True)
+    response = client.post(FORM_URL, data=_prepare(valid_form_data), follow_redirects=True)
+    row = app.testing_storage.csv_rows[0]
+
+    assert response.status_code == 200
+    assert row["process_status"] == "AUTO_REJECTED"
+    assert row["workflow_step"] == row["workflow_stage"] == "auto_rejected"
+    assert {item["id"] for item in row["data_json"]["_qualification"]["failed_conditions"]} == {"age", "region"}
+    assert "Wiek" in row["officer_decision_reason"]
+    assert "Województwo" in row["officer_decision_reason"]
+    assert any(event["source"] == "auto_rejected_by_condition" for event in events)
+    assert not any(event["new_step"] == "review" for event in events)
+    with pytest.raises(WorkflowTransitionError):
+        app.extensions["services"].workflow_service.transition_to(row["submission_id"], "review")
+
+
+def test_explicit_workflow_advances_after_all_qualification_conditions_pass(app, client, valid_form_data):
+    definition = app.testing_storage.form_definition
+    definition["workflow"] = {
+        "flow_mode": "explicit", "initial_step": "intake",
+        "steps": [
+            {"id": "intake", "type": "form_submit", "stage_type": "user_action", "status": "FORM_SUBMITTED", "next": "review"},
+            {"id": "review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
+        ],
+    }
+    definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [
+            {"field_name": "wiek", "operator": "greater_than_or_equal", "expected_value": "18", "is_active": True},
+            {"field_name": "wojewodztwo", "operator": "equals", "expected_value": "lubuskie", "is_active": True},
+        ],
+    }
+
+    response = client.post(FORM_URL, data=_prepare(valid_form_data), follow_redirects=True)
+    row = app.testing_storage.csv_rows[0]
+
+    assert response.status_code == 200
+    assert row["data_json"]["_qualification"]["passed"] is True
+    assert row["workflow_step"] == "review"
+    assert row["process_status"] == "WAITING_FOR_OFFICER_DECISION"

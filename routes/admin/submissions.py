@@ -503,6 +503,12 @@ def submission_detail(form_id: int, submission_pk: int):
                 "can_send_email", "can_edit_workflow",
             )
         }
+        correction_available = (
+            action_permissions["can_return_for_correction"]
+            and services.submission_correction_service.can_return_for_correction(
+                submission, submission_form_config,
+            )
+        )
         is_agreement_blocked = (
             submission.process_status == ProcessStatus.AGREEMENT_BLOCKED.value
             or str(submission.agreement_blocked or "").strip().lower() == "tak"
@@ -648,6 +654,7 @@ def submission_detail(form_id: int, submission_pk: int):
                 services.submission_repository.get_by_id(submission.submission_id), submission_form_config, signer="office"
             ) if services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form) else None,
             rollback_options=rollback_options,
+            correction_available=correction_available,
             blocked_agreement_view=blocked_agreement_view,
             office_signed_agreement_view=office_signed_agreement_view,
             participant_training_view=participant_training_view,
@@ -1219,7 +1226,7 @@ def submission_return_for_correction(submission_id: str):
     payload = payload or {}
     reason = str(payload.get("reason") or "").strip()
     message_to_user = str(payload.get("message_to_user") or "").strip()
-    clear_submission = _request_bool(payload, "clear_submission", default=True)
+    clear_submission = _request_bool(payload, "clear_submission", default=False)
     send_email = _request_bool(payload, "send_email", default=True)
 
     with db_session_factory()() as db:
@@ -1246,6 +1253,7 @@ def submission_return_for_correction(submission_id: str):
                 message_to_user=message_to_user,
                 clear_submission=clear_submission,
                 actor=g.admin_user,
+                authorized=True,
             )
             current_app.extensions["services"].workflow_sla_service.transition(
                 db,

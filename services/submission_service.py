@@ -26,6 +26,7 @@ from services.qualification_condition_service import QualificationConditionServi
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.submission_attachment_service import SubmissionAttachmentService
 from services.workflow_service import workflow_document_action, workflow_step_document_id
+from services.workflow_state_service import final_outcome_for_status
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ class SubmissionService:
             },
             submission_id=submission_id,
             dispatch_received=False,
-            start_workflow=(form_config.get("workflow") or {}).get("flow_mode") != "explicit",
+            start_workflow=False,
         )
         try:
             self.compliance_service.record_submission_acceptances(
@@ -168,29 +169,27 @@ class SubmissionService:
             for condition in failed_conditions
         )
 
-        if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
-            self.workflow_service.enter_submission_review(submission, form_config)
-        elif auto_rejected:
+        if auto_rejected:
             self._auto_reject_submission(
                 submission,
                 qualification,
+                previous_status=str(submission.get("process_status") or ProcessStatus.FORM_SUBMITTED.value),
             )
-
         elif requires_officer_decision:
             self._mark_officer_decision_required(
                 submission,
                 qualification,
             )
-        repeatable_confirmation = any(
-            isinstance(field, dict) and field.get('type') == 'repeatable_group'
-            and (field.get('submission_confirmation') or {}).get('enabled')
-            for field in form_config.get('fields') or []
-        )
-        if self.mail_dispatch_service and (repeatable_confirmation or not (auto_rejected or requires_officer_decision)):
+        elif self.workflow_service:
+            self.workflow_service.enter_submission_review(submission, form_config)
+        if self.mail_dispatch_service:
             try:
                 self.mail_dispatch_service.dispatch_submission_received(submission_id)
             except Exception as exc:
-                current_app.logger.exception("submission_received_mail_failed error=%s", exc.__class__.__name__)
+                current_app.logger.exception(
+                    "submission_received_mail_failed error=%s",
+                    exc.__class__.__name__,
+                )
 
         self._generate_form_pdf(
             form_slug=form_slug,
@@ -284,13 +283,18 @@ class SubmissionService:
             {},
         )
         initial_status = str(initial_step_config.get("status") or ProcessStatus.FORM_SUBMITTED.value)
+        submitted_at = datetime.now(timezone.utc)
+        created_at = (
+            submitted_at if hasattr(self.submission_repository, "session_factory")
+            else submitted_at.strftime("%d.%m.%Y")
+        )
         submission = {
             "submission_id": submission_id,
             "form_slug": form_slug,
-            "created_at": datetime.now().strftime("%d.%m.%Y"),
             "form_name": form_config.get("title", form_slug),
             "access_token": self.access_token_service.generate_token(),
             **form_data,
+            "created_at": created_at,
             "form_version_id": form_version_id if form_version_id is not None else form_data.get("form_version_id"),
             **build_initial_process_fields(
                 declaration_required="declaration" in document_ids,
@@ -387,6 +391,7 @@ class SubmissionService:
         history = list(system_data.get("_qualification_history") or [])
         history.append(qualification)
         stored_data = {
+            **{key: value for key, value in dict(existing.get("data_json") or {}).items() if not str(key).startswith("_")},
             **submission_data,
             **system_data,
             "_qualification": qualification,
@@ -399,20 +404,24 @@ class SubmissionService:
             signature_history.append({**signed_snapshot, "invalidated_at": datetime.now(timezone.utc).isoformat(), "reason": "signed_data_changed_during_correction"})
             stored_data.pop("_signed_declaration_snapshot", None)
             stored_data["_declaration_signature_history"] = signature_history
+        correction_history = list(system_data.get("_correction_history") or [])
+        correction_origin = correction_history[-1] if correction_history else {}
+        initial_step = str((form_config.get("workflow") or {}).get("initial_step") or "submission")
+        resume_status = str(correction_origin.get("previous_status") or ProcessStatus.FORM_SUBMITTED.value)
+        resume_step = str(correction_origin.get("previous_step") or initial_step)
+        if resume_status == ProcessStatus.AUTO_REJECTED.value:
+            resume_status = ProcessStatus.FORM_SUBMITTED.value
+            resume_step = initial_step
         updates = {
             **submission_data,
             "data_json": stored_data,
-            "process_status": ProcessStatus.FORM_SUBMITTED.value,
-            "workflow_step": str((form_config.get("workflow") or {}).get("initial_step") or "submission"),
+            "process_status": resume_status,
+            "workflow_step": resume_step,
+            "workflow_stage": resume_step,
+            "final_outcome": final_outcome_for_status(resume_status).value,
             "correction_required": "Nie",
             "correction_completed_at": datetime.now(timezone.utc).isoformat(),
-            "officer_decision": "",
-            "officer_decision_reason": "",
         }
-        explicit_flow = (form_config.get("workflow") or {}).get("flow_mode") == "explicit"
-        if explicit_flow:
-            updates["workflow_step"] = existing.get("workflow_step") or existing.get("workflow_stage")
-            updates["process_status"] = existing.get("process_status")
         if signed_data_changed:
             updates.update({
                 "declaration_generated": "",
@@ -454,16 +463,13 @@ class SubmissionService:
             )
         )
 
-        if explicit_flow:
-            self.workflow_service.advance_after_action(refreshed, form_config, actor="participant")
-        elif auto_rejected:
+        if auto_rejected:
             self._auto_reject_submission(
                 refreshed,
                 qualification,
                 previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
                 previous_step="returned_for_correction",
             )
-
         elif requires_officer_decision:
             self._mark_officer_decision_required(
                 refreshed,
@@ -477,7 +483,7 @@ class SubmissionService:
                 submission_id,
                 {
                     "previous_status": ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                    "new_status": ProcessStatus.FORM_SUBMITTED.value,
+                    "new_status": resume_status,
                     "previous_step": "returned_for_correction",
                     "new_step": updates["workflow_step"],
                     "actor_role": "participant",
@@ -491,13 +497,15 @@ class SubmissionService:
                     submission_id,
                     form_slug,
                     old_value=ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                    new_value=ProcessStatus.FORM_SUBMITTED.value,
+                    new_value=resume_status,
                 )
             if self.mail_dispatch_service:
                 try:
                     self.mail_dispatch_service.dispatch_submission_received(submission_id)
                 except Exception as exc:
                     current_app.logger.exception("correction_received_mail_failed error=%s", exc.__class__.__name__)
+            if resume_step == initial_step and self.workflow_service:
+                self.workflow_service.enter_submission_review(refreshed, form_config)
 
         self.storage.ensure_form_output_structure(form_slug)
         base_filename = Path(self.build_pdf_filename(form_slug, submission_id))
@@ -697,6 +705,7 @@ class SubmissionService:
         updates = {
             "process_status": ProcessStatus.FORM_SUBMITTED.value,
             "workflow_step": "officer_decision",
+            "workflow_stage": "officer_decision",
             "officer_decision": "",
             "officer_decision_reason": reason,
         }
@@ -766,6 +775,8 @@ class SubmissionService:
         updates = {
             "process_status": ProcessStatus.AUTO_REJECTED.value,
             "workflow_step": "auto_rejected",
+            "workflow_stage": "auto_rejected",
+            "final_outcome": final_outcome_for_status(ProcessStatus.AUTO_REJECTED.value).value,
             "officer_decision": "",
             "officer_decision_reason": reason,
         }

@@ -521,8 +521,13 @@ class FormVersionService:
                     continue
                 previous = old_documents.get(document["id"])
                 newly_required = not previous or not previous.get("required", True)
-                content_changed = bool(previous and FormVersionService._document_signing_config(previous) !=
-                    FormVersionService._document_signing_config(document))
+                content_changed = bool(
+                    previous
+                    and FormVersionService._document_signing_config_changed(
+                        previous,
+                        document,
+                    )
+                )
                 if not newly_required and not content_changed:
                     continue
                 policy = group_document_policy(step, document)
@@ -561,6 +566,21 @@ class FormVersionService:
         return {key: document.get(key) for key in ("kind", "template_source", "template_html", "template",
             "template_metadata", "builder_active_document", "builder_document", "fields", "allowed_signatures")} | {"lifecycle": {key: policy[key] for key in
             ("generate", "upload_required", "participant_signature", "office_signature")}}
+
+    @staticmethod
+    def _document_signing_config_changed(previous, current):
+        old_config = FormVersionService._document_signing_config(previous)
+        new_config = FormVersionService._document_signing_config(current)
+
+        old_allowed = set(old_config.pop("allowed_signatures", []) or [])
+        new_allowed = set(new_config.pop("allowed_signatures", []) or [])
+
+        if old_config != new_config:
+            return True
+
+        # Rozszerzenie listy dopuszczalnych podpisów nie zmienia
+        # treści dokumentu i nie może wymuszać ponownego podpisania.
+        return not old_allowed.issubset(new_allowed)
 
     def completion_form_definition(self, submission: FormSubmission, definition: Mapping, *, step: str | None = None) -> dict:
         """Use fields available now or at an earlier stage, keeping new sections."""
@@ -670,10 +690,19 @@ class FormVersionService:
         old_documents = {item.get("id"): item for item in old_definition.get("documents") or [] if isinstance(item, dict)}
         new_documents = {item.get("id"): item for item in new_definition.get("documents") or [] if isinstance(item, dict)}
         for file in files:
-            custom_generated_changed = (file.document_id not in {"", "declaration", "agreement", "training_agreement"}
-                and file.status == "generated" and
-                FormVersionService._document_signing_config(old_documents.get(file.document_id) or {}) !=
-                FormVersionService._document_signing_config(new_documents.get(file.document_id) or {}))
+            custom_generated_changed = (
+                file.document_id not in {
+                    "",
+                    "declaration",
+                    "agreement",
+                    "training_agreement",
+                }
+                and file.status == "generated"
+                and FormVersionService._document_signing_config_changed(
+                    old_documents.get(file.document_id) or {},
+                    new_documents.get(file.document_id) or {},
+                )
+            )
             if file.signed or not (file.document_type in {"form_pdf", "declaration", "agreement", "training_agreement"}
                                    or custom_generated_changed):
                 continue

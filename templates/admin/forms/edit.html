@@ -2041,6 +2041,74 @@ const workflowDecisionTemplate = document.querySelector("[data-workflow-decision
 const workflowBuilderInput = workflowBuilder?.querySelector("[data-workflow-builder-json]");
 const workflowInitialSelect = workflowBuilder?.querySelector("[data-workflow-initial]");
 let workflowSource = {{ workflow_builder|tojson }};
+const workflowStepMigrations = {
+    ...(workflowSource.step_migration || {}),
+};
+
+function resolveWorkflowStepMigration(value) {
+    let current = String(value || "");
+    const visited = new Set();
+
+    while (
+        current
+        && workflowStepMigrations[current]
+        && !visited.has(current)
+    ) {
+        visited.add(current);
+        current = workflowStepMigrations[current];
+    }
+
+    return current;
+}
+
+function applyWorkflowStepMigrations(workflow) {
+    workflow.step_migration = {
+        ...(workflow.step_migration || {}),
+        ...workflowStepMigrations,
+    };
+
+    workflow.initial_step = resolveWorkflowStepMigration(
+        workflow.initial_step
+    );
+
+    const remap = (object, key) => {
+        if (object && object[key]) {
+            object[key] = resolveWorkflowStepMigration(
+                object[key]
+            );
+        }
+    };
+
+    (workflow.steps || []).forEach((step) => {
+        [
+            "next",
+            "completion_next",
+            "return_step",
+            "return_to_step",
+            "correction_step",
+            "correction_target",
+        ].forEach((key) => remap(step, key));
+
+        (step.transitions || []).forEach((transition) => {
+            remap(transition, "next");
+        });
+
+        (step.decisions || []).forEach((decision) => {
+            remap(decision, "target_step");
+        });
+
+        (step.options || []).forEach((option) => {
+            remap(option, "target_step");
+        });
+    });
+
+    (workflow.decision_types || []).forEach((decision) => {
+        remap(decision, "target_step");
+        remap(decision, "step_id");
+    });
+
+    return workflow;
+}
 let workflowWasEdited = workflowSource.flow_mode === 'explicit' || Boolean(workflowSource.document_stage_conversion);
 workflowBuilder?.addEventListener('input', () => { workflowWasEdited = true; });
 workflowBuilder?.addEventListener('change', () => { workflowWasEdited = true; });
@@ -2231,6 +2299,7 @@ function collectWorkflow() {
         steps,
         decision_settings: allDecisionSettings(),
     };
+    applyWorkflowStepMigrations(workflow);
     // The separate DocumentBuilder endpoint owns these potentially large JSON
     // values. The general form posts only its revision metadata; the backend
     // merges the current draft instead of accepting a page-open document copy.
@@ -3408,11 +3477,110 @@ workflowBuilder?.addEventListener("click", (event) => {
         if (card) { setWorkflowStep(card, {id: uniqueWorkflowStepId(), admin_label: "", user_label: ""}); workflowStepList.appendChild(card); card.querySelector('[data-workflow-step-editor]').hidden = false; card.querySelector('[data-edit-workflow-step]').textContent = 'Zwiń edycję'; }
     }
     const remove = event.target.closest("[data-remove-workflow-step]");
-    if (remove) {
-        const stage = remove.closest("[data-workflow-step]");
-        const refs = WorkflowStageEditor.references(collectWorkflow(), stage.querySelector('[data-step-id]').value);
-        if (refs.length) { window.alert(`Ten etap jest używany przez: ${refs.join(', ')}. Najpierw popraw przejścia.`); return; }
-        const pool = document.querySelector("[data-workflow-decision-pool]");
+if (remove) {
+    const stage = remove.closest("[data-workflow-step]");
+    if (!stage) return;
+
+    const stageId = stage.querySelector("[data-step-id]")?.value.trim();
+    const config = collectWorkflow();
+
+    const removedStep = (config.steps || []).find(
+        (step) => step.id === stageId
+    );
+
+    const remainingSteps = (config.steps || []).filter(
+        (step) =>
+            step.id !== stageId
+            && step.active !== false
+    );
+
+    if (!remainingSteps.length) {
+        window.alert(
+            "Nie można usunąć jedynego aktywnego etapu workflow."
+        );
+        return;
+    }
+
+    const refs = WorkflowStageEditor.references(
+        config,
+        stageId
+    );
+
+    const defaultTarget =
+        (
+            removedStep?.next
+            && remainingSteps.some(
+                (step) => step.id === removedStep.next
+            )
+        )
+            ? removedStep.next
+            : (
+                config.initial_step !== stageId
+                && remainingSteps.some(
+                    (step) => step.id === config.initial_step
+                )
+            )
+                ? config.initial_step
+                : remainingSteps[0].id;
+
+    let targetId = defaultTarget;
+
+    if (refs.length) {
+        const available = remainingSteps
+            .map(
+                (step) =>
+                    `${step.id} — ${
+                        step.admin_label
+                        || step.label
+                        || step.id
+                    }`
+            )
+            .join("\n");
+
+        targetId = window.prompt(
+            `Etap „${stageId}” jest używany przez inne elementy.\n\n`
+            + `Wskaż ID etapu, do którego mają zostać `
+            + `przeniesione zależności:\n\n${available}`,
+            defaultTarget
+        );
+
+                if (targetId === null) return;
+
+                targetId = targetId.trim();
+
+                if (
+                    !remainingSteps.some(
+                        (step) => step.id === targetId
+                    )
+                ) {
+                    window.alert(
+                        `Nie istnieje aktywny etap o ID „${targetId}”.`
+                    );
+                    return;
+                }
+
+                if (
+                    !window.confirm(
+                        `Usunąć etap „${stageId}” i przenieść jego `
+                        + `zależności do „${targetId}”?`
+                    )
+                ) {
+                    return;
+                }
+            } else if (
+                !window.confirm(
+                    `Czy na pewno usunąć etap „${stageId}”?`
+                )
+            ) {
+                return;
+            }
+
+            workflowStepMigrations[stageId] = targetId;
+
+            const pool = document.querySelector(
+                "[data-workflow-decision-pool]"
+            );
+
         stage?.querySelectorAll("[data-workflow-decision-card]").forEach((card) => {
             const select = card.querySelector("[data-decision-step]");
             if (select) select.value = "";
@@ -3420,6 +3588,11 @@ workflowBuilder?.addEventListener("click", (event) => {
             pool?.appendChild(card);
         });
         stage?.remove();
+            if (workflowBuilderInput) {
+            workflowBuilderInput.value = JSON.stringify(
+                collectWorkflow()
+            );
+        }
     }
     const edit = event.target.closest("[data-edit-workflow-step]");
     if (edit) {

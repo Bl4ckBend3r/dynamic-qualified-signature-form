@@ -676,8 +676,8 @@ class MailDispatchService:
             if isinstance(submitted_at, datetime):
                 if submitted_at.tzinfo is None:
                     submitted_at = submitted_at.replace(tzinfo=timezone.utc)
-                submitted_at = submitted_at.astimezone(ZoneInfo(current_app.config.get("APP_TIMEZONE") or "Europe/Warsaw"))
-                received = submitted_at.strftime("%d.%m.%Y %H:%M")
+                submitted_at = submitted_at.astimezone(ZoneInfo("Europe/Warsaw"))
+                received = submitted_at.strftime("%d.%m.%Y, %H:%M:%S")
             else:
                 received = str(submitted_at or "")
             subject = f"Nowe zgłoszenie — {title}"

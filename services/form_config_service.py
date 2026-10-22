@@ -516,7 +516,7 @@ class FormConfigService:
         normalized.setdefault("kind", "generated_pdf")
         normalized.setdefault("signature_required", True)
         normalized.setdefault("required", True)
-        normalized.setdefault("allowed_signatures", ["mszafir", "profil_zaufany"])
+        normalized.setdefault("allowed_signatures", ["mszafir", "qualified", "profil_zaufany"])
         if document_id == "training_agreement":
             normalized.setdefault("repeat_over", "selected_trainings")
             normalized.setdefault("repeat_item_alias", "training")

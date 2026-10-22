@@ -330,6 +330,45 @@ def test_publish_leaves_final_submission_on_historical_version(tmp_path):
         assert final.workflow_step == "submission"
 
 
+def test_correction_uses_bound_published_qualification_while_draft_changes(tmp_path):
+    from services.qualification_condition_service import QualificationConditionService
+    from services.submission_correction_service import SubmissionCorrectionService
+
+    _url, Session = _database(tmp_path)
+    versions = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="versioned-qualification")
+        published_definition = deepcopy(form.definition_json)
+        published_definition["qualification_conditions"] = {"enabled": True, "conditions": [{
+            "id": "email-rule", "field_name": "email", "operator": "equals",
+            "expected_value": "accepted@example.org", "failure_action": "auto_reject", "is_active": True,
+        }]}
+        form.definition_json = published_definition
+        published = versions.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        draft = versions.clone_to_draft(db, form, published, actor_id=None)
+        draft_definition = deepcopy(draft.definition_json)
+        draft_definition["qualification_conditions"]["conditions"][0]["expected_value"] = "draft@example.org"
+        draft.definition_json = draft_definition
+        submission = FormSubmission(
+            submission_id="versioned-correction", form_slug=form.slug, form_version_id=published.id,
+            process_status="AUTO_REJECTED", workflow_step="auto_rejected",
+            data_json={"email": "draft@example.org"}, email="draft@example.org",
+        )
+        db.add(submission)
+        db.flush()
+        bound_definition = versions.resolve_for_submission(db, submission).definition_json
+        assert QualificationConditionService().evaluate(
+            bound_definition["qualification_conditions"], {"email": "draft@example.org"}, bound_definition["fields"],
+        )["passed"] is False
+        SubmissionCorrectionService().return_for_correction(
+            db, submission, form_config=bound_definition, reason="Popraw adres", message_to_user="",
+            clear_submission=False, actor=SimpleNamespace(id=None, email="admin@example.org", role="admin"),
+        )
+        assert submission.form_version_id == published.id
+        assert published.definition_json["qualification_conditions"]["conditions"][0]["expected_value"] == "accepted@example.org"
+        assert draft.definition_json["qualification_conditions"]["conditions"][0]["expected_value"] == "draft@example.org"
+
+
 def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch):
     database_url, Session = _database(tmp_path)
     service = FormVersionService()

@@ -156,6 +156,154 @@ def validate_admin_form_config(form_definition: dict, *, validate_visual_workflo
         )
     return list(dict.fromkeys(errors))
 
+_WORKFLOW_STEP_REFERENCE_KEYS = {
+    "next",
+    "next_step",
+    "initial_step",
+    "completion_next",
+    "target_step",
+    "target_step_id",
+    "assigned_stage",
+    "return_step",
+    "return_to_step",
+    "correction_step",
+    "correction_target",
+}
+
+
+def _apply_workflow_step_migrations(
+    definition: dict,
+    workflow: dict,
+) -> None:
+    raw_migrations = workflow.get("step_migration") or {}
+    if not isinstance(raw_migrations, dict):
+        raise ValueError(
+            "workflow.step_migration musi być obiektem."
+        )
+
+    active_step_ids = {
+        str(step.get("id") or "").strip()
+        for step in workflow.get("steps") or []
+        if isinstance(step, dict)
+        and str(step.get("id") or "").strip()
+    }
+
+    migrations: dict[str, str] = {}
+
+    for source, target in raw_migrations.items():
+        source_id = str(source or "").strip()
+        target_id = str(target or "").strip()
+
+        if not source_id or not target_id or source_id == target_id:
+            continue
+
+        # Mapowanie dotyczy wyłącznie etapu, którego nie ma już
+        # w aktualnym grafie.
+        if source_id in active_step_ids:
+            continue
+
+        if target_id not in active_step_ids:
+            raise ValueError(
+                f'Etap docelowy migracji „{target_id}” '
+                f'dla usuniętego etapu „{source_id}” nie istnieje.'
+            )
+
+        migrations[source_id] = target_id
+
+    if not migrations:
+        return
+
+    def resolve_step(value):
+        current = str(value or "").strip()
+        visited: set[str] = set()
+
+        while current in migrations and current not in visited:
+            visited.add(current)
+            current = migrations[current]
+
+        return current
+
+    def remap_workflow_references(value):
+        if isinstance(value, list):
+            for item in value:
+                remap_workflow_references(item)
+            return
+
+        if not isinstance(value, dict):
+            return
+
+        for key, item in list(value.items()):
+            if (
+                key in _WORKFLOW_STEP_REFERENCE_KEYS
+                and isinstance(item, str)
+            ):
+                value[key] = resolve_step(item)
+            else:
+                remap_workflow_references(item)
+
+    def remap_field(field: dict) -> None:
+        availability = field.get("availability")
+
+        if isinstance(availability, list):
+            merged: dict[str, dict] = {}
+            order: list[str] = []
+
+            for raw_entry in availability:
+                if not isinstance(raw_entry, dict):
+                    continue
+
+                entry = dict(raw_entry)
+                step_id = resolve_step(entry.get("step"))
+
+                if not step_id:
+                    continue
+
+                entry["step"] = step_id
+
+                if step_id not in merged:
+                    merged[step_id] = entry
+                    order.append(step_id)
+                    continue
+
+                existing = merged[step_id]
+
+                required = bool(
+                    existing.get("required")
+                    or entry.get("required")
+                )
+                editable = bool(
+                    existing.get("editable")
+                    or entry.get("editable")
+                    or required
+                )
+                visible = bool(
+                    existing.get("visible")
+                    or entry.get("visible")
+                    or editable
+                )
+
+                existing.update(entry)
+                existing["visible"] = visible
+                existing["editable"] = editable
+                existing["required"] = required
+
+            field["availability"] = [
+                merged[step_id]
+                for step_id in order
+            ]
+
+        if isinstance(field.get("stage"), str):
+            field["stage"] = resolve_step(field["stage"])
+
+        for child in field.get("fields") or []:
+            if isinstance(child, dict):
+                remap_field(child)
+
+    remap_workflow_references(workflow)
+
+    for field in definition.get("fields") or []:
+        if isinstance(field, dict):
+            remap_field(field)
 
 def build_form_definition_from_admin_form(
     current_definition: dict,
@@ -295,8 +443,15 @@ def build_form_definition_from_admin_form(
     workflow["decision_settings"] = _workflow_decision_settings(form_data, workflow.get("decision_settings") or [])
     workflow["email_notifications"] = _workflow_email_notifications(form_data, workflow.get("email_notifications") or [])
     workflow = normalizer.normalize(workflow)
+
     if "workflow_initial_step" in form_data:
         workflow["initial_step"] = requested_initial_step
+
+    _apply_workflow_step_migrations(
+        definition,
+        workflow,
+    )
+
     if convert_documents:
         # Convert the submitted graph, not only the fallback definition: a stale
         # builder payload can still contain separate phases (including composites).

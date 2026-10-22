@@ -1,4 +1,6 @@
-from services.workflow_service import WorkflowService
+import pytest
+
+from services.workflow_service import WorkflowService, WorkflowTransitionError
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 
@@ -65,6 +67,19 @@ def workflow_config():
             ],
         }
     }
+
+
+@pytest.mark.parametrize("status", ["AUTO_REJECTED", "RETURNED_FOR_CORRECTION"])
+def test_blocked_qualification_status_cannot_follow_regular_workflow_edge(status):
+    repository = FakeRepository()
+    repository.rows["abc"]["process_status"] = status
+    service = WorkflowService(repository)
+
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("abc", "officer_review")
+
+    assert repository.rows["abc"]["workflow_step"] == "submission"
+    assert repository.events == []
 
 
 def test_resolves_next_step_with_decision():

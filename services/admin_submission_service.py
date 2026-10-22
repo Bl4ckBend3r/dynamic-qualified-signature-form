@@ -170,10 +170,22 @@ def submission_status_label(submission: FormSubmission, form: Form | None = None
 def submission_step_label(submission: FormSubmission, form: Form | None = None) -> str:
     version = getattr(submission, "form_version", None)
     definition = version.definition_json if version else (form.definition_json if form else {})
-    if not (getattr(submission, "workflow_step", None) or getattr(submission, "workflow_stage", None)
-            or ((definition or {}).get("workflow") or {}).get("initial_step")):
+
+    if not (
+        getattr(submission, "workflow_step", None)
+        or getattr(submission, "workflow_stage", None)
+        or ((definition or {}).get("workflow") or {}).get("initial_step")
+    ):
         return "-"
+
     step = current_workflow_step(submission, definition or {})
+
+    if step == "auto_rejected":
+        return workflow_status_label(
+            str(submission.process_status or "AUTO_REJECTED"),
+            definition or {},
+        )
+
     return workflow_status_label(step, definition or {})
 
 

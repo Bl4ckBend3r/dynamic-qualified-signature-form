@@ -11,6 +11,7 @@ from services.admin_submission_service import (
     filter_submissions,
     sort_submissions,
     submission_value,
+    submission_step_label,
 )
 
 
@@ -158,3 +159,13 @@ def test_submission_detail_sections_use_labels_and_formatted_training_snapshot()
     assert {"label": "Imiona", "value": "Anna"} in detail["sections"][0]["items"]
     assert detail["trainings"][0]["price_formatted"] == "1 200,00 zł"
     assert detail["technical_items"]
+
+def test_submission_step_label_handles_auto_rejected_step_without_status_fallback():
+    submission = SimpleNamespace(
+        process_status="AUTO_REJECTED",
+        workflow_step="auto_rejected",
+        workflow_stage="auto_rejected",
+        form_version=None,
+    )
+
+    assert submission_step_label(submission) == "Odrzucony automatycznie"

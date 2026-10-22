@@ -154,7 +154,7 @@
           {% for item in section["items"] %}
           <tr>
             <td class="label">{{ item["label"] }}</td>
-            <td class="value">{{ item["value"] }}</td>
+            <td class="value">{{ item["value"]|pdf_link_html }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -172,7 +172,7 @@
         <div class="consent-title">{{ consent.title }}</div>
         {% endif %}
 
-        <div class="consent-text">{{ consent.text }}</div>
+        <div class="consent-text">{{ consent.text|pdf_link_html }}</div>
 
         {% if consent.accepted_label %}
         <div class="consent-status">

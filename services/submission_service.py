@@ -25,7 +25,11 @@ from services.process_service import OfficerDecision, ProcessStatus, build_initi
 from services.qualification_condition_service import QualificationConditionService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
 from services.submission_attachment_service import SubmissionAttachmentService
-from services.workflow_service import workflow_document_action, workflow_step_document_id
+from services.workflow_service import (
+    WorkflowTransitionError,
+    workflow_document_action,
+    workflow_step_document_id,
+)
 from services.workflow_state_service import final_outcome_for_status
 
 logger = logging.getLogger(__name__)
@@ -595,6 +599,187 @@ class SubmissionService:
             self.audit_log_service.log_event(
                 "PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename}
             )
+
+    def reevaluate_qualification(
+        self,
+        submission_id: str,
+        form_config: dict,
+        *,
+        actor_user_id: int | str | None = None,
+    ) -> dict:
+        submission = self.submission_repository.get_by_id(submission_id)
+
+        if not submission:
+            raise LookupError(f"Nie znaleziono zgłoszenia {submission_id}.")
+
+        stored_data = dict(submission.get("data_json") or {})
+
+        # Do evaluatora przekazujemy dane formularza bez technicznych pól "_*".
+        submission_data = {
+            key: value
+            for key, value in stored_data.items()
+            if not str(key).startswith("_")
+        }
+
+        evaluation = self.qualification_condition_service.evaluate(
+            form_config.get("qualification_conditions"),
+            submission_data,
+            form_config.get("fields") or [],
+        )
+
+        previous_status = str(
+            submission.get("process_status")
+            or ProcessStatus.FORM_SUBMITTED.value
+        )
+        previous_step = str(
+            submission.get("workflow_step")
+            or "submission"
+        )
+
+        self._persist_qualification_result(
+            submission,
+            submission_data,
+            evaluation,
+        )
+
+        failed_conditions = evaluation.get("failed_conditions") or []
+
+        auto_rejected = any(
+            item.get("failure_action") == "auto_reject"
+            for item in failed_conditions
+        )
+
+        requires_officer_decision = any(
+            item.get("failure_action") == "officer_decision"
+            for item in failed_conditions
+        )
+
+        if auto_rejected:
+            if previous_status == ProcessStatus.AUTO_REJECTED.value:
+                # Wynik nadal negatywny, ale nie wykonujemy ponownie
+                # odrzucenia ani nie wysyłamy drugiego maila.
+                outcome = "auto_rejected"
+
+            elif previous_status in {
+                ProcessStatus.FORM_SUBMITTED.value,
+                ProcessStatus.RETURNED_FOR_CORRECTION.value,
+            }:
+                self._auto_reject_submission(
+                    submission,
+                    evaluation,
+                    previous_status=previous_status,
+                    previous_step=previous_step,
+                )
+                outcome = "auto_rejected"
+
+            else:
+                raise WorkflowTransitionError(
+                    "Ponowne sprawdzenie wykazało niespełnienie warunków, "
+                    f"ale zgłoszenie w statusie {previous_status} "
+                    "nie może zostać automatycznie odrzucone."
+                )
+
+        elif requires_officer_decision:
+            if previous_step == "officer_decision":
+                # Zgłoszenie już oczekuje na decyzję urzędnika.
+                # Nie zapisujemy kolejnego identycznego zdarzenia workflow.
+                outcome = "officer_decision"
+
+            elif previous_status in {
+                ProcessStatus.FORM_SUBMITTED.value,
+                ProcessStatus.RETURNED_FOR_CORRECTION.value,
+            }:
+                self._mark_officer_decision_required(
+                    submission,
+                    evaluation,
+                    previous_status=previous_status,
+                    previous_step=previous_step,
+                )
+                outcome = "officer_decision"
+
+            else:
+                raise WorkflowTransitionError(
+                    "Ponowne sprawdzenie wymaga decyzji urzędnika, "
+                    f"ale zgłoszenie w statusie {previous_status} "
+                    "nie może zostać przeniesione do tego etapu."
+                )
+
+        else:
+            outcome = "passed"
+
+            # Jeżeli zgłoszenie oczekiwało na decyzję urzędnika z powodu
+            # warunku kwalifikacyjnego, a ponowne sprawdzenie jest pozytywne,
+            # przywracamy je do standardowego etapu procesu.
+            if (
+                previous_status != ProcessStatus.AUTO_REJECTED.value
+                and previous_step == "officer_decision"
+            ):
+                updates = {
+                    "process_status": ProcessStatus.FORM_SUBMITTED.value,
+                    "workflow_step": "submission",
+                    "workflow_stage": "submission",
+                    "final_outcome": final_outcome_for_status(
+                        ProcessStatus.FORM_SUBMITTED.value
+                    ).value,
+                    "officer_decision": "",
+                    "officer_decision_reason": "",
+                }
+
+                self.submission_repository.update(
+                    submission_id,
+                    updates,
+                )
+                submission.update(updates)
+
+                self.submission_repository.record_workflow_event(
+                    submission_id,
+                    {
+                        "previous_status": previous_status,
+                        "new_status": ProcessStatus.FORM_SUBMITTED.value,
+                        "previous_step": previous_step,
+                        "new_step": "submission",
+                        "actor_role": "admin",
+                        "reason": (
+                            "Ponowne sprawdzenie warunków kwalifikujących: "
+                            "zgłoszenie spełnia aktualne warunki."
+                        ),
+                        "source": "qualification_recheck",
+                    },
+                )
+
+        if self.audit_log_service:
+            self.audit_log_service.log_event(
+                "QUALIFICATION_RECHECKED",
+                submission_id,
+                submission.get("form_slug", ""),
+                old_value=previous_status,
+                new_value=str(
+                    submission.get("process_status")
+                    or previous_status
+                ),
+                metadata={
+                    "actor_user_id": actor_user_id,
+                    "outcome": outcome,
+                    "passed": bool(evaluation.get("passed")),
+                    "failed_conditions": [
+                        {
+                            "id": item.get("id"),
+                            "field_name": item.get("field_name"),
+                            "actual_value": item.get("actual_value"),
+                            "expected_value": item.get("expected_value"),
+                            "failure_action": item.get("failure_action"),
+                        }
+                        for item in failed_conditions
+                    ],
+                },
+            )
+
+        return {
+            "submission_id": submission_id,
+            "passed": bool(evaluation.get("passed")),
+            "outcome": outcome,
+            "evaluation": evaluation,
+        }
 
     def _persist_qualification_result(self, submission: dict, submission_data: dict, evaluation: dict) -> None:
         previous_data = submission.get("data_json") if isinstance(submission.get("data_json"), dict) else {}

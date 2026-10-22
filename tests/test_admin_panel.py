@@ -1928,6 +1928,660 @@ def test_admin_requires_login(admin_client):
     assert "/admin/" in response.location
 
 
+def _qualification_recheck_definition(
+    form_definition,
+    *,
+    failure_action="auto_reject",
+    expected_value="18",
+):
+    definition = json.loads(json.dumps(form_definition))
+    definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [{
+            "id": "recheck-age",
+            "field_name": "wiek",
+            "field_label": "Wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": expected_value,
+            "failure_action": failure_action,
+            "user_message": "Warunek wieku nie został spełniony.",
+            "officer_message": "Wiek poniżej wymaganego progu.",
+            "is_active": True,
+        }],
+    }
+    return definition
+
+
+def test_qualification_recheck_auto_rejects_selected_submission(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="auto_reject",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_auto",
+        name="Recheck Auto",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="recheck-auto-uuid",
+                form_slug="recheck_auto",
+                form_name="Recheck Auto",
+                process_status="FORM_SUBMITTED",
+                workflow_step="submission",
+                workflow_stage="submission",
+                data_json={
+                    "wiek": "17",
+                    "_qualification_history": [],
+                },
+            )
+        )
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    sent = []
+    monkeypatch.setattr(
+        services.mail_dispatch_service,
+        "dispatch_auto_rejected_by_condition",
+        lambda submission_id, evaluation: sent.append(submission_id),
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": ["recheck-auto-uuid"],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id == "recheck-auto-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "AUTO_REJECTED"
+        assert submission.workflow_step == "auto_rejected"
+        assert submission.data_json["_qualification"]["passed"] is False
+        assert len(
+            submission.data_json["_qualification_history"]
+        ) == 1
+
+    assert sent == ["recheck-auto-uuid"]
+
+
+def test_qualification_recheck_routes_submission_to_officer_decision(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="officer_decision",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_officer",
+        name="Recheck Officer",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="recheck-officer-uuid",
+                form_slug="recheck_officer",
+                form_name="Recheck Officer",
+                process_status="FORM_SUBMITTED",
+                workflow_step="submission",
+                workflow_stage="submission",
+                data_json={
+                    "wiek": "17",
+                    "_qualification_history": [],
+                },
+            )
+        )
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": ["recheck-officer-uuid"],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id == "recheck-officer-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "FORM_SUBMITTED"
+        assert submission.workflow_step == "officer_decision"
+        assert "Wiek" in submission.officer_decision_reason
+        assert submission.data_json["_qualification"]["passed"] is False
+
+
+def test_qualification_recheck_passes_submission_waiting_for_officer_decision(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="officer_decision",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_pass_officer",
+        name="Recheck Pass Officer",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="recheck-pass-officer-uuid",
+                form_slug="recheck_pass_officer",
+                form_name="Recheck Pass Officer",
+                process_status="FORM_SUBMITTED",
+                workflow_step="officer_decision",
+                workflow_stage="officer_decision",
+                officer_decision="",
+                officer_decision_reason="Wymagana weryfikacja.",
+                data_json={
+                    "wiek": "36",
+                    "_qualification_history": [{
+                        "passed": False,
+                    }],
+                },
+            )
+        )
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": ["recheck-pass-officer-uuid"],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id
+                == "recheck-pass-officer-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "FORM_SUBMITTED"
+        assert submission.workflow_step == "submission"
+        assert submission.workflow_stage == "submission"
+        assert submission.officer_decision_reason == ""
+        assert submission.data_json["_qualification"]["passed"] is True
+        assert len(
+            submission.data_json["_qualification_history"]
+        ) == 2
+
+
+def test_qualification_recheck_does_not_reopen_auto_rejected_submission(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="auto_reject",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_still_rejected",
+        name="Recheck Still Rejected",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="recheck-still-rejected-uuid",
+                form_slug="recheck_still_rejected",
+                form_name="Recheck Still Rejected",
+                process_status="AUTO_REJECTED",
+                workflow_step="auto_rejected",
+                workflow_stage="auto_rejected",
+                data_json={
+                    "wiek": "36",
+                    "_qualification": {
+                        "passed": False,
+                    },
+                    "_qualification_history": [{
+                        "passed": False,
+                    }],
+                },
+            )
+        )
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    sent = []
+    monkeypatch.setattr(
+        services.mail_dispatch_service,
+        "dispatch_auto_rejected_by_condition",
+        lambda submission_id, evaluation: sent.append(submission_id),
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": ["recheck-still-rejected-uuid"],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id
+                == "recheck-still-rejected-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "AUTO_REJECTED"
+        assert submission.workflow_step == "auto_rejected"
+        assert submission.data_json["_qualification"]["passed"] is True
+        assert len(
+            submission.data_json["_qualification_history"]
+        ) == 2
+
+    assert sent == []
+
+def test_qualification_recheck_does_not_resend_auto_rejection_mail(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="auto_reject",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_already_rejected",
+        name="Recheck Already Rejected",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="recheck-already-rejected-uuid",
+                form_slug="recheck_already_rejected",
+                form_name="Recheck Already Rejected",
+                process_status="AUTO_REJECTED",
+                workflow_step="auto_rejected",
+                workflow_stage="auto_rejected",
+                data_json={
+                    "wiek": "17",
+                    "_qualification": {
+                        "passed": False,
+                    },
+                    "_qualification_history": [{
+                        "passed": False,
+                    }],
+                },
+            )
+        )
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    sent = []
+    monkeypatch.setattr(
+        services.mail_dispatch_service,
+        "dispatch_auto_rejected_by_condition",
+        lambda submission_id, evaluation: sent.append(submission_id),
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": ["recheck-already-rejected-uuid"],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id
+                == "recheck-already-rejected-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "AUTO_REJECTED"
+        assert submission.workflow_step == "auto_rejected"
+        assert submission.data_json["_qualification"]["passed"] is False
+        assert len(
+            submission.data_json["_qualification_history"]
+        ) == 2
+
+    assert sent == []
+
+def test_qualification_recheck_rejects_submission_id_from_another_form(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+        failure_action="auto_reject",
+        expected_value="18",
+    )
+
+    create_user(admin_app)
+
+    form_id = create_form(
+        admin_app,
+        slug="recheck_idor",
+        name="Recheck IDOR",
+        definition_json=definition,
+    )
+
+    create_form(
+        admin_app,
+        slug="recheck_other",
+        name="Other Form",
+        definition_json=definition,
+    )
+
+    session_factory = create_session_factory(
+        admin_app.config["DATABASE_URL"]
+    )
+
+    with session_factory() as db:
+        db.add_all([
+            FormSubmission(
+                submission_id="recheck-local-uuid",
+                form_slug="recheck_idor",
+                form_name="Recheck IDOR",
+                process_status="FORM_SUBMITTED",
+                workflow_step="submission",
+                data_json={
+                    "wiek": "17",
+                    "_qualification_history": [],
+                },
+            ),
+            FormSubmission(
+                submission_id="recheck-foreign-uuid",
+                form_slug="recheck_other",
+                form_name="Other Form",
+                process_status="FORM_SUBMITTED",
+                workflow_step="submission",
+                data_json={
+                    "wiek": "17",
+                    "_qualification_history": [],
+                },
+            ),
+        ])
+        db.commit()
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+            "submission_ids": [
+                "recheck-local-uuid",
+                "recheck-foreign-uuid",
+            ],
+        },
+    )
+
+    assert response.status_code == 403
+
+    with session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.submission_id == "recheck-local-uuid"
+            )
+        ).scalar_one()
+
+        assert submission.process_status == "FORM_SUBMITTED"
+        assert submission.data_json["_qualification_history"] == []
+
+
+def test_qualification_recheck_without_selection_shows_warning(
+    admin_app,
+    admin_client,
+    form_definition,
+    monkeypatch,
+):
+    definition = _qualification_recheck_definition(
+        form_definition,
+    )
+
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_empty",
+        name="Recheck Empty",
+        definition_json=definition,
+    )
+
+    services = admin_app.extensions["services"]
+
+    monkeypatch.setattr(
+        services.form_config_service,
+        "get_form_config",
+        lambda storage, slug: definition,
+    )
+
+    login(admin_client)
+    token = admin_csrf(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": token,
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert (
+        "Nie zaznaczono żadnego zgłoszenia."
+        in response.get_data(as_text=True)
+    )
+
+def test_qualification_recheck_requires_csrf(
+    admin_app,
+    admin_client,
+):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app,
+        slug="recheck_csrf",
+        name="Recheck CSRF",
+    )
+
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "submission_ids": ["csrf-test-submission"],
+        },
+    )
+
+    assert response.status_code == 400
+
+
+def test_qualification_recheck_requires_can_make_decision_permission(
+    admin_app,
+    admin_client,
+):
+    user_id = create_user(
+        admin_app,
+        email="recheck-rbac@example.com",
+        role="form_manager",
+    )
+
+    form_id = create_form(
+        admin_app,
+        slug="recheck_rbac",
+        name="Recheck RBAC",
+    )
+
+    grant_rbac(
+        admin_app,
+        user_id,
+        ["can_view_submissions"],
+        form_id=form_id,
+    )
+
+    login(
+        admin_client,
+        email="recheck-rbac@example.com",
+    )
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/recheck-qualification",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "submission_ids": ["rbac-test-submission"],
+        },
+    )
+
+    assert response.status_code == 403
+
 def test_admin_login(admin_app, admin_client):
     create_user(admin_app)
 
@@ -6952,6 +7606,21 @@ def test_form_edit_renders_tabbed_configuration(admin_app, admin_client):
     assert 'data-form-tab-panel="basic"' in html
     assert 'data-form-tab-select' in html
     assert 'data-active-tab-input' in html
+    for name, expected_type in (
+        ("fields", list),
+        ("documents", list),
+        ("decisions", list),
+        ("mail-choices", list),
+        ("source", dict),
+    ):
+        payload = re.search(
+            rf'<template data-workflow-{name}-json>(.*?)</template>',
+            html,
+            flags=re.DOTALL,
+        )
+        assert payload is not None
+        assert isinstance(json.loads(payload.group(1)), expected_type)
+    assert '<span class="admin-form-header-preview__label" data-header-label>' in html
 
 
 def test_agreement_docx_preview_and_example_pdf_are_stateless_and_form_scoped(admin_app, admin_client, monkeypatch):

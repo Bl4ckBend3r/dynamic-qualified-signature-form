@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
-
 def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "tak", "on"}
 
@@ -117,6 +116,29 @@ class Config:
     FORM_NOTIFICATION_EMAILS = _env_list("FORM_NOTIFICATION_EMAILS")
     FORM_DRAFT_TTL_DAYS = _env_int("FORM_DRAFT_TTL_DAYS", 30, minimum=1, maximum=365)
     FORM_DRAFT_MAX_DATA_BYTES = _env_int("FORM_DRAFT_MAX_DATA_BYTES", 262144, minimum=4096, maximum=1048576)
+    
+    STORAGE_FAILOVER_ENABLED = os.getenv(
+        "STORAGE_FAILOVER_ENABLED",
+        "false",
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    LOCAL_STORAGE_PATH = os.getenv(
+        "LOCAL_STORAGE_PATH",
+        "./data/storage",
+    )
+
+    STORAGE_FAILOVER_RETRY_SECONDS = int(
+        os.getenv(
+            "STORAGE_FAILOVER_RETRY_SECONDS",
+            "30",
+        )
+    )
+    
 
     @classmethod
     def validate(cls) -> None:

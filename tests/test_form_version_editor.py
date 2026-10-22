@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
 import pytest
 from sqlalchemy import select
@@ -592,3 +594,54 @@ def test_published_version_cannot_be_edited_directly(version_editor_app):
         assert v1.definition_json == before_v1
         assert v2.definition_json == before_v2
         assert submission.form_version_id == v1.id
+
+
+def test_workflow_step_migration_accepts_decision_mapping_and_list():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed to check the form editor JavaScript")
+
+    template = (Path(__file__).resolve().parents[1] / "templates/admin/forms/edit.html").read_text(
+        encoding="utf-8"
+    )
+    start = template.index("function resolveWorkflowStepMigration(value) {")
+    end = template.index("let workflowWasEdited =", start)
+    script = "\n".join(
+        (
+            'const workflowStepMigrations = {old_step: "new_step"};',
+            template[start:end],
+            'const workflow = {initial_step: "old_step", steps: [',
+            '  {id: "mapped", decisions: {accepted: "old_step"}},',
+            '  {id: "listed", decisions: [{target_step: "old_step"}]}',
+            '], decision_types: []};',
+            "console.log(JSON.stringify(applyWorkflowStepMigrations(workflow)));",
+        )
+    )
+    completed = subprocess.run(
+        [node], input=script, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    migrated = json.loads(completed.stdout)
+    assert migrated["initial_step"] == "new_step"
+    assert migrated["steps"][0]["decisions"] == {"accepted": "new_step"}
+    assert migrated["steps"][1]["decisions"] == [{"target_step": "new_step"}]
+
+
+def test_form_editor_inline_scripts_are_plain_javascript():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed to check the form editor JavaScript")
+
+    template = (Path(__file__).resolve().parents[1] / "templates/admin/forms/edit.html").read_text(
+        encoding="utf-8"
+    )
+    blocks = re.findall(r"<script>(.*?)</script>", template, flags=re.DOTALL)
+    assert len(blocks) == 2
+    for block in blocks:
+        assert "{{" not in block and "{%" not in block
+        completed = subprocess.run(
+            [node, "--check"], input=block, capture_output=True,
+            text=True, encoding="utf-8", check=False,
+        )
+        assert completed.returncode == 0, completed.stderr

@@ -175,6 +175,147 @@ def _parse_due_at(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+@bp.post("/forms/<int:form_id>/submissions/recheck-qualification")
+@login_required
+def submissions_recheck_qualification(form_id: int):
+    services = current_app.extensions["services"]
+
+    summary = {
+        "checked": 0,
+        "passed": 0,
+        "auto_rejected": 0,
+        "officer_decision": 0,
+        "errors": 0,
+    }
+    errors = []
+
+    with db_session_factory()() as db:
+        form = ensure_form_access(
+            db,
+            form_id,
+            permission="can_make_decision",
+        )
+
+        public_ids = list(
+            dict.fromkeys(
+                value.strip()
+                for value in request.form.getlist("submission_ids")
+                if value.strip()
+            )
+        )
+
+        if not public_ids:
+            flash(
+                "Nie zaznaczono żadnego zgłoszenia.",
+                "warning",
+            )
+            return redirect(
+                request.form.get("next")
+                or url_for(
+                    "admin.submissions_list",
+                    form_id=form_id,
+                )
+            )
+
+        submissions = (
+            db.execute(
+                select(FormSubmission).where(
+                    FormSubmission.form_slug == form.slug,
+                    FormSubmission.submission_id.in_(public_ids),
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        found_ids = {
+            submission.submission_id
+            for submission in submissions
+        }
+
+        invalid_ids = set(public_ids) - found_ids
+
+        if invalid_ids:
+            abort(403)
+        form_config = services.form_config_service.get_form_config(
+            services.storage,
+            form.slug,
+        )
+
+        if not form_config:
+            flash(
+                "Nie udało się wczytać konfiguracji formularza.",
+                "error",
+            )
+            return redirect(
+                request.form.get("next")
+                or url_for(
+                    "admin.submissions_list",
+                    form_id=form_id,
+                )
+            )
+
+        for submission in submissions:
+            try:
+                result = (
+                    services.submission_service.reevaluate_qualification(
+                        submission.submission_id,
+                        form_config,
+                        actor_user_id=g.admin_user.id,
+                    )
+                )
+
+                summary["checked"] += 1
+
+                outcome = result["outcome"]
+
+                if outcome == "passed":
+                    summary["passed"] += 1
+                elif outcome == "auto_rejected":
+                    summary["auto_rejected"] += 1
+                elif outcome == "officer_decision":
+                    summary["officer_decision"] += 1
+
+            except Exception as exc:
+                current_app.logger.exception(
+                    "qualification_recheck_failed submission_id=%s",
+                    submission.submission_id,
+                )
+
+                summary["errors"] += 1
+                errors.append(
+                    f"{submission.submission_id}: {exc}"
+                )
+
+    flash(
+        (
+            f"Ponownie sprawdzono: {summary['checked']}; "
+            f"spełnia warunki: {summary['passed']}; "
+            f"odrzucone automatycznie: "
+            f"{summary['auto_rejected']}; "
+            f"wymaga decyzji: "
+            f"{summary['officer_decision']}; "
+            f"błędy: {summary['errors']}."
+        ),
+        (
+            "success"
+            if summary["errors"] == 0
+            else "warning"
+        ),
+    )
+
+    for error in errors[:10]:
+        flash(error, "warning")
+
+    return redirect(
+        request.form.get("next")
+        or url_for(
+            "admin.submissions_list",
+            form_id=form_id,
+        )
+    )
+
+
 @bp.get("/submissions")
 @login_required
 def submissions_all():

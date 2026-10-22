@@ -15,13 +15,38 @@
     </div>
 
     {% if result.auto_rejected|default(false) %}
-    <div class="result-box result-box--error" role="alert">
-        <p><strong>Zgłoszenie zostało odrzucone automatycznie.</strong></p>
-        <p>{{ result.qualification_message }}</p>
+<section class="qualification-result qualification-result--rejected"
+         role="alert"
+         aria-labelledby="qualification-result-title">
+
+    <div class="qualification-result__icon" aria-hidden="true">!</div>
+
+    <div class="qualification-result__content">
+        <span class="qualification-result__label">
+            Wynik weryfikacji
+        </span>
+
+        <h3 id="qualification-result-title">
+            Zgłoszenie nie spełnia warunków udziału
+        </h3>
+
+        <p>
+            {{ result.qualification_message
+               or "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału." }}
+        </p>
+
+        <div class="qualification-result__status">
+            <span>Status zgłoszenia</span>
+            <strong>Odrzucony automatycznie</strong>
+        </div>
     </div>
-    {% elif result.qualification_message|default('') %}
-    <div class="result-box result-box--completed" role="status"><p>{{ result.qualification_message }}</p></div>
-    {% endif %}
+</section>
+
+{% elif result.qualification_message|default('') %}
+<div class="result-box result-box--completed" role="status">
+    <p>{{ result.qualification_message }}</p>
+</div>
+{% endif %}
 
     <div class="result-grid">
         <div class="result-item">
@@ -189,13 +214,15 @@
 {% block extra_js %}
 {% set credential = result.participant_credential|default(result.access_token|default('')) %}
 {% if credential %}
+<script type="application/json" id="result-session-data">{{ {'submission_id': result.submission_id, 'credential': credential}|tojson }}</script>
 <script>
     try {
+        const resultSessionData = JSON.parse(document.getElementById('result-session-data').textContent);
         sessionStorage.setItem(
-            `participant-access:${window.APP_BASE_PATH}:` + {{ result.submission_id|tojson }},
-            {{ credential|tojson }}
+            `participant-access:${window.APP_BASE_PATH}:` + resultSessionData.submission_id,
+            resultSessionData.credential
         );
-        sessionStorage.setItem(`participant-last-submission:${window.APP_BASE_PATH}`, {{ result.submission_id|tojson }});
+        sessionStorage.setItem(`participant-last-submission:${window.APP_BASE_PATH}`, resultSessionData.submission_id);
     } catch (_) { /* The credential-bearing link still works if storage is unavailable. */ }
 </script>
 {% endif %}

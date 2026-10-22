@@ -704,7 +704,7 @@
         <div class="admin-form-header-preview" data-form-header-preview>
             <div class="admin-form-header-logo admin-align-{{ form.logo_alignment or 'left' }}" data-header-logo-wrap>{% if form.logo_id %}<img class="admin-form-header-logo__image" src="{{ url_for('admin.logo_asset', logo_id=form.logo_id) }}" alt="Podgląd logo" data-header-logo>{% else %}<img class="admin-form-header-logo__image" alt="Podgląd logo" data-header-logo hidden>{% endif %}</div>
             <div class="admin-form-header-logo admin-align-center" data-project-logo-wrap>{% if form.project_logo_id %}<img class="admin-form-header-logo__image" src="{{ url_for('admin.logo_asset', logo_id=form.project_logo_id) }}" alt="Podgląd logo projektu" data-project-logo>{% else %}<img class="admin-form-header-logo__image" alt="Podgląd logo projektu" data-project-logo hidden>{% endif %}</div>
-            <span class="admin-form-header-preview__label" data-header-label style="color: {{ form.label_color }}; background: {{ form.label_background }};">{{ form.label_text or 'Etykieta formularza' }}</span>
+            <span class="admin-form-header-preview__label" data-header-label>{{ form.label_text or 'Etykieta formularza' }}</span>
             <h3 data-header-title>{{ form.title or form.name }}</h3>
             <p>Podgląd nagłówka formularza publicznego</p>
         </div>
@@ -847,7 +847,7 @@
     </template>
     {% endif %}
     <section class="admin-form-tab-panel" id="form-tab-documents" role="tabpanel" data-form-tab-panel="documents" {% if active_tab != 'documents' %}hidden{% endif %}>
-    <div class="admin-section" data-custom-documents>
+    <div class="admin-section" data-custom-documents data-custom-builder-url="{{ url_for('admin.custom_document_builder_view', form_id=form.id, document_id='__ID__') }}">
         <h2>Dodatkowe dokumenty</h2>
         <p>Biblioteka dodatkowych dokumentów. Przypisz dokument do dowolnego aktywnego etapu uczestnika; generowanie i upload mogą działać razem.</p>
         <input type="hidden" name="documents_config_json" data-custom-documents-json>
@@ -1434,9 +1434,17 @@
         <button class="admin-button" type="submit" data-save-form title="Zapisz workflow i pozostałe zmiany">Zapisz zmiany</button>
     </div>
 </form>
+<template data-workflow-fields-json>{{ (workflow_converted_fields if workflow_converted_fields is defined and workflow_converted_fields is not none else form.workflow_editor_fields|default((form.workflow_editor_definition|default(form.definition_json) or {}).get("fields", [])))|tojson }}</template>
+<template data-workflow-documents-json>{{ form.workflow_editor_documents|default([])|tojson }}</template>
+<template data-workflow-decisions-json>{{ workflow_decision_catalog|default([])|tojson }}</template>
+<template data-workflow-mail-choices-json>[{% for item in form.mail_templates if item.is_active %}{{ [item.template_type, item.name]|tojson }}{{ ',' if not loop.last }}{% endfor %}]</template>
+<template data-workflow-source-json>{{ workflow_builder|tojson }}</template>
 <script>
-window.workflowFields = {{ (workflow_converted_fields if workflow_converted_fields is defined and workflow_converted_fields is not none else form.workflow_editor_fields|default((form.workflow_editor_definition|default(form.definition_json) or {}).get("fields", [])))|tojson }};
-window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson }};
+function readWorkflowEditorJson(selector) {
+    return JSON.parse(document.querySelector(selector).content.textContent);
+}
+window.workflowFields = readWorkflowEditorJson('[data-workflow-fields-json]');
+window.workflowDocuments = readWorkflowEditorJson('[data-workflow-documents-json]');
 (() => {
     const root = document.querySelector('[data-custom-documents]');
     if (!root) return;
@@ -1484,7 +1492,7 @@ window.workflowDocuments = {{ form.workflow_editor_documents|default([])|tojson 
             const generated = card.querySelector('[data-custom-field="generate"]').checked;
             card.querySelectorAll('[data-custom-template-control]').forEach(control => { control.hidden = !generated; });
             builder.hidden = !item.id || id !== item.id || !generated;
-            if (!builder.hidden) builder.href = `{{ url_for('admin.custom_document_builder_view', form_id=form.id, document_id='__ID__') }}`.replace('__ID__', encodeURIComponent(id));
+            if (!builder.hidden) builder.href = root.dataset.customBuilderUrl.replace('__ID__', encodeURIComponent(id));
         }
         card.addEventListener('input', () => { updateBuilderLink(); serialize(); });
         card.addEventListener('change', () => { updateBuilderLink(); serialize(); });
@@ -1602,8 +1610,8 @@ document.querySelectorAll('[data-mail-recipient]').forEach(section => {
         section.querySelector('[data-mail-recipient-fields]').hidden = event.target.value !== 'repeatable_group';
     });
 });
-window.workflowDecisionCatalog = {{ workflow_decision_catalog|default([])|tojson }};
-window.workflowMailChoices = [{% for item in form.mail_templates if item.is_active %}{{ [item.template_type, item.name]|tojson }}{{ ',' if not loop.last }}{% endfor %}];
+window.workflowDecisionCatalog = readWorkflowEditorJson('[data-workflow-decisions-json]');
+window.workflowMailChoices = readWorkflowEditorJson('[data-workflow-mail-choices-json]');
 </script>
 <script src="{{ url_for('static', filename='js/workflow_stage_editor.js') }}"></script>
 <script>
@@ -2040,7 +2048,7 @@ const workflowStepTemplate = document.querySelector("[data-workflow-step-templat
 const workflowDecisionTemplate = document.querySelector("[data-workflow-decision-template]");
 const workflowBuilderInput = workflowBuilder?.querySelector("[data-workflow-builder-json]");
 const workflowInitialSelect = workflowBuilder?.querySelector("[data-workflow-initial]");
-let workflowSource = {{ workflow_builder|tojson }};
+let workflowSource = readWorkflowEditorJson('[data-workflow-source-json]');
 const workflowStepMigrations = {
     ...(workflowSource.step_migration || {}),
 };
@@ -2093,9 +2101,17 @@ function applyWorkflowStepMigrations(workflow) {
             remap(transition, "next");
         });
 
-        (step.decisions || []).forEach((decision) => {
-            remap(decision, "target_step");
-        });
+        if (Array.isArray(step.decisions)) {
+            step.decisions.forEach((decision) => {
+                remap(decision, "target_step");
+            });
+        } else if (step.decisions && typeof step.decisions === "object") {
+            Object.keys(step.decisions).forEach((label) => {
+                step.decisions[label] = resolveWorkflowStepMigration(
+                    step.decisions[label]
+                );
+            });
+        }
 
         (step.options || []).forEach((option) => {
             remap(option, "target_step");

@@ -42,9 +42,20 @@
     <input type="hidden" name="compose" value="1">
 </form>
 <form id="bulk-office-agreements-form" method="post" action="{{ url_for('admin.check_office_signed_agreements_bulk', form_id=form.id) }}">
+
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-office-agreement-selection></div>
+</form>
+<form
+    id="bulk-qualification-recheck-form"
+    method="post"
+    action="{{ url_for('admin.submissions_recheck_qualification', form_id=form.id) }}"
+    data-admin-confirm-message="Czy ponownie sprawdzić warunki kwalifikujące dla zaznaczonych zgłoszeń?"
+>
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div data-qualification-recheck-selection></div>
 </form>
 <form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
@@ -58,6 +69,17 @@
 {% if can_select_rows %}<div class="admin-bulk-actions admin-submission-bulk" aria-label="Akcje dla zaznaczonych zgłoszeń">
     <span class="admin-submission-bulk__count" aria-live="polite">Zaznaczono: <strong data-selected-count>0</strong></span>
     <div class="admin-submission-bulk__controls">
+        {% if can_make_decision %}
+            <button
+                class="admin-button-secondary compact"
+                type="submit"
+                form="bulk-qualification-recheck-form"
+                data-qualification-recheck-button
+                disabled
+            >
+                Sprawdź warunki ponownie
+            </button>
+        {% endif %}
         {% if can_assign_submissions %}<select name="assigned_to_user_id" form="bulk-assignment-form" aria-label="Prowadzący"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select><input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany" aria-label="Powód zmiany prowadzącego"><button class="admin-button-secondary compact" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz</button>{% endif %}
         {% if can_send_email %}<button class="admin-button-secondary compact" type="submit" form="bulk-mail-form" data-mail-button disabled>Wyślij mail</button>{% endif %}
         {% if can_sign_office_agreement %}<button class="admin-button-secondary compact" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź podpisy urzędu</button>{% endif %}
@@ -199,6 +221,12 @@ document.addEventListener("DOMContentLoaded", function () {
     const officeAgreementSelection = document.querySelector("[data-office-agreement-selection]");
     const assignmentButton = document.querySelector("[data-assignment-button]");
     const assignmentSelection = document.querySelector("[data-assignment-selection]");
+    const qualificationRecheckButton = document.querySelector(
+        "[data-qualification-recheck-button]"
+    );
+    const qualificationRecheckSelection = document.querySelector(
+        "[data-qualification-recheck-selection]"
+    );
 
     function syncDeleteButton() {
         const selected = Array.from(checks).filter(item => item.checked);
@@ -230,6 +258,21 @@ document.addEventListener("DOMContentLoaded", function () {
                 input.name = "submission_ids";
                 input.value = item.value;
                 officeAgreementSelection.appendChild(input);
+            });
+        }
+        if (qualificationRecheckButton) {
+            qualificationRecheckButton.disabled = selected.length === 0;
+        }
+
+        if (qualificationRecheckSelection) {
+            qualificationRecheckSelection.innerHTML = "";
+
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_ids";
+                input.value = item.value;
+                qualificationRecheckSelection.appendChild(input);
             });
         }
         if (assignmentButton) assignmentButton.disabled = selected.length === 0;

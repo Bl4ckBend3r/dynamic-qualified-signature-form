@@ -1,7 +1,19 @@
 import re
+from pathlib import Path
+
+import pytest
 
 
 FORM_URL = "/submit/formularz_zgloszeniowy"
+
+
+@pytest.fixture(autouse=True)
+def _stub_form_pdf(monkeypatch):
+    """These tests cover submission flow; PDF rendering has separate tests."""
+    monkeypatch.setattr(
+        "services.submission_service.generate_pdf",
+        lambda app, template_name, context, output_path: Path(output_path).write_bytes(b"%PDF-1.4\n"),
+    )
 
 
 def _prepare(data):
@@ -215,6 +227,86 @@ def test_failed_qualification_saves_submission_and_sets_auto_rejected(app, clien
     assert sent[0][0] == row["submission_id"]
     assert sent[0][1]["passed"] is False
     assert sent[1] == ("received", row["submission_id"])
+
+
+def test_auto_rejected_result_shows_default_message_once(app, client, valid_form_data):
+    app.testing_storage.form_definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [{
+            "id": "age-condition",
+            "field_name": "wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "99",
+            "failure_action": "auto_reject",
+            "is_active": True,
+        }],
+    }
+    default_message = "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
+    with client.session_transaction() as session:
+        session["_flashes"] = [("info", default_message)]
+
+    response = client.post(FORM_URL, data=_prepare(valid_form_data))
+
+    assert response.status_code == 200
+    assert "Odrzucenie zgłoszenia".encode() in response.data
+    assert response.data.count(default_message.encode()) == 1
+    assert app.testing_storage.csv_rows[0]["process_status"] == "AUTO_REJECTED"
+
+
+def test_auto_rejected_result_shows_custom_message_once(app, client, valid_form_data):
+    custom_message = "Nie spełniasz wymaganych kryteriów udziału w projekcie."
+    app.testing_storage.form_definition["qualification_conditions"] = {
+        "enabled": True,
+        "conditions": [{
+            "id": "age-condition",
+            "field_name": "wiek",
+            "operator": "greater_than_or_equal",
+            "expected_value": "99",
+            "failure_action": "auto_reject",
+            "user_message": custom_message,
+            "is_active": True,
+        }],
+    }
+    with client.session_transaction() as session:
+        session["_flashes"] = [("info", custom_message), ("info", "Osobna informacja.")]
+
+    response = client.post(FORM_URL, data=_prepare(valid_form_data))
+
+    assert response.status_code == 200
+    assert response.data.count(custom_message.encode()) == 1
+    assert response.data.count("Osobna informacja.".encode()) == 1
+    assert "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.".encode() not in response.data
+
+
+def test_successful_submission_result_keeps_normal_content(app, client, valid_form_data):
+    response = client.post(FORM_URL, data=_prepare(valid_form_data))
+
+    assert response.status_code == 200
+    assert "Formularz zgłoszeniowy".encode() in response.data
+    assert "Identyfikator zgłoszenia".encode() in response.data
+    assert "Status PDF".encode() in response.data
+    assert "Odrzucenie zgłoszenia".encode() not in response.data
+    assert app.testing_storage.csv_rows[0]["process_status"] != "AUTO_REJECTED"
+
+
+@pytest.mark.parametrize("qualification_message", ["", "Nie spełniasz wymaganych kryteriów udziału w projekcie."])
+def test_auto_rejected_template_uses_one_primary_message(app, qualification_message):
+    from flask import render_template
+
+    message = "Nie spełniasz wymaganych kryteriów udziału w projekcie."
+    result = {
+        "auto_rejected": True,
+        "qualification_message": qualification_message,
+        "message": message,
+        "can_continue": False,
+        "form_title": "Formularz zgłoszeniowy",
+        "submission_id": "example-id",
+    }
+    with app.test_request_context("/"):
+        html = render_template("result.html", result=result)
+
+    assert html.count(message) == 1
+
 
 def test_failed_qualification_requiring_officer_decision_still_sends_submission_received(
     app,

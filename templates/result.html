@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% set auto_rejected = result.auto_rejected|default(false) %}
+{% set qualification_message = result.qualification_message|default('', true) %}
+{% set result_primary_message = (qualification_message or result.message|default('', true) or "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.") if auto_rejected else qualification_message %}
 
 {% block title %}Potwierdzamy Twoje zgłoszenie{% endblock %}
 
@@ -14,7 +17,7 @@
 
     </div>
 
-    {% if result.auto_rejected|default(false) %}
+    {% if auto_rejected %}
 <section class="qualification-result qualification-result--rejected"
          role="alert"
          aria-labelledby="qualification-result-title">
@@ -27,12 +30,11 @@
         </span>
 
         <h3 id="qualification-result-title">
-            Zgłoszenie nie spełnia warunków udziału
+            Odrzucenie zgłoszenia
         </h3>
 
         <p>
-            {{ result.qualification_message
-               or "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału." }}
+            {{ result_primary_message }}
         </p>
 
         <div class="qualification-result__status">
@@ -42,9 +44,9 @@
     </div>
 </section>
 
-{% elif result.qualification_message|default('') %}
+{% elif result_primary_message %}
 <div class="result-box result-box--completed" role="status">
-    <p>{{ result.qualification_message }}</p>
+    <p>{{ result_primary_message }}</p>
 </div>
 {% endif %}
 

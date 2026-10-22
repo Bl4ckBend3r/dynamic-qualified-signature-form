@@ -17,9 +17,16 @@
         <main class="site-main">
             <div class="container">
                 {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
+                    {# A result page already displays its primary message inside the result card. #}
+                    {% set visible_flashes = namespace(items=[]) %}
+                    {% for category, message in messages %}
+                        {% if not result_primary_message|default('') or message != result_primary_message %}
+                            {% set visible_flashes.items = visible_flashes.items + [(category, message)] %}
+                        {% endif %}
+                    {% endfor %}
+                    {% if visible_flashes.items %}
                         <div class="flash-stack">
-                            {% for category, message in messages %}
+                            {% for category, message in visible_flashes.items %}
                                 <div class="flash flash-{{ category }}">{{ message }}</div>
                             {% endfor %}
                         </div>

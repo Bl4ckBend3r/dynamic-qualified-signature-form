@@ -404,8 +404,8 @@ def test_show_result_for_existing_submission(client, app, valid_form_data, monke
     assert response.status_code == 200
     assert submission_id in html
     assert "Formularz" in html
-    assert '<h2>Potwierdzamy Twoje zgłoszenie</h2>' in html
-    assert 'Zapisaliśmy Twoje zgłoszenie.' in html
+    assert '<h2>Potwierdzamy przesłanie Twojego zgłoszenia</h2>' in html
+    assert 'Status PDF' in html
 
 
 def test_show_result_does_not_render_stored_access_token(client, app, valid_form_data, monkeypatch):

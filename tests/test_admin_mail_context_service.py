@@ -55,11 +55,11 @@ def test_office_signed_agreements_are_used_in_final_agreement_mail_list():
             "document_type": "agreement_signed_by_office",
             "signed": True,
         }],
-        document_url_builder=lambda item, filename: f"/download/{filename}",
+        document_url_builder=lambda item, filename: f"https://example.org/download/{filename}",
     )
 
     assert "final-python.pdf" in context["signed_agreements_list"]
-    assert "/download/final-python.pdf" in context["signed_agreements_list"]
+    assert "https://example.org/download/final-python.pdf" in context["signed_agreements_list"]
 
 
 def test_render_and_preview_mail_context_defaults():

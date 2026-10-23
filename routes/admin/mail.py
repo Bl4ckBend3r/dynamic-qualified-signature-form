@@ -47,7 +47,7 @@ MAIL_TEMPLATE_LABELS = {
     "confirmation": "Złożenie wniosku",
     "accepted": "Akceptacja",
     "rejected": "Odrzucenie",
-    "auto_rejected_by_condition": "Automatyczne odrzucenie",
+    "auto_rejected_by_condition": "Odrzucenie zgłoszenia",
     "correction_required": "Wysłanie do poprawy",
     "returned_for_correction": "Wysłanie do poprawy",
     "declaration_ready": "Deklaracja gotowa",

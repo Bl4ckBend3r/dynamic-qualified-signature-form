@@ -13,7 +13,7 @@ from flask import Blueprint, Flask
 from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, Text, create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, Form, FormField, FormSubmission, FormVersion, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
+from models import Base, Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from routes import documents as document_routes
 from routes import public_forms
 from routes.participant_access import resolve_participant_submission_access
@@ -93,6 +93,26 @@ def _seed_active_versioned_submission(db, service, *, status="SUBMITTED"):
     db.add(submission)
     db.flush()
     return form, first, submission
+
+
+def test_publishing_freezes_mail_footer_per_form_version(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db)
+        footer = MailFooter(form_id=form.id, name="Stopka", html_body="Stara stopka",
+                            is_default=True, is_active=True)
+        db.add(footer)
+        db.flush()
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        first_id = first.id
+        draft = service.clone_to_draft(db, form, first, actor_id=None)
+        footer.html_body = "Nowa stopka"
+        service.publish(db, form, draft, actor_id=None)
+        draft_id = draft.id
+    with Session() as db:
+        assert db.get(FormVersion, first_id).definition_json["mail_footer"]["html_body"] == "Stara stopka"
+        assert db.get(FormVersion, draft_id).definition_json["mail_footer"]["html_body"] == "Nowa stopka"
 
 
 def test_publish_upgrades_active_submissions_and_records_only_metadata(tmp_path):

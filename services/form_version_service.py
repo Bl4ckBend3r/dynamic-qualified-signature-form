@@ -7,7 +7,7 @@ from typing import Iterable, Mapping
 
 from sqlalchemy import func, select
 
-from models import Form, FormField, FormSubmission, FormVersion, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
+from models import Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.admin_form_service import sync_form_fields, validate_admin_form_config
 from services.compliance_service import ComplianceError, ComplianceService
 
@@ -157,6 +157,26 @@ class FormVersionService:
         }
         return definition
 
+    @staticmethod
+    def snapshot_mail_footer(db, form_id: int) -> dict | None:
+        """Freeze the selected footer content with the form version."""
+        footers = db.execute(
+            select(MailFooter).where(MailFooter.form_id == form_id, MailFooter.is_active.is_(True))
+            .order_by(MailFooter.is_default.desc(), MailFooter.id)
+        ).scalars().all()
+        footer = next((item for item in footers if not item.use_global), None)
+        if footer is None:
+            footer = db.execute(
+                select(MailFooter).where(MailFooter.form_id.is_(None), MailFooter.is_active.is_(True))
+                .order_by(MailFooter.is_default.desc(), MailFooter.id)
+            ).scalars().first()
+        if footer is None:
+            return None
+        return {key: deepcopy(getattr(footer, key)) for key in (
+            "name", "html_body", "contact_html", "links", "legal_text", "logo_id", "logo_path",
+            "logo_alignment", "logo_width", "logo_height", "logo_position",
+        )}
+
     def apply_to_legacy_editor(self, db, form: Form, definition: dict) -> None:
         snapshot = deepcopy(definition or {})
         metadata = snapshot.get("_form_metadata") if isinstance(snapshot.get("_form_metadata"), dict) else {}
@@ -220,6 +240,9 @@ class FormVersionService:
             ),
         )
         db.add(version)
+        snapshot = deepcopy(version.definition_json)
+        snapshot["mail_footer"] = self.snapshot_mail_footer(db, form.id)
+        version.definition_json = snapshot
         db.flush()
         if status == FORM_VERSION_PUBLISHED:
             try:
@@ -332,6 +355,10 @@ class FormVersionService:
             errors.append("Wersja nie zawiera pól formularza.")
         if errors:
             raise FormVersionValidationError(errors)
+
+        definition = deepcopy(version.definition_json or {})
+        definition["mail_footer"] = self.snapshot_mail_footer(db, form.id)
+        version.definition_json = definition
 
         try:
             ComplianceService().freeze_form_version(db, form, version, actor_id=actor_id)

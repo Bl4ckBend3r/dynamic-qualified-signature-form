@@ -313,7 +313,7 @@ def test_document_fields_and_real_signature(composite_env, participant_page, sig
     page.on('pageerror', lambda error: errors.append(str(error)))
     try:
         page.goto(f"http://127.0.0.1:{server.server_port}/do-podpisania?submission_id={env.public_id}&token={env.row()['access_token']}")
-        expect(page.get_by_role('heading', name='Deklaracja uczestnictwa i wybór szkoleń')).to_be_visible()
+        expect(page.get_by_role('heading', name='Deklaracja uczestnictwa')).to_be_visible()
         assert page.locator('[data-document-upload]').count() == 0
         page.locator('[name="deklaracja_18_lat"][value="Tak"]').check()
         page.locator('[name="wybor_szkolen"][value="course-a"]').check()

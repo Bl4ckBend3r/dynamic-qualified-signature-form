@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import csv
 from io import BytesIO
 from io import StringIO
@@ -1574,11 +1573,11 @@ def _send_stage_rollback_email(db, form, submission, reason: str, target_status:
             ),
         },
         extra_context={
-            "rollback_reason": html.escape(reason),
+            "rollback_reason": reason,
             "rollback_reason_text": reason,
             "rollback_status": target_status,
             "rollback_status_label": admin_status_label(target_status, form),
-            "rollback_next_action": html.escape(next_action),
+            "rollback_next_action": next_action,
             "rollback_next_action_text": next_action,
         },
     )
@@ -1890,7 +1889,7 @@ def _notify_beneficiary_agreement_decision(
         ),
     },
     extra_context={
-        "agreement_decision_reason": html.escape(decision_record.justification or ""),
+        "agreement_decision_reason": decision_record.justification or "",
         "agreement_decision_reason_text": decision_record.justification or "",
         "signed_agreement_download_link": signed_link,
         "signed_agreement_filename": signed_filename,

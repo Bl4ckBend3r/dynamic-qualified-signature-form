@@ -4,6 +4,8 @@ from decimal import Decimal
 from html import escape
 from typing import Any, Mapping
 
+from markupsafe import Markup
+
 from services.training_catalog_service import TrainingCatalogService
 from services.training_service import (
     build_training_availability,
@@ -60,13 +62,13 @@ def build_training_mail_context(
     )
 
     return {
-        "available_trainings": available_table,
-        "available_trainings_table": available_table,
-        "available_trainings_list": available_list,
+        "available_trainings": Markup(available_table),
+        "available_trainings_table": Markup(available_table),
+        "available_trainings_list": Markup(available_list),
         "available_trainings_text": available_text,
         "available_trainings_list_text": available_text,
-        "selected_trainings_table": selected_table,
-        "selected_trainings_list": selected_list,
+        "selected_trainings_table": Markup(selected_table),
+        "selected_trainings_list": Markup(selected_list),
         "selected_trainings_text": selected_text,
         "selected_trainings_count": len(selected_items),
         "trainings_total_price": format_price_pln(selected_total),

@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import select
 
 from services.mail_dispatch_service import MailDispatchRequest, MailDispatchService
+from services.mail_template_service import html_to_text, render_platform_mail_html, render_platform_mail_text
 from database import create_session_factory
-from models import EmailLog, Form, FormSubmission, FormVersion
+from models import EmailLog, Form, FormSubmission, FormVersion, MailFooter
 from test_admin_panel import admin_app, create_form
 
 
@@ -23,6 +24,23 @@ def test_render_subject_body_and_fallbacks():
     assert service.render_subject("Temat {{ id }}", {"id": "abc"}) == "Temat abc"
     assert service.render_body(None, {"id": "abc"}, fallback="Body {{ id }}") == "Body abc"
     assert service.render_subject(None, {}, fallback="Fallback") == "Fallback"
+
+
+def test_mail_renderer_escapes_values_and_keeps_structured_plain_text():
+    template = SimpleNamespace(content_title="Powiadomienie", html_body=(
+        '<p>{{ user_value }}</p><a href="{{ unsafe_url }}">Otwórz</a>'),
+        body_text="Otrzymano dane: {{ user_value }}")
+    context = {"user_value": "<script>alert(1)</script>", "unsafe_url": "javascript:alert(1)",
+               "mail_details": (("Numer zgłoszenia", "ABC"),),
+               "mail_documents": ["deklaracja.pdf", "umowa.pdf"]}
+    html_body = render_platform_mail_html(template, context)
+    text_body = render_platform_mail_text(template, context)
+    assert "<script>" not in html_body
+    assert "javascript:" not in html_body
+    assert "&lt;script&gt;" in html_body
+    assert "<script>" not in text_body
+    assert "Dane zgłoszenia:\nNumer zgłoszenia: ABC" in text_body
+    assert "Dokumenty:\n- deklaracja.pdf\n- umowa.pdf" in text_body
 
 
 def test_build_footer_handles_missing_footer_and_logo():
@@ -366,6 +384,63 @@ def test_new_submission_notice_is_per_form_version_and_idempotent(admin_app):
     assert len(sent) == 2
 
 
+def test_notice_uses_historical_version_footer_in_html_and_text(admin_app):
+    form_id, public_id = _seed_new_submission_notice(
+        admin_app, "historical-footer", enabled=True, recipient="office@example.org")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == public_id)).scalar_one()
+        version = submission.form_version
+        version.definition_json = {
+            **version.definition_json,
+            "mail_footer": {"html_body": "<p>Historyczna stopka &amp; kontakt</p>",
+                            "links": [{"label": "Pomoc", "url": "https://example.org/pomoc"}]},
+        }
+        db.add(MailFooter(form_id=form_id, name="Nowa stopka", html_body="Nowa treść",
+                          is_default=True, is_active=True))
+        db.commit()
+    sent = []
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.app_context():
+        assert dispatcher.dispatch_new_submission_notification(public_id).sent
+    html_body, text_body = sent[0]["html_body"], sent[0]["text_body"]
+    assert "Historyczna stopka &amp; kontakt" in html_body
+    assert "Historyczna stopka & kontakt" in text_body
+    assert "https://example.org/pomoc" in html_body
+    assert "https://example.org/pomoc" in text_body
+    assert "Nowa treść" not in html_body + text_body
+    assert text_body.strip().endswith("https://example.org/pomoc)")
+
+
+def test_formatted_training_notice_has_matching_action_and_submission_details(admin_app):
+    form_id, public_id = _seed_new_submission_notice(
+        admin_app, "training-notice", enabled=False, recipient="office@example.org")
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    sent = []
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with admin_app.app_context(), factory() as db:
+        form = db.get(Form, form_id)
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == public_id)).scalar_one()
+        result = dispatcher.dispatch_formatted_notice(
+            db=db, form=form, submission=submission,
+            event_type="training_attendance_invitation", recipient="user@example.org",
+            subject="Potwierdź obecność", title="Potwierdzenie obecności",
+            message="Potwierdź obecność na szkoleniu A.",
+            action_text="Otwórz link i potwierdź obecność.",
+            action_url="https://example.org/obecnosc/abc",
+            action_link_label="Potwierdź obecność")
+        assert result.sent
+    assert "Potwierdź obecność na szkoleniu A." in sent[0]["html_body"]
+    assert "Potwierdź obecność na szkoleniu A." in sent[0]["text_body"]
+    assert public_id in sent[0]["html_body"] and public_id in sent[0]["text_body"]
+    assert "https://example.org/obecnosc/abc" in sent[0]["html_body"]
+    assert "https://example.org/obecnosc/abc" in sent[0]["text_body"]
+
+
 def _seed_document_notice(app, slug, *, enabled=True, selected=None):
     definition = {
         "title": f"Formularz {slug}", "fields": [],
@@ -451,6 +526,9 @@ def test_document_notice_uses_versioned_workflow_filters_and_file_log(admin_app)
     assert sent[0]["to_emails"] == ["office@example.org"]
     assert "Etap workflow: Deklaracja" in sent[0]["text_body"]
     assert "Dokument: Deklaracja uczestnika" in sent[0]["text_body"]
+    assert "Dokumenty:\n- Deklaracja uczestnika" in sent[0]["text_body"]
+    assert "<h2" in sent[0]["html_body"] and "Dokumenty" in sent[0]["html_body"]
+    assert "<p>" not in sent[0]["text_body"]
     assert "Data wpływu: 22.10.2026, 14:32:00" in sent[0]["text_body"]
     assert "private-token-123" not in str(sent)
     assert "output/" not in str(sent)
@@ -533,7 +611,7 @@ def test_new_submission_notice_uses_persisted_time_in_warsaw(admin_app, submitte
         assert dispatcher.dispatch_new_submission_notification(public_id).sent
 
     assert f"Data wpływu: {expected}" in sent[0]["text_body"]
-    assert f"Data wpływu: {expected}" in sent[0]["html_body"]
+    assert f"Data wpływu: {expected}" in html_to_text(sent[0]["html_body"])
 
 
 def test_new_submission_creation_persists_full_utc_timestamp(admin_app):

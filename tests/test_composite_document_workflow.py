@@ -93,7 +93,7 @@ def composite_env(admin_app, monkeypatch):
 
 def configure_document_fields(env):
     document = env.definition['documents'][0]
-    document.update(label='Deklaracja uczestnictwa i wybór szkoleń', form_title='Deklaracja uczestnictwa i wybór szkoleń',
+    document.update(label='Deklaracja uczestnictwa', form_title='Deklaracja uczestnictwa',
         fields=[{'name': 'deklaracja_18_lat', 'label': 'Ukończyłem 18 lat', 'type': 'radio', 'options': ['Tak', 'Nie'], 'required': True},
             {'name': 'wybor_szkolen', 'label': 'Wybór szkoleń', 'type': 'training_selection', 'required': True,
              'max_total_amount': '2000', 'catalog': [{'id': 'course-a', 'name': 'Szkolenie A', 'price': '100', 'capacity': 10}]},

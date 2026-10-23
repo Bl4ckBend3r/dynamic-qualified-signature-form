@@ -140,7 +140,7 @@ def test_composite_mail_links_and_preview_use_recipient_context(record_mail_env,
         with env.repo.session_factory() as db:
             template = db.get(MailTemplate, env.template_id)
             assert render_template_text(template.subject, context) == call['subject']
-            assert render_platform_mail_text(template, context) == call['text_body']
+            assert call['text_body'].startswith(render_platform_mail_text(template, context))
     assert 'missing_special_link=document_url' in caplog.text
     assert 'secret-submission-wide-token' not in caplog.text
     assert all('secret-submission-wide-token' not in log.html_body for log in env.logs())

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 from datetime import datetime
+from html import escape
+
+from markupsafe import Markup
 
 from services.mail_template_service import build_mail_context as build_platform_mail_context
 from services.mail_template_service import render_template_text
@@ -129,9 +132,12 @@ def build_mail_context(
                     link = str(document_url_builder(submission, filename) or "")
                 except Exception:
                     link = ""
-            signed_rows.append(f'<li><a href="{link}">{filename}</a></li>' if link else f"<li>{filename}</li>")
-            signed_text.append(f"- {filename}" + (f": {link}" if link else ""))
-        context["signed_agreements_list"] = "<ul>" + "".join(signed_rows) + "</ul>" if signed_rows else ""
+            safe_link = link if link.lower().startswith(("https://", "http://")) else ""
+            signed_rows.append(
+                f'<li><a href="{escape(safe_link, quote=True)}">{escape(filename)}</a></li>'
+                if safe_link else f"<li>{escape(filename)}</li>")
+            signed_text.append(f"- {filename}" + (f": {safe_link}" if safe_link else ""))
+        context["signed_agreements_list"] = Markup("<ul>" + "".join(signed_rows) + "</ul>") if signed_rows else ""
         context["signed_agreements_table"] = context["signed_agreements_list"]
         context["signed_agreements_text"] = "\n".join(signed_text)
         context.setdefault("signed_agreement_filename", str(getattr(submission, "agreement_signed_filename", "") or ""))

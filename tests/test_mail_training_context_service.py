@@ -5,6 +5,7 @@ from services.mail_training_context_service import (
     build_training_mail_context,
     find_training_field,
 )
+from services.mail_template_service import render_platform_mail_html
 from services.training_availability_service import TrainingAvailabilityService
 
 
@@ -123,6 +124,13 @@ def test_available_trainings_support_multiple_items_and_escape_configuration_htm
     assert "&lt;b&gt;Nieufny opis&lt;/b&gt;" in context["available_trainings_list"]
     assert "1 000,00 zł" in context["available_trainings_text"]
     assert "2. Python" in context["available_trainings_text"]
+    context["untrusted_value"] = "<img src=x onerror=alert(1)>"
+    rendered = render_platform_mail_html(SimpleNamespace(
+        name="Szkolenia", html_body="{{ available_trainings_table }}<p>{{ untrusted_value }}</p>"), context)
+    assert "<table" in rendered
+    assert "&lt;table" not in rendered
+    assert "<script>" not in rendered and "<img" not in rendered
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
 
 
 def test_selected_training_formats_use_submission_snapshot_and_catalog_availability():

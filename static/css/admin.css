@@ -1777,7 +1777,7 @@ body.admin-modal-open {
   margin: 0;
   padding: 0.8rem;
   border-radius: 10px;
-  background: #f2f5f9;
+  background: var(--shadow-color);
 }
 
 .admin-file-button {

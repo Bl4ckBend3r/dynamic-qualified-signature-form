@@ -24,7 +24,7 @@ from services.footer_logo_service import (
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
 from services.mail_recipient_service import MailRecipientResolver
-from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
+from services.mail_template_service import html_to_text, render_platform_mail_html, render_platform_mail_text, render_template_text
 from services.training_availability_service import TrainingAvailabilityService
 
 
@@ -272,6 +272,66 @@ class MailDispatchService:
         separator = "\n" if content_html else ""
         return f'<div style="margin-bottom:16px;">{logo_html}</div>' + separator + content_html
 
+    def _footer_for_submission(self, db, *, form, submission, event_type):
+        version = getattr(submission, "form_version", None)
+        if version is not None:
+            snapshot = (version.definition_json or {}).get("mail_footer")
+            return SimpleNamespace(**snapshot) if isinstance(snapshot, dict) else None
+        return self.mail_footer_resolver.resolve(db, mail_type=event_type, form=form, submission=submission)
+
+    def _render_submission_message(self, db, *, form, submission, template, context, event_type):
+        if "mail_documents" not in context:
+            document = (context.get("document_label") or context.get("signed_agreement_filename")
+                        or context.get("signed_filename"))
+            if document:
+                context = {**context, "mail_documents": [str(document)]}
+        footer = self._footer_for_submission(db, form=form, submission=submission, event_type=event_type)
+        footer_logo_url, footer_images = self.footer_logo_for_email(db, footer)
+        footer_html = render_template_text(
+            self.build_footer(footer, logo_url=footer_logo_url), context, escape_html=True)
+        layout = self._layout_for_db(db)
+        if footer:
+            layout = {**layout, "footer_html": ""}
+        layout_footer = render_template_text(
+            str(layout.get("footer_html") or ""), context, escape_html=True)
+        footer_text = html_to_text("\n".join(part for part in (layout_footer, footer_html) if part), preserve_links=True)
+        platform_name = str(layout.get("platform_name") or "").strip()
+        if platform_name:
+            footer_text = "\n".join(part for part in (platform_name, footer_text) if part)
+        html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
+        text_body = render_platform_mail_text(template, context, footer_text=footer_text)
+        return html_body, text_body, footer, self._inline_images_from_layout(layout) + footer_images
+
+    def dispatch_formatted_notice(self, *, db, form, submission, event_type, recipient,
+                                  subject, title, message, sent_by_id=None,
+                                  action_text="", action_url="", action_link_label=""):
+        """Render a plain event notice through the same submission mail layout."""
+        context = self.build_context_for_submission(form, submission, [])
+        version = getattr(submission, "form_version", None)
+        definition = (version.definition_json if version else {}) or {}
+        event_at = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Warsaw")).strftime("%d.%m.%Y, %H:%M:%S")
+        context.update(
+            form_name=str(definition.get("title") or form.title or form.name),
+            mail_details=(("Numer zgłoszenia", submission.submission_id),
+                          ("Formularz", str(definition.get("title") or form.title or form.name)),
+                          ("Data", event_at)),
+            mail_action_text=action_text,
+            mail_action_url=action_url,
+            mail_action_link_label=action_link_label,
+        )
+        template = SimpleNamespace(
+            content_title=title,
+            html_body="<p>" + escape(message).replace("\n", "<br>") + "</p>",
+            body_text=message,
+        )
+        html_body, text_body, footer, inline_images = self._render_submission_message(
+            db, form=form, submission=submission, template=template, context=context,
+            event_type=event_type)
+        return self.dispatch_raw(
+            db=db, form=form, submission=submission, event_type=event_type,
+            recipient=recipient, subject=subject, html_body=html_body, text_body=text_body,
+            footer=footer, inline_images=inline_images, sent_by_id=sent_by_id)
+
     @staticmethod
     def _footer_logo_url(footer, logo_url_builder=None) -> str:
         """Resolve a library logo for preview; mail delivery supplies a CID explicitly."""
@@ -513,12 +573,7 @@ class MailDispatchService:
                 record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot,
                 item_decision_id=item_decision_id, sent_by_id=sent_by_id, extra_context=extra_context,
                 subject_template=subject_template, force_send=force_send)
-        footer = self.mail_footer_resolver.resolve(
-            db,
-            mail_type=event_type,
-            form=form,
-            submission=submission,
-        )
+        footer = self._footer_for_submission(db, form=form, submission=submission, event_type=event_type)
         if template is None or getattr(template, "is_active", True) is False:
             current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
             log = self.log_email(
@@ -550,13 +605,8 @@ class MailDispatchService:
                 status_label="",
             )
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
-        footer_logo_url, footer_inline_images = self.footer_logo_for_email(db, footer)
-        footer_html = self.build_footer(footer, logo_url=footer_logo_url)
-        layout = self._layout_for_db(db)
-        if footer:
-            layout = {**layout, "footer_html": ""}
-        html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
-        text_body = render_platform_mail_text(template, context)
+        html_body, text_body, footer, inline_images = self._render_submission_message(
+            db, form=form, submission=submission, template=template, context=context, event_type=event_type)
         return self.dispatch_raw(
             event_type=event_type,
             recipient=to_email or getattr(submission, "email", ""),
@@ -570,7 +620,7 @@ class MailDispatchService:
             template=template,
             footer=footer,
             sent_by_id=sent_by_id,
-            inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
+            inline_images=inline_images,
             attachments=attachments or [],
         )
 
@@ -682,13 +732,27 @@ class MailDispatchService:
             else:
                 received = str(submitted_at or "")
             subject = f"Nowe zgłoszenie — {title}"
-            text_body = f"Formularz: {title}\nIdentyfikator zgłoszenia: {public_id}\nData wpływu: {received}"
-            html_body = (f"<p>Nowe zgłoszenie w formularzu: {escape(title)}</p>"
-                         f"<p>Identyfikator zgłoszenia: {escape(public_id)}<br>"
-                         f"Data wpływu: {escape(received)}</p>")
+            context = {
+                "form_name": title, "submission_id": public_id,
+                "mail_details": (("Numer zgłoszenia", public_id), ("Formularz", title),
+                                 ("Data wpływu", received)),
+            }
+            template = SimpleNamespace(
+                content_title=title,
+                html_body=("<p>Do systemu wpłynęło nowe zgłoszenie.</p>"
+                           "<p>Powiadomienie dotyczy formularza wskazanego poniżej. "
+                           "Szczegóły zgłoszenia są dostępne w panelu administracyjnym.</p>"),
+                body_text=("Do systemu wpłynęło nowe zgłoszenie.\n"
+                           "Powiadomienie dotyczy formularza wskazanego poniżej. "
+                           "Szczegóły zgłoszenia są dostępne w panelu administracyjnym."),
+            )
+            html_body, text_body, footer, inline_images = self._render_submission_message(
+                db, form=form, submission=submission, template=template, context=context,
+                event_type=NEW_SUBMISSION_ADMIN_EVENT)
             result = self.dispatch_raw(
                 event_type=NEW_SUBMISSION_ADMIN_EVENT, recipient=recipient, subject=subject,
                 html_body=html_body, text_body=text_body, db=db, form=form, submission=submission,
+                footer=footer, inline_images=inline_images,
             )
             self._commit_email_log(db)
             return result
@@ -773,21 +837,35 @@ class MailDispatchService:
                 received = received_at.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%d.%m.%Y, %H:%M:%S")
             else:
                 received = ""
-            fields = (("Formularz", title), ("Numer zgłoszenia", submission.submission_id),
-                      ("Etap workflow", step_label), ("Dokument", document_label),
-                      ("Data wpływu", received))
-            text_body = "Wpłynął dokument do zgłoszenia\n\n" + "\n".join(f"{key}: {value}" for key, value in fields)
-            html_body = "<p>Wpłynął dokument do zgłoszenia</p><p>" + "<br>".join(
-                f"{escape(key)}: {escape(str(value))}" for key, value in fields) + "</p>"
+            context = {
+                "form_name": title, "submission_id": submission.submission_id,
+                "mail_details": (("Numer zgłoszenia", submission.submission_id), ("Formularz", title),
+                                 ("Dokument", document_label),
+                                 ("Data wpływu", received)),
+                "mail_documents": [document_label],
+                "mail_action_text": "Sprawdź otrzymany dokument i kontynuuj obsługę zgłoszenia w panelu administracyjnym.",
+            }
             if has_request_context():
                 admin_url = url_for("admin.submission_detail", form_id=form.id,
                                     submission_pk=submission.id, _external=True)
-                text_body += f"\nPrzejdź do zgłoszenia: {admin_url}"
-                html_body += f'<p><a href="{escape(admin_url)}">Przejdź do zgłoszenia</a></p>'
+                context["mail_action_url"] = admin_url
+            template = SimpleNamespace(
+                content_title="Powiadomienie o otrzymaniu dokumentu",
+                html_body=("<p>Otrzymano dokument związany ze zgłoszeniem.</p>"
+                           "<p>Wiadomość dotyczy zgłoszenia przesłanego za pomocą wskazanego formularza. "
+                           "Poniżej znajdują się szczegóły zdarzenia i zarejestrowany dokument.</p>"),
+                body_text=("Otrzymano dokument związany ze zgłoszeniem.\n"
+                           "Wiadomość dotyczy zgłoszenia przesłanego za pomocą wskazanego formularza. "
+                           "Poniżej znajdują się szczegóły zdarzenia i zarejestrowany dokument."),
+            )
+            html_body, text_body, footer, inline_images = self._render_submission_message(
+                db, form=form, submission=submission, template=template, context=context,
+                event_type=DOCUMENT_RECEIVED_ADMIN_EVENT)
             result = self.dispatch_raw(
                 event_type=DOCUMENT_RECEIVED_ADMIN_EVENT, recipient=recipient,
                 subject=f"Wpłynął dokument — {title}", html_body=html_body,
                 text_body=text_body, db=db, form=form, submission=submission,
+                footer=footer, inline_images=inline_images,
             )
             if result.log is not None:
                 result.log.administrator_message = event_id
@@ -857,19 +935,9 @@ class MailDispatchService:
                 submission_date=submission.created_at,
             )
             subject = self.render_subject(template.subject, context)
-            layout = self._layout_for_db(db)
-            footer = self.mail_footer_resolver.resolve(
-                db,
-                mail_type="submission_received",
-                form=form,
-                submission=submission,
-            )
-            footer_logo_url, footer_inline_images = self.footer_logo_for_email(db, footer)
-            footer_html = self.build_footer(footer, logo_url=footer_logo_url)
-            if footer:
-                layout = {**layout, "footer_html": ""}
-            html_body = render_platform_mail_html(template, context, footer_html=footer_html, layout=layout)
-            text_body = render_platform_mail_text(template, context)
+            html_body, text_body, footer, inline_images = self._render_submission_message(
+                db, form=form, submission=submission, template=template, context=context,
+                event_type="submission_received")
             result = self.dispatch_raw(
                 event_type="submission_received",
                 recipient=submission.email,
@@ -882,7 +950,7 @@ class MailDispatchService:
                 submission=submission,
                 template=None,
                 footer=footer,
-                inline_images=self._inline_images_from_layout(layout) + footer_inline_images,
+                inline_images=inline_images,
             )
             self._commit_email_log(db)
             return result
@@ -1030,17 +1098,14 @@ class MailDispatchService:
                 context = self._record_mail_context(recipient, submission, form, definition, extra_context)
                 if getattr(frozen_template, 'show_process_status', True) is False:
                     context.update(current_status='', status_label='', process_status_label='')
-                footer = self.mail_footer_resolver.resolve(db, mail_type=event_type, form=form, submission=submission)
-                logo_url, footer_images = self.footer_logo_for_email(db, footer)
-                layout = self._layout_for_db(db)
-                if footer:
-                    layout = {**layout, 'footer_html': ''}
+                html_body, text_body, footer, inline_images = self._render_submission_message(
+                    db, form=form, submission=submission, template=frozen_template,
+                    context=context, event_type=event_type)
                 result = self.dispatch_raw(event_type=event_type, recipient=recipient.email,
                     subject=self.render_subject(subject_template or frozen_template.subject, context),
-                    html_body=render_platform_mail_html(frozen_template, context, footer_html=self.build_footer(footer, logo_url=logo_url), layout=layout),
-                    text_body=render_platform_mail_text(frozen_template, context), context=context, db=db, form=form,
+                    html_body=html_body, text_body=text_body, context=context, db=db, form=form,
                     submission=submission, template=log_template, footer=footer, sent_by_id=sent_by_id,
-                    inline_images=self._inline_images_from_layout(layout) + footer_images)
+                    inline_images=inline_images)
             except Exception as exc:
                 log = self.log_email(db, form=form, submission=submission, template=log_template, to_email=recipient.email,
                     sent_by_id=sent_by_id, event_type=event_type, status='failed', error_message=type(exc).__name__)
@@ -1067,13 +1132,19 @@ class MailDispatchService:
         return self._dispatch_special_submission_event(
             submission_id,
             event_type="auto_rejected_by_condition",
-            default_name="Automatyczne odrzucenie zgłoszenia",
+            default_name="Odrzucenie zgłoszenia",
             default_subject="Zgłoszenie {{ submission_id }} nie spełnia warunków udziału",
             default_html=(
-                "<p>{{ qualification_message_html }}</p>"
+                "<p>Przeprowadzono ocenę warunków udziału dla Twojego zgłoszenia.</p>"
+                "<p>{{ qualification_message }}</p>"
+                "<p>Poniżej znajdują się dane zgłoszenia, którego dotyczy ten wynik. "
+                "W razie pytań skontaktuj się z organizatorem formularza.</p>"
             ),
             default_text=(
-                "{{ qualification_message }}"
+                "Przeprowadzono ocenę warunków udziału dla Twojego zgłoszenia.\n"
+                "{{ qualification_message }}\n"
+                "Poniżej znajdują się dane zgłoszenia, którego dotyczy ten wynik. "
+                "W razie pytań skontaktuj się z organizatorem formularza."
             ),
             extra_context={
                 "qualification_message": message,
@@ -1097,9 +1168,9 @@ class MailDispatchService:
             default_subject="Zgłoszenie {{ submission_id }} wymaga poprawy",
             default_html=(
                 "<p>Zgłoszenie wymaga ponownego uzupełnienia.</p>"
-                "<p><strong>Powód:</strong> {{ correction_reason_html }}</p>"
-                "<p>{{ correction_message_html }}</p>"
-                "<p>{{ correction_clear_info_html }}</p>"
+                "<p><strong>Powód:</strong> {{ correction_reason }}</p>"
+                "<p>{{ correction_message }}</p>"
+                "<p>{{ correction_clear_info }}</p>"
                 '<p><a href="{{ correction_url }}">Uzupełnij formularz ponownie</a></p>'
             ),
             default_text=(

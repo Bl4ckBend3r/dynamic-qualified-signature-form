@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 from copy import deepcopy
 from datetime import date
-from html import escape
 from io import BytesIO, StringIO
 import json
 
@@ -357,7 +356,11 @@ def training_message_send(form_id: int, training_id: str):
             if template:
                 result = dispatch.dispatch_to_submission(db=db, form=form, submission=submission, template=template, to_email=submission.email, subject_template=subject, event_type="training_bulk_message", sent_by_id=g.admin_user.id, extra_context={"training_name": service.require_training(db, form, training_id)["name"]})
             else:
-                result = dispatch.dispatch_raw(db=db, form=form, submission=submission, event_type="training_bulk_message", recipient=submission.email, subject=subject, html_body="<p>" + escape(body).replace("\n", "<br>") + "</p>", text_body=body, sent_by_id=g.admin_user.id)
+                result = dispatch.dispatch_formatted_notice(
+                    db=db, form=form, submission=submission, event_type="training_bulk_message",
+                    recipient=submission.email, subject=subject, title=subject,
+                    message=("Ta wiadomość dotyczy szkolenia wybranego w zgłoszeniu.\n" + body),
+                    sent_by_id=g.admin_user.id)
             sent += result.status == "sent"
         db.commit()
         flash(f"Przetworzono indywidualne wysyłki. Wysłano: {sent}.", "success")
@@ -412,7 +415,14 @@ def training_attendance_send(form_id: int, training_id: str, session_id: int):
         dispatch = current_app.extensions["services"].mail_dispatch_service
         for record, submission, token in _training_service().attendance_links(db, session):
             link = url_for("training_public.attendance", token=token, _external=True)
-            result = dispatch.dispatch_raw(db=db, form=form, submission=submission, event_type="training_attendance_invitation", recipient=submission.email, subject=f"Potwierdź obecność — {session.name}", html_body=f'<p><a href="{escape(link)}">Potwierdź obecność</a></p>', text_body=f"Potwierdź obecność: {link}", sent_by_id=g.admin_user.id)
+            result = dispatch.dispatch_formatted_notice(
+                db=db, form=form, submission=submission, event_type="training_attendance_invitation",
+                recipient=submission.email, subject=f"Potwierdź obecność — {session.name}",
+                title="Potwierdzenie obecności", message=(
+                    f"Zapraszamy do potwierdzenia obecności na szkoleniu: {session.name}. "
+                    "To zaproszenie dotyczy Twojego zgłoszenia wskazanego poniżej."),
+                action_text="Otwórz indywidualny link i potwierdź obecność.",
+                action_url=link, action_link_label="Potwierdź obecność", sent_by_id=g.admin_user.id)
             if result.log is not None:
                 result.log.html_body = "[Indywidualny link obecności zredagowany]"
                 result.log.text_body = "[Indywidualny link obecności zredagowany]"
@@ -569,7 +579,13 @@ def training_survey_send(form_id: int, training_id: str, survey_id: int):
         dispatch = current_app.extensions["services"].mail_dispatch_service
         for invitation, submission, token in _training_service().survey_links(db, form, survey):
             link = url_for("training_public.survey", token=token, _external=True)
-            result = dispatch.dispatch_raw(db=db, form=form, submission=submission, event_type="training_survey_invitation", recipient=submission.email, subject=survey.name, html_body=f'<p>{escape(survey.description)}</p><p><a href="{escape(link)}">Wypełnij ankietę</a></p>', text_body=f"{survey.description}\n\n{link}", sent_by_id=g.admin_user.id)
+            result = dispatch.dispatch_formatted_notice(
+                db=db, form=form, submission=submission, event_type="training_survey_invitation",
+                recipient=submission.email, subject=survey.name, title=survey.name,
+                message=("Zapraszamy do wypełnienia ankiety dotyczącej szkolenia powiązanego "
+                         f"z Twoim zgłoszeniem.\n{survey.description}"),
+                action_text="Otwórz indywidualny link i wypełnij ankietę.",
+                action_url=link, action_link_label="Wypełnij ankietę", sent_by_id=g.admin_user.id)
             if result.log is not None:
                 result.log.html_body = "[Indywidualny link ankiety zredagowany]"
                 result.log.text_body = "[Indywidualny link ankiety zredagowany]"

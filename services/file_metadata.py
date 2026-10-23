@@ -33,6 +33,7 @@ def record_submission_file(
     signed_at: datetime | None = None,
     storage_path: str = "",
     workflow_step_at_upload: str = "",
+    uploaded_by_source: str = "",
 ) -> bool:
     if not submission_repository or not hasattr(submission_repository, "record_file"):
         return False
@@ -55,6 +56,7 @@ def record_submission_file(
         "generated_at": generated_at,
         "signed_at": signed_at,
         "workflow_step_at_upload": workflow_step_at_upload,
+        "uploaded_by_source": uploaded_by_source,
     }
     recorded = bool(submission_repository.record_file(submission_id, metadata))
     logger.info(

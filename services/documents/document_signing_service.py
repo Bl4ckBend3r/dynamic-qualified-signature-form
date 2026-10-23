@@ -108,6 +108,7 @@ class DocumentSigningService:
             signature_validation_result=verification,
             storage_path=storage_path,
             storage=self.storage,
+            uploaded_by_source="participant",
         )
         if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
             raise RuntimeError("Nie udalo sie zapisac metadanych podpisanego dokumentu.")

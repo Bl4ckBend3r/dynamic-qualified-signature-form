@@ -366,6 +366,151 @@ def test_new_submission_notice_is_per_form_version_and_idempotent(admin_app):
     assert len(sent) == 2
 
 
+def _seed_document_notice(app, slug, *, enabled=True, selected=None):
+    definition = {
+        "title": f"Formularz {slug}", "fields": [],
+        "workflow": {"steps": [
+            {"id": "declaration", "admin_label": "Deklaracja"},
+            {"id": "agreement", "admin_label": "Umowa"},
+        ]},
+        "documents": [
+            {"id": "decl", "label": "Deklaracja uczestnika", "workflow_step": "declaration"},
+            {"id": "contract", "label": "Podpisana umowa", "workflow_step": "agreement"},
+        ],
+        "new_submission_notification": {
+            "enabled": False, "recipient_email": "office@example.org",
+            "document_notifications_enabled": enabled,
+            "document_notification_steps": ["declaration"] if selected is None else selected,
+        },
+    }
+    form_id = create_form(app, slug=slug, definition_json=definition)
+    factory = create_session_factory(app.config["DATABASE_URL"])
+    public_id = f"submission-{slug}"
+    with factory() as db:
+        version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+                              version_label="1.0", status="published", definition_json=definition)
+        db.add(version)
+        db.flush()
+        db.add(FormSubmission(submission_id=public_id, form_slug=slug,
+                              form_version_id=version.id, access_token="private-token-123",
+                              process_status="FORM_SUBMITTED"))
+        db.commit()
+    return form_id, public_id
+
+
+def test_document_notice_uses_versioned_workflow_filters_and_file_log(admin_app):
+    form_id, public_id = _seed_document_notice(admin_app, "document-notice")
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    metadata = admin_app.extensions["services"].submission_document_service
+    sent = []
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.get(Form, form_id).definition_json = {
+            "title": "Zmieniona definicja", "new_submission_notification": {
+                "document_notifications_enabled": False, "recipient_email": "wrong@example.org"}}
+        db.add(FormVersion(form_id=form_id, version_major=2, version_minor=0,
+                           version_label="2.0", status="draft", definition_json={
+                               "title": "Nowa wersja", "workflow": {"steps": [{"id": "other"}]},
+                               "new_submission_notification": {
+                                   "document_notifications_enabled": False,
+                                   "recipient_email": "wrong@example.org",
+                               },
+                           }))
+        db.commit()
+    with admin_app.app_context():
+        assert metadata.record_generated_document(
+            submission_id=public_id, form_slug="document-notice", filename="generated.pdf",
+            file_bytes=b"generated", document_id="decl", document_type="decl",
+            storage_path="output/generated.pdf")
+        assert metadata.record_document_metadata(
+            submission_id=public_id, form_slug="document-notice", filename="contract.pdf",
+            file_bytes=b"contract", document_id="contract", document_type="contract",
+            original_filename="contract.pdf", status="uploaded", uploaded_by_source="participant",
+            workflow_step_at_upload="agreement", storage_path="output/contract.pdf")
+        assert metadata.record_document_metadata(
+            submission_id=public_id, form_slug="document-notice", filename="office.pdf",
+            file_bytes=b"office", document_id="decl", document_type="decl",
+            original_filename="office.pdf", status="signed", uploaded_by_source="office",
+            workflow_step_at_upload="declaration", storage_path="output/office.pdf")
+        assert metadata.record_document_metadata(
+            submission_id=public_id, form_slug="document-notice", filename="rejected.pdf",
+            file_bytes=b"rejected", document_id="decl", document_type="decl",
+            original_filename="rejected.pdf", status="rejected", uploaded_by_source="participant",
+            workflow_step_at_upload="declaration", storage_path="output/rejected.pdf")
+        assert sent == []
+        for _ in range(2):
+            assert metadata.record_document_metadata(
+                submission_id=public_id, form_slug="document-notice", filename="decl.pdf",
+                file_bytes=b"declaration", document_id="decl", document_type="decl",
+                original_filename="decl.pdf", status="signed", signed=True,
+                uploaded_by_source="participant", workflow_step_at_upload="declaration",
+                signed_at=datetime(2026, 10, 22, 12, 32, tzinfo=timezone.utc),
+                storage_path="output/decl.pdf")
+    assert len(sent) == 1
+    assert sent[0]["to_emails"] == ["office@example.org"]
+    assert "Etap workflow: Deklaracja" in sent[0]["text_body"]
+    assert "Dokument: Deklaracja uczestnika" in sent[0]["text_body"]
+    assert "Data wpływu: 22.10.2026, 14:32:00" in sent[0]["text_body"]
+    assert "private-token-123" not in str(sent)
+    assert "output/" not in str(sent)
+    with factory() as db:
+        logs = db.execute(select(EmailLog).where(
+            EmailLog.event_type == "document_received")).scalars().all()
+        assert len(logs) == 1
+        assert logs[0].status == "sent"
+        assert logs[0].administrator_message.startswith("file:")
+        first_event = logs[0].administrator_message
+    with admin_app.app_context():
+        assert metadata.record_document_metadata(
+            submission_id=public_id, form_slug="document-notice", filename="decl.pdf",
+            file_bytes=b"corrected declaration", document_id="decl", document_type="decl",
+            original_filename="decl.pdf", status="signed", signed=True,
+            uploaded_by_source="participant", workflow_step_at_upload="declaration",
+            storage_path="output/decl.pdf")
+    assert len(sent) == 2
+    with factory() as db:
+        logs = db.execute(select(EmailLog).where(
+            EmailLog.event_type == "document_received")).scalars().all()
+        assert len(logs) == 2
+        assert logs[-1].administrator_message != first_event
+
+
+@pytest.mark.parametrize("enabled,selected", [(False, ["declaration"]), (True, [])])
+def test_document_notice_requires_enabled_selected_step(admin_app, enabled, selected):
+    _, public_id = _seed_document_notice(admin_app, f"document-disabled-{enabled}-{len(selected)}",
+                                         enabled=enabled, selected=selected)
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    sent = []
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.app_context():
+        assert admin_app.extensions["services"].submission_document_service.record_document_metadata(
+            submission_id=public_id, form_slug=f"document-disabled-{enabled}-{len(selected)}",
+            filename="decl.pdf", file_bytes=b"declaration", document_id="decl",
+            document_type="decl", original_filename="decl.pdf", status="uploaded",
+            uploaded_by_source="participant", workflow_step_at_upload="declaration",
+            storage_path="output/decl.pdf")
+    assert sent == []
+
+
+def test_document_notice_resolves_document_assignment_without_current_step(admin_app):
+    form_id, public_id = _seed_document_notice(admin_app, "document-assignment")
+    sent = []
+    admin_app.extensions["services"].mail_dispatch_service.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.test_request_context("/document-steps/document-assignment/upload"):
+        assert admin_app.extensions["services"].submission_document_service.record_document_metadata(
+            submission_id=public_id, form_slug="document-assignment",
+            filename="decl.pdf", file_bytes=b"document", document_id="decl",
+            document_type="decl", original_filename="decl.pdf", status="uploaded",
+            uploaded_by_source="participant", workflow_step_at_upload="",
+            storage_path="output/decl.pdf")
+    assert len(sent) == 1
+    assert "Etap workflow: Deklaracja" in sent[0]["text_body"]
+    assert f"/admin/forms/{form_id}/submissions/" in sent[0]["text_body"]
+    assert "Przejdź do zgłoszenia" in sent[0]["html_body"]
+    assert "private-token-123" not in str(sent)
+
+
 @pytest.mark.parametrize("submitted_at, expected", [
     (datetime(2026, 1, 15, 10, 11, 12, tzinfo=timezone.utc), "15.01.2026, 11:11:12"),
     (datetime(2026, 7, 15, 10, 11, 12, tzinfo=timezone.utc), "15.07.2026, 12:11:12"),

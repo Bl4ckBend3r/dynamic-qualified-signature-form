@@ -1375,7 +1375,7 @@ class DocumentWorkflowService:
                 signed=bool(accepted and requires_signature),
                 status="signed" if accepted and requires_signature else "uploaded" if accepted else "rejected",
                 signature_status=str(verification.get("validation_status") or "not_required").lower(),
-                signature_validation_result=verification)
+                signature_validation_result=verification, uploaded_by_source=signer)
             if not recorded:
                 target["verification_result"] = "VERIFICATION_ERROR"
                 target["substate"] = "verification_error"
@@ -1831,7 +1831,7 @@ class DocumentWorkflowService:
             signed=bool(signature_required and accepted),
             status="signed" if signature_required and accepted else "uploaded" if accepted else "rejected",
             signature_status=str(verification.get("validation_status") or "not_required").lower(),
-            signature_validation_result=verification)
+            signature_validation_result=verification, uploaded_by_source="participant")
         if not recorded:
             raise ValueError("Nie udało się zapisać metadanych dokumentu.")
         if accepted:

@@ -719,6 +719,22 @@
         <label class="admin-check"><input type="checkbox" name="new_submission_notification_enabled" {% if new_submission_notification.get('enabled') %}checked{% endif %}><span>Wysyłaj powiadomienia e-mail</span></label>
         <div class="admin-form-grid"><label><span>Adres e-mail odbiorcy</span><input type="email" name="new_submission_notification_email" value="{{ new_submission_notification.get('recipient_email', '') }}" autocomplete="email"></label></div>
     </div>
+    <div class="admin-section">
+        <h2>Powiadomienia o dokumentach</h2>
+        <p>Wiadomość jest wysyłana na adres odbiorcy podany powyżej po przyjęciu dokumentu od uczestnika.</p>
+        <label class="admin-check"><input type="checkbox" name="document_notifications_enabled" {% if new_submission_notification.get('document_notifications_enabled') %}checked{% endif %}><span>Wysyłaj powiadomienia o wpływie dokumentów</span></label>
+        {% set notification_steps = new_submission_notification.get('document_notification_steps') or [] %}
+        {% set workflow_steps = (form.workflow_editor_definition.get('workflow') or {}).get('steps') or [] %}
+        {% if workflow_steps %}
+        <fieldset><legend>Etapy, dla których wysyłać powiadomienia</legend>
+            {% for step in workflow_steps %}
+            {% if step.id %}
+            <label class="admin-check"><input type="checkbox" name="document_notification_steps" value="{{ step.id }}" {% if step.id in notification_steps %}checked{% endif %}><span>{{ step.admin_label or step.user_label or step.label or step.name or step.id }}</span></label>
+            {% endif %}
+            {% endfor %}
+        </fieldset>
+        {% endif %}
+    </div>
     <div class="admin-section" data-mail-settings>
         <h2>Ustawienia wysyłki e-mail</h2>
         <div class="admin-form-grid">

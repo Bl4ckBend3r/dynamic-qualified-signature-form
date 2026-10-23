@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+from flask import current_app, has_app_context
 
 from services.documents.document_storage_service import DocumentStorageService
 from services.file_metadata import record_submission_file
@@ -88,6 +91,7 @@ class SubmissionDocumentService:
         storage_path: str = "",
         workflow_step_at_upload: str = "",
         storage=None,
+        uploaded_by_source: str = "",
     ) -> bool:
         return self.record_document_metadata(
             submission_id=submission_id,
@@ -107,6 +111,7 @@ class SubmissionDocumentService:
             signed=True,
             status=SIGNED_STATUS,
             storage=storage,
+            uploaded_by_source=uploaded_by_source,
         )
 
     def record_document_metadata(
@@ -131,9 +136,10 @@ class SubmissionDocumentService:
         storage_path: str = "",
         workflow_step_at_upload: str = "",
         storage=None,
+        uploaded_by_source: str = "",
     ) -> bool:
         try:
-            return record_submission_file(
+            recorded = record_submission_file(
                 submission_repository=self.submission_repository,
                 submission_id=submission_id,
                 form_slug=form_slug,
@@ -154,6 +160,7 @@ class SubmissionDocumentService:
                 signed_at=signed_at,
                 storage_path=storage_path,
                 workflow_step_at_upload=workflow_step_at_upload,
+                uploaded_by_source=uploaded_by_source,
             )
         except Exception:
             self.logger.warning(
@@ -163,6 +170,16 @@ class SubmissionDocumentService:
                 exc_info=True,
             )
             return False
+        if (recorded and uploaded_by_source == "participant" and file_bytes is not None
+                and status in {"uploaded", "signed"} and has_app_context()):
+            try:
+                current_app.extensions["services"].mail_dispatch_service.dispatch_document_received_notification(
+                    submission_id, document_id=document_id, filename=filename,
+                    checksum_sha256=hashlib.sha256(file_bytes).hexdigest(),
+                )
+            except Exception:
+                self.logger.exception("Nie udało się wysłać powiadomienia o wpływie dokumentu.")
+        return recorded
 
     def get_document_by_type(self, submission_id: str, document_type: str) -> dict | None:
         if not self.submission_repository or not hasattr(self.submission_repository, "get_document_by_type"):

@@ -61,10 +61,15 @@ class FormConfigValidator:
         notification = form_config.get("new_submission_notification") or {}
         if isinstance(notification, dict):
             recipient = str(notification.get("recipient_email") or "").strip()
-            if notification.get("enabled") and not recipient:
+            if (notification.get("enabled") or notification.get("document_notifications_enabled")) and not recipient:
                 errors.append("Powiadomienia o nowych zgłoszeniach wymagają adresu e-mail odbiorcy.")
             elif recipient and not EMAIL_REGEX.fullmatch(recipient):
                 errors.append("Niepoprawny adres e-mail odbiorcy powiadomień o nowych zgłoszeniach.")
+            selected_steps = notification.get("document_notification_steps") or []
+            if not isinstance(selected_steps, list) or any(
+                not isinstance(step, str) or step not in steps for step in selected_steps
+            ):
+                errors.append("Powiadomienia o dokumentach zawierają nieznany etap workflow.")
         errors.extend(
             QualificationConditionService().validate_config(
                 form_config.get("qualification_conditions"),

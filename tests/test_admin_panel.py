@@ -3208,7 +3208,12 @@ def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
 def test_new_submission_notification_editor_saves_draft_and_requires_form_permission(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="admin-notice-settings",
-                          definition_json={"title": "Wniosek", "fields": []})
+                          definition_json={"title": "Wniosek", "fields": [], "workflow": {
+                              "initial_step": "submission", "steps": [
+                                  {"id": "submission", "type": "form_submit", "next": "completed",
+                                   "admin_label": "Formularz zgłoszeniowy"},
+                                  {"id": "completed", "type": "end", "admin_label": "Zakończenie"},
+                              ]}})
     factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with factory() as db:
         admin_app.extensions["services"].form_version_service.create_initial_version(
@@ -3218,12 +3223,20 @@ def test_new_submission_notification_editor_saves_draft_and_requires_form_permis
     page = admin_client.get(f"/admin/forms/{form_id}/edit?tab=emails")
     assert page.status_code == 200
     assert "Powiadomienia o nowych zgłoszeniach" in page.get_data(as_text=True)
+    assert "Powiadomienia o dokumentach" in page.get_data(as_text=True)
+    assert 'name="document_notifications_enabled"' in page.get_data(as_text=True)
+    step_ids = re.findall(r'name="document_notification_steps" value="([^"]+)"', page.get_data(as_text=True))
+    assert len(step_ids) >= 2
+    assert f'value="{step_ids[0]}"' in page.get_data(as_text=True)
+    assert "Formularz zgłoszeniowy" in page.get_data(as_text=True)
     token = page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
     payload = {"csrf_token": token, "active_tab": "emails", "name": "Wniosek",
                "slug": "admin-notice-settings", "title": "Wniosek",
                "new_submission_notification_present": "1",
                "new_submission_notification_enabled": "on",
-               "new_submission_notification_email": "office@example.org"}
+               "new_submission_notification_email": "office@example.org",
+               "document_notifications_enabled": "on",
+               "document_notification_steps": step_ids[:2]}
     without_csrf = admin_client.post(f"/admin/forms/{form_id}/edit", data={
         key: value for key, value in payload.items() if key != "csrf_token"})
     assert without_csrf.status_code in (400, 403)
@@ -3235,9 +3248,15 @@ def test_new_submission_notification_editor_saves_draft_and_requires_form_permis
     with factory() as db:
         form = db.get(Form, form_id)
         assert form.definition_json["new_submission_notification"] == {
-            "enabled": True, "recipient_email": "office@example.org"}
+            "enabled": True, "recipient_email": "office@example.org",
+            "document_notifications_enabled": True, "document_notification_steps": step_ids[:2],
+        }
         version = db.execute(select(FormVersion).where(FormVersion.form_id == form_id)).scalars().first()
         assert version and version.definition_json["new_submission_notification"]["recipient_email"] == "office@example.org"
+    reloaded = admin_client.get(f"/admin/forms/{form_id}/edit?tab=emails").get_data(as_text=True)
+    assert 'name="document_notifications_enabled" checked' in reloaded
+    for step_id in step_ids[:2]:
+        assert f'name="document_notification_steps" value="{step_id}" checked' in reloaded
 
     user_id = create_user(admin_app, email="workflow-only-notice@example.org", role="form_manager")
     grant_rbac(admin_app, user_id, ["can_edit_workflow"], form_id=form_id)

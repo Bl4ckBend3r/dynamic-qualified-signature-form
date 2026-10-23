@@ -590,10 +590,20 @@ def build_form_definition_from_admin_form(
     definition = apply_training_selection_from_admin_form(definition, form_data)
     definition = normalize_admin_form_definition(definition)
     if form_data.get("new_submission_notification_present") == "1":
+        available_steps = {
+            str(step.get("id")) for step in (definition.get("workflow") or {}).get("steps") or []
+            if isinstance(step, dict) and str(step.get("id") or "").strip()
+        }
+        selected_steps = list(dict.fromkeys(str(step) for step in
+            _form_getlist(form_data, "document_notification_steps")))
+        if any(step not in available_steps for step in selected_steps):
+            raise ValueError("Wybrano nieznany etap powiadomień o dokumentach.")
         definition["new_submission_notification"] = {
             **definition.get("new_submission_notification", {}),
             "enabled": form_data.get("new_submission_notification_enabled") == "on",
             "recipient_email": str(form_data.get("new_submission_notification_email") or "").strip(),
+            "document_notifications_enabled": form_data.get("document_notifications_enabled") == "on",
+            "document_notification_steps": selected_steps,
         }
     if "declaration_document_name" in form_data:
         declaration = next((document for document in definition.get("documents") or []

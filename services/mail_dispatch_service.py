@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from flask import current_app, url_for
+from flask import current_app, has_request_context, url_for
 from sqlalchemy.exc import SQLAlchemyError
 
 from services.admin_mail_context_service import build_mail_context, mail_template_type_score
@@ -30,6 +30,7 @@ from services.training_availability_service import TrainingAvailabilityService
 
 logger = logging.getLogger(__name__)
 NEW_SUBMISSION_ADMIN_EVENT = "new_submission_admin"
+DOCUMENT_RECEIVED_ADMIN_EVENT = "document_received"
 
 
 @dataclass(frozen=True)
@@ -689,6 +690,107 @@ class MailDispatchService:
                 event_type=NEW_SUBMISSION_ADMIN_EVENT, recipient=recipient, subject=subject,
                 html_body=html_body, text_body=text_body, db=db, form=form, submission=submission,
             )
+            self._commit_email_log(db)
+            return result
+
+    def dispatch_document_received_notification(
+        self, submission_id: str, *, document_id: str, filename: str, checksum_sha256: str,
+    ) -> MailDispatchResult:
+        """Notify the configured office once for an accepted participant upload."""
+        database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
+        from database import create_session_factory
+        from form_loader import EMAIL_REGEX
+        from models import EmailLog, Form, FormSubmission, SubmissionFile
+        from sqlalchemy import select
+
+        with create_session_factory(database_url)() as db:
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            submission = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == submission_id).with_for_update()).scalar_one_or_none()
+            if submission is None or submission.form_version is None:
+                return MailDispatchResult("skipped", error_message="Brak wersji zgłoszenia.")
+            definition = submission.form_version.definition_json or {}
+            notification = definition.get("new_submission_notification") or {}
+            if not isinstance(notification, dict) or notification.get("document_notifications_enabled") is not True:
+                return MailDispatchResult("skipped", error_message="Powiadomienia o dokumentach wyłączone.")
+            recipient = str(notification.get("recipient_email") or "").strip()
+            if not EMAIL_REGEX.fullmatch(recipient):
+                return MailDispatchResult("skipped", error_message="Niepoprawny adres odbiorcy.")
+            selected_steps = notification.get("document_notification_steps") or []
+            if not isinstance(selected_steps, list) or not selected_steps:
+                return MailDispatchResult("skipped", error_message="Nie wybrano etapów.")
+            file = db.execute(select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.document_id == document_id,
+                SubmissionFile.filename == Path(filename).name,
+                SubmissionFile.checksum_sha256 == checksum_sha256,
+            ).order_by(SubmissionFile.id.desc()).limit(1)).scalar_one_or_none()
+            if (file is None or file.uploaded_by_source != "participant"
+                    or file.status not in {"uploaded", "signed"} or file.generated_at is not None):
+                return MailDispatchResult("skipped", error_message="Brak przyjętego uploadu uczestnika.")
+            workflow = definition.get("workflow") or {}
+            steps = [step for step in workflow.get("steps") or [] if isinstance(step, dict)]
+            matching = next((step for step in steps if step.get("id") == file.workflow_step_at_upload), None)
+            if matching is None:
+                documents = [item for item in definition.get("documents") or [] if isinstance(item, dict)]
+                configured = next((item for item in documents if item.get("id") == document_id), None)
+                assigned_step = str((configured or {}).get("workflow_step") or "")
+                matching = next((step for step in steps if step.get("id") == assigned_step), None)
+            if matching is None:
+                matching = next((step for step in steps if step.get("document_id") == document_id), None)
+            if matching is None or matching.get("id") not in selected_steps:
+                return MailDispatchResult("skipped", error_message="Etap nie jest objęty powiadomieniami.")
+            event_fingerprint = sha256(json.dumps([
+                submission.id, file.document_id, file.training_key, file.filename,
+                file.checksum_sha256,
+            ], ensure_ascii=False).encode("utf-8")).hexdigest()
+            event_id = f"file:{event_fingerprint}"
+            already_recorded = db.execute(select(EmailLog.id).where(
+                EmailLog.submission_id == submission.id,
+                EmailLog.event_type == DOCUMENT_RECEIVED_ADMIN_EVENT,
+                EmailLog.administrator_message == event_id,
+                EmailLog.status.in_(("pending", "sent", "failed")),
+            )).first()
+            if already_recorded:
+                return MailDispatchResult("skipped", error_message="Powiadomienie zostało już zarejestrowane.")
+            form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+            if form is None or submission.form_version.form_id != form.id:
+                return MailDispatchResult("skipped", error_message="Brak formularza.")
+            title = " ".join(str(definition.get("title") or form.title or form.name or form.slug).split())
+            step_label = str(next((matching.get(key) for key in
+                ("admin_label", "user_label", "label", "name", "id") if matching.get(key)), ""))
+            configured_document = next((item for item in definition.get("documents") or []
+                if isinstance(item, dict) and item.get("id") == document_id), {})
+            document_label = str(next((configured_document.get(key) for key in
+                ("participant_label", "label", "name", "id") if configured_document.get(key)), document_id))
+            received_at = file.signed_at or file.updated_at or file.created_at
+            if isinstance(received_at, datetime):
+                if received_at.tzinfo is None:
+                    received_at = received_at.replace(tzinfo=timezone.utc)
+                received = received_at.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%d.%m.%Y, %H:%M:%S")
+            else:
+                received = ""
+            fields = (("Formularz", title), ("Numer zgłoszenia", submission.submission_id),
+                      ("Etap workflow", step_label), ("Dokument", document_label),
+                      ("Data wpływu", received))
+            text_body = "Wpłynął dokument do zgłoszenia\n\n" + "\n".join(f"{key}: {value}" for key, value in fields)
+            html_body = "<p>Wpłynął dokument do zgłoszenia</p><p>" + "<br>".join(
+                f"{escape(key)}: {escape(str(value))}" for key, value in fields) + "</p>"
+            if has_request_context():
+                admin_url = url_for("admin.submission_detail", form_id=form.id,
+                                    submission_pk=submission.id, _external=True)
+                text_body += f"\nPrzejdź do zgłoszenia: {admin_url}"
+                html_body += f'<p><a href="{escape(admin_url)}">Przejdź do zgłoszenia</a></p>'
+            result = self.dispatch_raw(
+                event_type=DOCUMENT_RECEIVED_ADMIN_EVENT, recipient=recipient,
+                subject=f"Wpłynął dokument — {title}", html_body=html_body,
+                text_body=text_body, db=db, form=form, submission=submission,
+            )
+            if result.log is not None:
+                result.log.administrator_message = event_id
             self._commit_email_log(db)
             return result
 

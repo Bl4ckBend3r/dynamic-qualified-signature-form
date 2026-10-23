@@ -635,6 +635,7 @@ class DocumentService:
                 training_key=str(instance_id or ""),
                 storage_path=storage_path,
                 storage=self.storage,
+                uploaded_by_source="participant",
             )
             self._log_document_write(
                 submission,

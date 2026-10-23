@@ -37,6 +37,11 @@ class FormConfigService:
             **notification,
             "enabled": notification.get("enabled") is True,
             "recipient_email": str(notification.get("recipient_email") or "").strip(),
+            "document_notifications_enabled": notification.get("document_notifications_enabled") is True,
+            "document_notification_steps": [
+                str(step) for step in notification.get("document_notification_steps", [])
+                if isinstance(step, str) and step.strip()
+            ] if isinstance(notification.get("document_notification_steps"), list) else [],
         }
         config["rules"] = self.normalize_rules_config(config)
         config["qualification_conditions"] = QualificationConditionService().normalize_config(

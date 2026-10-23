@@ -33,13 +33,19 @@ from services.training_catalog_service import TrainingCatalogService
 
 def test_new_submission_notification_admin_round_trip_and_validation():
     original = normalize_admin_form_definition({"title": "Wniosek", "fields": []})
-    assert original["new_submission_notification"] == {"enabled": False, "recipient_email": ""}
+    assert original["new_submission_notification"] == {
+        "enabled": False, "recipient_email": "", "document_notifications_enabled": False,
+        "document_notification_steps": [],
+    }
     enabled = build_form_definition_from_admin_form(original, {
         "new_submission_notification_present": "1",
         "new_submission_notification_enabled": "on",
         "new_submission_notification_email": "first@example.org",
     })
-    assert enabled["new_submission_notification"] == {"enabled": True, "recipient_email": "first@example.org"}
+    assert enabled["new_submission_notification"] == {
+        "enabled": True, "recipient_email": "first@example.org",
+        "document_notifications_enabled": False, "document_notification_steps": [],
+    }
     changed = build_form_definition_from_admin_form(enabled, {
         "new_submission_notification_present": "1",
         "new_submission_notification_enabled": "on",
@@ -53,7 +59,47 @@ def test_new_submission_notification_admin_round_trip_and_validation():
     })
     assert any("Niepoprawny adres e-mail" in error for error in validate_admin_form_config(invalid))
     disabled = build_form_definition_from_admin_form(changed, {"new_submission_notification_present": "1"})
-    assert disabled["new_submission_notification"] == {"enabled": False, "recipient_email": ""}
+    assert disabled["new_submission_notification"] == {
+        "enabled": False, "recipient_email": "", "document_notifications_enabled": False,
+        "document_notification_steps": [],
+    }
+
+
+def test_document_notification_steps_save_one_or_many_and_validate_ids():
+    definition = normalize_admin_form_definition({
+        "title": "Wniosek", "fields": [],
+        "workflow": {"flow_mode": "explicit", "steps": [
+            {"id": "submission", "label": "Zgłoszenie"},
+            {"id": "declaration", "label": "Deklaracja"},
+        ]},
+    })
+    one = build_form_definition_from_admin_form(definition, MultiDict([
+        ("new_submission_notification_present", "1"),
+        ("new_submission_notification_email", "office@example.org"),
+        ("document_notifications_enabled", "on"),
+        ("document_notification_steps", "declaration"),
+    ]))
+    assert one["new_submission_notification"]["document_notification_steps"] == ["declaration"]
+    missing_recipient = build_form_definition_from_admin_form(definition, MultiDict([
+        ("new_submission_notification_present", "1"),
+        ("document_notifications_enabled", "on"),
+        ("document_notification_steps", "declaration"),
+    ]))
+    assert any("adresu e-mail" in error for error in validate_admin_form_config(missing_recipient))
+    many = build_form_definition_from_admin_form(one, MultiDict([
+        ("new_submission_notification_present", "1"),
+        ("new_submission_notification_email", "office@example.org"),
+        ("document_notifications_enabled", "on"),
+        ("document_notification_steps", "submission"),
+        ("document_notification_steps", "declaration"),
+    ]))
+    assert many["new_submission_notification"]["document_notification_steps"] == ["submission", "declaration"]
+    assert normalize_admin_form_definition(many)["new_submission_notification"]["document_notification_steps"] == ["submission", "declaration"]
+    with pytest.raises(ValueError, match="nieznany etap"):
+        build_form_definition_from_admin_form(many, MultiDict([
+            ("new_submission_notification_present", "1"),
+            ("document_notification_steps", "foreign_step"),
+        ]))
 
 
 def test_build_definition_from_html_detects_basic_fields():

@@ -968,11 +968,9 @@ class MailDispatchService:
             default_name="Automatyczne odrzucenie zgłoszenia",
             default_subject="Zgłoszenie {{ submission_id }} nie spełnia warunków udziału",
             default_html=(
-                "<p>Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.</p>"
                 "<p>{{ qualification_message_html }}</p>"
             ),
             default_text=(
-                "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.\n"
                 "{{ qualification_message }}"
             ),
             extra_context={

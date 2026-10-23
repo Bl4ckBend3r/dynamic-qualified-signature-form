@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("sqlalchemy")
 
 from models import Base
-from scripts.check_p4_schema import build_parser, main, write_report
+from scripts.diagnostics.check_p4_schema import build_parser, main, write_report
 from services.p4_schema_check_service import P4SchemaCheckService
 from sqlalchemy import create_engine, text
 

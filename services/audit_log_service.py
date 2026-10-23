@@ -7,7 +7,7 @@ from uuid import uuid4
 
 
 class AuditLogService:
-    def __init__(self, log_path: str | Path = "data/audit_log.jsonl", repository=None) -> None:
+    def __init__(self, log_path: str | Path = "storage/audit_log.jsonl", repository=None) -> None:
         self.log_path = Path(log_path)
         self.repository = repository
 

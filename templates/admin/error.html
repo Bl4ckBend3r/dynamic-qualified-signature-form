@@ -1,0 +1,11 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ error_title }}{% endblock %}
+
+{% block content %}
+<section class="admin-card" role="alert" aria-labelledby="admin-error-title">
+  <h1 id="admin-error-title">{{ error_title }}</h1>
+  <p>{{ error_message }}</p>
+  <a class="admin-button-secondary" href="{{ url_for('admin.dashboard') }}">Wróć do panelu</a>
+</section>
+{% endblock %}

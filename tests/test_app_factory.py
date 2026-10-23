@@ -20,16 +20,51 @@ def test_blueprints_are_registered(app):
     assert {"public_forms", "documents", "api"}.issubset(set(app.blueprints))
 
 
+def test_public_api_endpoint_urls_are_registered(app):
+    with app.test_request_context():
+        assert (
+            app.url_for("api.api_acceptance_status", submission_id="abc")
+            == "/api/submissions/abc/acceptance-status"
+        )
+        assert (
+            app.url_for("api.api_workflow_status", submission_id="abc")
+            == "/api/submissions/abc/workflow-status"
+        )
+
+
 def test_create_app_rejects_default_secret_key_in_production(monkeypatch, form_definition):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
     from config import Config
 
     class ProductionConfig(Config):
         ENV = "production"
         TESTING = True
+        SECRET_KEY = "change-me-in-production"
+        SESSION_COOKIE_SECURE = True
+        AUTO_DB_MIGRATE = False
+        AUTO_CREATE_DB_SCHEMA = False
+        ALLOW_UNSCANNED_UPLOADS = False
 
     with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
+
+
+def test_create_app_rejects_insecure_session_cookie_in_production(form_definition):
+    import app as app_module
+    from testing_support import InMemoryStorage
+    from config import Config
+
+    class ProductionConfig(Config):
+        ENV = "production"
+        TESTING = True
+        SECRET_KEY = "production-test-secret-key"
+        SESSION_COOKIE_SECURE = False
+        AUTO_DB_MIGRATE = False
+        AUTO_CREATE_DB_SCHEMA = False
+        ALLOW_UNSCANNED_UPLOADS = False
+
+    with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE"):
         app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
 
 
@@ -44,7 +79,7 @@ def test_strict_flags_are_disabled_by_default():
 
 def test_create_app_logs_active_strict_flags_independently(monkeypatch, tmp_path, form_definition, caplog):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     monkeypatch.setenv("FLASK_ENV", "testing")
     monkeypatch.setenv("TESTING", "1")
@@ -69,7 +104,7 @@ def test_create_app_logs_active_strict_flags_independently(monkeypatch, tmp_path
 
 def test_require_strict_readiness_check_logs_external_gate(monkeypatch, tmp_path, form_definition, caplog):
     import app as app_module
-    from conftest import InMemoryStorage
+    from testing_support import InMemoryStorage
 
     monkeypatch.setenv("FLASK_ENV", "testing")
     monkeypatch.setenv("TESTING", "1")

@@ -11,13 +11,13 @@ from models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    url = get_database_url()
+    url = str(config.get_main_option("sqlalchemy.url") or "").strip() or get_database_url()
     if not url:
         raise RuntimeError("DATABASE_URL is required for Alembic migrations.")
     return normalize_database_url(url)

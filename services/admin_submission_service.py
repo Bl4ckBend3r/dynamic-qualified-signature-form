@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
+from copy import deepcopy
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import logging
 
 from models import Form, FormField, FormSubmission
 from models import SubmissionFile, SubmissionWorkflowEvent
@@ -14,6 +16,10 @@ from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
 from services.workflow_service import current_workflow_step, workflow_status_label
 from services.status_catalog import WORKFLOW_STATUS_LABELS
+from services.file_metadata import resolve_pdf_storage_path
+
+
+logger = logging.getLogger(__name__)
 
 
 SUBMISSION_SORT_FIELDS = {
@@ -41,7 +47,8 @@ def editable_submission_definition(form_config: dict) -> dict:
     definition["fields"] = [
         field for field in definition.get("fields") or []
         if field.get("type") == "section" or (
-            field.get("name") and field.get("type") not in excluded
+            field.get("name") and field.get("name") != "confirm_qualification_change"
+            and field.get("type") not in excluded
             and FORM_FIELD_MAP.get(str(field["name"]), str(field["name"])) not in technical_columns
             and not any(field.get(key) for key in ("readonly", "hidden", "system", "technical"))
         )
@@ -112,6 +119,8 @@ def update_submission_answers(db, submission: FormSubmission, form_config: dict,
     if not changed:
         return {"ok": True, "changed": []}
     qualification_config = form_config.get("qualification_conditions")
+    qualification_changed = False
+    confirmed = False
     if qualification_config:
         evaluator = services.qualification_condition_service
         all_fields = evaluator.field_catalog(form_config)
@@ -123,40 +132,116 @@ def update_submission_answers(db, submission: FormSubmission, form_config: dict,
                                    stage="recheck", available_documents=available_documents)
         before_passes = [(item["id"], item["passed"]) for item in before["results"]]
         after_passes = [(item["id"], item["passed"]) for item in after["results"]]
-        if before_passes != after_passes:
-            return {"ok": False, "errors": {"form": "Zmiana wpływa na kwalifikację. Użyj istniejącego procesu korekty i decyzji."}, "values": merged}
-        if any(item.get("field_name") in changed for item in after["results"]):
+        qualification_changed = before_passes != after_passes
+        confirmed = qualification_changed and request_form.get("confirm_qualification_change") == "1"
+        if qualification_changed and not confirmed:
+            return {
+                "ok": False,
+                "requires_qualification_confirmation": True,
+                "values": merged,
+                "changed": changed,
+                "qualification_before": before,
+                "qualification_after": after,
+            }
+        if not qualification_changed and any(item.get("field_name") in changed for item in after["results"]):
             history = list(existing.get("_qualification_history") or [])
             history.append(after)
             merged["_qualification"] = after
             merged["_qualification_history"] = history
     mapped_columns = build_submission_from_form(posted, definition)
     new_filename = f"{services.submission_service.build_pdf_filename(submission.form_slug, submission.submission_id)[:-4]}_edit_{uuid4().hex[:12]}.pdf"
-    snapshot = {column.name: getattr(submission, column.name) for column in submission.__table__.columns}
-    services.submission_service._generate_form_pdf(
-        form_slug=submission.form_slug, form_config=form_config,
-        submission_id=submission.submission_id, submission_data=merged,
-        submission=snapshot, pdf_filename=new_filename, require_metadata=True,
-    )
-    for name in changed:
-        column = FORM_FIELD_MAP.get(name, name)
-        if column in FORM_SUBMISSION_COLUMNS and column not in {"id", "data_json"} and column in mapped_columns:
-            setattr(submission, column, mapped_columns[column])
-    submission.data_json = merged
-    submission.pdf_filename = new_filename
-    for item in related_files:
-        if item.document_type == "form_pdf" and item.status == "generated":
-            item.status = "superseded"
-    db.add(SubmissionWorkflowEvent(
-        submission_id=submission.id, public_submission_id=submission.submission_id,
-        form_slug=submission.form_slug, previous_status=submission.process_status,
-        new_status=submission.process_status, previous_step=submission.workflow_step or "",
-        new_step=submission.workflow_step or "", actor_id=actor.id,
-        actor_email=actor.email or "", actor_role=actor.role,
-        reason="Edycja danych zgłoszenia", source="admin_submission_edit",
-        side_effects={"changed_fields": changed, "pdf_regenerated": True},
-    ))
-    db.commit()
+    storage = services.submission_service.storage
+    pdf_path = resolve_pdf_storage_path(storage, submission.form_slug, new_filename, "form_pdf", False)
+    original_values = {column.name: deepcopy(getattr(submission, column.name))
+                       for column in submission.__table__.columns}
+    original_file_statuses = {item.id: item.status for item in related_files}
+    try:
+        pdf_bytes = services.submission_service._render_form_pdf_bytes(
+            form_config, submission.submission_id, merged,
+        )
+        storage.save_pdf(submission.form_slug, new_filename, pdf_bytes,
+                         document_type="form_pdf", signed=False)
+        services.submission_document_service.add_generated_form_pdf_to_session(
+            db, submission, new_filename, pdf_bytes, storage=storage,
+        )
+        for name in changed:
+            column = FORM_FIELD_MAP.get(name, name)
+            if column in FORM_SUBMISSION_COLUMNS and column not in {"id", "data_json"} and column in mapped_columns:
+                setattr(submission, column, mapped_columns[column])
+        submission.data_json = merged
+        submission.pdf_filename = new_filename
+        for item in related_files:
+            if item.document_type == "form_pdf" and item.status == "generated":
+                item.status = "superseded"
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, previous_status=submission.process_status,
+            new_status=submission.process_status, previous_step=submission.workflow_step or "",
+            new_step=submission.workflow_step or "", actor_id=actor.id,
+            actor_email=actor.email or "", actor_role=actor.role,
+            reason="Edycja danych zgłoszenia", source="admin_submission_edit",
+            side_effects={
+                "changed_fields": changed,
+                "pdf_regenerated": True,
+                "qualification_changed": qualification_changed,
+                "qualification_change_confirmed": confirmed,
+            },
+        ))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            storage.delete(pdf_path, missing_ok=True)
+        except Exception:
+            logger.exception("admin_submission_edit_pdf_cleanup_failed submission_id=%s", submission.submission_id)
+        raise RuntimeError("Nie udało się zapisać danych i PDF zgłoszenia.") from exc
+
+    if confirmed:
+        try:
+            services.submission_service.reevaluate_qualification(
+                submission.submission_id, form_config, actor_user_id=actor.id,
+            )
+        except Exception as exc:
+            logger.exception("admin_submission_edit_recheck_failed submission_id=%s", submission.submission_id)
+            # Recheck uses the repository's own transactions. Restore the edited
+            # record and its document metadata if it cannot finish.
+            db.rollback()
+            db.refresh(submission)
+            if submission.pdf_filename == new_filename:
+                failed_status = submission.process_status
+                failed_step = submission.workflow_step or ""
+                for column, value in original_values.items():
+                    if column != "id":
+                        setattr(submission, column, value)
+                db.query(SubmissionFile).filter(
+                    SubmissionFile.submission_id == submission.id,
+                    SubmissionFile.filename == new_filename,
+                ).delete(synchronize_session=False)
+                for item_id, status in original_file_statuses.items():
+                    file_row = db.get(SubmissionFile, item_id)
+                    if file_row is not None:
+                        file_row.status = status
+                db.add(SubmissionWorkflowEvent(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    previous_status=failed_status,
+                    new_status=original_values["process_status"],
+                    previous_step=failed_step,
+                    new_step=original_values["workflow_step"] or "",
+                    actor_id=actor.id,
+                    actor_email=actor.email or "",
+                    actor_role=actor.role,
+                    reason="Wycofanie edycji po błędzie ponownej kwalifikacji",
+                    source="admin_submission_edit_rollback",
+                    side_effects={"pdf_regenerated": False},
+                ))
+                db.commit()
+                try:
+                    storage.delete(pdf_path, missing_ok=True)
+                except Exception:
+                    logger.exception("admin_submission_edit_pdf_cleanup_failed submission_id=%s", submission.submission_id)
+            raise RuntimeError("Nie udało się dokończyć ponownej kwalifikacji.") from exc
     return {"ok": True, "changed": changed}
 
 

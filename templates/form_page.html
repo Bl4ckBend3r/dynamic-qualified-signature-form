@@ -92,6 +92,23 @@ endblock %}
     {% endif %}
   >
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() if admin_edit_mode else public_csrf_token() }}" />
+    {% if admin_edit_mode and qualification_confirmation %}
+    <section class="alert alert-warning" role="alert" aria-labelledby="qualification-confirmation-title">
+      <h3 id="qualification-confirmation-title" tabindex="-1" autofocus>Zmiana danych wpłynie na wynik kwalifikacji zgłoszenia.</h3>
+      <p>Po zapisaniu system ponownie oceni warunki kwalifikujące i może automatycznie zmienić status lub etap workflow.</p>
+      {% if qualification_confirmation.changed_fields %}
+      <p>Zmienione pola: {{ qualification_confirmation.changed_fields|join(', ') }}.</p>
+      {% endif %}
+      {% if qualification_confirmation.transitions %}
+      <ul>
+        {% for transition in qualification_confirmation.transitions %}
+        <li>{{ transition.label }}: {{ 'warunek spełniony' if transition.before else 'warunek niespełniony' }} → {{ 'warunek spełniony' if transition.after else 'warunek niespełniony' }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <p>Czy na pewno chcesz zapisać te zmiany?</p>
+    </section>
+    {% endif %}
     {% if not document_mode and not correction_mode and not admin_edit_mode %}<input type="hidden" name="review_token" value="" />{% endif %}
     {% if form_version_token %}
     <input type="hidden" name="form_version_id" value="{{ form_version_id }}" />
@@ -544,10 +561,15 @@ endblock %}
         aria-live="polite"
         >Wersja robocza jest aktywna.</span
       >{% endif %}
+      {% if admin_edit_mode and qualification_confirmation %}
+      <a class="btn-secondary" href="{{ form_action }}">Anuluj</a>
+      <button type="submit" class="btn-primary" name="confirm_qualification_change" value="1">Zapisz mimo wpływu na kwalifikację</button>
+      {% else %}
       <button type="submit" class="btn-primary">
         {{ form_definition.submit_label if document_mode else "Uzupełnij dane" if version_upgrade_mode|default(false) else "Wyślij poprawione
         zgłoszenie" if correction_mode else "Zapisz zmiany" if admin_edit_mode else "Sprawdź dane przed wysłaniem" }}
       </button>
+      {% endif %}
     </div>
     {% if draft_mode %}
     <p class="form-hint">

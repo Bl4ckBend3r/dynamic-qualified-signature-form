@@ -39,6 +39,8 @@ class InMemoryStorage:
     def delete(self, path, missing_ok=False):
         if path in self.direct_files:
             del self.direct_files[path]
+        elif path in self.saved_pdfs:
+            del self.saved_pdfs[path]
         elif not missing_ok:
             raise FileNotFoundError(path)
 

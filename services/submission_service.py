@@ -563,28 +563,9 @@ class SubmissionService:
         pdf_filename: str,
         require_metadata: bool = False,
     ) -> None:
-        pdf_context = {
-            "form_definition": form_config,
-            "submission_view": build_submission_view(form_config, submission_data),
-            "submission_id": submission_id,
-            "pdf_image_url": self._resolve_pdf_image_url(form_config),
-            "pdf_image_alt": form_config.get("title", ""),
-            "consents_view": build_consents_view(form_config, submission_data),
-        }
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=current_app.config["TEMP_DIR"]) as tmp_pdf:
-            tmp_pdf_path = Path(tmp_pdf.name)
-        try:
-            generate_pdf(
-                app=current_app._get_current_object(),
-                template_name="pdf_template.html",
-                context=pdf_context,
-                output_path=tmp_pdf_path,
-            )
-            pdf_bytes = tmp_pdf_path.read_bytes()
-            self.storage.save_pdf(form_slug, pdf_filename, pdf_bytes)
-            logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
-        finally:
-            tmp_pdf_path.unlink(missing_ok=True)
+        pdf_bytes = self._render_form_pdf_bytes(form_config, submission_id, submission_data)
+        self.storage.save_pdf(form_slug, pdf_filename, pdf_bytes)
+        logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
         metadata_recorded = self.submission_document_service.record_generated_document(
             submission_id=submission_id,
             form_slug=form_slug,
@@ -604,6 +585,29 @@ class SubmissionService:
             self.audit_log_service.log_event(
                 "PDF_GENERATED", submission_id, form_slug, metadata={"filename": pdf_filename}
             )
+
+    def _render_form_pdf_bytes(self, form_config: dict, submission_id: str, submission_data: dict) -> bytes:
+        """Render a form PDF without persisting its bytes or metadata."""
+        pdf_context = {
+            "form_definition": form_config,
+            "submission_view": build_submission_view(form_config, submission_data),
+            "submission_id": submission_id,
+            "pdf_image_url": self._resolve_pdf_image_url(form_config),
+            "pdf_image_alt": form_config.get("title", ""),
+            "consents_view": build_consents_view(form_config, submission_data),
+        }
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=current_app.config["TEMP_DIR"]) as tmp_pdf:
+            tmp_pdf_path = Path(tmp_pdf.name)
+        try:
+            generate_pdf(
+                app=current_app._get_current_object(),
+                template_name="pdf_template.html",
+                context=pdf_context,
+                output_path=tmp_pdf_path,
+            )
+            return tmp_pdf_path.read_bytes()
+        finally:
+            tmp_pdf_path.unlink(missing_ok=True)
 
     def reevaluate_qualification(
         self,
@@ -771,7 +775,12 @@ class SubmissionService:
         events = self.submission_repository.list_workflow_events(submission["submission_id"])
         if not events:
             return None
-        origin = events[-1]
+        # An answer edit records its own event before the qualification recheck.
+        # It does not replace the workflow event that caused the block.
+        origin = next((event for event in reversed(events)
+                       if event.get("source") not in {"admin_submission_edit", "admin_submission_edit_rollback"}), None)
+        if origin is None:
+            return None
         if (origin.get("source") != expected_source
                 or str(origin.get("new_status") or "") != status
                 or str(origin.get("new_step") or "") != step):

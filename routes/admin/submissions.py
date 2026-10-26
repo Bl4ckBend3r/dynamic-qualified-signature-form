@@ -831,13 +831,17 @@ def submission_edit(form_id: int, submission_pk: int):
             abort(403)
         if not services.permission_service.has_permission(db, g.admin_user, "can_view_sensitive_data", form=form):
             abort(403)
-        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        submission = (
+            db.execute(select(FormSubmission).where(FormSubmission.id == submission_pk).with_for_update()).scalar_one_or_none()
+            if request.method == "POST" else db.get(FormSubmission, submission_pk)
+        ) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
         config = _submission_form_config(db, form, submission)
         definition = editable_submission_definition(config)
         errors = {}
         form_error = ""
+        qualification_confirmation = None
         response_status = 200
         values = submission_answer_values(submission, config)
         if request.method == "POST":
@@ -848,20 +852,40 @@ def submission_edit(form_id: int, submission_pk: int):
                 )
             except RuntimeError:
                 db.rollback()
-                current_app.logger.exception("admin_submission_edit_document_failed submission_pk=%s", submission_pk)
-                result = {"ok": False, "errors": {"form": "Nie udało się bezpiecznie zaktualizować dokumentu. Dane nie zostały zmienione."}}
+                current_app.logger.exception("admin_submission_edit_failed submission_pk=%s", submission_pk)
+                result = {"ok": False, "errors": {"form": "Nie udało się bezpiecznie zapisać zgłoszenia. Dane nie zostały zmienione."}}
                 response_status = 503
             if result["ok"]:
                 flash("Zapisano dane zgłoszenia.", "success")
                 return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
-            errors = result["errors"]
             values = values_for_rerender(definition, request.form, saved_values=values)
-            form_error = errors.get("form") or "Sprawdź pola oznaczone poniżej."
+            if result.get("requires_qualification_confirmation"):
+                response_status = 200
+                before_results = {str(item.get("id")): item for item in result["qualification_before"]["results"]}
+                transitions = []
+                for after_item in result["qualification_after"]["results"]:
+                    prior = before_results.get(str(after_item.get("id")))
+                    if prior is not None and prior.get("passed") != after_item.get("passed"):
+                        transitions.append({
+                            "label": after_item.get("field_label") or after_item.get("field_name") or "Warunek kwalifikujący",
+                            "before": bool(prior.get("passed")),
+                            "after": bool(after_item.get("passed")),
+                        })
+                labels = {str(field.get("name")): field.get("label") or field.get("name")
+                          for field in definition.get("fields") or [] if field.get("name")}
+                qualification_confirmation = {
+                    "changed_fields": [labels.get(name, name) for name in result["changed"]],
+                    "transitions": transitions,
+                }
+            else:
+                errors = result["errors"]
+                form_error = errors.get("form") or "Sprawdź pola oznaczone poniżej."
         response = make_response(render_template(
             "form_page.html", slug=form.slug, form_meta={}, form_definition=definition,
             errors=errors, values=values, form_error=form_error,
             form_action=url_for("admin.submission_edit", form_id=form.id, submission_pk=submission.id),
             admin_edit_mode=True,
+            qualification_confirmation=qualification_confirmation,
             admin_back_url=url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id),
         ), response_status)
         response.headers["Cache-Control"] = "no-store, private"

@@ -819,14 +819,12 @@ def test_admin_submission_edit_validates_scopes_and_audits_fields(admin_app, adm
         db.commit()
         submission_pk = submission.id
     generated = []
-    original_generate_pdf = admin_app.extensions["services"].submission_service._generate_form_pdf
-    def capture_generated_pdf(**kwargs):
-        generated.append(kwargs["pdf_filename"])
-        return original_generate_pdf(**kwargs)
-    monkeypatch.setattr(
-        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
-        capture_generated_pdf,
-    )
+    storage = admin_app.extensions["services"].submission_service.storage
+    original_save_pdf = storage.save_pdf
+    def capture_generated_pdf(slug, filename, pdf_bytes, **kwargs):
+        generated.append(filename)
+        return original_save_pdf(slug, filename, pdf_bytes, **kwargs)
+    monkeypatch.setattr(storage, "save_pdf", capture_generated_pdf)
     login(admin_client)
     url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
     page = admin_client.get(url)
@@ -835,6 +833,7 @@ def test_admin_submission_edit_validates_scopes_and_audits_fields(admin_app, adm
     assert admin_client.post(url, data={"imie": "Anna", "email": "anna@example.test"}).status_code == 400
     invalid = admin_client.post(url, data={
         "csrf_token": admin_csrf(admin_client), "imie": "Anna", "email": "wrong",
+        "confirm_qualification_change": "1",
     })
     assert invalid.status_code == 400
     assert not generated
@@ -855,6 +854,7 @@ def test_admin_submission_edit_validates_scopes_and_audits_fields(admin_app, adm
         assert db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission_pk, SubmissionFile.filename == generated[0])).scalar_one()
         assert db.execute(select(SubmissionFile.status).where(SubmissionFile.submission_id == submission_pk, SubmissionFile.filename == "original.pdf")).scalar_one() == "superseded"
         assert event.side_effects["changed_fields"] == ["email", "imie"]
+        assert event.side_effects["qualification_changed"] is False
         assert "Anna" not in str(event.side_effects)
 
 
@@ -876,7 +876,7 @@ def test_admin_submission_edit_blocks_signed_documents(admin_app, admin_client, 
         db.commit()
         submission_pk = submission.id
     monkeypatch.setattr(
-        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
+        admin_app.extensions["services"].submission_service, "_render_form_pdf_bytes",
         lambda **_kwargs: pytest.fail("Signed document must not be regenerated"),
     )
     login(admin_client)
@@ -885,7 +885,7 @@ def test_admin_submission_edit_blocks_signed_documents(admin_app, admin_client, 
     assert "Edytuj dane zgłoszenia" not in detail.get_data(as_text=True)
     response = admin_client.post(
         f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
-        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna"},
+        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna", "confirm_qualification_change": "1"},
     )
     assert response.status_code == 400
     with factory() as db:
@@ -915,9 +915,12 @@ def test_admin_submission_edit_requires_scoped_edit_and_sensitive_permissions(ad
     grant_rbac(admin_app, user_id, ["can_view_sensitive_data"], form_id=first_form)
     assert admin_client.get(first_url).status_code == 200
     assert admin_client.get(second_url).status_code == 403
+    assert admin_client.post(second_url, data={
+        "csrf_token": admin_csrf(admin_client), "imie": "Anna", "confirm_qualification_change": "1",
+    }).status_code == 403
 
 
-def test_admin_submission_edit_blocks_change_that_reverses_qualification(admin_app, admin_client, monkeypatch):
+def test_admin_submission_edit_requires_confirmation_for_qualification_change(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     form_id = create_form(admin_app, definition_json={
         "title": "Qualification",
@@ -934,7 +937,7 @@ def test_admin_submission_edit_blocks_change_that_reverses_qualification(admin_a
         db.commit()
         submission_pk = submission.id
     monkeypatch.setattr(
-        admin_app.extensions["services"].submission_service, "_generate_form_pdf",
+        admin_app.extensions["services"].submission_service, "_render_form_pdf_bytes",
         lambda **_kwargs: pytest.fail("Qualification-changing edit must not generate a PDF"),
     )
     login(admin_client)
@@ -942,9 +945,265 @@ def test_admin_submission_edit_blocks_change_that_reverses_qualification(admin_a
         f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
         data={"csrf_token": admin_csrf(admin_client), "imie": "Anna"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Zapisz mimo wpływu na kwalifikację" in html
+    assert "Anuluj" in html
+    assert 'value="Anna"' in html
     with factory() as db:
-        assert db.get(FormSubmission, submission_pk).imiona == "Jan"
+        stored = db.get(FormSubmission, submission_pk)
+        assert stored.imiona == "Jan"
+        assert stored.process_status != "AUTO_REJECTED"
+        assert db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.submission_id == submission_pk)).scalars().all() == []
+
+
+@pytest.mark.parametrize("failure_action,expected_status,expected_step,expected_event", [
+    ("auto_reject", "AUTO_REJECTED", "auto_rejected", "auto_rejected_by_condition"),
+    ("officer_decision", "FORM_SUBMITTED", "officer_decision", "qualification_officer_decision"),
+])
+def test_admin_submission_edit_confirmed_change_rechecks_workflow(
+    admin_app, admin_client, monkeypatch, failure_action, expected_status, expected_step, expected_event,
+):
+    create_user(admin_app)
+    definition = {
+        "title": "Qualification",
+        "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "qualification_conditions": {"enabled": True, "conditions": [{
+            "id": "name_condition", "field_name": "imie", "operator": "equals",
+            "expected_value": "Jan", "failure_action": failure_action, "is_active": True,
+        }]},
+    }
+    form_id = create_form(admin_app, definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id=f"confirmed-{failure_action}", form_slug="sample_form",
+            imiona="Jan", data_json={"imie": "Jan"}, process_status="FORM_SUBMITTED",
+            workflow_step="submission", workflow_stage="submission",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    services = admin_app.extensions["services"]
+    rendered_data = []
+    original_render = services.submission_service._render_form_pdf_bytes
+    def capture_pdf_data(form_config, submission_id, submission_data):
+        rendered_data.append(dict(submission_data))
+        return original_render(form_config, submission_id, submission_data)
+    monkeypatch.setattr(services.submission_service, "_render_form_pdf_bytes", capture_pdf_data)
+    if failure_action == "auto_reject":
+        monkeypatch.setattr(services.mail_dispatch_service, "dispatch_auto_rejected_by_condition", lambda *_args: None)
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
+    data = {"csrf_token": admin_csrf(admin_client), "imie": "Anna"}
+    assert admin_client.post(url, data=data).status_code == 200
+    confirmed = admin_client.post(url, data={**data, "confirm_qualification_change": "1"})
+    assert confirmed.status_code == 302
+    assert len(rendered_data) == 1 and "confirm_qualification_change" not in rendered_data[0]
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert saved.imiona == "Anna"
+        assert saved.process_status == expected_status
+        assert saved.workflow_step == expected_step
+        assert "confirm_qualification_change" not in saved.data_json
+        assert saved.data_json["_qualification"]["passed"] is False
+        assert saved.pdf_filename
+        files = db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission_pk)).scalars().all()
+        assert len(files) == 1 and files[0].filename == saved.pdf_filename
+        events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission_pk
+        ).order_by(SubmissionWorkflowEvent.id)).scalars().all()
+        assert [event.source for event in events] == ["admin_submission_edit", expected_event]
+        assert events[0].side_effects == {
+            "changed_fields": ["imie"], "pdf_regenerated": True,
+            "qualification_changed": True, "qualification_change_confirmed": True,
+        }
+
+
+@pytest.mark.parametrize("origin_source,expected_status,expected_step", [
+    ("auto_rejected_by_condition", "DECLARATION_READY", "later_stage"),
+    ("manual_decision", "OFFICER_REJECTED", "auto_rejected"),
+])
+def test_admin_submission_edit_confirmed_recheck_restores_only_qualification_block(
+    admin_app, admin_client, origin_source, expected_status, expected_step,
+):
+    create_user(admin_app)
+    published = {
+        "title": "Historical qualification",
+        "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "qualification_conditions": {"enabled": True, "conditions": [{
+            "id": "name_condition", "field_name": "imie", "operator": "equals",
+            "expected_value": "Jan", "failure_action": "auto_reject", "is_active": True,
+        }]},
+        "workflow": {"flow_mode": "explicit", "initial_step": "submission", "steps": [
+            {"id": "submission", "type": "form_submit", "stage_type": "user_action", "status": "FORM_SUBMITTED", "next": "review"},
+            {"id": "review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
+            {"id": "later_stage", "stage_type": "documents", "status": "DECLARATION_READY"},
+        ]},
+    }
+    draft = json.loads(json.dumps(published))
+    draft["qualification_conditions"]["conditions"][0]["expected_value"] = "Never"
+    form_id = create_form(admin_app, slug="historical_edit", definition_json=draft)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+                              version_label="1.0", status="published", definition_json=published)
+        db.add(version)
+        db.flush()
+        submission = FormSubmission(
+            submission_id=f"historical-{origin_source}", form_slug="historical_edit",
+            form_version_id=version.id, imiona="Anna", process_status=(
+                "AUTO_REJECTED" if origin_source == "auto_rejected_by_condition" else "OFFICER_REJECTED"
+            ), workflow_step="auto_rejected", workflow_stage="auto_rejected",
+            data_json={"imie": "Anna", "_qualification_history": [{"passed": False}]},
+        )
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, previous_status="OFFICER_ACCEPTED",
+            new_status=submission.process_status, previous_step="later_stage",
+            new_step="auto_rejected", actor_role="system", source=origin_source,
+        ))
+        db.commit()
+        submission_pk, version_id = submission.id, version.id
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
+    data = {"csrf_token": admin_csrf(admin_client), "imie": "Jan"}
+    first = admin_client.post(url, data=data)
+    assert first.status_code == 200
+    assert "Zapisz mimo wpływu na kwalifikację" in first.get_data(as_text=True)
+    confirmed = admin_client.post(url, data={**data, "confirm_qualification_change": "1"})
+    assert confirmed.status_code == 302
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert saved.form_version_id == version_id
+        assert saved.process_status == expected_status
+        assert saved.workflow_step == expected_step
+        assert saved.data_json["_qualification"]["passed"] is True
+        assert db.get(FormVersion, version_id).definition_json == published
+        events = db.execute(select(SubmissionWorkflowEvent.source).where(
+            SubmissionWorkflowEvent.submission_id == submission_pk
+        ).order_by(SubmissionWorkflowEvent.id)).scalars().all()
+        assert events[:2] == [origin_source, "admin_submission_edit"]
+        assert ("qualification_recheck" in events) == (origin_source == "auto_rejected_by_condition")
+
+
+def test_admin_submission_edit_confirmation_reloads_current_data(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={
+        "title": "Qualification", "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "qualification_conditions": {"enabled": True, "conditions": [{
+            "id": "name", "field_name": "imie", "operator": "equals", "expected_value": "Jan",
+            "failure_action": "auto_reject", "is_active": True,
+        }]},
+    })
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = FormSubmission(submission_id="edit-reload", form_slug="sample_form", imiona="Jan", data_json={"imie": "Jan"})
+        db.add(row)
+        db.commit()
+        submission_pk = row.id
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
+    data = {"csrf_token": admin_csrf(admin_client), "imie": "Anna"}
+    assert admin_client.post(url, data=data).status_code == 200
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        row.imiona = "Anna"
+        row.data_json = {"imie": "Anna"}
+        db.commit()
+    confirmed = admin_client.post(url, data={**data, "confirm_qualification_change": "1"})
+    assert confirmed.status_code == 302
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        assert row.imiona == "Anna" and row.pdf_filename in (None, "")
+        assert db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission_pk
+        )).scalars().all() == []
+
+
+def test_admin_submission_edit_recheck_failure_restores_data_and_pdf(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={
+        "title": "Qualification", "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "qualification_conditions": {"enabled": True, "conditions": [{
+            "id": "name", "field_name": "imie", "operator": "equals", "expected_value": "Jan",
+            "failure_action": "auto_reject", "is_active": True,
+        }]},
+    })
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = FormSubmission(submission_id="edit-recheck-fail", form_slug="sample_form", imiona="Jan",
+                             data_json={"imie": "Jan"}, pdf_filename="original.pdf",
+                             process_status="FORM_SUBMITTED", workflow_step="submission", workflow_stage="submission")
+        db.add(row)
+        db.flush()
+        db.add(SubmissionFile(submission_id=row.id, public_submission_id=row.submission_id,
+                              form_slug=row.form_slug, filename="original.pdf", storage_path="original.pdf",
+                              document_type="form_pdf", status="generated"))
+        db.commit()
+        submission_pk = row.id
+    def fail_recheck(*_args, **_kwargs):
+        admin_app.extensions["services"].submission_service.submission_repository.update(
+            "edit-recheck-fail", {
+                "data_json": {"imie": "Anna", "_qualification": {"passed": False}},
+                "process_status": "AUTO_REJECTED", "workflow_step": "auto_rejected",
+                "workflow_stage": "auto_rejected",
+            },
+        )
+        raise RuntimeError("recheck failed")
+    monkeypatch.setattr(admin_app.extensions["services"].submission_service,
+                        "reevaluate_qualification", fail_recheck)
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/edit",
+        data={"csrf_token": admin_csrf(admin_client), "imie": "Anna", "confirm_qualification_change": "1"},
+    )
+    assert response.status_code == 503
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        assert row.imiona == "Jan" and row.data_json == {"imie": "Jan"}
+        assert row.pdf_filename == "original.pdf"
+        assert row.process_status == "FORM_SUBMITTED" and row.workflow_step == "submission"
+        files = db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission_pk)).scalars().all()
+        assert len(files) == 1 and files[0].status == "generated"
+    assert admin_app.extensions["services"].submission_service.storage.saved_pdfs == {}
+
+
+def test_admin_submission_edit_recheck_skips_future_document_condition(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    definition = {
+        "title": "Qualification",
+        "fields": [{"type": "text", "name": "imie", "label": "Imię", "required": True}],
+        "documents": [{"id": "certificate", "fields": [{"name": "adult", "type": "radio", "options": ["Tak", "Nie"]}]}],
+        "qualification_conditions": {"enabled": True, "conditions": [
+            {"id": "name", "field_name": "imie", "operator": "equals", "expected_value": "Jan",
+             "failure_action": "auto_reject", "is_active": True},
+            {"id": "document-adult", "field_name": "adult", "operator": "equals", "expected_value": "Tak",
+             "failure_action": "auto_reject", "is_active": True},
+        ]},
+    }
+    form_id = create_form(admin_app, definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = FormSubmission(submission_id="edit-future-document", form_slug="sample_form", imiona="Jan",
+                             data_json={"imie": "Jan"}, process_status="FORM_SUBMITTED",
+                             workflow_step="submission", workflow_stage="submission")
+        db.add(row)
+        db.commit()
+        submission_pk = row.id
+    monkeypatch.setattr(admin_app.extensions["services"].mail_dispatch_service,
+                        "dispatch_auto_rejected_by_condition", lambda *_args: None)
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/submissions/{submission_pk}/edit"
+    data = {"csrf_token": admin_csrf(admin_client), "imie": "Anna"}
+    assert admin_client.post(url, data=data).status_code == 200
+    assert admin_client.post(url, data={**data, "confirm_qualification_change": "1"}).status_code == 302
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        assert row.process_status == "AUTO_REJECTED"
+        assert [item["id"] for item in row.data_json["_qualification"]["failed_conditions"]] == ["name"]
 
 
 def test_admin_submission_edit_keeps_data_if_pdf_metadata_fails(admin_app, admin_client, monkeypatch):
@@ -963,7 +1222,7 @@ def test_admin_submission_edit_keeps_data_if_pdf_metadata_fails(admin_app, admin
         submission_pk = submission.id
     monkeypatch.setattr(
         admin_app.extensions["services"].submission_document_service,
-        "record_generated_document", lambda **_kwargs: False,
+        "add_generated_form_pdf_to_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("metadata failed")),
     )
     login(admin_client)
     response = admin_client.post(

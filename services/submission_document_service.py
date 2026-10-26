@@ -73,6 +73,31 @@ class SubmissionDocumentService:
             storage=storage,
         )
 
+    def add_generated_form_pdf_to_session(self, db, submission, filename: str, file_bytes: bytes, storage=None):
+        """Stage generated form PDF metadata in the caller's edit transaction."""
+        from models import SubmissionFile
+        from services.file_metadata import resolve_pdf_storage_path
+
+        storage = storage or self.storage
+        record = SubmissionFile(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            document_id="form_submission",
+            document_type=SubmissionDocumentType.FORM_PDF,
+            filename=filename,
+            storage_path=resolve_pdf_storage_path(storage, submission.form_slug, filename,
+                                                  SubmissionDocumentType.FORM_PDF, False),
+            mime_type="application/pdf",
+            size_bytes=len(file_bytes),
+            checksum_sha256=hashlib.sha256(file_bytes).hexdigest(),
+            signed=False,
+            status=GENERATED_STATUS,
+            generated_at=datetime.now(timezone.utc),
+        )
+        db.add(record)
+        return record
+
     def record_signed_document(
         self,
         *,

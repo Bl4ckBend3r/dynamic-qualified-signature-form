@@ -2115,11 +2115,18 @@ def test_qualification_recheck_routes_submission_to_officer_decision(
         assert submission.data_json["_qualification"]["passed"] is False
 
 
-def test_qualification_recheck_passes_submission_waiting_for_officer_decision(
+@pytest.mark.parametrize("block_source, expected_step", [
+    (None, "officer_decision"),
+    ("workflow_transition_to", "officer_decision"),
+    ("qualification_officer_decision", "officer_review"),
+])
+def test_qualification_recheck_resumes_only_qualification_officer_decision(
     admin_app,
     admin_client,
     form_definition,
     monkeypatch,
+    block_source,
+    expected_step,
 ):
     definition = _qualification_recheck_definition(
         form_definition,
@@ -2140,24 +2147,34 @@ def test_qualification_recheck_passes_submission_waiting_for_officer_decision(
     )
 
     with session_factory() as db:
-        db.add(
-            FormSubmission(
-                submission_id="recheck-pass-officer-uuid",
-                form_slug="recheck_pass_officer",
-                form_name="Recheck Pass Officer",
-                process_status="FORM_SUBMITTED",
-                workflow_step="officer_decision",
-                workflow_stage="officer_decision",
-                officer_decision="",
-                officer_decision_reason="Wymagana weryfikacja.",
-                data_json={
-                    "wiek": "36",
-                    "_qualification_history": [{
-                        "passed": False,
-                    }],
-                },
-            )
+        submission = FormSubmission(
+            submission_id="recheck-pass-officer-uuid",
+            form_slug="recheck_pass_officer",
+            form_name="Recheck Pass Officer",
+            process_status="FORM_SUBMITTED",
+            workflow_step="officer_decision",
+            workflow_stage="officer_decision",
+            officer_decision="",
+            officer_decision_reason="Wymagana weryfikacja.",
+            data_json={
+                "wiek": "36",
+                "_qualification_history": [{"passed": False}],
+            },
         )
+        db.add(submission)
+        db.flush()
+        if block_source:
+            db.add(SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status="FORM_SUBMITTED",
+                new_status="FORM_SUBMITTED",
+                previous_step="submission",
+                new_step="officer_decision",
+                actor_role="system",
+                source=block_source,
+            ))
         db.commit()
 
     services = admin_app.extensions["services"]
@@ -2190,21 +2207,39 @@ def test_qualification_recheck_passes_submission_waiting_for_officer_decision(
             )
         ).scalar_one()
 
-        assert submission.process_status == "FORM_SUBMITTED"
-        assert submission.workflow_step == "submission"
-        assert submission.workflow_stage == "submission"
-        assert submission.officer_decision_reason == ""
+        assert submission.workflow_step == expected_step
+        assert submission.workflow_stage == expected_step
+        assert submission.process_status == (
+            "WAITING_FOR_OFFICER_DECISION" if block_source == "qualification_officer_decision"
+            else "FORM_SUBMITTED"
+        )
+        assert submission.officer_decision_reason == (
+            "" if block_source == "qualification_officer_decision" else "Wymagana weryfikacja."
+        )
         assert submission.data_json["_qualification"]["passed"] is True
         assert len(
             submission.data_json["_qualification_history"]
         ) == 2
+        events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.public_submission_id == submission.submission_id
+        ).order_by(SubmissionWorkflowEvent.id)).scalars().all()
+        assert [event.source for event in events] == (
+            ["qualification_officer_decision", "qualification_recheck", "workflow_transition_to"]
+            if block_source == "qualification_officer_decision" else [block_source] if block_source else []
+        )
 
 
-def test_qualification_recheck_does_not_reopen_auto_rejected_submission(
+@pytest.mark.parametrize("record_origin, expected_step", [
+    (False, "auto_rejected"),
+    (True, "officer_review"),
+])
+def test_qualification_recheck_reopens_only_qualification_auto_rejection(
     admin_app,
     admin_client,
     form_definition,
     monkeypatch,
+    record_origin,
+    expected_step,
 ):
     definition = _qualification_recheck_definition(
         form_definition,
@@ -2225,25 +2260,33 @@ def test_qualification_recheck_does_not_reopen_auto_rejected_submission(
     )
 
     with session_factory() as db:
-        db.add(
-            FormSubmission(
-                submission_id="recheck-still-rejected-uuid",
-                form_slug="recheck_still_rejected",
-                form_name="Recheck Still Rejected",
-                process_status="AUTO_REJECTED",
-                workflow_step="auto_rejected",
-                workflow_stage="auto_rejected",
-                data_json={
-                    "wiek": "36",
-                    "_qualification": {
-                        "passed": False,
-                    },
-                    "_qualification_history": [{
-                        "passed": False,
-                    }],
-                },
-            )
+        submission = FormSubmission(
+            submission_id="recheck-still-rejected-uuid",
+            form_slug="recheck_still_rejected",
+            form_name="Recheck Still Rejected",
+            process_status="AUTO_REJECTED",
+            workflow_step="auto_rejected",
+            workflow_stage="auto_rejected",
+            data_json={
+                "wiek": "36",
+                "_qualification": {"passed": False},
+                "_qualification_history": [{"passed": False}],
+            },
         )
+        db.add(submission)
+        db.flush()
+        if record_origin:
+            db.add(SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status="FORM_SUBMITTED",
+                new_status="AUTO_REJECTED",
+                previous_step="submission",
+                new_step="auto_rejected",
+                actor_role="system",
+                source="auto_rejected_by_condition",
+            ))
         db.commit()
 
     services = admin_app.extensions["services"]
@@ -2274,6 +2317,7 @@ def test_qualification_recheck_does_not_reopen_auto_rejected_submission(
     )
 
     assert response.status_code == 200
+    assert f"wznowiono proces: {int(record_origin)}" in response.get_data(as_text=True)
 
     with session_factory() as db:
         submission = db.execute(
@@ -2283,14 +2327,119 @@ def test_qualification_recheck_does_not_reopen_auto_rejected_submission(
             )
         ).scalar_one()
 
-        assert submission.process_status == "AUTO_REJECTED"
-        assert submission.workflow_step == "auto_rejected"
+        assert submission.workflow_step == expected_step
+        assert submission.process_status == (
+            "WAITING_FOR_OFFICER_DECISION" if record_origin else "AUTO_REJECTED"
+        )
         assert submission.data_json["_qualification"]["passed"] is True
         assert len(
             submission.data_json["_qualification_history"]
         ) == 2
 
     assert sent == []
+
+
+def test_qualification_recheck_restores_later_stage_from_bound_version(admin_app, form_definition):
+    published = _qualification_recheck_definition(form_definition, expected_value="18")
+    published["workflow"] = {"flow_mode": "explicit", "initial_step": "submission", "steps": [
+        {"id": "submission", "type": "form_submit", "stage_type": "user_action", "status": "FORM_SUBMITTED",
+         "next": "review"},
+        {"id": "review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
+        {"id": "later_stage", "stage_type": "documents", "status": "DECLARATION_READY"},
+    ]}
+    draft = _qualification_recheck_definition(form_definition, expected_value="100")
+    form_id = create_form(admin_app, slug="recheck_later_stage", definition_json=draft)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+                              version_label="1.0", status="published", definition_json=published)
+        db.add(version)
+        db.flush()
+        submission = FormSubmission(
+            submission_id="recheck-later-stage-uuid", form_slug="recheck_later_stage",
+            form_version_id=version.id, process_status="AUTO_REJECTED",
+            workflow_step="auto_rejected", workflow_stage="auto_rejected",
+            data_json={"wiek": "36", "_qualification_history": [{"passed": False}]},
+        )
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, previous_status="OFFICER_ACCEPTED",
+            new_status="AUTO_REJECTED", previous_step="later_stage", new_step="auto_rejected",
+            actor_role="system", source="auto_rejected_by_condition",
+        ))
+        db.commit()
+
+    result = admin_app.extensions["services"].submission_service.reevaluate_qualification(
+        "recheck-later-stage-uuid", draft,
+    )
+    assert result["passed"] and result["outcome"] == "passed"
+    with factory() as db:
+        row = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == "recheck-later-stage-uuid"
+        )).scalar_one()
+        assert row.process_status == "DECLARATION_READY"
+        assert row.workflow_step == row.workflow_stage == "later_stage"
+        assert len(row.data_json["_qualification_history"]) == 2
+        assert db.get(FormVersion, row.form_version_id).definition_json == published
+        events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.public_submission_id == row.submission_id
+        ).order_by(SubmissionWorkflowEvent.id)).scalars().all()
+        assert [event.source for event in events] == ["auto_rejected_by_condition", "qualification_recheck"]
+
+
+def test_qualification_recheck_keeps_block_until_document_condition_is_evaluated(admin_app, form_definition):
+    definition = json.loads(json.dumps(form_definition))
+    definition["documents"] = [{"id": "certificate", "fields": [
+        {"name": "adult", "type": "radio", "options": ["Tak", "Nie"]},
+    ]}]
+    definition["qualification_conditions"] = {"enabled": True, "conditions": [{
+        "id": "document-adult", "field_name": "adult", "operator": "equals",
+        "expected_value": "Tak", "failure_action": "auto_reject",
+    }]}
+    create_form(admin_app, slug="recheck_document_pending", definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    failed = {"id": "document-adult", "field_name": "adult", "passed": False}
+    with factory() as db:
+        row = FormSubmission(
+            submission_id="recheck-document-pending-uuid", form_slug="recheck_document_pending",
+            process_status="AUTO_REJECTED", workflow_step="auto_rejected", workflow_stage="auto_rejected",
+            data_json={"_qualification": {"passed": False, "failed_conditions": [failed]},
+                       "_qualification_history": [{"passed": False, "failed_conditions": [failed]}]},
+        )
+        db.add(row)
+        db.flush()
+        db.add(SubmissionWorkflowEvent(
+            submission_id=row.id, public_submission_id=row.submission_id, form_slug=row.form_slug,
+            previous_status="WAITING_FOR_OFFICER_DECISION", new_status="AUTO_REJECTED",
+            previous_step="officer_review", new_step="auto_rejected",
+            actor_role="system", source="auto_rejected_by_condition",
+        ))
+        db.commit()
+
+    services = admin_app.extensions["services"]
+    config = services.form_config_service.normalize_form_config(definition)
+    first = services.submission_service.reevaluate_qualification("recheck-document-pending-uuid", config)
+    assert first["passed"] and first["evaluation"]["results"] == []
+    with factory() as db:
+        row = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == "recheck-document-pending-uuid"
+        )).scalar_one()
+        assert row.process_status == "AUTO_REJECTED"
+        assert row.workflow_step == "auto_rejected"
+        row.data_json = {**row.data_json, "adult": "Tak"}
+        db.commit()
+
+    second = services.submission_service.reevaluate_qualification("recheck-document-pending-uuid", config)
+    assert second["passed"]
+    with factory() as db:
+        row = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == "recheck-document-pending-uuid"
+        )).scalar_one()
+        assert row.process_status == "WAITING_FOR_OFFICER_DECISION"
+        assert row.workflow_step == "officer_review"
+        assert len(row.data_json["_qualification_history"]) == 3
 
 def test_qualification_recheck_does_not_resend_auto_rejection_mail(
     admin_app,

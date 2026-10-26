@@ -182,6 +182,7 @@ def submissions_recheck_qualification(form_id: int):
     summary = {
         "checked": 0,
         "passed": 0,
+        "resumed": 0,
         "auto_rejected": 0,
         "officer_decision": 0,
         "errors": 0,
@@ -258,6 +259,8 @@ def submissions_recheck_qualification(form_id: int):
 
                 if outcome == "passed":
                     summary["passed"] += 1
+                    if result.get("resumed"):
+                        summary["resumed"] += 1
                 elif outcome == "auto_rejected":
                     summary["auto_rejected"] += 1
                 elif outcome == "officer_decision":
@@ -278,6 +281,7 @@ def submissions_recheck_qualification(form_id: int):
         (
             f"Ponownie sprawdzono: {summary['checked']}; "
             f"spełnia warunki: {summary['passed']}; "
+            f"wznowiono proces: {summary['resumed']}; "
             f"odrzucone automatycznie: "
             f"{summary['auto_rejected']}; "
             f"wymaga decyzji: "

@@ -31,7 +31,7 @@ from services.workflow_service import (
     workflow_document_action,
     workflow_step_document_id,
 )
-from services.workflow_state_service import final_outcome_for_status
+from services.workflow_state_service import FinalOutcome, final_outcome_for_status
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +652,7 @@ class SubmissionService:
         )
 
         failed_conditions = evaluation.get("failed_conditions") or []
+        resumed = False
 
         auto_rejected = any(
             item.get("failure_action") == "auto_reject"
@@ -715,46 +716,10 @@ class SubmissionService:
 
         else:
             outcome = "passed"
-
-            # Jeżeli zgłoszenie oczekiwało na decyzję urzędnika z powodu
-            # warunku kwalifikacyjnego, a ponowne sprawdzenie jest pozytywne,
-            # przywracamy je do standardowego etapu procesu.
-            if (
-                previous_status != ProcessStatus.AUTO_REJECTED.value
-                and previous_step == "officer_decision"
-            ):
-                updates = {
-                    "process_status": ProcessStatus.FORM_SUBMITTED.value,
-                    "workflow_step": "submission",
-                    "workflow_stage": "submission",
-                    "final_outcome": final_outcome_for_status(
-                        ProcessStatus.FORM_SUBMITTED.value
-                    ).value,
-                    "officer_decision": "",
-                    "officer_decision_reason": "",
-                }
-
-                self.submission_repository.update(
-                    submission_id,
-                    updates,
-                )
-                submission.update(updates)
-
-                self.submission_repository.record_workflow_event(
-                    submission_id,
-                    {
-                        "previous_status": previous_status,
-                        "new_status": ProcessStatus.FORM_SUBMITTED.value,
-                        "previous_step": previous_step,
-                        "new_step": "submission",
-                        "actor_role": "admin",
-                        "reason": (
-                            "Ponowne sprawdzenie warunków kwalifikujących: "
-                            "zgłoszenie spełnia aktualne warunki."
-                        ),
-                        "source": "qualification_recheck",
-                    },
-                )
+            origin = self._qualification_block_origin(submission, form_config)
+            if origin is not None and self._qualification_failures_resolved(stored_data, evaluation, form_config):
+                self._resume_after_qualification_recheck(submission, form_config, origin)
+                resumed = True
 
         if self.audit_log_service:
             self.audit_log_service.log_event(
@@ -788,7 +753,97 @@ class SubmissionService:
             "passed": bool(evaluation.get("passed")),
             "outcome": outcome,
             "evaluation": evaluation,
+            "resumed": resumed,
         }
+
+    def _qualification_block_origin(self, submission: dict, form_config: dict) -> dict | None:
+        """Only a current qualification event may authorize automatic resumption."""
+        if self.workflow_service is None or submission.get("officer_decision"):
+            return None
+        status = str(submission.get("process_status") or "")
+        step = str(submission.get("workflow_step") or submission.get("workflow_stage") or "")
+        if status == ProcessStatus.AUTO_REJECTED.value and step == "auto_rejected":
+            expected_source = "auto_rejected_by_condition"
+        elif status == ProcessStatus.FORM_SUBMITTED.value and step == "officer_decision":
+            expected_source = "qualification_officer_decision"
+        else:
+            return None
+        events = self.submission_repository.list_workflow_events(submission["submission_id"])
+        if not events:
+            return None
+        origin = events[-1]
+        if (origin.get("source") != expected_source
+                or str(origin.get("new_status") or "") != status
+                or str(origin.get("new_step") or "") != step):
+            return None
+        target = str(origin.get("previous_step") or "")
+        previous_status = str(origin.get("previous_status") or "")
+        configured_steps = {
+            str(item.get("id") or ""): item
+            for item in (form_config.get("workflow") or {}).get("steps") or []
+            if isinstance(item, dict) and item.get("active", True) is not False
+        }
+        target_status = str((configured_steps.get(target) or {}).get("status") or previous_status)
+        if (not target or target not in configured_steps or not previous_status
+                or final_outcome_for_status(previous_status) != FinalOutcome.ACTIVE
+                or final_outcome_for_status(target_status) != FinalOutcome.ACTIVE
+                or previous_status == ProcessStatus.RETURNED_FOR_CORRECTION.value):
+            return None
+        return {**origin, "resume_status": target_status}
+
+    def _qualification_failures_resolved(self, stored_data: dict, evaluation: dict, form_config: dict) -> bool:
+        """A skipped condition from the blocked stage is not a positive answer."""
+        history = stored_data.get("_qualification_history") or []
+        prior_evaluations = [stored_data.get("_qualification"), *reversed(history)]
+        failed_ids = next((
+            {str(item.get("id") or "") for item in prior.get("failed_conditions") or [] if item.get("id")}
+            for prior in prior_evaluations if isinstance(prior, dict) and prior.get("failed_conditions")
+        ), set())
+        active = self.qualification_condition_service.normalize_config(
+            form_config.get("qualification_conditions"),
+            self.qualification_condition_service.field_catalog(form_config),
+        )
+        active_ids = (
+            {item["id"] for item in active["conditions"] if item["is_active"]}
+            if active["enabled"] else set()
+        )
+        evaluated_ids = {str(item.get("id") or "") for item in evaluation.get("results") or []}
+        required_ids = failed_ids & active_ids if failed_ids else active_ids
+        return required_ids <= evaluated_ids
+
+    def _resume_after_qualification_recheck(self, submission: dict, form_config: dict, origin: dict) -> None:
+        submission_id = submission["submission_id"]
+        previous_status = str(submission.get("process_status") or "")
+        previous_step = str(submission.get("workflow_step") or "")
+        target_status = str(origin["resume_status"])
+        target_step = str(origin["previous_step"])
+        updates = {
+            "process_status": target_status,
+            "workflow_step": target_step,
+            "workflow_stage": target_step,
+            "final_outcome": final_outcome_for_status(target_status).value,
+            "officer_decision_reason": "",
+        }
+        conditional_update = getattr(self.submission_repository, "update_if_workflow_step", None)
+        if callable(conditional_update):
+            updated = conditional_update(submission_id, previous_step, updates)
+        else:
+            updated = self.submission_repository.update(submission_id, updates)
+        if not updated:
+            raise WorkflowTransitionError("Nie udało się przywrócić etapu po ponownej kwalifikacji.")
+        submission.update(updates)
+        self.submission_repository.record_workflow_event(submission_id, {
+            "previous_status": previous_status,
+            "new_status": target_status,
+            "previous_step": previous_step,
+            "new_step": target_step,
+            "actor_role": "admin",
+            "reason": "Ponowne sprawdzenie warunków kwalifikujących: zgłoszenie spełnia aktualne warunki.",
+            "source": "qualification_recheck",
+            "side_effects": {"resumed_from": str(origin["source"])},
+        })
+        if target_step == FieldAvailabilityService().initial_step(form_config):
+            self.workflow_service.enter_submission_review(submission, form_config)
 
     def evaluate_saved_document(self, submission_id: str, form_config: dict, document_id: str) -> dict:
         return self.evaluate_saved_stage(submission_id, form_config, document_id=document_id)

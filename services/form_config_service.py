@@ -46,7 +46,7 @@ class FormConfigService:
         config["rules"] = self.normalize_rules_config(config)
         config["qualification_conditions"] = QualificationConditionService().normalize_config(
             config.get("qualification_conditions"),
-            config["fields"],
+            QualificationConditionService.field_catalog(config),
         )
         config = self.build_default_workflow_if_missing(config)
         config["workflow"] = self.normalize_workflow_config(config.get("workflow") or {})

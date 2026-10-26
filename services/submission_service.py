@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,10 +146,11 @@ class SubmissionService:
             self.compliance_service.remove_incomplete_submission(submission_id)
             raise
 
+        qualification_config = self._qualification_config(form_config, submission)
         qualification = self.qualification_condition_service.evaluate(
-            form_config.get("qualification_conditions"),
+            qualification_config.get("qualification_conditions"),
             submission_data,
-            form_config.get("fields") or [],
+            self.qualification_condition_service.field_catalog(qualification_config),
         )
         self._persist_qualification_result(submission, submission_data, qualification)
         try:
@@ -382,10 +384,13 @@ class SubmissionService:
         if errors:
             return {"ok": False, "errors": errors, "values": submission_data, "result": None}
 
+        qualification_config = self._qualification_config(form_config, existing)
         qualification = self.qualification_condition_service.evaluate(
-            form_config.get("qualification_conditions"),
-            submission_data,
-            form_config.get("fields") or [],
+            qualification_config.get("qualification_conditions"),
+            {**dict(existing.get("data_json") or {}), **submission_data},
+            self.qualification_condition_service.field_catalog(qualification_config),
+            stage="correction",
+            available_documents=self._available_qualification_documents(existing, qualification_config),
         )
         system_data = {
             key: value
@@ -612,7 +617,9 @@ class SubmissionService:
         if not submission:
             raise LookupError(f"Nie znaleziono zgłoszenia {submission_id}.")
 
-        stored_data = dict(submission.get("data_json") or {})
+        form_config = self._qualification_config(form_config, submission)
+
+        stored_data = self._qualification_data(submission)
 
         # Do evaluatora przekazujemy dane formularza bez technicznych pól "_*".
         submission_data = {
@@ -624,7 +631,9 @@ class SubmissionService:
         evaluation = self.qualification_condition_service.evaluate(
             form_config.get("qualification_conditions"),
             submission_data,
-            form_config.get("fields") or [],
+            self.qualification_condition_service.field_catalog(form_config),
+            stage="recheck",
+            available_documents=self._available_qualification_documents(submission, form_config),
         )
 
         previous_status = str(
@@ -781,8 +790,75 @@ class SubmissionService:
             "evaluation": evaluation,
         }
 
+    def evaluate_saved_document(self, submission_id: str, form_config: dict, document_id: str) -> dict:
+        return self.evaluate_saved_stage(submission_id, form_config, document_id=document_id)
+
+    def evaluate_saved_stage(self, submission_id: str, form_config: dict, *, document_id: str = "", workflow_step: str = "") -> dict:
+        """Apply the existing qualification actions after document data was saved."""
+        submission = self.submission_repository.get_by_id(submission_id)
+        if not submission:
+            raise LookupError(submission_id)
+        form_config = self._qualification_config(form_config, submission)
+        data = {key: value for key, value in self._qualification_data(submission).items()
+                if not str(key).startswith("_")}
+        available = self._available_qualification_documents(submission, form_config)
+        if document_id:
+            available.add(document_id)
+        evaluation = self.qualification_condition_service.evaluate(
+            form_config.get("qualification_conditions"), data,
+            self.qualification_condition_service.field_catalog(form_config),
+            stage=workflow_step or "document", available_documents=available,
+        )
+        self._persist_qualification_result(submission, data, evaluation)
+        failed = evaluation.get("failed_conditions") or []
+        if str(submission.get("process_status") or "") != ProcessStatus.AUTO_REJECTED.value:
+            if any(item.get("failure_action") == "auto_reject" for item in failed):
+                self._auto_reject_submission(
+                    submission, evaluation,
+                    previous_status=str(submission.get("process_status") or ""),
+                    previous_step=str(submission.get("workflow_step") or ""),
+                )
+            elif (str(submission.get("workflow_step") or "") != "officer_decision"
+                  and any(item.get("failure_action") == "officer_decision" for item in failed)):
+                self._mark_officer_decision_required(
+                    submission, evaluation,
+                    previous_status=str(submission.get("process_status") or ""),
+                    previous_step=str(submission.get("workflow_step") or ""),
+                )
+        return evaluation
+
+    def _qualification_config(self, form_config: dict, submission: dict) -> dict:
+        """Use the complete immutable snapshot, even when the caller rendered one stage."""
+        version_id = submission.get("form_version_id")
+        session_factory = getattr(self.submission_repository, "session_factory", None)
+        if not version_id or session_factory is None:
+            return form_config
+        from models import FormVersion
+        with session_factory() as db:
+            version = db.get(FormVersion, version_id)
+            if version is None or version.form.slug != submission.get("form_slug"):
+                raise LookupError("Brak wersji formularza przypisanej do zgłoszenia.")
+            return dict(version.definition_json or {})
+
+    def _available_qualification_documents(self, submission: dict, form_config: dict) -> set[str]:
+        data = self._qualification_data(submission)
+        catalog = self.qualification_condition_service.field_catalog(form_config)
+        return {field["document_id"] for field in catalog
+                if field.get("source") == "document" and field.get("document_id")
+                and field.get("name") in data}
+
+    @staticmethod
+    def _qualification_data(submission: dict) -> dict:
+        data = submission.get("data_json") or {}
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return {}
+        return dict(data) if isinstance(data, dict) else {}
+
     def _persist_qualification_result(self, submission: dict, submission_data: dict, evaluation: dict) -> None:
-        previous_data = submission.get("data_json") if isinstance(submission.get("data_json"), dict) else {}
+        previous_data = self._qualification_data(submission)
         system_data = {key: value for key, value in previous_data.items() if str(key).startswith("_")}
         history = list(previous_data.get("_qualification_history") or [])
         history.append(evaluation)

@@ -759,13 +759,14 @@ def render_platform_mail_html(
     info_rows = context.get("mail_details") or [
         ("Numer zgłoszenia", context.get("submission_id", "")),
         ("Formularz", context.get("form_name", "")),
-        ("Etap", context.get("current_stage_label") or context.get("status_label") or context.get("process_status", "")),
         ("Data", context.get("submitted_at", "")),
     ]
     info_rows = [(str(label), str(value)) for label, value in info_rows if value not in (None, "")]
     info_html = "".join(
         f'<tr><td style="padding:4px 0;color:#ffffff;font-size:16px;line-height:1.4;word-break:break-word;">'
-        f'<strong>{html.escape(label)}:</strong> {html.escape(value)}</td></tr>'
+        f'<strong>{html.escape(label)}:</strong> '
+        f'<strong style="color:{mail_layout["accent_color"]};">{html.escape(value)}</strong>'
+        f'</td></tr>'
         for label, value in info_rows
     )
     documents = _mail_document_names(context)
@@ -853,7 +854,6 @@ def render_platform_mail_text(template, context: dict[str, Any], *, footer_text:
     details = context.get("mail_details") or [
         ("Numer zgłoszenia", context.get("submission_id", "")),
         ("Formularz", context.get("form_name", "")),
-        ("Etap", context.get("current_stage_label") or context.get("status_label") or context.get("process_status", "")),
         ("Data", context.get("submitted_at", "")),
     ]
     details_text = "Dane zgłoszenia:\n" + "\n".join(

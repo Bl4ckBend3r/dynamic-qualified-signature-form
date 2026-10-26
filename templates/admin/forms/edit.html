@@ -253,7 +253,7 @@
                 <div>
                     <h3>Warunki kwalifikujące zgłoszenie</h3>
                     <p>
-                        Warunki są sprawdzane po zapisaniu zgłoszenia.
+                        Warunki są sprawdzane po zapisaniu danych etapu, do którego należy wybrane pole.
                         Dla każdego niespełnionego warunku wykonywana jest skonfigurowana akcja:
                         automatyczne odrzucenie albo przekazanie do decyzji urzędnika.
                     </p>
@@ -262,7 +262,7 @@
             </div>
             <label class="admin-check"><input type="checkbox" name="qualification_conditions_enabled" {% if qualification.get('enabled') %}checked{% endif %}><span>Włącz automatyczną ocenę warunków</span></label>
             <input type="hidden" name="qualification_conditions_json" data-qualification-json value="[]">
-            <script type="application/json" data-qualification-fields>[{% for field in fields %}{"name":{{ field.name|tojson }},"label":{{ (field.label or field.name)|tojson }},"type":{{ field.type|tojson }},"options":{{ (field.options or [])|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]</script>
+            <script type="application/json" data-qualification-fields>{{ form.qualification_fields|tojson }}</script>
             <div class="admin-condition-list" data-qualification-list>
                 {% for condition in qualification.get('conditions', []) %}
                 <section class="admin-card admin-condition-card" data-qualification-row>
@@ -334,12 +334,12 @@
                                 <select data-condition-field required>
                                     <option value="">Wybierz pole</option>
 
-                                    {% for field in fields %}
+                                    {% for field in form.qualification_fields %}
                                         <option
                                             value="{{ field.name }}"
                                             {% if condition.get('field_name') == field.name %}selected{% endif %}
                                         >
-                                            {{ field.label or field.name }}
+                                            {{ field.label or field.name }}{% if field.source == 'document' %} ({{ field.document_id }}){% endif %}
                                         </option>
                                     {% endfor %}
                                 </select>
@@ -546,9 +546,9 @@
                             <select data-condition-field required>
                                 <option value="">Wybierz pole</option>
 
-                                {% for field in fields %}
+                                {% for field in form.qualification_fields %}
                                     <option value="{{ field.name }}">
-                                        {{ field.label or field.name }}
+                                        {{ field.label or field.name }}{% if field.source == 'document' %} ({{ field.document_id }}){% endif %}
                                     </option>
                                 {% endfor %}
                             </select>
@@ -1929,7 +1929,10 @@ function syncQualificationBuilder() {
         return {
             id: row.querySelector("[data-condition-id]")?.value || `condition_${index + 1}`,
             field_name: field?.value || "",
-            field_label: field?.selectedOptions?.[0]?.textContent?.trim() || "",
+            source: qualificationFieldsByName.get(field?.value || "")?.source || "",
+            document_id: qualificationFieldsByName.get(field?.value || "")?.document_id || "",
+            workflow_step: qualificationFieldsByName.get(field?.value || "")?.workflow_step || "",
+            field_label: qualificationFieldsByName.get(field?.value || "")?.label || field?.value || "",
             operator,
             expected_value: expectedValue,
             failure_action: failureAction,

@@ -424,6 +424,84 @@ def test_declaration_flow_generates_pdf_without_training_selection():
     assert repository.updated[0][1].get("selected_trainings") is None
 
 
+@pytest.mark.parametrize("answer", ["Tak", "Nie"])
+def test_legacy_declaration_qualification_runs_after_save_and_preserves_history(answer):
+    from services.submission_service import SubmissionService
+
+    row = {"submission_id": "abc", "form_slug": "sample", "process_status": "DECLARATION_READY",
+           "workflow_step": "declaration", "data_json": json.dumps({
+               "initial_answer": "preserved", "_qualification_history": [{"passed": True}],
+           })}
+    events = []
+    sent = []
+    repository = SimpleNamespace(
+        get_by_id=lambda submission_id: dict(row),
+        update=lambda submission_id, updates: row.update(updates) or True,
+        record_workflow_event=lambda submission_id, event: events.append(event) or True,
+    )
+    submission_service = SubmissionService(repository, mail_dispatch_service=SimpleNamespace(
+        dispatch_auto_rejected_by_condition=lambda submission_id, evaluation: sent.append(submission_id)))
+    document_service = FakeDocumentService()
+    document = {"id": "declaration", "enabled": True, "fields": [
+        {"name": "adult", "type": "radio", "options": ["Tak", "Nie"], "required": True},
+    ]}
+    definition = {"fields": [{"name": "initial_answer", "type": "text"}], "documents": [document],
+                  "qualification_conditions": {"enabled": True, "conditions": [
+                      {"field_name": "adult", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+                  ]}}
+    result = DeclarationFlowService().handle_declaration_post(
+        submission_id="abc", submission={"row": dict(row)}, form_config=definition,
+        declaration_config=document, form_data={"adult": answer},
+        rules_service=SimpleNamespace(apply_rules=lambda *args: {}), submission_repository=repository,
+        document_service=document_service, refresh_submission=lambda submission_id: {"row": dict(row)},
+        submission_service=submission_service,
+    )
+    assert result.success
+    assert row["data_json"]["initial_answer"] == "preserved"
+    assert row["data_json"]["adult"] == answer
+    assert len(row["data_json"]["_qualification_history"]) == 2
+    assert row["data_json"]["_qualification"]["passed"] is (answer == "Tak")
+    assert (row["process_status"] == "AUTO_REJECTED") is (answer == "Nie")
+    assert bool(document_service.generated_documents) is (answer == "Tak")
+    assert sent == (["abc"] if answer == "Nie" else [])
+
+
+def test_additional_stage_qualification_rejects_only_after_valid_save():
+    from services.submission_service import SubmissionService
+
+    row = {"submission_id": "abc", "form_slug": "sample", "process_status": "OFFICER_ACCEPTED",
+           "data_json": {"initial_answer": "preserved"}}
+    repository = SimpleNamespace(
+        get_by_id=lambda submission_id: dict(row),
+        update=lambda submission_id, updates: row.update(updates) or True,
+        record_workflow_event=lambda *args: True,
+    )
+    submission_service = SubmissionService(repository)
+    definition = {"fields": [
+        {"name": "initial_answer", "type": "text"},
+        {"name": "later_answer", "type": "radio", "options": ["Tak", "Nie"], "required": True,
+         "stage": "after_officer_acceptance"},
+    ], "qualification_conditions": {"enabled": True, "conditions": [
+        {"field_name": "later_answer", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+    ]}}
+    flow = DeclarationFlowService()
+    invalid = flow.save_additional_fields(
+        submission_id="abc", submission={"row": dict(row)}, form_config=definition, form_data={},
+        submission_repository=repository, submission_service=submission_service,
+    )
+    assert not invalid.success
+    assert row["process_status"] == "OFFICER_ACCEPTED"
+    assert "_qualification_history" not in row["data_json"]
+    saved = flow.save_additional_fields(
+        submission_id="abc", submission={"row": dict(row)}, form_config=definition, form_data={"later_answer": "Nie"},
+        submission_repository=repository, submission_service=submission_service,
+    )
+    assert saved.success
+    assert row["process_status"] == "AUTO_REJECTED"
+    assert row["data_json"]["initial_answer"] == "preserved"
+    assert row["data_json"]["later_answer"] == "Nie"
+
+
 def test_agreement_flow_generates_collection_with_today_by_default():
     document_service = FakeDocumentService()
     submission = {

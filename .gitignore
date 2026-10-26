@@ -89,6 +89,7 @@ tmp*/
 .agents
 agent.py
 local_agent.py
+.pytest*
 # Operating-system metadata
 .DS_Store
 Thumbs.db

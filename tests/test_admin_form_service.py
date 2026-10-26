@@ -441,6 +441,24 @@ def test_build_form_definition_saves_multiple_qualification_conditions():
     assert qualification["conditions"][0]["officer_message"] == "Kandydat jest niepełnoletni."
 
 
+def test_qualification_document_owner_is_saved_automatically_and_validates():
+    definition = build_form_definition_from_admin_form(
+        {"title": "Form", "fields": [{"name": "main", "type": "text"}],
+         "documents": [{"id": "certificate", "enabled": True, "fields": [
+             {"name": "adult", "label": "Pełnoletność", "type": "radio", "options": ["Tak", "Nie"]},
+         ]}]},
+        {"qualification_conditions_enabled": "on", "qualification_conditions_json": json.dumps([
+            {"field_name": "adult", "operator": "equals", "expected_value": "Tak"},
+        ])},
+    )
+    condition = definition["qualification_conditions"]["conditions"][0]
+    assert condition["source"] == "document"
+    assert condition["document_id"] == "certificate"
+    assert condition["field_label"] == "Pełnoletność"
+    from validators.form_config_validator import FormConfigValidator
+    assert not any("istniejące pole" in error for error in FormConfigValidator().validate(definition))
+
+
 def test_build_form_definition_serializes_typed_qualification_values():
     definition = build_form_definition_from_admin_form(
         {

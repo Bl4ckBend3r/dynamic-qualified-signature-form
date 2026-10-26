@@ -573,16 +573,17 @@ def build_form_definition_from_admin_form(
         if not isinstance(parsed_conditions, list):
             raise ValueError("Konfiguracja warunków kwalifikujących musi być listą.")
         qualification_service = QualificationConditionService()
+        qualification_fields = qualification_service.field_catalog(definition)
         qualification_config = qualification_service.normalize_config(
             {
                 "enabled": form_data.get("qualification_conditions_enabled") == "on",
                 "conditions": parsed_conditions,
             },
-            definition.get("fields") or [],
+            qualification_fields,
         )
         qualification_errors = qualification_service.validate_config(
             qualification_config,
-            definition.get("fields") or [],
+            qualification_fields,
         )
         if qualification_errors:
             raise ValueError(" ".join(qualification_errors))

@@ -107,6 +107,61 @@ def configure_document_fields(env):
         db.commit()
 
 
+@pytest.mark.parametrize("answer,failure_action,expected_step", [
+    ("Tak", "auto_reject", "paper"),
+    ("Nie", "auto_reject", "auto_rejected"),
+    ("Nie", "officer_decision", "officer_decision"),
+])
+def test_document_qualification_waits_for_saved_data_and_uses_submission_version(
+    composite_env, monkeypatch, answer, failure_action, expected_step,
+):
+    env = composite_env("eligibility_certificate")
+    env.definition["documents"][0]["fields"] = [
+        {"name": "adult", "type": "radio", "options": ["Tak", "Nie"], "required": True},
+    ]
+    env.definition["documents"].append({"id": "later_certificate", "fields": [
+        {"name": "later_answer", "type": "text"},
+    ]})
+    env.definition["qualification_conditions"] = {"enabled": True, "conditions": [
+        {"field_name": "adult", "operator": "equals", "expected_value": "Tak", "failure_action": failure_action},
+        {"field_name": "later_answer", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+    ]}
+    snapshot = deepcopy(env.definition)
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()["form_version_id"]).definition_json = snapshot
+        db.commit()
+    sent = []
+    monkeypatch.setattr(env.services.mail_dispatch_service, "dispatch_auto_rejected_by_condition",
+                        lambda public_id, evaluation: sent.append(public_id))
+
+    # No document data yet: recheck uses the submission version and skips both conditions.
+    before = env.services.submission_service.reevaluate_qualification(env.public_id, {"fields": []})
+    assert before["passed"] and before["evaluation"]["results"] == []
+    env.enter()
+    assert env.row()["workflow_step"] == "paper"
+    invalid = env.document.save_fields(env.row(), env.definition, "paper", MultiDict(), generate=False)
+    assert not invalid.success
+    assert len(env.row()["data_json"]["_qualification_history"]) == 1
+
+    saved = env.document.save_fields(env.row(), env.definition, "paper", MultiDict({"adult": answer}), generate=False)
+    assert saved.success
+    row = env.row()
+    assert row["workflow_step"] == expected_step
+    assert row["data_json"]["adult"] == answer
+    evaluation = row["data_json"]["_qualification"]
+    assert [item["field_name"] for item in evaluation["results"]] == ["adult"]
+    assert evaluation["passed"] is (answer == "Tak")
+    assert len(row["data_json"]["_qualification_history"]) == 2
+    assert not env.generated
+    assert sent == ([env.public_id] if expected_step == "auto_rejected" else [])
+    recheck = env.services.submission_service.reevaluate_qualification(env.public_id, {"fields": []})
+    assert [item["field_name"] for item in recheck["evaluation"]["results"]] == ["adult"]
+    assert env.row()["workflow_step"] == expected_step
+    assert sent == ([env.public_id] if expected_step == "auto_rejected" else [])
+    with env.repo.session_factory() as db:
+        assert db.get(FormVersion, row["form_version_id"]).definition_json == snapshot
+
+
 def configure_participant_document_stage(env, documents):
     # Given: a generic participant document stage.
     step = env.definition["workflow"]["steps"][1]

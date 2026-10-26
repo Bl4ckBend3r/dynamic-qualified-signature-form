@@ -73,6 +73,7 @@ def test_step_update_merges_only_editable_values_and_keeps_other_data():
 
         def update(self, submission_id, updates):
             self.updates.append((submission_id, updates))
+            return True
 
         def record_workflow_event(self, submission_id, event):
             self.events.append((submission_id, event))
@@ -112,6 +113,7 @@ def test_later_step_records_compliance_only_after_valid_stage_data():
 
         def update(self, submission_id, updates):
             self.updates.append(updates)
+            return True
 
         def record_workflow_event(self, *_args, **_kwargs):
             return True

@@ -582,6 +582,7 @@ def declaration_form(slug: str, submission_id: str):
                 document_service=services.document_service,
                 refresh_submission=get_submission_context,
                 compliance_service=services.compliance_service,
+                submission_service=services.submission_service,
             )
         except Exception as exc:
             logger.exception("Nie udało się wygenerować deklaracji: %s", exc)
@@ -629,6 +630,7 @@ def save_additional_fields(slug: str, submission_id: str):
         submission_repository=services.submission_repository,
         compliance_service=services.compliance_service,
         workflow_service=services.workflow_service,
+        submission_service=services.submission_service,
     )
     if not flow_result.success:
         flash(flow_result.message or "Dodatkowe informacje zawierają błędy. Popraw wskazane pola.", "error")

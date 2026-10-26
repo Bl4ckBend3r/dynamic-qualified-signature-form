@@ -3,6 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
+import logging
+
+from services.field_availability_service import FieldAvailabilityService
+
+logger = logging.getLogger(__name__)
 
 
 QUALIFICATION_OPERATORS = {
@@ -52,6 +57,54 @@ def normalize_yes_no_value(value: Any) -> bool | None:
 
 
 class QualificationConditionService:
+    @staticmethod
+    def field_catalog(definition: Mapping[str, Any]) -> list[dict]:
+        """Return fields with their owning stage from one versioned definition."""
+        availability = FieldAvailabilityService()
+        initial = availability.initial_step(definition)
+        # Historical definitions may keep document fields under process.documents.
+        # Use the same merged document catalog as the form loader, without changing
+        # the versioned definition itself.
+        from services.form_config_service import FormConfigService
+
+        document_definitions = FormConfigService().normalize_documents_config(dict(definition))
+        document_owners: dict[str, set[str]] = {}
+        for document in document_definitions:
+            if not isinstance(document, Mapping) or not document.get("id"):
+                continue
+            for field in document.get("fields") or []:
+                if isinstance(field, Mapping) and field.get("name"):
+                    document_owners.setdefault(str(field["name"]), set()).add(str(document["id"]))
+        catalog = []
+        names = set()
+        for field in definition.get("fields") or []:
+            if not isinstance(field, Mapping) or not field.get("name"):
+                continue
+            name = str(field["name"])
+            names.add(name)
+            entry = dict(field)
+            if availability.permission(field, definition, initial)["editable"]:
+                entry.update(source="submission", document_id="")
+            elif name in document_owners:
+                owners = document_owners[name]
+                entry.update(source="document" if len(owners) == 1 else "unknown",
+                             document_id=next(iter(owners)) if len(owners) == 1 else "")
+            else:
+                steps = [item["step"] for item in availability.normalize_field(field, definition)["availability"] if item.get("editable")]
+                entry.update(source="workflow_step", workflow_step=steps[0] if steps else "")
+            catalog.append(entry)
+        for document in document_definitions:
+            if not isinstance(document, Mapping):
+                continue
+            for field in document.get("fields") or []:
+                if not isinstance(field, Mapping) or not field.get("name") or str(field["name"]) in names:
+                    continue
+                names.add(str(field["name"]))
+                owners = document_owners.get(str(field["name"]), set())
+                catalog.append({**field, "source": "document" if len(owners) == 1 else "unknown",
+                                "document_id": str(document.get("id") or "") if len(owners) == 1 else ""})
+        return catalog
+
     def normalize_config(self, raw_config: Any, fields: list[dict] | None = None) -> dict:
         source = dict(raw_config) if isinstance(raw_config, Mapping) else {}
         known_fields = {
@@ -78,6 +131,10 @@ class QualificationConditionService:
                 failure_action == "auto_reject"
             )
             field_definition = known_fields.get(field_name, {})
+            owner = field_definition if field_definition.get("source") else raw_condition
+            source_name = str(owner.get("source") or ("submission" if field_definition else "")).strip()
+            document_id = str(owner.get("document_id") or "").strip()
+            workflow_step = str(owner.get("workflow_step") or "").strip()
             expected_value = self._normalize_expected_value(
                 raw_condition.get("expected_value"),
                 operator,
@@ -87,6 +144,9 @@ class QualificationConditionService:
                 {
                     "id": condition_id,
                     "field_name": field_name,
+                    "source": source_name,
+                    "document_id": document_id,
+                    "workflow_step": workflow_step,
                     "field_label": str(
                         raw_condition.get("field_label")
                         or known_fields.get(field_name, {}).get("label")
@@ -117,6 +177,8 @@ class QualificationConditionService:
             field = known_fields.get(condition["field_name"])
             if not condition["field_name"] or (known_fields and field is None):
                 errors.append(f"{label}: wybierz istniejące pole formularza.")
+            if field and field.get("source") == "unknown":
+                errors.append(f"{label}: pole musi mieć jednoznacznego właściciela etapu.")
             if condition["operator"] not in QUALIFICATION_OPERATORS:
                 errors.append(f"{label}: wybierz prawidłowy operator.")
             if condition["failure_action"] not in QUALIFICATION_FAILURE_ACTIONS:
@@ -146,7 +208,8 @@ class QualificationConditionService:
                     )
         return errors
 
-    def evaluate(self, config: Any, submission_data: Mapping[str, Any], fields: list[dict] | None = None) -> dict:
+    def evaluate(self, config: Any, submission_data: Mapping[str, Any], fields: list[dict] | None = None,
+                 *, stage: str = "submission", available_documents: set[str] | None = None) -> dict:
         normalized = self.normalize_config(config, fields)
         evaluated_at = datetime.now(timezone.utc).isoformat()
         results = []
@@ -158,6 +221,19 @@ class QualificationConditionService:
             }
             for condition in normalized["conditions"]:
                 if not condition["is_active"]:
+                    continue
+                source = condition["source"]
+                name = condition["field_name"]
+                if source == "document":
+                    if condition["document_id"] not in (available_documents or set()):
+                        continue
+                elif source == "workflow_step":
+                    if stage == "submission" or (stage != condition["workflow_step"] and name not in submission_data):
+                        continue
+                elif source == "submission":
+                    pass
+                elif name not in submission_data:
+                    logger.warning("qualification_condition_owner_unknown condition_id=%s", condition["id"])
                     continue
                 actual_value = submission_data.get(condition["field_name"])
                 passed = self._matches(

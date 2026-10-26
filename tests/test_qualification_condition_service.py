@@ -210,3 +210,68 @@ def test_validation_rejects_value_outside_field_options_and_empty_list():
 
     assert any("wartość zdefiniowaną" in error for error in invalid_option)
     assert any("podaj wartość oczekiwaną" in error for error in empty_list)
+
+
+def test_conditions_follow_their_versioned_field_owner():
+    service = QualificationConditionService()
+    definition = {
+        "fields": [{"name": "age", "type": "number", "stage": "initial_submission"}],
+        "documents": [
+            {"id": "declaration", "fields": [{"name": "adult", "type": "select", "options": ["Tak", "Nie"]}]},
+            {"id": "consent_card", "fields": [{"name": "card_ok", "type": "select", "options": ["Tak", "Nie"]}]},
+        ],
+    }
+    fields = service.field_catalog(definition)
+    config = {"enabled": True, "conditions": [
+        {"field_name": "age", "operator": "greater_than_or_equal", "expected_value": 18},
+        {"field_name": "adult", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+        {"field_name": "card_ok", "operator": "equals", "expected_value": "Tak"},
+    ]}
+    normalized = service.normalize_config(config, fields)
+    assert [(item["source"], item["document_id"]) for item in normalized["conditions"]] == [
+        ("submission", ""), ("document", "declaration"), ("document", "consent_card")]
+    submitted = service.evaluate(config, {"age": 17}, fields)
+    assert [item["field_name"] for item in submitted["failed_conditions"]] == ["age"]
+    assert service.evaluate(config, {"age": 19}, fields)["passed"] is True
+    accepted = service.evaluate(config, {"age": 19, "adult": "Tak"}, fields,
+                                stage="document", available_documents={"declaration"})
+    rejected = service.evaluate(config, {"age": 19, "adult": "Nie"}, fields,
+                                stage="document", available_documents={"declaration"})
+    assert accepted["passed"] is True
+    assert [item["field_name"] for item in rejected["failed_conditions"]] == ["adult"]
+
+
+def test_legacy_condition_owner_is_inferred_without_mutating_definition(caplog):
+    service = QualificationConditionService()
+    definition = {"fields": [{"name": "main", "type": "text"}],
+                  "documents": [{"id": "later", "fields": [{"name": "answer", "type": "text"}]}]}
+    config = {"enabled": True, "conditions": [
+        {"field_name": "answer", "operator": "equals", "expected_value": "Tak"},
+        {"field_name": "unknown", "operator": "equals", "expected_value": "Tak"},
+    ]}
+    fields = service.field_catalog(definition)
+    assert service.evaluate(config, {"main": "x"}, fields)["passed"] is True
+    assert config["conditions"][0].get("source") is None
+    assert "qualification_condition_owner_unknown" in caplog.text
+
+
+def test_legacy_process_document_owner_is_inferred_from_versioned_definition():
+    service = QualificationConditionService()
+    definition = {
+        "fields": [{"name": "main", "type": "text"}],
+        "process": {"documents": {"declaration": {"fields": [
+            {"name": "adult", "type": "radio", "options": ["Tak", "Nie"]},
+        ]}}},
+    }
+    config = {"enabled": True, "conditions": [
+        {"field_name": "adult", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+    ]}
+    catalog = service.field_catalog(definition)
+    assert [(field["source"], field["document_id"]) for field in catalog if field.get("name") == "adult"] == [
+        ("document", "declaration")]
+    assert service.evaluate(config, {"main": "saved"}, catalog)["results"] == []
+    result = service.evaluate(config, {"main": "saved", "adult": "Nie"}, catalog,
+                              stage="document", available_documents={"declaration"})
+    assert [item["field_name"] for item in result["failed_conditions"]] == ["adult"]
+    assert "source" not in config["conditions"][0]
+    assert "documents" not in definition

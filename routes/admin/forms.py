@@ -872,6 +872,7 @@ def form_edit(form_id: int):
             version_service.materialize_editor_mirror(db, form, editable_version)
         current_definition = deepcopy((editable_version.definition_json if editable_version else form.definition_json) or {})
         form.workflow_editor_definition = current_definition
+        form.qualification_fields = current_app.extensions["services"].qualification_condition_service.field_catalog(current_definition)
         form.editable_version_id = editable_version.id if editable_version else None
         form.editable_version_label = editable_version.version_label if editable_version else ""
         form.workflow_editor_fields = (
@@ -1031,6 +1032,7 @@ def form_edit(form_id: int):
             if validation_errors:
                 active_tab = _tab_for_form_error(validation_errors, active_tab, request.form)
                 form.workflow_editor_definition = updated_definition
+                form.qualification_fields = current_app.extensions["services"].qualification_condition_service.field_catalog(updated_definition)
                 flash("Nie można zapisać workflow: " + " ".join(validation_errors), "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
                 fields = active_fields_for_form(db, form.id)

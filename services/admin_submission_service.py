@@ -114,9 +114,13 @@ def update_submission_answers(db, submission: FormSubmission, form_config: dict,
     qualification_config = form_config.get("qualification_conditions")
     if qualification_config:
         evaluator = services.qualification_condition_service
-        all_fields = form_config.get("fields") or []
-        before = evaluator.evaluate(qualification_config, existing, all_fields)
-        after = evaluator.evaluate(qualification_config, merged, all_fields)
+        all_fields = evaluator.field_catalog(form_config)
+        available_documents = {field["document_id"] for field in all_fields
+                               if field.get("source") == "document" and field.get("name") in existing}
+        before = evaluator.evaluate(qualification_config, existing, all_fields,
+                                    stage="recheck", available_documents=available_documents)
+        after = evaluator.evaluate(qualification_config, merged, all_fields,
+                                   stage="recheck", available_documents=available_documents)
         before_passes = [(item["id"], item["passed"]) for item in before["results"]]
         after_passes = [(item["id"], item["passed"]) for item in after["results"]]
         if before_passes != after_passes:

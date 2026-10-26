@@ -73,7 +73,7 @@ class FormConfigValidator:
         errors.extend(
             QualificationConditionService().validate_config(
                 form_config.get("qualification_conditions"),
-                form_config.get("fields") or [],
+                QualificationConditionService.field_catalog(form_config),
             )
         )
         return errors

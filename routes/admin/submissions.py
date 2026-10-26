@@ -236,26 +236,14 @@ def submissions_recheck_qualification(form_id: int):
 
         if invalid_ids:
             abort(403)
-        form_config = services.form_config_service.get_form_config(
-            services.storage,
-            form.slug,
-        )
-
-        if not form_config:
-            flash(
-                "Nie udało się wczytać konfiguracji formularza.",
-                "error",
-            )
-            return redirect(
-                request.form.get("next")
-                or url_for(
-                    "admin.submissions_list",
-                    form_id=form_id,
-                )
-            )
-
         for submission in submissions:
             try:
+                version = services.form_version_service.resolve_for_submission(db, submission)
+                if submission.form_version_id and version is None:
+                    raise LookupError("Brak wersji formularza przypisanej do zgłoszenia.")
+                form_config = services.form_config_service.normalize_form_config(
+                    (version.definition_json if version else form.definition_json) or {}
+                )
                 result = (
                     services.submission_service.reevaluate_qualification(
                         submission.submission_id,

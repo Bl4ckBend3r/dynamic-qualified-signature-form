@@ -290,6 +290,7 @@ class DeclarationFlowService:
         document_service,
         refresh_submission: Callable[[str], dict | None],
         compliance_service=None,
+        submission_service=None,
     ) -> DeclarationFlowResult:
         step = self._row_availability_step(form_config, submission["row"])
         declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
@@ -329,12 +330,29 @@ class DeclarationFlowService:
         rule_updates = rules_service.apply_rules(submission["row"], form_config, declaration_data)
         if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
             rule_updates = {k: v for k, v in rule_updates.items() if k not in {"process_status", "workflow_step", "workflow_stage"}}
-        updates = {**declaration_data, **rule_updates}
-        submission_repository.update(submission_id, updates)
+        stored_data = submission["row"].get("data_json") or {}
+        if isinstance(stored_data, str):
+            try:
+                stored_data = json.loads(stored_data)
+            except json.JSONDecodeError:
+                stored_data = {}
+        if not isinstance(stored_data, dict):
+            stored_data = {}
+        updates = {**declaration_data, **rule_updates,
+                   "data_json": {**stored_data, **declaration_data}}
+        if not submission_repository.update(submission_id, updates):
+            return DeclarationFlowResult(success=False, message="Nie udało się zapisać danych deklaracji.",
+                                         values=values, declaration_definition=declaration_definition, error_code="save_failed")
+        if submission_service is not None:
+            qualification = submission_service.evaluate_saved_document(submission_id, form_config, DocumentType.DECLARATION)
+            if any(item.get("failure_action") in {"auto_reject", "officer_decision"}
+                   for item in qualification.get("failed_conditions") or []):
+                return DeclarationFlowResult(success=True, message="Dane deklaracji zostały zapisane.",
+                                             values=values, declaration_definition=declaration_definition)
         refreshed_submission = refresh_submission(submission_id)
         generated = None
         if refreshed_submission:
-            refreshed_submission["row"].update(updates)
+            refreshed_submission["row"].update({key: value for key, value in updates.items() if key != "data_json"})
             generated = document_service.generate_document(
                 refreshed_submission,
                 form_config,
@@ -375,6 +393,7 @@ class DeclarationFlowService:
         submission_repository,
         compliance_service=None,
         workflow_service=None,
+        submission_service=None,
     ) -> DeclarationFlowResult:
         step = self._row_availability_step(form_config, submission["row"])
         additional_definition = self.build_additional_fields_definition(form_config, step)
@@ -429,7 +448,9 @@ class DeclarationFlowService:
         if (form_config.get("workflow") or {}).get("flow_mode") == "explicit":
             updates.pop("process_status", None)
             updates.pop("workflow_step", None)
-        submission_repository.update(submission_id, updates)
+        if not submission_repository.update(submission_id, updates):
+            return DeclarationFlowResult(success=False, message="Nie udało się zapisać dodatkowych informacji.",
+                                         values=values, declaration_definition=additional_definition, error_code="save_failed")
         if hasattr(submission_repository, "record_workflow_event"):
             submission_repository.record_workflow_event(
                 submission_id,
@@ -445,6 +466,11 @@ class DeclarationFlowService:
                     "side_effects": {"changed_fields": sorted(additional_data)},
                 },
             )
+        if submission_service is not None:
+            qualification = submission_service.evaluate_saved_stage(submission_id, form_config, workflow_step=step)
+            if any(item.get("failure_action") in {"auto_reject", "officer_decision"}
+                   for item in qualification.get("failed_conditions") or []):
+                return DeclarationFlowResult(success=True, message="Dodatkowe informacje zostały zapisane.", values=values)
         if (form_config.get("workflow") or {}).get("flow_mode") == "explicit" and workflow_service is not None:
             refreshed = submission_repository.get_by_id(submission_id)
             if refreshed:

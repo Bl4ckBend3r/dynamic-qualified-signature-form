@@ -894,6 +894,13 @@ class DocumentWorkflowService:
                 token,
             )
 
+        qualification = current_app.extensions["services"].submission_service.evaluate_saved_document(
+            row["submission_id"], definition, document["id"],
+        )
+        if any(item.get("failure_action") in {"auto_reject", "officer_decision"}
+               for item in qualification.get("failed_conditions") or []):
+            return flow
+
         if generate:
             self.documents.workflow_service.run_automatic_steps(
                 self.repository.get_by_id(row["submission_id"]),

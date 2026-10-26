@@ -372,6 +372,24 @@ def test_all_qualification_conditions_pass_and_normal_flow_continues(app, client
     assert row["data_json"]["_qualification"]["passed"] is True
 
 
+def test_submission_skips_legacy_document_conditions_until_document_data_is_saved(app, client, valid_form_data):
+    definition = app.testing_storage.form_definition
+    definition["documents"] = {"declaration": {"enabled": True, "fields": [
+        {"name": "deklaracja_18_lat", "type": "radio", "options": ["Tak", "Nie"]},
+    ]}}
+    definition["qualification_conditions"] = {"enabled": True, "conditions": [
+        {"id": "main", "field_name": "wiek", "operator": "greater_than_or_equal", "expected_value": 18},
+        {"id": "document", "field_name": "deklaracja_18_lat", "operator": "equals", "expected_value": "Tak", "failure_action": "auto_reject"},
+    ]}
+    response = client.post(FORM_URL, data=_prepare(valid_form_data), follow_redirects=True)
+    assert response.status_code == 200
+    row = app.testing_storage.csv_rows[0]
+    assert row["process_status"] != "AUTO_REJECTED"
+    evaluation = row["data_json"]["_qualification"]
+    assert evaluation["passed"]
+    assert [item["id"] for item in evaluation["results"]] == ["main"]
+
+
 def test_explicit_workflow_rejects_all_failed_qualification_conditions_before_advancing(
     app, client, valid_form_data, monkeypatch,
 ):

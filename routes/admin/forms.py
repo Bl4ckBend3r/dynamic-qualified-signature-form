@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
 from jinja2 import TemplateSyntaxError, UndefinedError, meta
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from werkzeug.exceptions import HTTPException
 
 from services.form_access_service import generate_share_token
@@ -453,11 +453,18 @@ def form_versions(form_id: int):
             )
             for version in versions
         }
+        published = next((item for item in versions if item.status == "published"), None)
+        pending_sync_count = (db.scalar(select(func.count(FormSubmission.id)).where(
+            FormSubmission.form_slug == form.slug,
+            or_(FormSubmission.form_version_id.is_(None),
+                FormSubmission.form_version_id != published.id),
+        )) or 0) if published else 0
         return render_template(
             "admin/forms/versions.html",
             form=form,
             versions=versions,
             diffs=diffs,
+            pending_sync_count=pending_sync_count,
             can_manage=can_manage_form(db, g.admin_user, form.id),
         )
 
@@ -589,16 +596,25 @@ def form_version_publish(form_id: int, version_id: int):
         version = db.get(FormVersion, version_id) or abort(404)
         service = current_app.extensions["services"].form_version_service
         try:
-            if version.form_id != form.id or version.status != FORM_VERSION_DRAFT:
+            if version.form_id != form.id:
+                raise FormVersionError("Wersja nie należy do tego formularza.")
+            retry_sync = request.form.get("retry_sync") == "1"
+            if retry_sync and version.status == "published":
+                pass
+            elif not retry_sync and version.status == FORM_VERSION_DRAFT:
+                service.publish(
+                    db,
+                    form,
+                    version,
+                    actor_id=g.admin_user.id,
+                    change_summary=str(request.form.get("change_summary") or "").strip(),
+                    synchronize_submissions=False,
+                )
+            else:
                 raise FormVersionError("Można opublikować wyłącznie wersję roboczą tego formularza.")
-            service.publish(
-                db,
-                form,
-                version,
-                actor_id=g.admin_user.id,
-                change_summary=str(request.form.get("change_summary") or "").strip(),
-            )
             published_label = version.version_label
+            published_form_id = form.id
+            published_version_id = version.id
             db.commit()
         except FormVersionValidationError as exc:
             db.rollback()
@@ -609,7 +625,15 @@ def form_version_publish(form_id: int, version_id: int):
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.form_versions", form_id=form.id))
-    flash(f"Opublikowano wersję {published_label}.", "success")
+    try:
+        service.synchronize_published_submissions(
+            db_session_factory(), published_form_id, published_version_id, actor_id=g.admin_user.id)
+    except Exception:
+        current_app.logger.exception("Nie udało się zsynchronizować zgłoszeń po publikacji wersji %s", published_version_id)
+        flash("Wersję opublikowano, ale synchronizacja zgłoszeń wymaga ponowienia.", "error")
+        return redirect(url_for("admin.form_versions", form_id=form_id))
+    flash((f"Zsynchronizowano zgłoszenia z wersją {published_label}." if retry_sync
+           else f"Opublikowano wersję {published_label}."), "success")
     return redirect(url_for("admin.form_versions", form_id=form_id))
 
 

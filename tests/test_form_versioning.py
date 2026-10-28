@@ -10,7 +10,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from flask import Blueprint, Flask
-from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, Text, create_engine, inspect, select
+from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, Text, create_engine, func, inspect, select
 from sqlalchemy.orm import sessionmaker
 
 from models import Base, Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
@@ -424,6 +424,32 @@ def test_publish_syncs_corrections_and_final_cases_without_changing_history(tmp_
         assert db.get(SubmissionFile, file.id).status == "signed"
         assert db.get(SubmissionDecision, decision.id).decision == "return"
         assert db.get(FormSubmission, unrelated.id).form_version_id == other_version.id
+
+
+def test_deferred_publication_synchronizes_multiple_short_batches(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db)
+        old = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        old_id = old.id
+        db.add_all(FormSubmission(submission_id=f"batch-{index}", form_slug=form.slug,
+            form_version_id=old_id, data_json={"email": f"{index}@example.org"},
+            process_status="COMPLETED" if index % 2 else "RETURNED_FOR_CORRECTION")
+            for index in range(205))
+        draft = service.clone_to_draft(db, form, old, actor_id=None)
+        service.publish(db, form, draft, actor_id=None, synchronize_submissions=False)
+        form_id, version_id = form.id, draft.id
+    with Session() as db:
+        assert db.scalar(select(func.count(FormSubmission.id)).where(
+            FormSubmission.form_version_id == old_id)) == 205
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 205
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 0
+    with Session() as db:
+        assert db.scalar(select(func.count(FormSubmission.id)).where(
+            FormSubmission.form_version_id == version_id)) == 205
+        assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
+            SubmissionWorkflowEvent.source == "form_version_upgrade")) == 205
 
 
 def test_correction_uses_bound_published_qualification_while_draft_changes(tmp_path):

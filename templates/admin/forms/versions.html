@@ -72,6 +72,13 @@
                         <button class="admin-button-secondary compact" name="bump" value="major" type="submit">Nowa wersja główna</button>
                     </form>
                     {% if version.status == 'published' %}
+                    {% if pending_sync_count %}
+                    <form method="post" action="{{ url_for('admin.form_version_publish', form_id=form.id, version_id=version.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <input type="hidden" name="retry_sync" value="1">
+                        <button class="admin-button-secondary compact" type="submit">Ponów synchronizację ({{ pending_sync_count }})</button>
+                    </form>
+                    {% endif %}
                     <form method="post" action="{{ url_for('admin.form_version_archive', form_id=form.id, version_id=version.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                         <button class="admin-link-button" type="submit" data-admin-confirm-message="Zarchiwizować aktywną wersję? Formularz publiczny przestanie być dostępny.">Archiwizuj</button>

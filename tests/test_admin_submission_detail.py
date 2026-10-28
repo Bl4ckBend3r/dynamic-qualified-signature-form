@@ -8,8 +8,49 @@ import pytest
 from models import Form, FormSubmission, FormVersion
 from database import create_session_factory
 from services.admin_workflow_view_service import build_admin_workflow_view
-from test_admin_panel import admin_app, admin_client, create_user, login
+from test_admin_panel import admin_app, admin_client, admin_csrf, create_user, login
 from test_composite_document_workflow import composite_env
+
+
+def test_publish_route_synchronizes_existing_submissions_after_commit(admin_app, admin_client):
+    from test_admin_panel import create_form
+
+    definition = {"title": "Published form", "fields": [{"name": "email", "label": "Email",
+        "type": "email", "required": True}], "workflow": {"initial_step": "submission",
+        "steps": [{"id": "submission", "status": "FORM_SUBMITTED"}]}}
+    form_id = create_form(admin_app, slug="route-publish", definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory.begin() as db:
+        old = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+            version_label="1.0", status="published", definition_json=definition)
+        draft = FormVersion(form_id=form_id, version_major=1, version_minor=1,
+            version_label="1.1", status="draft", source_version=old, definition_json=definition)
+        db.add_all([old, draft])
+        db.flush()
+        row = FormSubmission(submission_id="publish-route-row", form_slug="route-publish",
+            form_version_id=old.id, process_status="COMPLETED", workflow_step="submission",
+            data_json={"email": "person@example.org"})
+        db.add(row)
+        db.flush()
+        row_id, version_id, old_id = row.id, draft.id, old.id
+    create_user(admin_app)
+    login(admin_client)
+    response = admin_client.post(f"/admin/forms/{form_id}/versions/{version_id}/publish",
+        data={"csrf_token": admin_csrf(admin_client)})
+    assert response.status_code == 302
+    with factory() as db:
+        row = db.get(FormSubmission, row_id)
+        assert row.form_version_id == version_id
+        assert row.process_status == "COMPLETED"
+        row.form_version_id = old_id
+        db.commit()
+    versions_page = admin_client.get(f"/admin/forms/{form_id}/versions")
+    assert "Ponów synchronizację (1)" in versions_page.text
+    retry = admin_client.post(f"/admin/forms/{form_id}/versions/{version_id}/publish",
+        data={"csrf_token": admin_csrf(admin_client), "retry_sync": "1"})
+    assert retry.status_code == 302
+    with factory() as db:
+        assert db.get(FormSubmission, row_id).form_version_id == version_id
 
 
 def test_old_correction_opens_with_current_version_and_no_step_mapping(admin_app, admin_client):
@@ -44,6 +85,13 @@ def test_old_correction_opens_with_current_version_and_no_step_mapping(admin_app
     assert correction.status_code == 200
     assert "Miasto" in correction.text
     assert "person@example.org" in correction.text
+    with admin_client.session_transaction() as session:
+        public_csrf = session["public_form_csrf_token"]
+    correction_url = "/form/versioned-detail/correction/old-correction-detail?token=correction-secret"
+    invalid = admin_client.post(correction_url, data={"csrf_token": public_csrf,
+        "email": "person@example.org"})
+    assert invalid.status_code == 400
+    assert "Miasto" in invalid.text
 
     create_user(admin_app)
     login(admin_client)
@@ -56,6 +104,13 @@ def test_old_correction_opens_with_current_version_and_no_step_mapping(admin_app
         assert row.form_version_id == latest_id
         assert row.process_status == "RETURNED_FOR_CORRECTION"
         assert row.workflow_step == "old-step"
+    completed = admin_client.post(correction_url, data={"csrf_token": public_csrf,
+        "email": "person@example.org", "city": "Warszawa"})
+    assert completed.status_code == 200
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        assert row.form_version_id == latest_id
+        assert row.data_json["city"] == "Warszawa"
 
 
 def test_timeline_uses_observed_path_and_supports_loops_and_arbitrary_steps():

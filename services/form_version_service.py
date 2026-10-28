@@ -338,6 +338,7 @@ class FormVersionService:
         *,
         actor_id: int | None,
         change_summary: str = "",
+        synchronize_submissions: bool = True,
     ) -> FormVersion:
         db.execute(select(Form).where(Form.id == form.id).with_for_update()).scalar_one()
         version = db.execute(
@@ -389,7 +390,8 @@ class FormVersionService:
         version.change_summary = str(change_summary or version.change_summary or "").strip()
         self.apply_to_legacy_editor(db, form, version.definition_json)
         db.flush()
-        self.upgrade_active_submissions(db, form, version, actor_id=actor_id)
+        if synchronize_submissions:
+            self.upgrade_active_submissions(db, form, version, actor_id=actor_id)
         return version
 
     @staticmethod
@@ -400,10 +402,12 @@ class FormVersionService:
         outcome = str(submission.final_outcome or "").strip().upper()
         return not is_final_status(submission.process_status) and outcome in {"", FinalOutcome.ACTIVE.value}
 
-    def upgrade_active_submissions(self, db, form: Form, version: FormVersion, *, actor_id: int | None) -> int:
+    def upgrade_active_submissions(self, db, form: Form, version: FormVersion, *,
+                                   actor_id: int | None, max_batches: int | None = None) -> int:
         """Synchronize every linked submission in bounded ORM pages."""
         upgraded = 0
         last_id = 0
+        batches = 0
         while True:
             submissions = db.execute(
                 select(FormSubmission).where(
@@ -419,7 +423,26 @@ class FormVersionService:
                     upgraded += 1
             last_id = submissions[-1].id
             db.flush()
+            batches += 1
+            if max_batches is not None and batches >= max_batches:
+                break
         return upgraded
+
+    def synchronize_published_submissions(self, session_factory, form_id: int, version_id: int, *,
+                                          actor_id: int | None) -> int:
+        """Finish publication in short, retryable transactions of at most 100 rows."""
+        total = 0
+        while True:
+            with session_factory.begin() as db:
+                form = db.get(Form, form_id)
+                version = db.get(FormVersion, version_id)
+                if form is None or version is None or version.form_id != form_id or version.status != FORM_VERSION_PUBLISHED:
+                    raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
+                changed = self.upgrade_active_submissions(
+                    db, form, version, actor_id=actor_id, max_batches=1)
+            total += changed
+            if not changed:
+                return total
 
     def upgrade_submission(
         self, db, submission: FormSubmission, latest: FormVersion | None = None,

@@ -43,6 +43,9 @@ def test_form_builder_add_edit_resize_drag_preview_delete_and_serialize():
         <span data-field-count></span><div data-form-canvas></div><div data-builder-empty></div>
         <aside data-properties-panel>
           <div data-properties-empty></div><div data-properties-content>
+            <div data-label-setting></div><div data-static-text-setting><textarea data-static-text-content></textarea></div>
+            <div data-name-setting></div><div data-type-setting></div><div data-width-setting></div>
+            <div data-documents-setting></div><div data-file-settings></div>
             <button type=button data-close-properties>×</button>
             <input data-property=label><input data-property=name><small data-name-help></small>
             <select data-property=type></select><div data-width-options></div>
@@ -146,6 +149,9 @@ def test_form_builder_panels_follow_selection_with_clamping_and_mobile_reset():
           </main>
           <aside class="form-builder__properties" data-properties-panel>
             <div data-properties-empty></div><div data-properties-content>
+              <div data-label-setting></div><div data-static-text-setting><textarea data-static-text-content></textarea></div>
+              <div data-name-setting></div><div data-type-setting></div><div data-width-setting></div>
+              <div data-documents-setting></div><div data-file-settings></div>
               <button type=button data-close-properties>×</button>
               <input data-property=label><input data-property=name><small data-name-help></small>
               <select data-property=type></select><div data-width-options></div>
@@ -221,4 +227,72 @@ def test_form_builder_panels_follow_selection_with_clamping_and_mobile_reset():
             "scrollY": initial_scroll,
         }
         assert not errors
+        browser.close()
+
+
+def test_public_conditional_fields_match_backend_and_toggle_required(app, client):
+    from form_loader import normalize_form_definition, validate_submission
+
+    fields = [
+        {"type": "radio", "name": "answer", "label": "Odpowiedź", "required": True,
+         "options": [{"value": "Tak", "label": "Tak"}, {"value": "Nie", "label": "Nie"}]},
+    ]
+    conditions = {
+        "equals": "Tak", "not_equals": "Tak", "in": ["Tak"],
+        "not_in": ["Nie"], "is_empty": None, "is_not_empty": None,
+    }
+    for operator, value in conditions.items():
+        fields.append({"type": "text", "name": operator, "label": operator, "required": True,
+                       "visible_if": {"field": "answer", "operator": operator, "value": value}})
+    fields.append({"type": "text", "name": "conditional_required", "label": "Warunkowo wymagane",
+                   "required": False,
+                   "required_if": {"field": "answer", "operator": "equals", "value": "Tak"}})
+    definition = normalize_form_definition({"title": "Warunki", "fields": fields})
+    app.testing_storage.form_definition = definition
+    html = client.get("/form/formularz_zgloszeniowy").get_data(as_text=True)
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda exception: errors.append(str(exception)))
+        _serve_project_page(page, html)
+        initial_errors = validate_submission(definition, {"answer": ""})
+        for operator in conditions:
+            row = page.locator(f'.form-row[data-field-name="{operator}"]')
+            visible = row.evaluate("element => getComputedStyle(element).display !== 'none'")
+            assert visible is (operator in initial_errors)
+            assert row.locator("input").first.evaluate("element => element.required") is visible
+            assert (row.locator("input").first.get_attribute("aria-required") == "true") is visible
+        for answer in ("Tak", "Nie"):
+            page.locator(f'input[name="answer"][value="{answer}"]').check()
+            backend_errors = validate_submission(definition, {"answer": answer})
+            for operator in conditions:
+                row = page.locator(f'.form-row[data-field-name="{operator}"]')
+                visible = row.evaluate("element => getComputedStyle(element).display !== 'none'")
+                assert visible is (operator in backend_errors)
+                assert row.locator("input").first.evaluate("element => element.required") is visible
+                assert (row.locator("input").first.get_attribute("aria-required") == "true") is visible
+            conditional = page.locator('input[name="conditional_required"]')
+            assert conditional.is_visible()
+            assert conditional.evaluate("element => element.required") is (answer == "Tak")
+            assert (conditional.get_attribute("aria-required") == "true") is (answer == "Tak")
+            assert ("conditional_required" in backend_errors) is (answer == "Tak")
+        page.locator('input[name="answer"][value="Tak"]').check()
+        page.locator('input[name="equals"]').fill("Wartość publiczna")
+        page.locator('input[name="answer"][value="Nie"]').check()
+        assert page.locator('input[name="equals"]').input_value() == ""
+        assert not errors
+
+        admin_html = html.replace("const preserveConditionalValues = false;", "const preserveConditionalValues = true;")
+        assert admin_html != html
+        admin_page = browser.new_page()
+        _serve_project_page(admin_page, admin_html)
+        admin_page.locator('input[name="answer"][value="Tak"]').check()
+        admin_page.locator('input[name="equals"]').fill("Zachowaj w edycji")
+        admin_page.locator('input[name="answer"][value="Nie"]').check()
+        assert admin_page.locator('input[name="equals"]').input_value() == "Zachowaj w edycji"
         browser.close()

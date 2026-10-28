@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import load_form_definition
-from models import FormSubmission, FormVersion, RepeatableGroupItemDecision, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
+from models import Form, FormSubmission, FormVersion, RepeatableGroupItemDecision, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
 from services.decision_definition_service import DecisionDefinitionError
 from test_admin_panel import admin_app, admin_client, create_form, create_user, login
 
@@ -103,6 +103,271 @@ def officer_decision_fixture(app, *, stage="officer_review"):
         db.add(submission)
         db.commit()
         return form_id, submission.id, submission.submission_id
+
+
+def post_officer_decision(app, client, form_id, pk, *, decision="pzytywna"):
+    listing = client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    csrf = listing.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    return client.post(f"/admin/forms/{form_id}/submissions/decisions", data={
+        "csrf_token": csrf, "submission_row_ids": [str(pk)],
+        f"officer_decision_{pk}": decision,
+    })
+
+
+def test_officer_decision_commits_transition_and_audit_once(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        decisions = db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
+        events = db.scalars(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == pk,
+            SubmissionWorkflowEvent.reason == "officer_decision",
+        )).all()
+        assert submission.workflow_step == "declaration"
+        assert len(decisions) == len(events) == 1
+        assert (decisions[0].workflow_step, decisions[0].target_step) == ("officer_review", "declaration")
+        assert (events[0].previous_step, events[0].new_step) == ("officer_review", "declaration")
+
+
+def test_officer_decision_transition_error_rolls_back_all_domain_rows(admin_app, admin_client, monkeypatch):
+    from services.workflow_service import WorkflowTransitionError
+
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+    workflow = admin_app.extensions["services"].workflow_service
+    original = workflow.transition_submission
+
+    def fail_after_transition(*args, **kwargs):
+        original(*args, **kwargs)
+        raise WorkflowTransitionError("Test błędu po utworzeniu eventu")
+
+    monkeypatch.setattr(workflow, "transition_submission", fail_after_transition)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        assert submission.workflow_step == "officer_review"
+        assert submission.officer_decision is None or not submission.officer_decision
+        assert not db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
+        assert not db.scalars(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.submission_id == pk)).all()
+
+
+def test_officer_decision_invalid_version_target_is_controlled(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        definition["workflow"]["decision_types"][0]["target_step"] = "unknown_target"
+        version.definition_json = definition
+        db.commit()
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        assert submission.workflow_step == "officer_review"
+        assert not submission.officer_decision
+        assert db.scalar(select(SubmissionDecision.id).where(SubmissionDecision.submission_id == pk)) is None
+
+
+def test_officer_decision_document_without_config_is_rejected_before_commit(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        document_step = next(step for step in definition["workflow"]["steps"] if step["id"] == "declaration")
+        document_step["stage_type"] = "documents"
+        document_step["action"] = "none"
+        document_step["document_lifecycle"] = "group"
+        definition["documents"] = [{"id": "declaration", "enabled": False, "kind": "generated_pdf", "workflow_step": "declaration"}]
+        from services.documents.document_workflow_service import is_document_step, step_documents
+        assert is_document_step(document_step)
+        assert not step_documents(definition, document_step)
+        version.definition_json = definition
+        db.commit()
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        persisted_definition = db.get(FormSubmission, pk).form_version.definition_json
+        persisted_step = next(step for step in persisted_definition["workflow"]["steps"] if step["id"] == "declaration")
+        assert is_document_step(persisted_step)
+        assert not step_documents(persisted_definition, persisted_step)
+        from services.workflow_service import WorkflowTransitionError
+        with pytest.raises(WorkflowTransitionError):
+            admin_app.extensions["services"].workflow_service.validate_automatic_path(persisted_definition, "declaration")
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        assert submission.workflow_step == "officer_review"
+        assert not submission.officer_decision
+        assert db.scalar(select(SubmissionDecision.id).where(SubmissionDecision.submission_id == pk)) is None
+
+
+@pytest.mark.parametrize("failure", ["result", "exception"])
+def test_officer_decision_mail_failure_preserves_domain_commit(admin_app, admin_client, monkeypatch, caplog, failure):
+    from services.mail_dispatch_service import MailDispatchResult
+
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    if failure == "result":
+        monkeypatch.setattr(dispatcher, "dispatch_workflow_decision_event", lambda **_: MailDispatchResult("failed"))
+    else:
+        def fail_mail(**_):
+            raise RuntimeError("private-contact@example.invalid")
+        monkeypatch.setattr(dispatcher, "dispatch_workflow_decision_event", fail_mail)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with admin_client.session_transaction() as session:
+        assert any("nie udało się wysłać powiadomienia" in message for _, message in session.get("_flashes", []))
+    assert "private-contact@example.invalid" not in caplog.text
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "declaration"
+        assert db.scalar(select(SubmissionDecision.id).where(SubmissionDecision.submission_id == pk)) is not None
+
+
+def test_officer_decision_disabled_mail_does_not_block(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with admin_client.session_transaction() as session:
+        assert not any("nie udało się wysłać powiadomienia" in message for _, message in session.get("_flashes", []))
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "declaration"
+
+
+def test_officer_decision_missing_mail_template_does_not_block(admin_app, admin_client, monkeypatch):
+    from services.mail_dispatch_service import MailDispatchResult
+
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    monkeypatch.setattr(dispatcher, "dispatch_workflow_decision_event", lambda **_: MailDispatchResult("skipped", error_message="Brak aktywnego szablonu maila."))
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with admin_client.session_transaction() as session:
+        assert not any("nie udało się wysłać powiadomienia" in message for _, message in session.get("_flashes", []))
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "declaration"
+
+
+def test_officer_decision_automatic_error_is_reported_after_commit(admin_app, admin_client, monkeypatch):
+    from services.workflow_service import WorkflowTransitionError
+
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    login(admin_client)
+    workflow = admin_app.extensions["services"].workflow_service
+    monkeypatch.setattr(workflow, "run_automatic_steps", lambda *_: (_ for _ in ()).throw(WorkflowTransitionError("Test")))
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+    with admin_client.session_transaction() as session:
+        assert any("automatyczny etap workflow" in message for _, message in session.get("_flashes", []))
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "declaration"
+
+
+def test_submission_enters_versioned_decision_before_declaration(admin_app):
+    from services.admin_workflow_view_service import build_admin_workflow_view
+    from services.workflow_service import WorkflowTransitionError
+
+    definition = {"title": "Ścieżka decyzji", "fields": [], "workflow": {
+        "flow_mode": "explicit", "initial_step": "application_sent", "steps": [
+            {"id": "application_sent", "stage_type": "user_action", "type": "form_submit",
+             "admin_label": "Wniosek złożony", "status": "FORM_SUBMITTED", "next": "human_gate"},
+            {"id": "human_gate", "stage_type": "decision", "decision_scope": "submission",
+             "admin_label": "Oczekujący na decyzję", "status": "WAITING_FOR_OFFICER_DECISION"},
+            {"id": "ready_document", "stage_type": "documents", "admin_label": "Deklaracja gotowa",
+             "status": "DECLARATION_READY"},
+        ], "decision_types": [{"code": "approved", "step_id": "human_gate", "target_step": "ready_document"}],
+    }}
+    form_id, row, _ = make_submission(admin_app, definition)
+    services = admin_app.extensions["services"]
+    public_id = row["submission_id"]
+    persisted = services.submission_repository.get_by_id(public_id)
+    assert persisted["workflow_step"] == persisted["workflow_stage"] == "human_gate"
+    assert persisted["process_status"] == "WAITING_FOR_OFFICER_DECISION"
+
+    # An unrelated editor state must not replace the submission's FormVersion.
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        form.definition_json = {"workflow": {"initial_step": "application_sent", "steps": [
+            {"id": "application_sent", "next": "ready_document"}, {"id": "ready_document"},
+        ]}}
+        db.commit()
+        submission = db.get(FormSubmission, persisted["id"])
+        events = db.scalars(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission.id).order_by(SubmissionWorkflowEvent.id)).all()
+        assert [(event.previous_step, event.new_step) for event in events] == [("application_sent", "human_gate")]
+        view = build_admin_workflow_view(submission, form_config=definition, events=[
+            {"previous_step": event.previous_step, "new_step": event.new_step} for event in events
+        ])
+        assert [section["state"] for section in view["sections"]] == ["completed", "current", "future"]
+
+    services.workflow_service.run_automatic_steps(persisted, definition)
+    assert services.submission_repository.get_by_id(public_id)["workflow_step"] == "human_gate"
+    with pytest.raises(WorkflowTransitionError):
+        services.workflow_service.transition_to(public_id, "ready_document")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, persisted["id"])
+        with pytest.raises(WorkflowTransitionError):
+            services.workflow_service.transition_submission(
+                submission, "DECLARATION_READY", target_step="ready_document",
+                actor="system", reason="automatic_shortcut",
+            )
+        services.workflow_service.transition_submission(
+            submission, "DECLARATION_READY", target_step="ready_document",
+            decision_code="approved", actor="officer", reason="officer_decision",
+        )
+        db.commit()
+        assert submission.workflow_step == submission.workflow_stage == "ready_document"
+        event = db.scalars(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission.id,
+            SubmissionWorkflowEvent.reason == "officer_decision",
+        )).one()
+        assert (event.previous_step, event.new_step) == ("human_gate", "ready_document")
+
+
+def test_skip_diagnostic_does_not_repair_record_with_later_document(admin_app):
+    from scripts.diagnostics.report_workflow_skip import build_report
+    from test_workflow_v2_validation import explicit_workflow
+
+    workflow = explicit_workflow()
+    workflow["steps"].insert(2, {"id": "document", "stage_type": "documents", "status": "DECLARATION_READY", "next": "completed"})
+    for decision in workflow["decision_types"]:
+        decision["target_step"] = "document"
+    _, row, _ = make_submission(admin_app, {"title": "Diagnostyka", "fields": [], "workflow": workflow})
+    public_id = row["submission_id"]
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.scalar(select(FormSubmission).where(FormSubmission.submission_id == public_id))
+        event = db.scalar(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission.id,
+        ))
+        event.new_step = "document"
+        event.new_status = "DECLARATION_READY"
+        event.source = "legacy_shortcut"
+        submission.workflow_step = submission.workflow_stage = "document"
+        submission.process_status = "DECLARATION_READY"
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id=public_id, form_slug=submission.form_slug,
+            document_type="declaration", filename="generated.pdf", storage_path="test/generated.pdf", status="generated",
+        ))
+        db.commit()
+        report = build_report(db, public_id)
+        assert build_report(db, submission_pk=submission.id, form_id=submission.form_version.form_id) == report
+        assert report["assessment"]["unvisited_decision_steps"] == ["review"]
+        assert report["assessment"]["recorded_decision"] is False
+        assert report["assessment"]["later_document_types"] == ["declaration"]
+        assert report["assessment"]["automatic_repair_safe"] is False
+        db.refresh(submission)
+        assert submission.workflow_step == "document"
 
 
 @pytest.mark.parametrize("stage", ["officer_review", "declaration"])

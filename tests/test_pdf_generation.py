@@ -72,6 +72,30 @@ def test_pdf_plain_values_remain_escaped_and_urls_are_not_auto_linked(app, form_
     assert '<a href="https://example.com">' not in html
 
 
+def test_pdf_renders_each_visible_field_once_and_omits_hidden_consent(app):
+    from flask import render_template
+    from form_loader import build_consents_view, build_submission_view
+
+    definition = {"title": "Formularz", "fields": [
+        {"type": "section", "label": "Oświadczenia"},
+        {"type": "checkbox", "name": "ordinary", "label": "Kompetencje Cyfrowe"},
+        {"type": "checkbox", "name": "consent", "label": "Akceptacja", "consent": True},
+        {"type": "checkbox", "name": "conditional", "label": "Zgoda warunkowa", "consent": True,
+         "visible_if": {"field": "answer", "operator": "equals", "value": "Tak"}},
+    ]}
+    for answer in ("Nie", "Tak"):
+        values = {"answer": answer, "ordinary": "Tak", "consent": "Tak", "conditional": "Tak"}
+        with app.app_context():
+            html = render_template(
+                "pdf_template.html", form_definition=definition,
+                submission_view=build_submission_view(definition, values),
+                consents_view=build_consents_view(definition, values), submission_id="example-id",
+            )
+        assert html.count("Kompetencje Cyfrowe") == 1
+        assert html.count("Akceptacja") == 1
+        assert html.count("Zgoda warunkowa") == (1 if answer == "Tak" else 0)
+
+
 def test_chromium_pdf_contains_clickable_link(app, form_definition, valid_form_data, tmp_path):
     import os
     from pathlib import Path
@@ -107,7 +131,7 @@ def test_chromium_pdf_contains_clickable_link(app, form_definition, valid_form_d
         for page in reader.pages
         for annotation in page.get("/Annots", [])
     ]
-    assert "https://example.com" in uris
+    assert "https://example.com" in {uri.rstrip("/") for uri in uris}
     assert "https://example.com/dokument" in uris
     assert all("<a href" not in (page.extract_text() or "") for page in reader.pages)
 

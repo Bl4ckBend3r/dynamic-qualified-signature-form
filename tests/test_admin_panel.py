@@ -4195,7 +4195,8 @@ def test_officer_decision_does_not_send_automatic_mail(admin_app, admin_client):
         assert [decision.email_requested for decision in decisions] == [False]
 
 
-def test_officer_decision_update_survives_missing_decision_audit_table(admin_app, admin_client):
+@pytest.mark.parametrize("bulk", [False, True])
+def test_officer_decision_update_rolls_back_when_decision_audit_table_is_missing(admin_app, admin_client, bulk):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="sample_form", name="Sample")
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
@@ -4218,18 +4219,21 @@ def test_officer_decision_update_survives_missing_decision_audit_table(admin_app
     html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
     token = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
 
-    response = admin_client.post(
-        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
-        data={"csrf_token": token, "officer_decision": "rejected", "officer_decision_reason": "Braki"},
-    )
+    path = (f"/admin/forms/{form_id}/submissions/decisions" if bulk
+            else f"/admin/forms/{form_id}/submissions/{submission_pk}/decision")
+    data = ({"csrf_token": token, "submission_row_ids": [str(submission_pk)],
+             f"officer_decision_{submission_pk}": "rejected",
+             f"officer_decision_reason_{submission_pk}": "Braki"} if bulk
+            else {"csrf_token": token, "officer_decision": "rejected", "officer_decision_reason": "Braki"})
+    response = admin_client.post(path, data=data)
 
     assert response.status_code == 302
     assert calls == []
     with session_factory() as db:
         submission = db.get(FormSubmission, submission_pk)
-        assert submission.officer_decision == "rejected"
-        assert submission.officer_decision_reason == "Braki"
-        assert submission.process_status == "OFFICER_REJECTED"
+        assert not submission.officer_decision
+        assert not submission.officer_decision_reason
+        assert submission.process_status == "FORM_SUBMITTED"
 
 
 def test_bulk_officer_decision_update_saves_all_rows(admin_app, admin_client):

@@ -74,6 +74,22 @@ def test_existing_form_opens_with_default_and_saved_widths(tmp_path):
         assert state[1]["width"] == "full"
 
 
+def test_builder_saves_conditions_and_checkbox_consent(tmp_path):
+    factory, form_id = builder_form(tmp_path)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        state = serialize_builder_fields(form, sorted(form.fields, key=lambda item: item.sort_order))
+        state[0]["visible_if"] = {"field": "zgoda", "operator": "equals", "value": "Tak"}
+        state[0]["required_if"] = {"field": "zgoda", "operator": "not_equals", "value": "Nie"}
+        state[1]["consent"] = True
+        apply_builder_state(db, form, state, field_types=FIELD_TYPES, availability_definition=form.definition_json)
+        db.commit()
+        fields = {field["name"]: field for field in form.definition_json["fields"]}
+        assert fields["imie"]["visible_if"] == state[0]["visible_if"]
+        assert fields["imie"]["required_if"] == state[0]["required_if"]
+        assert fields["zgoda"]["consent"] is True
+
+
 def test_builder_serialization_excludes_specialized_training_selection(tmp_path):
     factory, form_id = builder_form(tmp_path)
     with factory() as db:

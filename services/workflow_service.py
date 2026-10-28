@@ -140,7 +140,7 @@ class WorkflowService:
         if not self._is_decision_step(review):
             return
         status = review.get("status") or "WAITING_FOR_OFFICER_DECISION"
-        if self.transition_to(submission["submission_id"], target, actor="system", metadata={"target_status": status, "reason": "submission_entered_review"}):
+        if self.transition_to(submission["submission_id"], target, actor="system", metadata={"target_status": status, "reason": "submission_entered_review"}, form_config=form_config):
             submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
     def definition_for(self, submission: dict) -> dict:
@@ -175,7 +175,8 @@ class WorkflowService:
             raise WorkflowTransitionError("Przejście wskazuje nieistniejący lub nieaktywny etap.")
         status = step.get("status") or self._status_for_step(target)
         if not self.transition_to(submission["submission_id"], target, actor=actor,
-                                  metadata={"target_status": status, "reason": "configured_workflow_edge", "expected_step": self.get_current_step(submission, form_config)}):
+                                  metadata={"target_status": status, "reason": "configured_workflow_edge", "expected_step": self.get_current_step(submission, form_config)},
+                                  form_config=form_config):
             raise WorkflowTransitionError("Nie udało się zapisać przejścia workflow.")
         submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
@@ -236,6 +237,45 @@ class WorkflowService:
         finally:
             self._driving.discard(public_id)
 
+    def validate_automatic_path(self, definition: dict, start_step: str, *, submission_data: dict | None = None) -> None:
+        """Validate deterministic post-decision steps before committing the decision."""
+        if (definition.get("workflow") or {}).get("flow_mode") != "explicit":
+            return
+        from services.workflow_config_service import DOCUMENTS_STAGE_TYPE, workflow_stage_type
+        from services.documents.document_workflow_service import is_document_step, step_documents
+
+        visited = set()
+        current = start_step
+        while current:
+            step = self._find_step(definition, current)
+            if not step or step.get("active") is False:
+                raise WorkflowTransitionError("Przejście wskazuje nieistniejący lub nieaktywny etap.")
+            kind = workflow_stage_type(step)
+            action = step.get("action") or "none"
+            if is_document_step(step):
+                if not step_documents(definition, step):
+                    raise WorkflowTransitionError("Etap dokumentowy nie ma przypisanych dokumentów.")
+                return
+            if kind in {"decision", "final", "user_action", "officer_action"} or step.get("final"):
+                return
+            if kind == DOCUMENTS_STAGE_TYPE and action != "generate_document":
+                return
+            if current in visited:
+                raise WorkflowTransitionError("Automatyczna pętla workflow wymaga działania użytkownika lub urzędnika.")
+            visited.add(current)
+            if action == "generate_document":
+                if not self.document_service or not step.get("document_id"):
+                    raise WorkflowTransitionError("Etap generowania nie ma skonfigurowanego dokumentu.")
+                document = self.document_service.get_document_by_id(definition, step["document_id"])
+                if not document or not document.get("enabled", True):
+                    raise WorkflowTransitionError("Etap generowania wskazuje brakujący lub nieaktywny dokument.")
+            elif action != "none" and action not in self.side_effect_handlers:
+                raise WorkflowTransitionError("Brak obsługi skonfigurowanej akcji automatycznej.")
+            next_step = self.resolve_next_step(definition, current, submission_data=submission_data)
+            if not next_step:
+                raise WorkflowTransitionError("Automatyczny etap nie ma skonfigurowanego następnego kroku.")
+            current = next_step
+
     def get_current_step(self, submission: dict, form_config: dict) -> str:
         return current_workflow_step(submission, form_config)
 
@@ -245,6 +285,7 @@ class WorkflowService:
         target_step: str,
         actor: str = "system",
         metadata: dict | None = None,
+        form_config: dict | None = None,
     ) -> bool:
         if not self.submission_repository:
             return False
@@ -264,8 +305,18 @@ class WorkflowService:
                         raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)
         from services.documents.document_workflow_service import has_document_workflow, document_step_state
-        old_definition = self.definition_for(submission)
+        if submission.get("form_version_id") and getattr(self.submission_repository, "session_factory", None):
+            old_definition = self.definition_for(submission)
+            if not old_definition:
+                raise WorkflowTransitionError("Brak wersji workflow przypisanej do zgłoszenia.")
+        else:
+            old_definition = form_config or {}
         old_config = self._find_step(old_definition, old_step) or {}
+        self._require_configured_edge(
+            old_definition, old_step, target_step,
+            decision_code=str((metadata or {}).get("officer_decision") or ""),
+            actor=actor, submission_data=submission.get("data_json") or {},
+        )
         if target_step != old_step and has_document_workflow(old_definition, old_config) and not document_step_state(submission, old_step).get("completed"):
             raise WorkflowTransitionError("Najpierw zakończ wymagane czynności dokumentu.")
         target_status = str((metadata or {}).get("target_status") or self._status_for_step(target_step))
@@ -356,8 +407,16 @@ class WorkflowService:
         old_step = current_workflow_step(submission)
         from services.documents.document_workflow_service import has_document_workflow, document_step_state
         version = getattr(submission, "form_version", None)
+        if getattr(submission, "form_version_id", None) and version is None:
+            raise WorkflowTransitionError("Brak wersji workflow przypisanej do zgłoszenia.")
         definition = (version.definition_json if version else {}) or {}
         current_config = self._find_step(definition, old_step) or {}
+        if target_step is not None:
+            self._require_configured_edge(
+                definition, old_step, target_step, decision_code=decision_code,
+                item_completion=reason.startswith("item_decision_completion:ALL:"),
+                actor=actor, submission_data=getattr(submission, "data_json", None) or {},
+            )
         if has_document_workflow(definition, current_config) and (target_step != old_step or target_status != old_status):
             if not document_step_state({"document_states": submission.document_states}, old_step).get("completed"):
                 raise WorkflowTransitionError("Najpierw zakończ wymagane czynności dokumentu.")
@@ -420,6 +479,35 @@ class WorkflowService:
             return False
         available = self.get_available_actions(submission, form_config)
         return any(action.get("target_step") == step_id for action in available)
+
+    def _require_configured_edge(
+        self, definition: dict, current: str, target: str, *,
+        decision_code: str = "", item_completion: bool = False,
+        actor: str = "system", submission_data: dict | None = None,
+    ) -> None:
+        """Reject a shortcut around an explicit workflow gate."""
+        workflow = definition.get("workflow") or {}
+        if workflow.get("flow_mode") != "explicit" or target == current:
+            return
+        step = self._find_step(definition, current)
+        if not step:
+            raise WorkflowTransitionError("Bieżący etap nie występuje w wersji workflow zgłoszenia.")
+        if step.get("stage_type") == "decision" or step.get("type") in {"decision", "manual_decision"} or step.get("decisions"):
+            if item_completion and step.get("decision_scope") == "item":
+                expected = step.get("completion_next")
+            elif decision_code:
+                expected = self.resolve_next_step(definition, current, decision_code)
+            else:
+                expected = None
+        else:
+            if step.get("final") or step.get("stage_type") == "final":
+                expected = None
+            elif (step.get("stage_type") == "officer_action" or step.get("requires_officer_action")) and actor == "system":
+                expected = None
+            else:
+                expected = self.resolve_next_step(definition, current, submission_data=submission_data)
+        if str(expected or "") != str(target or ""):
+            raise WorkflowTransitionError("Przejście pomija wymagany etap lub nie wynika z grafu workflow.")
 
     def get_available_actions(self, submission: dict, form_config: dict) -> list[dict]:
         current_step = self._find_step(form_config, self.get_current_step(submission, form_config))

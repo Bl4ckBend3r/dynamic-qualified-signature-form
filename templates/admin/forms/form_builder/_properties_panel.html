@@ -79,6 +79,23 @@
         </label>
       </div>
     </fieldset>
+    <fieldset data-conditions-setting>
+      <legend>Warunki pola</legend>
+      {% for kind, title in [('visible_if', 'Widoczne, gdy'), ('required_if', 'Wymagane, gdy')] %}
+      <div data-condition="{{ kind }}">
+        <strong>{{ title }}</strong>
+        <label><span>Nazwa pola sterującego</span><input data-condition-part="field" placeholder="np. odpowiedz" /></label>
+        <label><span>Operator</span><select data-condition-part="operator">
+          {% for operator in ['equals', 'not_equals', 'in', 'not_in', 'is_empty', 'is_not_empty'] %}<option value="{{ operator }}">{{ operator }}</option>{% endfor %}
+        </select></label>
+        <label><span>Wartość (dla in/not_in oddziel przecinkami)</span><input data-condition-part="value" /></label>
+      </div>
+      {% endfor %}
+    </fieldset>
+    <label class="form-builder__checkbox" data-consent-setting hidden>
+      <input type="checkbox" data-property="consent" />
+      <span>Pole jest zgodą lub oświadczeniem</span>
+    </label>
     <fieldset class="form-builder__documents" data-documents-setting>
       <legend>Dokumenty</legend>
       <label class="form-builder__checkbox">

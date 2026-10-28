@@ -32,9 +32,9 @@
                 </span>
             </td>
             <td>
-                <small>Utworzono {{ version.created_at.strftime('%Y-%m-%d %H:%M') if version.created_at else '-' }}{% if version.created_by %}<br>przez {{ version.created_by.email }}{% endif %}</small>
-                {% if version.published_at %}<small><br>Opublikowano {{ version.published_at.strftime('%Y-%m-%d %H:%M') }}{% if version.published_by %}<br>przez {{ version.published_by.email }}{% endif %}</small>{% endif %}
-                {% if version.archived_at %}<small><br>Zarchiwizowano {{ version.archived_at.strftime('%Y-%m-%d %H:%M') }}</small>{% endif %}
+                <small>Utworzono {{ version.created_at\|business_datetime if version.created_at else '-' }}{% if version.created_by %}<br>przez {{ version.created_by.email }}{% endif %}</small>
+                {% if version.published_at %}<small><br>Opublikowano {{ version.published_at\|business_datetime }}{% if version.published_by %}<br>przez {{ version.published_by.email }}{% endif %}</small>{% endif %}
+                {% if version.archived_at %}<small><br>Zarchiwizowano {{ version.archived_at\|business_datetime }}</small>{% endif %}
             </td>
             <td>{{ version.change_summary or '—' }}</td>
             <td>

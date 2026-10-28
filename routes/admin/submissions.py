@@ -6,6 +6,7 @@ from io import StringIO
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from traceback import extract_tb
 
 from flask import abort, current_app, flash, g, make_response, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
@@ -68,7 +69,7 @@ from services.admin_submission_service import (
     submission_edit_block_reason,
     update_submission_answers,
 )
-from services.workflow_service import current_workflow_step
+from services.workflow_service import WorkflowTransitionError, current_workflow_step
 from services.process_service import ProcessStatus
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
@@ -1948,13 +1949,35 @@ def _notify_beneficiary_agreement_decision(
 def submission_decision_update(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
-        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        submission = db.scalar(select(FormSubmission).where(FormSubmission.id == submission_pk).with_for_update()) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
         checklist_service = current_app.extensions["services"].verification_checklist_service
         if not checklist_service.can_make_decision(db, g.admin_user, form):
             abort(403)
-        result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""))
+        try:
+            result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""))
+        except (WorkflowTransitionError, DecisionDefinitionError) as exc:
+            db.rollback()
+            current_app.logger.warning(
+                "officer_decision_rejected",
+                exc_info=True,
+                extra={"event": "officer_decision_rejected", "operation": "officer_decision",
+                       "submission_pk": submission_pk, "form_id": form_id,
+                       "exception_type": type(exc).__name__},
+            )
+            flash("Nie udało się przejść do kolejnego etapu workflow. Decyzja nie została zapisana.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+        except SQLAlchemyError as exc:
+            db.rollback()
+            current_app.logger.error(
+                "officer_decision_database_failed frames=%s", _decision_error_frames(exc),
+                extra={"event": "officer_decision_database_failed", "operation": "officer_decision",
+                       "submission_pk": submission_pk, "form_id": form_id,
+                       "exception_type": type(exc).__name__},
+            )
+            flash("Nie udało się zapisać decyzji. Sprawdź stan bazy danych.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         if result.get("checklist_errors"):
             for error in result["checklist_errors"]:
                 flash(error, "error")
@@ -1965,11 +1988,10 @@ def submission_decision_update(form_id: int, submission_pk: int):
         if result["missing_reason"]:
             flash("Podaj powod odrzucenia albo skierowania wniosku do poprawy.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
-        if result["schema_warning"]:
-            flash(
-                "Decyzja zostala zapisana, ale audyt decyzji wymaga migracji schematu P4 (uruchom scripts/diagnostics/check_p4_schema.py i alembic upgrade head).",
-                "warning",
-            )
+        if result.get("automatic_warning"):
+            flash("Decyzja została zapisana, ale automatyczny etap workflow wymaga ponowienia lub interwencji.", "warning")
+        if result.get("mail_warning"):
+            flash("Decyzja została zapisana, ale nie udało się wysłać powiadomienia.", "warning")
         flash("Decyzja urzednika zostala zapisana.", "success")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
@@ -2287,24 +2309,56 @@ def submissions_decisions_update(form_id: int):
     skipped_count = 0
     missing_reason_count = 0
     invalid_stage_count = 0
-    schema_warning = False
     checklist_errors = []
+    workflow_errors = 0
+    database_errors = 0
+    automatic_warnings = 0
+    mail_warnings = 0
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
         if not current_app.extensions["services"].verification_checklist_service.can_make_decision(db, g.admin_user, form):
             abort(403)
         raw_ids = request.form.getlist("submission_row_ids")
-        submission_ids = [int(item) for item in raw_ids if str(item).isdigit()]
-        submissions = db.execute(
-            select(FormSubmission).where(FormSubmission.id.in_(submission_ids), FormSubmission.form_slug == form.slug)
-        ).scalars().all()
-        for submission in submissions:
+        submission_ids = list(dict.fromkeys(int(item) for item in raw_ids if str(item).isdigit()))
+        for submission_pk in submission_ids:
+            submission = db.scalar(select(FormSubmission).where(
+                FormSubmission.id == submission_pk, FormSubmission.form_slug == form.slug,
+            ).with_for_update())
+            if submission is None:
+                continue
             decision = request.form.get(f"officer_decision_{submission.id}", "")
             if not decision:
                 skipped_count += 1
                 continue
             reason = request.form.get(f"officer_decision_reason_{submission.id}", "")
-            result = save_officer_decision(db, form, submission, decision, reason)
+            submission_log_context = {
+                "submission_id": submission.submission_id,
+                "submission_pk": submission.id,
+                "form_id": form_id,
+                "previous_step": submission.workflow_step or "",
+                "decision_code": decision,
+            }
+            try:
+                result = save_officer_decision(db, form, submission, decision, reason)
+            except (WorkflowTransitionError, DecisionDefinitionError) as exc:
+                db.rollback()
+                workflow_errors += 1
+                current_app.logger.warning(
+                    "officer_decision_rejected",
+                    exc_info=True,
+                    extra={"event": "officer_decision_rejected", "operation": "officer_decision",
+                           "exception_type": type(exc).__name__, **submission_log_context},
+                )
+                continue
+            except SQLAlchemyError as exc:
+                db.rollback()
+                database_errors += 1
+                current_app.logger.error(
+                    "officer_decision_database_failed frames=%s", _decision_error_frames(exc),
+                    extra={"event": "officer_decision_database_failed", "operation": "officer_decision",
+                           "exception_type": type(exc).__name__, **submission_log_context},
+                )
+                continue
             if result.get("checklist_errors"):
                 checklist_errors.extend(f"{submission.submission_id}: {error}" for error in result["checklist_errors"])
                 continue
@@ -2318,18 +2372,22 @@ def submissions_decisions_update(form_id: int):
                 skipped_count += 1
                 continue
             saved_count += 1
-            schema_warning = schema_warning or result["schema_warning"]
-        if schema_warning:
-            flash(
-                "Czesc decyzji zostala zapisana bez audytu P4, bo schemat bazy wymaga migracji.",
-                "warning",
-            )
+            automatic_warnings += bool(result.get("automatic_warning"))
+            mail_warnings += bool(result.get("mail_warning"))
         if missing_reason_count:
             flash(f"Pominieto {missing_reason_count} decyzji: podaj powod odrzucenia albo poprawy.", "error")
         if invalid_stage_count:
             flash(f"Pominieto {invalid_stage_count} decyzji: etap weryfikacji wniosku jest juz zakonczony.", "warning")
         for error in checklist_errors[:10]:
             flash(error, "error")
+        if workflow_errors:
+            flash(f"Nie zapisano {workflow_errors} decyzji: nie udało się przejść do kolejnego etapu workflow.", "error")
+        if database_errors:
+            flash(f"Nie zapisano {database_errors} decyzji: błąd zapisu danych.", "error")
+        if automatic_warnings:
+            flash(f"Zapisano {automatic_warnings} decyzji, ale automatyczny etap workflow wymaga ponowienia lub interwencji.", "warning")
+        if mail_warnings:
+            flash(f"Zapisano {mail_warnings} decyzji, ale nie udało się wysłać powiadomienia.", "warning")
         flash(f"Zapisano decyzje: {saved_count}. Bez zmian: {skipped_count}.", "success" if saved_count else "warning")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
@@ -2389,7 +2447,17 @@ def delete_submissions_transactionally(db, submissions: list[FormSubmission]) ->
         db.delete(submission)
 
 
+def _decision_error_frames(exc: Exception) -> str:
+    """Keep failure location in logs without SQL parameters or mail content."""
+    return " > ".join(
+        f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+        for frame in extract_tb(exc.__traceback__)[-8:]
+    )
+
+
 def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:
+    if submission.form_version_id and submission.form_version is None:
+        raise WorkflowTransitionError("Brak wersji workflow przypisanej do zgłoszenia.")
     historical_definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
     workflow_config = historical_definition.get("workflow") or {}
     current_step = current_workflow_step(submission, historical_definition)
@@ -2407,10 +2475,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         }
     decision = str(decision_value or "").strip()
     decision_service = current_app.extensions["services"].decision_definition_service
-    try:
-        decision_definition = decision_service.resolve(submission, decision, scope="submission")
-    except Exception:
-        abort(400)
+    decision_definition = decision_service.resolve(submission, decision, scope="submission")
     category = str(decision_definition.get("semantic_category") or "neutral")
 
     if category == "positive":
@@ -2458,6 +2523,16 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     elif category == "negative" and not target_step:
         target_step = "end_rejected"
 
+    log_context = {
+        "submission_id": public_submission_id,
+        "submission_pk": submission.id,
+        "form_id": form.id,
+        "previous_step": previous_step,
+        "target_step": target_step or "",
+        "decision_code": decision,
+        "decision_category": category,
+    }
+
     configured_target = next(
         (
             item
@@ -2469,14 +2544,17 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     if workflow_config.get("flow_mode") == "explicit":
         if not configured_target or configured_target.get("active") is False:
-            db.rollback()
-            abort(400)
+            current_app.logger.warning(
+                "officer_decision_invalid_target",
+                extra={"event": "officer_decision_invalid_target", "operation": "officer_decision_validation",
+                       "exception_type": "WorkflowTransitionError", **log_context},
+            )
+            raise WorkflowTransitionError("Decyzja wskazuje nieistniejący lub nieaktywny etap workflow.")
 
     if category == "positive":
         if not target_step:
             if workflow_config.get("steps"):
-                db.rollback()
-                abort(400)
+                raise WorkflowTransitionError("Decyzja nie ma skonfigurowanego etapu docelowego.")
             target_status = (
                 ProcessStatus.ACCEPTED_WAITING_FOR_ADDITIONAL_FIELDS.value
                 if has_additional_fields_after_acceptance(historical_definition)
@@ -2504,24 +2582,38 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         submission.correction_requested_at = datetime.now(timezone.utc)
 
     else:
-        target_status = submission.process_status
+        target_status = (
+            workflow_service.status_for_step(historical_definition, target_step)
+            if workflow_config.get("flow_mode") == "explicit" else submission.process_status
+        )
+
+    if workflow_config.get("flow_mode") == "explicit":
+        try:
+            workflow_service.validate_automatic_path(
+                historical_definition, target_step, submission_data=submission.data_json or {},
+            )
+        except WorkflowTransitionError as exc:
+            current_app.logger.warning(
+                "officer_decision_preflight_failed",
+                exc_info=True,
+                extra={"event": "officer_decision_preflight_failed", "operation": "officer_decision_preflight",
+                       "exception_type": type(exc).__name__, **log_context},
+            )
+            raise
 
     if category != "correction":
         submission.correction_required = "Nie"
 
-    workflow_service.transition_submission(
-        submission,
-        target_status,
-        actor="officer",
-        reason="officer_decision",
-        target_step=target_step,
-        decision_code=decision,
-    )
-    submission.updated_at = datetime.now(timezone.utc)
-    db.commit()
-
-    schema_warning = False
     try:
+        workflow_service.transition_submission(
+            submission,
+            target_status,
+            actor="officer",
+            reason="officer_decision",
+            target_step=target_step,
+            decision_code=decision,
+        )
+        submission.updated_at = datetime.now(timezone.utc)
         db.add(
             SubmissionDecision(
                 submission_id=submission.id,
@@ -2543,15 +2635,15 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             )
         )
         db.commit()
-    except SQLAlchemyError as exc:
+    except (WorkflowTransitionError, SQLAlchemyError) as exc:
         db.rollback()
-        schema_warning = True
-        current_app.logger.warning(
-            "schema_mismatch area=decisions submission_id=%s reason=submission_decisions_unavailable error=%s",
-            public_submission_id,
-            exc.__class__.__name__,
-            exc_info=True,
-        )
+        context = {"event": "officer_decision_domain_failed", "operation": "officer_decision_domain",
+                   "exception_type": type(exc).__name__, **log_context}
+        if isinstance(exc, SQLAlchemyError):
+            current_app.logger.error("officer_decision_domain_failed frames=%s", _decision_error_frames(exc), extra=context)
+        else:
+            current_app.logger.exception("officer_decision_domain_failed", extra=context)
+        raise
 
     current_app.logger.info(
         "officer_decision_saved",
@@ -2564,27 +2656,53 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         },
     )
 
-    mail_result = None
+    automatic_warning = False
     if workflow_config.get("flow_mode") == "explicit":
-        mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_decision_event(
-            db=db, form=form, submission=submission, decision=None,
-            actor_id=g.admin_user.id, step_config=current_step_config,
-        )
-        db.commit()
-        row = workflow_service.submission_repository.get_by_id(public_submission_id)
-        if row:
-            workflow_service.run_automatic_steps(row, historical_definition)
-            db.refresh(submission)
-    elif accepted_after_correction:
         try:
-            mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_correction_accepted(
-                public_submission_id
-            )
+            row = workflow_service.submission_repository.get_by_id(public_submission_id)
+            if row:
+                workflow_service.run_automatic_steps(row, historical_definition)
+                db.refresh(submission)
+        except (WorkflowTransitionError, ValueError, SQLAlchemyError) as exc:
+            if isinstance(exc, SQLAlchemyError):
+                db.rollback()
+            automatic_warning = True
+            context = {"event": "officer_decision_automatic_workflow_failed",
+                       "operation": "officer_decision_automatic_workflow",
+                       "exception_type": type(exc).__name__, **log_context}
+            if isinstance(exc, SQLAlchemyError):
+                current_app.logger.error("officer_decision_automatic_workflow_failed frames=%s", _decision_error_frames(exc), extra=context)
+            else:
+                current_app.logger.exception("officer_decision_automatic_workflow_failed", extra=context)
+
+    mail_result = None
+    mail_warning = False
+    if workflow_config.get("flow_mode") == "explicit" or accepted_after_correction:
+        try:
+            if workflow_config.get("flow_mode") == "explicit":
+                mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_decision_event(
+                    db=db, form=form, submission=submission, decision=None,
+                    actor_id=g.admin_user.id, step_config=current_step_config,
+                )
+                db.commit()
+            else:
+                mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_correction_accepted(
+                    public_submission_id
+                )
+            mail_warning = bool(mail_result and mail_result.status == "failed")
+            if mail_warning:
+                current_app.logger.warning(
+                    "officer_decision_mail_failed_result",
+                    extra={"event": "officer_decision_mail_failed_result", "operation": "officer_decision_mail",
+                           "exception_type": "MailDispatchResult", **log_context},
+                )
         except Exception as exc:
-            current_app.logger.exception(
-                "correction_accepted_mail_failed public_submission_id=%s error=%s",
-                public_submission_id,
-                exc.__class__.__name__,
+            db.rollback()
+            mail_warning = True
+            current_app.logger.error(
+                "officer_decision_mail_failed frames=%s", _decision_error_frames(exc),
+                extra={"event": "officer_decision_mail_failed", "operation": "officer_decision_mail",
+                       "exception_type": type(exc).__name__, **log_context},
             )
 
     return {
@@ -2592,8 +2710,10 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         "invalid_stage": False,
         "missing_reason": False,
         "public_submission_id": public_submission_id,
-        "schema_warning": schema_warning,
+        "schema_warning": False,
         "send_mail": bool(mail_result and mail_result.sent),
+        "automatic_warning": automatic_warning,
+        "mail_warning": mail_warning,
         "skipped": False,
     }
 

@@ -643,7 +643,7 @@ if (builder) {
         selectedPath?.fieldKey === fieldKey,
     });
 
-    renderProperties(selected());
+    renderProperties(selected(), Boolean(selectedPath?.groupKey));
 
     builder
       .querySelector("[data-builder-empty]")

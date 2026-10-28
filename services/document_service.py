@@ -4,7 +4,8 @@ import re
 import json
 from hashlib import sha256
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
 from flask import Flask, current_app, request, url_for
@@ -1076,7 +1077,7 @@ class DocumentService:
                 raise ValueError("Nie znaleziono szkolenia przypisanego do umowy.")
             training = db.execute(select(SubmissionTraining).where(SubmissionTraining.submission_id == model.id, SubmissionTraining.agreement_id == instance)).scalar_one()
             training.status = "agreement_signed_by_office"
-            training.updated_at = datetime.now().astimezone()
+            training.updated_at = datetime.now(timezone.utc)
             db.commit()
 
     @staticmethod
@@ -1090,7 +1091,7 @@ class DocumentService:
                 and all(isinstance(item, dict) and (item.get("record_uuid") or item.get("id")) for item in value)},
             "protected_data": {key: value for key, value in data_json.items() if not str(key).startswith("_")},
             "form_version_id": row.get("form_version_id"), "document_filename": signed_filename,
-            "document_sha256": sha256(uploaded_bytes).hexdigest(), "signed_at": datetime.now().astimezone().isoformat(),
+            "document_sha256": sha256(uploaded_bytes).hexdigest(), "signed_at": datetime.now(timezone.utc).isoformat(),
         }
         return data_json
 
@@ -1419,6 +1420,16 @@ def build_document_pdf_context(
         (parse_decimal_price(training.get("price")) or 0 for training in selected_trainings),
         parse_decimal_price("0") or 0,
     )
+    
+    local_now = datetime.now(timezone.utc).astimezone(
+        ZoneInfo(
+            current_app.config.get(
+                "APP_TIMEZONE",
+                "Europe/Warsaw",
+            )
+        )
+    )
+        
     return {
         **dict(row),
         "form_definition": form_definition,
@@ -1437,8 +1448,8 @@ def build_document_pdf_context(
         "selected_trainings": selected_trainings,
         "selected_trainings_total": selected_trainings_total,
         "selected_trainings_total_formatted": format_price_pln(selected_trainings_total),
-        "generated_at": datetime.now().strftime("%d.%m.%Y"),
-        "generated_date": datetime.now().strftime("%Y-%m-%d"),
+        "generated_at": local_now.strftime("%d.%m.%Y"),
+        "generated_date": local_now.strftime("%Y-%m-%d"),
         "submission_date": row.get("created_at") or row.get("submission_date") or "",
         "project_name": form_definition.get("title", ""),
         "first_name": get_participant_first_name(row),

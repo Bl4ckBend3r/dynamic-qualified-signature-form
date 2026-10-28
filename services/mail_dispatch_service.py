@@ -932,7 +932,6 @@ class MailDispatchService:
                 submission,
                 [],
                 platform_url=url_for("public_forms.index", _external=True),
-                submission_date=submission.created_at,
             )
             subject = self.render_subject(template.subject, context)
             html_body, text_body, footer, inline_images = self._render_submission_message(

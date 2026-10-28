@@ -48,9 +48,9 @@ def form_definition():
                 {"type": "radio", "name": "osoba_z_niepelnosprawnosciami", "label": "Osoba z niepełnosprawnościami", "required": True, "options": ["Tak", "Nie", "Odmowa podania informacji"]},
                 {"type": "textarea", "name": "specjalne_potrzeby", "label": "Specjalne potrzeby"},
                 {"type": "section", "label": "Oświadczenia"},
-                {"type": "checkbox", "name": "accept_regulamin", "label": "Akceptacja regulaminu", "required": True, "options": [{"value": "Tak", "label": "Akceptuję regulamin rekrutacji i uczestnictwa."}]},
-                {"type": "checkbox", "name": "accept_rodo", "label": "Zgoda RODO", "required": True, "options": [{"value": "Tak", "label": "Wyrażam zgodę na przetwarzanie danych osobowych."}]},
-                {"type": "checkbox", "name": "accept_odpowiedzialnosc", "label": "Odpowiedzialność cywilna", "required": True, "options": [{"value": "Tak", "label": "Oświadczam, że dane są zgodne z prawdą."}]},
+                {"type": "checkbox", "name": "accept_regulamin", "label": "Akceptacja regulaminu", "required": True, "consent": True, "options": [{"value": "Tak", "label": "Akceptuję regulamin rekrutacji i uczestnictwa."}]},
+                {"type": "checkbox", "name": "accept_rodo", "label": "Zgoda RODO", "required": True, "consent": True, "options": [{"value": "Tak", "label": "Wyrażam zgodę na przetwarzanie danych osobowych."}]},
+                {"type": "checkbox", "name": "accept_odpowiedzialnosc", "label": "Odpowiedzialność cywilna", "required": True, "consent": True, "options": [{"value": "Tak", "label": "Oświadczam, że dane są zgodne z prawdą."}]},
             ],
             "documents": {
                 "declaration": {"enabled": False},

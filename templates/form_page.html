@@ -196,6 +196,9 @@ endblock %}
       class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
       data-field-name="{{ field.name }}"
       data-field-type="{{ field.type }}"
+      data-base-required="{{ 'true' if field.required else 'false' }}"
+      {% if field.visible_if %}data-visible-rule="{{ field.visible_if|tojson|forceescape }}"{% endif %}
+      {% if field.required_if %}data-required-rule="{{ field.required_if|tojson|forceescape }}"{% endif %}
       {%
       if
       field.visible_if
@@ -210,8 +213,8 @@ endblock %}
      {% if field.type != "checkbox" %}
         <label for="{{ field.name }}">
             {{ field.label|trusted_html }}
-            {% if field.required %}
-                <span class="required required-marker" aria-hidden="true">*</span>
+            {% if field.required or field.required_if %}
+                <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
             {% endif %}
         </label>
 
@@ -224,8 +227,8 @@ endblock %}
     {% elif (field.options or [])|length > 1 %}
         <div class="field-group-label" id="{{ field.name }}-group-label">
             {{ field.label|trusted_html }}
-            {% if field.required %}
-                <span class="required required-marker" aria-hidden="true">*</span>
+            {% if field.required or field.required_if %}
+                <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
             {% endif %}
         </div>
 
@@ -520,8 +523,8 @@ endblock %}
               >regulamin</a
             >
             {% else %} {{ option|option_label|trusted_html }} {% endif %} {% if
-            field.required %}
-            <span class="required required-marker" aria-hidden="true">*</span>
+            field.required or field.required_if %}
+            <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
             {% endif %}
           </span>
         </label>
@@ -819,12 +822,13 @@ endblock %}
                   render();
               });
           });
-          const dynamicRows = document.querySelectorAll("[data-visible-field]");
+          const dynamicRows = document.querySelectorAll(".form-row[data-field-name]");
           const preserveConditionalValues = {{ 'true' if admin_edit_mode else 'false' }};
 
           function getFieldValue(fieldName) {
               const radioChecked = document.querySelector(`input[name="${fieldName}"][type="radio"]:checked`);
               if (radioChecked) return radioChecked.value;
+              if (document.querySelector(`input[name="${fieldName}"][type="radio"]`)) return "";
 
               const checkboxes = Array.from(document.querySelectorAll(`input[name="${fieldName}"][type="checkbox"]`));
               if (checkboxes.length > 1) return checkboxes.filter(box => box.checked).map(box => box.value);
@@ -835,22 +839,42 @@ endblock %}
               return input ? input.value : "";
           }
 
+          function conditionMatches(rule) {
+              if (!rule) return true;
+              const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find(key => Object.hasOwn(rule, key)) || "equals";
+              const expected = Object.hasOwn(rule, "value") ? rule.value : rule[operator];
+              const current = getFieldValue(rule.field);
+              const equal = JSON.stringify(current) === JSON.stringify(expected);
+              if (operator === "equals") return equal;
+              if (operator === "not_equals") return !equal;
+              if (operator === "in" || operator === "not_in") {
+                  const choices = Object.hasOwn(rule, "values") ? rule.values : (expected || []);
+                  const included = Array.isArray(choices) ? choices.some(choice => JSON.stringify(choice) === JSON.stringify(current)) : String(choices).includes(String(current));
+                  return operator === "in" ? included : !included;
+              }
+              const empty = current == null || current === "" || (Array.isArray(current) && current.length === 0);
+              if (operator === "is_empty") return empty;
+              if (operator === "is_not_empty") return !empty;
+              return true;
+          }
+
           function updateVisibility() {
               dynamicRows.forEach(row => {
-                  const watchedField = row.dataset.visibleField;
-                  const operator = row.dataset.visibleOperator || "equals";
-                  const expectedValue = row.dataset.visibleValue || "";
-                  const currentValue = getFieldValue(watchedField);
-
-                  let visible = true;
-
-                  const matches = Array.isArray(currentValue) ? currentValue.includes(expectedValue) : currentValue === expectedValue;
-                  if (operator === "equals") visible = matches;
-                  if (operator === "not_equals") visible = !matches;
+                  const visibleRule = row.dataset.visibleRule ? JSON.parse(row.dataset.visibleRule) : null;
+                  const requiredRule = row.dataset.requiredRule ? JSON.parse(row.dataset.requiredRule) : null;
+                  const visible = conditionMatches(visibleRule);
+                  const required = visible && (row.dataset.baseRequired === "true" || (requiredRule && conditionMatches(requiredRule)));
 
                   row.style.display = visible ? "" : "none";
-
-                  row.querySelectorAll("input, select, textarea").forEach(el => {
+                  const controls = Array.from(row.querySelectorAll("input, select, textarea")).filter(el => !el.closest("[data-repeatable-record]"));
+                  const checkboxes = controls.filter(el => el.type === "checkbox");
+                  const radio = controls.filter(el => el.type === "radio");
+                  controls.forEach(el => {
+                      const nativeRequired = required && (checkboxes.length <= 1 || el.type !== "checkbox") && (radio.length === 0 || el.type !== "radio" || el === radio[0]);
+                      el.required = Boolean(nativeRequired) && el.type !== "hidden";
+                      if (el.required) el.setAttribute("aria-required", "true");
+                      else el.removeAttribute("aria-required");
+                      el.setCustomValidity("");
                       if (!visible && !preserveConditionalValues) {
                           if (el.type === "checkbox" || el.type === "radio") {
                               el.checked = false;
@@ -858,6 +882,14 @@ endblock %}
                               el.value = "";
                           }
                       }
+                  });
+                  if (checkboxes.length > 1) {
+                      const first = checkboxes[0];
+                      first.setCustomValidity(required && !checkboxes.some(el => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
+                      if (required) first.setAttribute("aria-required", "true");
+                  }
+                  row.querySelectorAll(".required-marker").forEach(marker => {
+                      if (!marker.closest("[data-repeatable-record]")) marker.hidden = !required;
                   });
               });
           }
@@ -1294,8 +1326,13 @@ endblock %}
 
   function repeatableRootValue(fieldName) {
       const controls = Array.from(document.querySelectorAll(`[name="${CSS.escape(fieldName)}"]`));
-      const checked = controls.find((control) => control.checked);
-      return checked ? checked.value : (controls[0]?.value || "");
+      if (controls[0]?.type === "radio") return controls.find((control) => control.checked)?.value || "";
+      if (controls[0]?.type === "checkbox") {
+          if (controls.length > 1) return controls.filter((control) => control.checked).map((control) => control.value);
+          return controls[0].checked ? "Tak" : "Nie";
+      }
+      if (controls[0]?.tagName === "SELECT" && controls[0].multiple) return Array.from(controls[0].selectedOptions).map((option) => option.value);
+      return controls[0]?.value || "";
   }
 
 
@@ -1303,14 +1340,19 @@ endblock %}
       if (!rule) return true;
       const current = rule.scope === "root" ? repeatableRootValue(rule.field) : (record?.[rule.field] ?? "");
       const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find((key) => key in rule) || "equals";
-      const expected = rule.value ?? rule[operator];
-      if (operator === "equals") return current === expected;
-      if (operator === "not_equals") return current !== expected;
-      if (operator === "in") return (rule.values || expected || []).includes(current);
-      if (operator === "not_in") return !(rule.values || expected || []).includes(current);
-      if (operator === "is_empty") return current === "" || current == null;
-      if (operator === "is_not_empty") return current !== "" && current != null;
-      return false;
+      const expected = Object.hasOwn(rule, "value") ? rule.value : rule[operator];
+      const equal = JSON.stringify(current) === JSON.stringify(expected);
+      if (operator === "equals") return equal;
+      if (operator === "not_equals") return !equal;
+      if (operator === "in" || operator === "not_in") {
+          const choices = Object.hasOwn(rule, "values") ? rule.values : (expected || []);
+          const included = Array.isArray(choices) ? choices.some((choice) => JSON.stringify(choice) === JSON.stringify(current)) : String(choices).includes(String(current));
+          return operator === "in" ? included : !included;
+      }
+      const empty = current == null || current === "" || (Array.isArray(current) && current.length === 0);
+      if (operator === "is_empty") return empty;
+      if (operator === "is_not_empty") return !empty;
+      return true;
   }
 
 
@@ -1920,7 +1962,7 @@ endblock %}
       );
 
       document.addEventListener("change", (event) => {
-          if ((definition.fields || []).some((field) => field.visible_if?.scope === "root" && field.visible_if.field === event.target?.name)) {
+          if ((definition.fields || []).some((field) => [field.visible_if, field.required_if].some((rule) => rule?.scope === "root" && rule.field === event.target?.name))) {
               syncValue();
               render();
           }
@@ -1928,7 +1970,11 @@ endblock %}
 
       groupElement.addEventListener(
           "change",
-          syncValue
+          (event) => {
+              syncValue();
+              const name = event.target?.dataset.repeatableChildName;
+              if ((definition.fields || []).some((field) => [field.visible_if, field.required_if].some((rule) => rule && rule.scope !== "root" && rule.field === name))) render();
+          }
       );
 
 

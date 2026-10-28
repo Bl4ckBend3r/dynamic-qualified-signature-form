@@ -48,6 +48,22 @@ export function initializePropertiesPanel(panel, config, callbacks) {
   const typeSetting = panel.querySelector("[data-type-setting]");
   const widthSetting = panel.querySelector("[data-width-setting]");
   const documentsSetting = panel.querySelector("[data-documents-setting]");
+  const conditionsSetting = panel.querySelector("[data-conditions-setting]");
+  const consentSetting = panel.querySelector("[data-consent-setting]");
+
+  panel.querySelectorAll("[data-condition]").forEach((group) => {
+    group.querySelectorAll("[data-condition-part]").forEach((control) => {
+      control.addEventListener(control.tagName === "SELECT" ? "change" : "input", () => {
+        const field = group.querySelector('[data-condition-part="field"]').value.trim();
+        const operator = group.querySelector('[data-condition-part="operator"]').value;
+        const raw = group.querySelector('[data-condition-part="value"]').value;
+        const value = ["in", "not_in"].includes(operator)
+          ? raw.split(",").map((part) => part.trim()).filter(Boolean)
+          : raw;
+        callbacks.update({ [group.dataset.condition]: field ? { field, operator, value } : null });
+      });
+    });
+  });
 
   staticTextContent.addEventListener("input", () => {
     callbacks.update({
@@ -149,7 +165,7 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     });
   });
 
-  return (field) => {
+  return (field, isNested = false) => {
     empty.hidden = Boolean(field);
     content.hidden = !field;
     if (!field) return;
@@ -163,6 +179,17 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     typeSetting.hidden = isStaticText;
     widthSetting.hidden = isStaticText;
     documentsSetting.hidden = isStaticText;
+    if (conditionsSetting) conditionsSetting.hidden = isStaticText || isNested;
+    if (consentSetting) consentSetting.hidden = field.type !== "checkbox" || isNested;
+
+    panel.querySelectorAll("[data-condition]").forEach((group) => {
+      const rule = field[group.dataset.condition] || {};
+      const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find((key) => key in rule) || "equals";
+      group.querySelector('[data-condition-part="field"]').value = rule.field || "";
+      group.querySelector('[data-condition-part="operator"]').value = operator;
+      const value = rule.values ?? rule.value ?? rule[operator] ?? "";
+      group.querySelector('[data-condition-part="value"]').value = Array.isArray(value) ? value.join(", ") : value;
+    });
 
     panel.querySelector("[data-name-help]").hidden = isStaticText || !field.id;
 

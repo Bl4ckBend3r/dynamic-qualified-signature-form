@@ -89,7 +89,7 @@ def build_consents_view(
     consents_view: List[Dict[str, Any]] = []
 
     for field in without_training_selection_section(form_definition.get("fields", [])):
-        if field.get("type") != "checkbox":
+        if field.get("type") != "checkbox" or field.get("consent") is not True:
             continue
 
         field_name = field.get("name")
@@ -116,7 +116,7 @@ def build_consents_view(
         consents_view.append(
             {
                 "name": field_name,
-                "title": field.get("label", ""),
+                "title": field.get("label", "") if consent_text != field.get("label", "") else "",
                 "text": consent_text,
                 "accepted": accepted,
                 "accepted_label": "Tak" if accepted else "Nie",
@@ -357,6 +357,8 @@ def _normalize_field_definition(
     normalized.setdefault("default", "")
     normalized.setdefault("validation", {})
     normalized.setdefault("visible_if", None)
+    normalized.setdefault("required_if", None)
+    normalized.setdefault("consent", False)
     normalized.setdefault("readonly", False)
 
     # Normalizacja szerokości.
@@ -1197,15 +1199,11 @@ def build_submission_view(
         "items": [],
     }
 
-    def should_skip_section(section: Dict[str, Any]) -> bool:
-        title = (section.get("title") or "").strip().lower()
-        return title == "oświadczenia"
-
     for field in without_training_selection_section(form_definition["fields"]):
         field_type = field["type"]
 
         if field_type == "section":
-            if current_section["items"] and not should_skip_section(current_section):
+            if current_section["items"]:
                 view.append(current_section)
 
             current_section = {
@@ -1214,7 +1212,7 @@ def build_submission_view(
             }
             continue
 
-        if field_type in {"static_text", "file"}:
+        if field_type in {"static_text", "file"} or (field_type == "checkbox" and field.get("consent") is True):
             continue
 
         field_name = field.get("name")
@@ -1229,7 +1227,7 @@ def build_submission_view(
             "value": format_value_for_pdf(field_type, submission_data.get(field_name, "")),
         })
 
-    if current_section["items"] and not should_skip_section(current_section):
+    if current_section["items"]:
         view.append(current_section)
 
     return view

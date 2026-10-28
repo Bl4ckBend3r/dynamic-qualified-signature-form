@@ -402,6 +402,7 @@
     {
       "type": "checkbox",
       "name": "osw_regulamin",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -414,6 +415,7 @@
     {
       "type": "checkbox",
       "name": "osw_kryteria",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -426,6 +428,7 @@
     {
       "type": "checkbox",
       "name": "osw_finansowanie",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -438,6 +441,7 @@
     {
       "type": "checkbox",
       "name": "osw_brak_gwarancji",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -450,6 +454,7 @@
     {
       "type": "checkbox",
       "name": "osw_rodo",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -462,6 +467,7 @@
     {
       "type": "checkbox",
       "name": "osw_ewaluacja",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -474,6 +480,7 @@
     {
       "type": "checkbox",
       "name": "osw_zatrudnienie",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -486,6 +493,7 @@
     {
       "type": "checkbox",
       "name": "osw_monitoring",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [
@@ -498,6 +506,7 @@
     {
       "type": "checkbox",
       "name": "osw_prawdziwosc",
+      "consent": true,
       "required": true,
       "width": "full",
       "options": [

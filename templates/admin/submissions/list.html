@@ -136,7 +136,7 @@
                     <td>{{ submission.created_at|business_datetime if submission.created_at else "-" }}</td>
                     <td class="admin-form-name-cell">{{ form.name }}</td>
                     <td class="admin-assignee-cell">{{ submission.assigned_to.email if submission.assigned_to else "Nieprzydzielona" }}</td>
-                    <td class="admin-priority-cell"><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><small>{{ submission.due_at.strftime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
+                    <td class="admin-priority-cell"><span class="admin-badge">{{ priority_labels.get(submission.priority, submission.priority) }}</span><small>{{ submission.due_at|business_datetime("%Y-%m-%d %H:%M") if submission.due_at else "Bez terminu" }}</small></td>
                     <td><span class="admin-badge">{{ submission_status_label(submission, form) }}</span></td>
                     <td>{{ submission_step_label(submission, form) }}</td>
                     <td>

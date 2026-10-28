@@ -161,6 +161,9 @@ def serialize_builder_fields(
             ),
             "type": field.type or "text",
             "required": bool(field.required),
+            "visible_if": deepcopy(config.get("visible_if")),
+            "required_if": deepcopy(config.get("required_if")),
+            "consent": bool(config.get("consent", False)),
             "availability": deepcopy(
                 field.availability_json
                 or config.get("availability")
@@ -392,6 +395,9 @@ def apply_builder_state(
                 "content_html": str(item.get("content_html") or ""),
                 "type": field_type,
                 "required": field.required,
+                "visible_if": deepcopy(item.get("visible_if", config.get("visible_if"))),
+                "required_if": deepcopy(item.get("required_if", config.get("required_if"))),
+                "consent": field_type == "checkbox" and bool(item.get("consent", config.get("consent", False))),
                 "options": deepcopy(field.options),
                 "width": width_name(item.get("width")),
                 "placeholder": str(item.get("placeholder") or "").strip(),

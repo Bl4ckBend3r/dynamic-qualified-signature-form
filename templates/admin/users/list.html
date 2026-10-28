@@ -25,7 +25,7 @@
                         <span class="admin-badge admin-badge-muted">Nieaktywny</span>
                     {% endif %}
                 </td>
-                <td>{{ user.created_at.strftime("%Y-%m-%d") if user.created_at else "-" }}</td>
+                <td>{{ user.created_at\|business_datetime("%Y-%m-%d") if user.created_at else "-" }}</td>
                 <td>
                     <div class="admin-actions">
                         {% if has_permission('can_manage_roles') %}<a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edytuj</a>

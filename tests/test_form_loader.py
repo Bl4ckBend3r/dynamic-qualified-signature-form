@@ -279,6 +279,70 @@ def test_build_consents_view_contains_required_consents(form_definition, valid_f
     assert all(item["accepted"] is True for item in consents)
 
 
+@pytest.mark.parametrize(
+    ("visible", "required_if", "expect_error"),
+    [(False, None, False), (True, None, True), (False, True, False), (True, True, True), (True, False, False)],
+)
+def test_conditional_required_respects_visibility(visible, required_if, expect_error):
+    condition = {"field": "answer", "operator": "equals", "value": "Tak"}
+    field = {"type": "text", "name": "detail", "label": "Detail", "required": required_if is None}
+    if not visible:
+        field["visible_if"] = condition
+    if required_if is not None:
+        field["required_if"] = {"field": "answer", "operator": "equals", "value": "Nie" if not visible or not required_if else "Tak"}
+    values = {"answer": "Nie" if not visible else "Tak", "detail": ""}
+    assert ("detail" in validate_submission({"fields": [field]}, values)) is expect_error
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "answer", "matches"),
+    [
+        ("equals", "Tak", "Tak", True),
+        ("not_equals", "Tak", "Nie", True),
+        ("in", ["Tak", "Może"], "Tak", True),
+        ("not_in", ["Nie"], "Tak", True),
+        ("is_empty", None, "", True),
+        ("is_not_empty", None, "Tak", True),
+    ],
+)
+def test_all_condition_operators_control_required(operator, value, answer, matches):
+    condition = {"field": "answer", "operator": operator, "value": value}
+    field = {"type": "text", "name": "detail", "label": "Detail", "required": False, "required_if": condition}
+    assert ("detail" in validate_submission({"fields": [field]}, {"answer": answer, "detail": ""})) is matches
+
+
+def test_pdf_views_partition_checkbox_fields_and_respect_visibility():
+    fields = [
+        {"type": "section", "label": "Oświadczenia"},
+        {"type": "checkbox", "name": "ordinary", "label": "Kompetencje Cyfrowe"},
+        {"type": "checkbox", "name": "consent", "label": "Akceptuję", "consent": True},
+        {"type": "checkbox", "name": "conditional", "label": "Warunkowa", "consent": True,
+         "visible_if": {"field": "answer", "operator": "equals", "value": "Tak"}},
+    ]
+    definition = {"fields": fields}
+    for answer, conditional_count in [("Nie", 0), ("Tak", 1)]:
+        values = {"answer": answer, "ordinary": "Tak", "consent": "Tak", "conditional": "Tak"}
+        submission = build_submission_view(definition, values)
+        consents = build_consents_view(definition, values)
+        labels = [item["label"] for section in submission for item in section["items"]]
+        consent_names = [item["name"] for item in consents]
+        assert labels == ["Kompetencje Cyfrowe"]
+        assert consent_names == ["consent"] + (["conditional"] if conditional_count else [])
+
+
+def test_repeatable_hidden_required_child_is_ignored():
+    from uuid import uuid4
+
+    definition = {"fields": [{"type": "repeatable_group", "name": "people", "fields": [
+        {"type": "text", "name": "detail", "label": "Detail", "required": True,
+         "visible_if": {"field": "answer", "operator": "equals", "value": "Tak"}},
+    ]}]}
+    record = {"record_uuid": str(uuid4()), "answer": "Nie", "detail": ""}
+    assert not validate_submission(definition, {"people": [record]})
+    record["answer"] = "Tak"
+    assert f"people.{record['record_uuid']}.detail" in validate_submission(definition, {"people": [record]})
+
+
 def test_public_stage_and_pdf_view_omit_complete_training_section():
     definition = {
         "title": "Formularz",
@@ -286,6 +350,7 @@ def test_public_stage_and_pdf_view_omit_complete_training_section():
             {"type": "text", "name": "email", "label": "E-mail", "required": True},
             {"type": "section", "label": "Wybór szkoleń"},
             {"type": "static_text", "label": "Limit finansowania"},
+            {"type": "checkbox", "name": "kompetencje_cyfrowe", "label": "Kompetencje Cyfrowe"},
             {
                 "type": "training_selection",
                 "name": "selected_trainings",
@@ -313,3 +378,4 @@ def test_public_stage_and_pdf_view_omit_complete_training_section():
     assert "selected_trainings" not in labels
     assert "selected_trainings" not in errors
     assert "Wybór szkoleń" not in {section["title"] for section in pdf_view}
+    assert not build_consents_view(definition, {"kompetencje_cyfrowe": "Tak"})

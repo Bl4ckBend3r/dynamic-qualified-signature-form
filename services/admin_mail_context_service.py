@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from flask import current_app, has_app_context
 from html import escape
 
 from markupsafe import Markup
@@ -192,7 +194,15 @@ def preview_mail_context(
         )
     else:
         context.update(preview_training_context)
-    now = datetime.now()
+    timezone_name = (
+        current_app.config.get("APP_TIMEZONE", "Europe/Warsaw")
+        if has_app_context()
+        else "Europe/Warsaw"
+    )
+
+    now = datetime.now(timezone.utc).astimezone(
+        ZoneInfo(timezone_name)
+    )
     context.setdefault("app_name", "Portal formularzy")
     context.setdefault("current_year", now.year)
     context.setdefault("base_url", "https://formularze.example.com")

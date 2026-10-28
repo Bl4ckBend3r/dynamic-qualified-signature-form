@@ -216,11 +216,11 @@
     {% for note in internal_notes %}
         <article class="admin-internal-note{% if note.is_important %} admin-internal-note--important{% endif %}{% if note.archived_at %} admin-internal-note--archived{% endif %}">
             <header class="admin-internal-note__header">
-                <div><strong>{{ note.author.email }}</strong> · <time datetime="{{ note.created_at.isoformat() }}">{{ note.created_at|business_datetime('%d.%m.%Y %H:%M') }}</time>{% if note.edited_at %} · poprawiono {{ note.edited_at\|business_datetime('%d.%m.%Y %H:%M') }}{% endif %}</div>
+                <div><strong>{{ note.author.email }}</strong> · <time datetime="{{ note.created_at.isoformat() }}">{{ note.created_at|business_datetime('%d.%m.%Y %H:%M') }}</time>{% if note.edited_at %} · poprawiono {{ note.edited_at|business_datetime('%d.%m.%Y %H:%M') }}{% endif %}</div>
                 {% if note.is_important %}<span class="admin-badge admin-internal-note__important">Ważna</span>{% endif %}
             </header>
             {% if note.archived_at %}
-                <p class="admin-alert admin-alert-info">Notatka została ukryta przez {{ note.archived_by.email if note.archived_by else 'użytkownika systemu' }} dnia {{ 	note.archived_at\|business_datetime('%d.%m.%Y %H:%M') }}.</p>
+                <p class="admin-alert admin-alert-info">Notatka została ukryta przez {{ note.archived_by.email if note.archived_by else 'użytkownika systemu' }} dnia {{ 	note.archived_at|business_datetime('%d.%m.%Y %H:%M') }}.</p>
             {% else %}
                 <p class="admin-internal-note__content">{{ note.content }}</p>
                 {% if note.mentions %}<p class="admin-internal-note__mentions"><strong>Wzmianki:</strong> {% for mention in note.mentions %}<span class="admin-badge">@{{ mention.mentioned_user.email }}</span>{% endfor %}</p>{% endif %}
@@ -239,7 +239,7 @@
                 </details>
                 {% endif %}
             {% endif %}
-            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at\|business_datetime('%d.%m.%Y %H:%M')) }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
+            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at|business_datetime('%d.%m.%Y %H:%M')) }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
         </article>
     {% else %}<p>{{ 'Nie znaleziono notatek.' if notes_search else 'Brak notatek wewnętrznych.' }}</p>{% endfor %}
     </div>
@@ -431,8 +431,8 @@
                     {% set selected_ids = result.evidence_links|map(attribute='submission_file_id')|list if result else [] %}
                     {% for file in checklist_evidence_files %}<option value="{{ file.id }}" {% if file.id in selected_ids %}selected{% endif %}>{{ file.original_filename or file.filename }} ({{ file.document_type or file.field_key }})</option>{% endfor %}
                 </select><small>Możesz zaznaczyć kilka dokumentów. Lista obejmuje wyłącznie pliki tej sprawy.</small></label>
-                {% if result and result.officer %}<p><strong>Zweryfikował:</strong> {{ result.officer.email }} · <strong>Data:</strong> {{ result.reviewed_at\|business_datetime('%d.%m.%Y %H:%M') if result.reviewed_at else '-' }}</p>{% endif %}
-                {% if result and result.history %}<details><summary>Historia zmian ({{ result.history|length }})</summary><ul>{% for change in result.history|sort(attribute='changed_at', reverse=true) %}<li>{{ change.changed_at\|business_datetime('%d.%m.%Y %H:%M') }}: {{ change.previous_result }} → {{ change.new_result }}{% if change.officer %} ({{ change.officer.email }}){% endif %}</li>{% endfor %}</ul></details>{% endif %}
+                {% if result and result.officer %}<p><strong>Zweryfikował:</strong> {{ result.officer.email }} · <strong>Data:</strong> {{ result.reviewed_at|business_datetime('%d.%m.%Y %H:%M') if result.reviewed_at else '-' }}</p>{% endif %}
+                {% if result and result.history %}<details><summary>Historia zmian ({{ result.history|length }})</summary><ul>{% for change in result.history|sort(attribute='changed_at', reverse=true) %}<li>{{ change.changed_at|business_datetime('%d.%m.%Y %H:%M') }}: {{ change.previous_result }} → {{ change.new_result }}{% if change.officer %} ({{ change.officer.email }}){% endif %}</li>{% endfor %}</ul></details>{% endif %}
                 {% if can_review_checklist %}<button class="admin-button" type="submit">Zapisz ocenę</button>{% endif %}
             {% endif %}
         </form>
@@ -565,7 +565,7 @@
                     <td>{{ "Tak" if training.agreement_downloaded else "Nie" }}</td>
                     <td>{{ "Tak" if training.signed_agreement_uploaded else "Nie" }}</td>
                     <td>{{ "Tak" if training.is_locked else "Nie" }} / {{ "zajęte" if training.seat_occupied else "wolne" }}</td>
-                    <td>{{ training.locked_at\|business_datetime("%Y-%m-%d %H:%M") if training.locked_at else "-" }}</td>
+                    <td>{{ training.locked_at|business_datetime("%Y-%m-%d %H:%M") if training.locked_at else "-" }}</td>
                     <td>{% if training.agreement_url %}<a href="{{ training.agreement_url }}">Umowa wygenerowana</a>{% endif %}{% if training.signed_agreement_url %} · <a href="{{ training.signed_agreement_url }}">Podpisana przez beneficjenta</a>{% endif %}{% if training.office_signed_agreement_url %} · <a href="{{ training.office_signed_agreement_url }}">Finalna podpisana przez urząd</a>{% endif %}{% if not training.agreement_url and not training.signed_agreement_url and not training.office_signed_agreement_url %}-{% endif %}</td>
                     <td>
                         {% if training.signed_agreement_uploaded and not training.office_signed_agreement_filename and can_sign_office_agreement %}
@@ -606,7 +606,7 @@
                     <td>{{ training.name }}</td>
                     <td>{{ training.price_formatted }}</td>
                     <td>{{ training.status_label }}</td>
-                    <td>{{ training.unselected_at\|business_datetime("%Y-%m-%d %H:%M") if training.unselected_at else "-" }}</td>
+                    <td>{{ training.unselected_at|business_datetime("%Y-%m-%d %H:%M") if training.unselected_at else "-" }}</td>
                     <td>Nie zajmuje miejsca i nie liczy siÄ™ do wykorzystanego limitu.</td>
                 </tr>
             {% endfor %}</tbody>
@@ -648,7 +648,7 @@
 </table></div>
 <h2>Historia przydziałów</h2>
 <div class="admin-card admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Zmiana</th><th>Przydzielił</th><th>Źródło</th><th>Powód</th></tr></thead><tbody>
-{% for item in assignment_history %}<tr><td>{{ item.assigned_at\|business_datetime if item.assigned_at else "-" }}</td><td>{{ item.previous_user.email if item.previous_user else "Nieprzydzielona" }} → {{ item.assigned_to.email if item.assigned_to else "Nieprzydzielona" }}</td><td>{{ item.assigned_by.email if item.assigned_by else "System" }}</td><td>{{ item.source }}</td><td>{{ item.reason or "-" }}</td></tr>{% else %}<tr><td colspan="5">Brak historii przydziałów.</td></tr>{% endfor %}
+{% for item in assignment_history %}<tr><td>{{ item.assigned_at|business_datetime if item.assigned_at else "-" }}</td><td>{{ item.previous_user.email if item.previous_user else "Nieprzydzielona" }} → {{ item.assigned_to.email if item.assigned_to else "Nieprzydzielona" }}</td><td>{{ item.assigned_by.email if item.assigned_by else "System" }}</td><td>{{ item.source }}</td><td>{{ item.reason or "-" }}</td></tr>{% else %}<tr><td colspan="5">Brak historii przydziałów.</td></tr>{% endfor %}
 </tbody></table></div>
 <h2 id="correspondence">Korespondencja</h2>
 <div class="admin-card admin-table-wrap"><table class="admin-table">

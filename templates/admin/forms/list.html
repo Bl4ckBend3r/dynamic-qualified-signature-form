@@ -56,7 +56,7 @@
                 <td class="column-secondary"><span class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if form.is_public else "Nie" }}</span></td>
                 <td class="column-secondary">{% if form.label_text %}<span class="admin-project-label">{{ form.label_text }}</span>{% else %}-{% endif %}</td>
                 <td class="column-secondary">{{ submission_counts.get(form.slug, 0) }}</td>
-                <td class="column-secondary">{{ form.created_at\|business_datetime("%Y-%m-%d") if form.created_at else "-" }}</td>
+                <td class="column-secondary">{{ form.created_at|business_datetime("%Y-%m-%d") if form.created_at else "-" }}</td>
                 <td class="actions-column">
                     <div class="admin-action-dropdown">
                         <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>

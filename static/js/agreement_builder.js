@@ -2078,9 +2078,18 @@
       setZoom(Math.min(1, available / pageWidth), { fitWidth: true, persist });
     }
 
+    function closeBuilderWindow() {
+      if (window.opener && !window.opener.closed) {
+        window.close();
+        return;
+      }
+
+      window.history.back();
+    }
+
     function requestClose() {
       if (!builderState.dirty) {
-        window.history.back();
+        closeBuilderWindow();
         return;
       }
 
@@ -2466,12 +2475,12 @@
       if (event.target.closest("[data-builder-close-discard]")) {
         builderState.dirty = false;
         closeDialog?.close();
-        window.history.back();
+        closeBuilderWindow();
       }
       if (event.target.closest("[data-builder-close-save]")) {
         if (await save("draft")) {
           closeDialog?.close();
-          window.history.back();
+          closeBuilderWindow();
         }
       }
     });

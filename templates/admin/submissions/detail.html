@@ -239,7 +239,7 @@
                 </details>
                 {% endif %}
             {% endif %}
-            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at|business_datetime('%d.%m.%Y %H:%M')) }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
+            {% if not note.archived_at and note.revisions %}<details><summary>Historia poprawek ({{ note.revisions|length }})</summary><ol>{% for revision in note.revisions|reverse %}<li><strong>{{ revision.edited_by.email }}</strong>, {{ revision.edited_at|business_datetime('%d.%m.%Y %H:%M') }}<div class="admin-internal-note__revision"><del>{{ revision.previous_content }}</del><br><ins>{{ revision.new_content }}</ins>{% if revision.previous_is_important != revision.new_is_important %}<br><small>Oznaczenie ważności: {{ 'ważna' if revision.previous_is_important else 'zwykła' }} → {{ 'ważna' if revision.new_is_important else 'zwykła' }}</small>{% endif %}</div></li>{% endfor %}</ol></details>{% endif %}
         </article>
     {% else %}<p>{{ 'Nie znaleziono notatek.' if notes_search else 'Brak notatek wewnętrznych.' }}</p>{% endfor %}
     </div>

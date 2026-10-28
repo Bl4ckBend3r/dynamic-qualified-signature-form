@@ -222,7 +222,7 @@ function renderInstructionSteps(steps) {
             item.setAttribute("aria-current", "step");
         }
         const label = document.createElement(step.current ? "strong" : "span");
-        label.textContent = String(step.label || "");
+        label.textContent = String(step.label || "").replace(/^\s*\d+[.)]\s+/, "");
         item.appendChild(label);
         if (step.completed) {
             const completedLabel = document.createElement("span");

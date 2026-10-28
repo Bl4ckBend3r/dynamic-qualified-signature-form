@@ -5,10 +5,57 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from models import Form
+from models import Form, FormSubmission, FormVersion
+from database import create_session_factory
 from services.admin_workflow_view_service import build_admin_workflow_view
-from test_admin_panel import admin_app, create_user, login
+from test_admin_panel import admin_app, admin_client, create_user, login
 from test_composite_document_workflow import composite_env
+
+
+def test_old_correction_opens_with_current_version_and_no_step_mapping(admin_app, admin_client):
+    from test_admin_panel import create_form
+
+    definition = {"title": "Versioned", "fields": [{"name": "email", "label": "Email",
+        "type": "email", "required": True}, {"name": "city", "label": "Miasto",
+        "type": "text", "required": True}], "workflow": {"initial_step": "review",
+        "steps": [{"id": "review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"}]}}
+    form_id = create_form(admin_app, slug="versioned-detail", definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory.begin() as db:
+        old = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+            version_label="1.0", status="archived", definition_json={**definition,
+                "fields": definition["fields"][:1],
+                "workflow": {"initial_step": "old-step", "steps": [{"id": "old-step"}]}})
+        latest = FormVersion(form_id=form_id, version_major=1, version_minor=1,
+            version_label="1.1", status="published", source_version=old, definition_json=definition)
+        db.add_all([old, latest])
+        db.flush()
+        row = FormSubmission(submission_id="old-correction-detail", form_slug="versioned-detail",
+            form_version_id=old.id, process_status="RETURNED_FOR_CORRECTION",
+            workflow_step="old-step", workflow_stage="old-step", email="person@example.org",
+            access_token="correction-secret",
+            data_json={"email": "person@example.org", "_correction_history": [{"reason": "Popraw"}]})
+        db.add(row)
+        db.flush()
+        submission_pk = row.id
+        latest_id = latest.id
+
+    correction = admin_client.get("/form/versioned-detail/correction/old-correction-detail?token=correction-secret")
+    assert correction.status_code == 200
+    assert "Miasto" in correction.text
+    assert "person@example.org" in correction.text
+
+    create_user(admin_app)
+    login(admin_client)
+    response = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert response.status_code == 200
+    assert "Wersja formularza: 1.1" in response.text
+    assert "Historia wersji" in response.text
+    with factory() as db:
+        row = db.get(FormSubmission, submission_pk)
+        assert row.form_version_id == latest_id
+        assert row.process_status == "RETURNED_FOR_CORRECTION"
+        assert row.workflow_step == "old-step"
 
 
 def test_timeline_uses_observed_path_and_supports_loops_and_arbitrary_steps():

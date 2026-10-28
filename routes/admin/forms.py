@@ -2448,6 +2448,7 @@ def _instruction_config_from_admin_form(
                 "next_action": step["next_action"],
                 "final": step["final"],
                 "rejected": step["rejected"],
+                "show_only_when_current": step["show_only_when_current"],
                 "sort_order": index,
             }
             for index, step in enumerate(normalized_workflow["steps"], start=1)
@@ -2501,6 +2502,7 @@ def _workflow_editor_context(
         if instruction:
             step["description"] = instruction.get("description") or ""
             step["next_action"] = instruction.get("next_action") or ""
+            step["show_only_when_current"] = instruction.get("show_only_when_current", False)
     converted = False
     editor_fields = (draft_definition or {}).get("fields")
     if draft_definition is not None:

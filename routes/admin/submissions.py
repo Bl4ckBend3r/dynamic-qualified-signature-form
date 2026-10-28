@@ -516,20 +516,22 @@ def submissions_export(form_id: int):
 def submission_detail(form_id: int, submission_pk: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
-        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.id == submission_pk).with_for_update()).scalar_one_or_none() or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
         from services.form_version_service import FormVersionError
 
         version_service = current_app.extensions["services"].form_version_service
-        if submission.form_version_id and version_service.is_active_submission(submission):
+        if submission.form_version_id:
             try:
                 version_service.upgrade_submission(db, submission)
                 version_service.refresh_submission_completion(db, submission)
                 db.commit()
-            except FormVersionError as exc:
+            except FormVersionError:
                 db.rollback()
-                abort(409, description=str(exc))
+                current_app.logger.exception("Nieprawidłowe powiązanie wersji zgłoszenia %s", submission_pk)
+                raise
         if request.method == "POST":
             requested_status = request.form.get("process_status", "").strip()
             if requested_status and requested_status != submission.process_status:
@@ -779,6 +781,9 @@ def submission_detail(form_id: int, submission_pk: int):
             files=files,
             workflow_history=workflow_history,
             form_version_label=submission.form_version.version_label if submission.form_version else "—",
+            form_version_updated_at=submission.form_version.published_at if submission.form_version else None,
+            previous_form_version_label=(submission.form_version.source_version.version_label
+                                         if submission.form_version and submission.form_version.source_version else ""),
             version_upgrade_events=[item for item in workflow_history.get("events") or [] if item.get("source") == "form_version_upgrade"],
             version_upgrade_state=(submission.data_json or {}).get("_form_version_upgrade") or {},
             decision_history=decision_history,

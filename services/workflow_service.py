@@ -27,12 +27,26 @@ class WorkflowTransitionError(ValueError):
 
 
 def current_workflow_step(submission, form_config: dict | None = None) -> str:
-    """Read the canonical step, retaining workflow_stage for older records."""
+    """Resolve an operational step while retaining the stored historical step."""
     if isinstance(submission, Mapping):
         step = submission.get("workflow_step") or submission.get("workflow_stage")
+        data = submission.get("data_json") or {}
     else:
         step = getattr(submission, "workflow_step", None) or getattr(submission, "workflow_stage", None)
-    return str(step or ((form_config or {}).get("workflow") or {}).get("initial_step") or "submission").strip()
+        data = getattr(submission, "data_json", None) or {}
+    workflow = (form_config or {}).get("workflow") or {}
+    value = str(step or workflow.get("initial_step") or "submission").strip()
+    step_order = [str(item.get("id") or "") for item in workflow.get("steps") or [] if isinstance(item, Mapping)]
+    steps = set(step_order)
+    upgraded = isinstance(data, Mapping) and bool(data.get("_form_version_upgrade"))
+    if upgraded and steps and value not in steps:
+        mapping = workflow.get("step_migration") or {}
+        mapped = str(mapping.get(value) or "").strip() if isinstance(mapping, Mapping) else ""
+        if mapped in steps:
+            return mapped
+        initial = str(workflow.get("initial_step") or "").strip()
+        return initial if initial in steps else step_order[0]
+    return value
 
 
 def workflow_step_document_id(step: Mapping) -> str:

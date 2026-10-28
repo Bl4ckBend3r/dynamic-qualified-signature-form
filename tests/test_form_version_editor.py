@@ -131,6 +131,7 @@ def _seed_v1_v2(app, *, user_id: int | None = None) -> dict[str, int | dict]:
         v2 = service.clone_to_draft(db, form, v1, actor_id=user_id, bump="minor")
         service.update_definition(v2, v2_definition, change_summary="B usunięte, D dodane")
         service.publish(db, form, v2, actor_id=user_id, change_summary="Publikacja V2")
+        stored_v2_definition = deepcopy(v2.definition_json)
         db.commit()
         return {
             "form_id": form.id,
@@ -138,7 +139,7 @@ def _seed_v1_v2(app, *, user_id: int | None = None) -> dict[str, int | dict]:
             "v2_id": v2.id,
             "submission_id": submission.id,
             "v1_definition": stored_v1_definition,
-            "v2_definition": v2_definition,
+            "v2_definition": stored_v2_definition,
         }
 
 
@@ -214,7 +215,7 @@ def test_v3_clone_is_an_independent_exact_snapshot_of_v2(version_editor_app):
         assert v2.definition_json["fields"][0]["visible_if"]["all"][0]["value"]["code"] == "yes"
         assert v2.definition_json["fields"][1]["options"][0]["metadata"]["color"] == "blue"
         submission = db.get(FormSubmission, seeded["submission_id"])
-        assert submission.form_version_id == v1.id
+        assert submission.form_version_id == v2.id
 
 
 def test_explicit_draft_id_wins_when_historical_data_contains_two_drafts(version_editor_app):
@@ -593,7 +594,7 @@ def test_published_version_cannot_be_edited_directly(version_editor_app):
         submission = db.get(FormSubmission, seeded["submission_id"])
         assert v1.definition_json == before_v1
         assert v2.definition_json == before_v2
-        assert submission.form_version_id == v1.id
+        assert submission.form_version_id == v2.id
 
 
 def test_workflow_step_migration_accepts_decision_mapping_and_list():

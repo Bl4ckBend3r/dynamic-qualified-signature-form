@@ -117,14 +117,14 @@ def get_form_instruction_context(form_slug: str, form_version_id: int | str | No
     if database_url:
         try:
             from database import create_session_factory
-            from models import Form, FormVersion
+            from models import Form
             from sqlalchemy import select
 
             with create_session_factory(database_url)() as db:
                 form = db.execute(select(Form).where(Form.slug == form_slug)).scalar_one_or_none()
                 if form:
-                    version = db.get(FormVersion, int(form_version_id)) if str(form_version_id or "").isdigit() else None
-                    if version and version.form_id == form.id:
+                    version = services.form_version_service.resolve_published(db, form.id)
+                    if version:
                         form_config = services.form_config_service.normalize_form_config(version.definition_json or {})
                         instruction = str(form_config.get("user_instruction") or "").strip()
                         instruction_config = form_config.get("user_instruction_config") or {}

@@ -1353,6 +1353,38 @@ def test_acceptance_status_returns_form_instruction_steps_and_next_action(client
     assert "user_instruction" not in without_instruction
 
 
+def test_public_instruction_api_hides_conditional_future_and_past_stages(client, app):
+    app.testing_storage.form_definition["user_instruction_config"] = {
+        "stages": [
+            {"key": "start", "label": "Wniosek", "status_codes": ["FORM_SUBMITTED"]},
+            {"key": "correction", "label": "Prywatna korekta", "status_codes": ["WAITING_FOR_CORRECTION"],
+             "show_only_when_current": True, "description": "Popraw formularz."},
+            {"key": "review", "label": "Ocena", "status_codes": ["WAITING_FOR_OFFICER_DECISION"]},
+        ],
+    }
+    app.testing_storage.csv_rows = [{
+        "submission_id": "conditional-instruction", "access_token": "conditional-token",
+        "form_slug": "formularz_zgloszeniowy", "form_name": "Formularz zgłoszeniowy",
+        "process_status": "FORM_SUBMITTED",
+    }]
+    url = "/api/submissions/conditional-instruction/acceptance-status?token=conditional-token"
+    before = client.get(url).get_json()
+    assert [item["label"] for item in before["instruction"]["stages"]] == ["Wniosek", "Ocena"]
+    assert before["instruction_steps"] == before["instruction"]["stages"]
+    assert "Prywatna korekta" not in str(before["instruction"])
+
+    app.testing_storage.csv_rows[0]["process_status"] = "WAITING_FOR_CORRECTION"
+    current = client.get(url).get_json()
+    assert [item["label"] for item in current["instruction_steps"]] == ["Wniosek", "Prywatna korekta", "Ocena"]
+    assert current["instruction"]["current_stage_description"] == "Popraw formularz."
+
+    app.testing_storage.csv_rows[0]["process_status"] = "WAITING_FOR_OFFICER_DECISION"
+    after = client.get(url).get_json()
+    assert [item["label"] for item in after["instruction_steps"]] == ["Wniosek", "Ocena"]
+    assert [item["sort_order"] for item in after["instruction_steps"]] == [1, 2]
+    assert "Prywatna korekta" not in str(after["instruction"])
+
+
 def test_blocked_agreement_status_has_no_positive_signing_message_or_actions(client, app):
     app.testing_storage.form_definition["user_instruction"] = "Możesz przejść do podpisywania dokumentów."
     app.testing_storage.form_definition["user_instruction_config"] = {

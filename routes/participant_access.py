@@ -99,7 +99,7 @@ def resolve_participant_submission_access(
                     _access_denied("submission_not_found")
                     return None
                 version_service = services.form_version_service
-                if record.form_version_id and version_service.is_active_submission(record):
+                if record.form_version_id:
                     version_service.upgrade_submission(db, record)
                     version_service.refresh_submission_completion(db, record)
             if loaded_from_service:

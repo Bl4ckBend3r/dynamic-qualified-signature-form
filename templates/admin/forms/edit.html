@@ -1234,6 +1234,7 @@
             </section>
             <section class="admin-instruction-preview" aria-label="Podgląd instrukcji" data-live-instruction-preview>
                 <div class="admin-section-heading"><div><h3>Podgląd instrukcji</h3><p>Tak sformatowane treści zobaczy użytkownik.</p></div><button type="button" class="admin-button-secondary" data-refresh-instruction-preview>Odśwież podgląd</button></div>
+                <label><span>Aktualny etap w podglądzie</span><select data-instruction-preview-current-step></select></label>
                 <h4 data-live-instruction-title></h4>
                 <div class="admin-instruction-preview__text instruction-safe-html" data-live-instruction-general></div>
                 <div data-live-instruction-stages></div>
@@ -2319,6 +2320,10 @@ function collectWorkflow() {
         requires_officer_action: Boolean(card.querySelector("[data-step-officer-action]")?.checked),
         final: Boolean(card.querySelector("[data-step-final]")?.checked),
         rejected: Boolean(card.querySelector("[data-step-rejected]")?.checked),
+        show_only_when_current: Boolean(Array.from(document.querySelectorAll("[data-workflow-instruction-list] [data-instruction-step-id]"))
+            .find((item) => item.dataset.instructionStepId === card.querySelector("[data-step-id]")?.value)
+            ?.querySelector("[data-show-only-when-current]")?.checked
+            ?? workflowStepSource(card).show_only_when_current),
         active: workflowStepIsActive(card),
         ...WorkflowStageEditor.collect(card),
     }));
@@ -3159,6 +3164,18 @@ function createLinkedInstructionEditor(workflowCard) {
         label.append(span, textarea);
         article.appendChild(label);
     });
+    const visibility = document.createElement("label");
+    visibility.className = "admin-check";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.showOnlyWhenCurrent = "";
+    const text = document.createElement("span");
+    text.textContent = "Pokaż etap tylko wtedy, gdy jest aktualny";
+    visibility.append(checkbox, text);
+    article.appendChild(visibility);
+    const help = document.createElement("p");
+    help.textContent = "Etap będzie ukryty przed uczestnikiem, dopóki jego zgłoszenie nie osiągnie tego etapu. Po opuszczeniu etapu zostanie ponownie ukryty.";
+    article.appendChild(help);
     return article;
 }
 
@@ -3177,6 +3194,9 @@ function renderLinkedInstructionEditors({forceValues = false} = {}) {
         const isNew = !article;
         if (!article) article = createLinkedInstructionEditor(workflowCard);
         article.dataset.instructionStepId = stepId;
+        article.dataset.instructionLabel = workflowCard.querySelector("[data-step-user-label]")?.value || "Etap bez nazwy";
+        const visibility = article.querySelector("[data-show-only-when-current]");
+        if (visibility && (isNew || forceValues)) visibility.checked = Boolean(workflowStepSource(workflowCard).show_only_when_current);
         let heading = article.querySelector("[data-linked-instruction-heading]");
         if (!heading) {
             heading = document.createElement("div");
@@ -3185,8 +3205,16 @@ function renderLinkedInstructionEditors({forceValues = false} = {}) {
             heading.append(document.createElement("h3"), document.createElement("code"));
             article.prepend(heading);
         }
-        heading.querySelector("h3").textContent = `${index + 1}. ${workflowCard.querySelector("[data-step-user-label]")?.value || "Etap bez nazwy"}`;
+        heading.querySelector("h3").textContent = `${index + 1}. ${article.dataset.instructionLabel.replace(/^\s*\d+[.)]\s+/, "")}`;
         heading.querySelector("code").textContent = workflowCard.querySelector("[data-step-status]")?.value || "Brak statusu";
+        let visibilityNote = heading.querySelector("[data-conditional-visibility-note]");
+        if (!visibilityNote) {
+            visibilityNote = document.createElement("span");
+            visibilityNote.dataset.conditionalVisibilityNote = "";
+            visibilityNote.textContent = "Tylko gdy aktualny";
+            heading.appendChild(visibilityNote);
+        }
+        visibilityNote.hidden = !visibility?.checked;
         [["description", "[data-step-description]"], ["next-action", "[data-step-next-action]"]].forEach(([key, selector]) => {
             const textarea = article.querySelector(`textarea[data-linked-instruction="${key}"]`);
             if (textarea && (isNew || forceValues)) textarea.value = workflowCard.querySelector(selector)?.value || "";
@@ -3220,9 +3248,17 @@ function renderInstructionPreview() {
     const title = preview.querySelector("[data-live-instruction-title]"); if (title) title.textContent = document.getElementById("instruction_title")?.value || "Instrukcja dalszego postępowania";
     const general = preview.querySelector("[data-live-instruction-general]"); if (general) general.innerHTML = sanitizeInstructionPreview(document.getElementById("user_instruction")?.value || "");
     const stages = preview.querySelector("[data-live-instruction-stages]"); stages?.replaceChildren();
-    document.querySelectorAll("[data-workflow-instruction-list] [data-instruction-step-id]").forEach((card) => {
+    const cards = Array.from(document.querySelectorAll("[data-workflow-instruction-list] [data-instruction-step-id]"));
+    const currentSelect = preview.querySelector("[data-instruction-preview-current-step]");
+    const selected = currentSelect?.value || cards[0]?.dataset.instructionStepId || "";
+    currentSelect?.replaceChildren(...cards.map((card) => new Option(card.dataset.instructionLabel, card.dataset.instructionStepId)));
+    if (currentSelect) currentSelect.value = cards.some((card) => card.dataset.instructionStepId === selected) ? selected : (cards[0]?.dataset.instructionStepId || "");
+    let visibleIndex = 0;
+    cards.forEach((card) => {
+        if (card.querySelector("[data-show-only-when-current]")?.checked && card.dataset.instructionStepId !== currentSelect?.value) return;
+        visibleIndex += 1;
         const box = document.createElement("article"); box.className = "instruction-preview-stage";
-        const heading = document.createElement("strong"); heading.textContent = card.querySelector("h3")?.textContent || "Etap"; box.appendChild(heading);
+        const heading = document.createElement("strong"); heading.textContent = `${visibleIndex}. ${(card.dataset.instructionLabel || "Etap").replace(/^\s*\d+[.)]\s+/, "")}`; box.appendChild(heading);
         card.querySelectorAll("textarea").forEach((textarea) => { if (!textarea.value.trim()) return; const content = document.createElement("div"); content.className = "instruction-safe-html"; content.innerHTML = sanitizeInstructionPreview(textarea.value); box.appendChild(content); });
         stages?.appendChild(box);
     });
@@ -3680,6 +3716,14 @@ document.querySelector("[data-workflow-instruction-list]")?.addEventListener("in
     renderInstructionPreview();
     renderWorkflowPreview();
 });
+document.querySelector("[data-workflow-instruction-list]")?.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-show-only-when-current]")) return;
+    const note = event.target.closest("[data-instruction-step-id]")?.querySelector("[data-conditional-visibility-note]");
+    if (note) note.hidden = !event.target.checked;
+    if (workflowBuilderInput) workflowBuilderInput.value = JSON.stringify(collectWorkflow());
+    formIsDirty = true;
+    renderInstructionPreview();
+});
 document.getElementById("instruction_title")?.addEventListener("input", renderInstructionPreview);
 document.getElementById("user_instruction")?.addEventListener("input", renderInstructionPreview);
 document.querySelector("[data-refresh-workflow-preview]")?.addEventListener("click", () => { renderWorkflowPreview(); fitWorkflowDiagram(); });
@@ -3702,6 +3746,7 @@ document.querySelector("[data-workflow-diagram-layout-reset]")?.addEventListener
     fitWorkflowDiagram();
 });
 document.querySelector("[data-refresh-instruction-preview]")?.addEventListener("click", renderInstructionPreview);
+document.querySelector("[data-instruction-preview-current-step]")?.addEventListener("change", renderInstructionPreview);
 
 document.querySelector("[data-refresh-workflow-json]")?.addEventListener("click", () => {
     const input = document.querySelector("[data-workflow-json]");

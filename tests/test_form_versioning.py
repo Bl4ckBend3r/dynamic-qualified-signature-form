@@ -13,7 +13,7 @@ from flask import Blueprint, Flask
 from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, Text, create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
+from models import Base, Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from routes import documents as document_routes
 from routes import public_forms
 from routes.participant_access import resolve_participant_submission_access
@@ -115,6 +115,31 @@ def test_publishing_freezes_mail_footer_per_form_version(tmp_path):
         assert db.get(FormVersion, draft_id).definition_json["mail_footer"]["html_body"] == "Nowa stopka"
 
 
+def test_conditional_stage_visibility_survives_draft_and_publication(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db)
+        form.user_instruction_config = {"stages": [{"key": "submission", "label": "Wniosek",
+                                                    "status_codes": ["SUBMITTED"], "show_only_when_current": False}]}
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        first_id = first.id
+        draft = service.clone_to_draft(db, form, first, actor_id=None)
+        changed = deepcopy(draft.definition_json)
+        changed["workflow"]["steps"][0]["show_only_when_current"] = True
+        changed["user_instruction_config"]["stages"][0]["show_only_when_current"] = True
+        service.update_definition(draft, changed)
+        assert draft.definition_json["user_instruction_config"]["stages"][0]["show_only_when_current"] is True
+        service.publish(db, form, draft, actor_id=None)
+        draft_id = draft.id
+    with Session() as db:
+        old = db.get(FormVersion, first_id).definition_json
+        published = db.get(FormVersion, draft_id).definition_json
+        assert old["user_instruction_config"]["stages"][0]["show_only_when_current"] is False
+        assert published["user_instruction_config"]["stages"][0]["show_only_when_current"] is True
+        assert published["workflow"]["steps"][0]["show_only_when_current"] is True
+
+
 def test_publish_upgrades_active_submissions_and_records_only_metadata(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
@@ -131,13 +156,14 @@ def test_publish_upgrades_active_submissions_and_records_only_metadata(tmp_path)
         assert migrated.form_version_id == new_id
         assert migrated.data_json["email"] == "user@example.org"
         assert migrated.data_json["legacy_note"] == "zachowaj"
-        assert migrated.data_json["_form_version_upgrade"]["missing_fields"] == ["city"]
+        assert migrated.data_json["_form_version_upgrade"]["missing_fields"] == []
         assert [field["name"] for field in db.get(FormVersion, old_id).definition_json["fields"]] == ["email"]
         event = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.submission_id == submission_id)).scalar_one()
         assert event.source == "form_version_upgrade"
         assert event.side_effects["old_version_id"] == old_id
         assert event.side_effects["new_version_id"] == new_id
         assert "user@example.org" not in str(event.side_effects)
+        assert "city" in service.refresh_submission_completion(db, migrated)["errors"]
         with pytest.raises(FormVersionError):
             service.require_submission_data_complete(db, migrated)
         data = dict(migrated.data_json)
@@ -183,14 +209,10 @@ def test_new_required_document_reconciles_current_or_completed_step(tmp_path, cu
                 form_slug=form.slug, previous_step="paper", new_step="review", source="test"))
         assert service.upgrade_submission(db, submission, new)
         marker = submission.data_json["_form_version_upgrade"]
-        if current_step == "paper":
-            assert not submission.document_states["workflow_documents"]["paper"]["completed"]
-            assert marker["missing_documents"] == []
-        else:
-            assert submission.workflow_step == submission.workflow_stage == "paper"
-            assert submission.process_status == "DECLARATION_WAITING_FOR_SIGNATURE"
-            assert not submission.document_states["workflow_documents"]["paper"]["completed"]
-            assert marker["missing_documents"] == []
+        assert submission.workflow_step == submission.workflow_stage == current_step
+        assert submission.process_status == "WAITING_FOR_OFFICER_DECISION"
+        assert submission.document_states["workflow_documents"]["paper"]["completed"]
+        assert marker["missing_documents"] == []
 
 
 @pytest.mark.parametrize("remove_old", [False, True])
@@ -244,15 +266,14 @@ def test_participant_document_version_reconcile_preserves_signed_history(tmp_pat
         assert FormVersionService().upgrade_submission(db, submission, latest)
         # Expected: only a new required document rewinds the active workflow;
         # the historical signed file and answers are preserved in both cases.
-        assert submission.workflow_step == ("review" if remove_old else "paper")
-        assert submission.process_status == ("WAITING_FOR_OFFICER_DECISION" if remove_old else "WAITING_FOR_USER_ACTION")
+        assert submission.workflow_step == "review"
+        assert submission.process_status == "WAITING_FOR_OFFICER_DECISION"
         assert submission.data_json["participant_note"] == "zachowaj"
         assert historical.status == "signed" and historical.signed
-        if not remove_old:
-            assert not submission.document_states["workflow_documents"]["paper"]["completed"]
+        assert submission.document_states["workflow_documents"]["paper"]["completed"]
 
 
-def test_publish_skips_final_submission_and_requires_explicit_step_mapping(tmp_path):
+def test_publish_updates_final_submission_and_preserves_unmapped_step(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -265,19 +286,20 @@ def test_publish_skips_final_submission_and_requires_explicit_step_mapping(tmp_p
         draft = service.clone_to_draft(db, form, old, actor_id=None)
         changed = deepcopy(draft.definition_json)
         changed["workflow"] = {"initial_step": "review", "steps": [{"id": "review"}]}
+        changed["fields"][0]["availability"] = [{"step": "review", "visible": True,
+            "editable": True, "required": True}]
         service.update_definition(draft, changed)
         old.status = FORM_VERSION_ARCHIVED
         db.flush()
         draft.status = FORM_VERSION_PUBLISHED
-        with pytest.raises(FormVersionValidationError) as error:
-            service.upgrade_submission(db, active, draft)
-        assert "usuniętym etapie" in error.value.errors[0]
-        changed["workflow"]["step_migration"] = {"submission": "review"}
-        draft.definition_json = changed
         service.upgrade_submission(db, active, draft)
+        service.upgrade_submission(db, final, draft)
         assert active.form_version_id == draft.id
-        assert active.workflow_step == "review"
-        assert final.form_version_id == old.id
+        assert active.workflow_step == "submission"
+        assert final.form_version_id == draft.id
+        assert service.resolve_for_submission(db, active).id == draft.id
+        from services.workflow_service import current_workflow_step
+        assert current_workflow_step(active, changed) == "review"
 
 
 def test_publish_preserves_signed_file_and_supersedes_unsigned_when_template_changes(tmp_path):
@@ -302,7 +324,7 @@ def test_publish_preserves_signed_file_and_supersedes_unsigned_when_template_cha
         service.upgrade_submission(db, submission, draft)
         files = db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission.id)).scalars().all()
         assert {item.document_type: item.status for item in files} == {
-            "declaration": "superseded", "signed_declaration": "uploaded",
+            "declaration": "uploaded", "signed_declaration": "uploaded",
         }
 
 
@@ -326,14 +348,15 @@ def test_reconcile_keeps_removed_values_but_flags_new_option_and_required_field(
         draft.status = FORM_VERSION_PUBLISHED
         service.upgrade_submission(db, submission, draft)
         marker = submission.data_json["_form_version_upgrade"]
-        assert marker["missing_fields"] == ["choice", "telephone"]
+        assert marker["missing_fields"] == []
+        assert set(service.refresh_submission_completion(db, submission)["errors"]) == {"choice", "telephone"}
         assert submission.data_json["choice"] == "A"
         assert submission.data_json["removed"] == "historical"
         assert "telephone" not in submission.data_json
         assert "removed" not in [field.get("name") for field in service.completion_form_definition(submission, changed)["fields"]]
 
 
-def test_publish_leaves_final_submission_on_historical_version(tmp_path):
+def test_publish_moves_final_submission_without_changing_its_state(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -346,8 +369,61 @@ def test_publish_leaves_final_submission_on_historical_version(tmp_path):
         draft = service.clone_to_draft(db, form, old, actor_id=None)
         service.publish(db, form, draft, actor_id=None)
         assert active.form_version_id == draft.id
-        assert final.form_version_id == old.id
+        assert final.form_version_id == draft.id
+        assert final.process_status == "COMPLETED"
         assert final.workflow_step == "submission"
+
+
+def test_publish_syncs_corrections_and_final_cases_without_changing_history(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form, old, pending = _seed_active_versioned_submission(db, service)
+        pending.process_status = "RETURNED_FOR_CORRECTION"
+        pending.workflow_step = "returned_for_correction"
+        pending.workflow_stage = "returned_for_correction"
+        pending.data_json = {**pending.data_json, "_correction_history": [{"reason": "Popraw dane", "previous_step": "submission"}]}
+        waiting = FormSubmission(submission_id="waiting-correction", form_slug=form.slug,
+            form_version_id=old.id, process_status="WAITING_FOR_CORRECTION", workflow_step="old-step",
+            data_json={"email": "waiting@example.org"})
+        completed = FormSubmission(submission_id="completed-case", form_slug=form.slug,
+            form_version_id=old.id, process_status="COMPLETED", workflow_step="old-step",
+            data_json={"email": "done@example.org"})
+        other = _form_with_field(db, slug="another-form")
+        other_version = service.create_initial_version(db, other, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        unrelated = FormSubmission(submission_id="unrelated-case", form_slug=other.slug,
+            form_version_id=other_version.id, process_status="COMPLETED")
+        db.add_all([waiting, completed, unrelated])
+        db.flush()
+        file = SubmissionFile(submission_id=pending.id, public_submission_id=pending.submission_id,
+            form_slug=form.slug, document_type="signed_declaration", document_id="declaration",
+            filename="signed.pdf", storage_path="signed.pdf", signed=True, status="signed")
+        decision = SubmissionDecision(submission_id=pending.id, public_submission_id=pending.submission_id,
+            form_slug=form.slug, decision="return", workflow_step="submission")
+        db.add_all([file, decision])
+        draft = service.clone_to_draft(db, form, old, actor_id=None)
+        changed = deepcopy(draft.definition_json)
+        changed["workflow"] = {"initial_step": "review", "steps": [{"id": "review", "status": "WAITING_FOR_OFFICER_DECISION"}]}
+        changed["fields"][0]["availability"] = [{"step": "review", "visible": True,
+            "editable": True, "required": True}]
+        service.update_definition(draft, changed)
+        from services.admin_form_service import validate_admin_form_config
+        assert not (validation_errors := validate_admin_form_config(changed)), validation_errors
+        service.publish(db, form, draft, actor_id=None)
+        ids = [pending.id, waiting.id, completed.id]
+        event_count = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.source == "form_version_upgrade")).scalars().all()
+        assert len(event_count) == 3
+        assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 0
+    with Session() as db:
+        rows = [db.get(FormSubmission, pk) for pk in ids]
+        assert [row.form_version_id for row in rows] == [draft.id] * 3
+        assert [row.process_status for row in rows] == ["RETURNED_FOR_CORRECTION", "WAITING_FOR_CORRECTION", "COMPLETED"]
+        assert [row.workflow_step for row in rows] == ["returned_for_correction", "old-step", "old-step"]
+        assert rows[0].data_json["_correction_history"][0]["reason"] == "Popraw dane"
+        assert db.get(SubmissionFile, file.id).status == "signed"
+        assert db.get(SubmissionDecision, decision.id).decision == "return"
+        assert db.get(FormSubmission, unrelated.id).form_version_id == other_version.id
 
 
 def test_correction_uses_bound_published_qualification_while_draft_changes(tmp_path):
@@ -433,10 +509,10 @@ def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch)
         new_config = document_routes.get_form_config("named-statement")
     with Session() as db:
         assert db.execute(select(FormSubmission).where(
-            FormSubmission.submission_id == "finished-statement")).scalar_one().form_version_id == old_id
+            FormSubmission.submission_id == "finished-statement")).scalar_one().form_version_id == new_id
         assert db.get(FormVersion, old_id).definition_json["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
         assert db.get(FormVersion, new_id).definition_json["documents"][0]["id"] == "statement"
-    assert old_config["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
+    assert old_config["documents"][0]["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
     assert new_config["documents"][0]["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
     legacy = FormConfigService().normalize_form_config({"process": {"documents": [
         {"id": "statement", "label": "Oświadczenia"}]}})
@@ -613,7 +689,7 @@ def test_training_upgrade_preserves_valid_and_flags_removed_unlocked_choice(tmp_
         db.flush()
         draft.status = FORM_VERSION_PUBLISHED
         service.upgrade_submission(db, submission, draft)
-        assert submission.data_json["_form_version_upgrade"]["invalid_training_ids"] == ["removed"]
+        assert service.refresh_submission_completion(db, submission)["invalid_training_ids"] == ["removed"]
         assert {row.training_id: row.status for row in db.execute(select(SubmissionTraining).where(
             SubmissionTraining.submission_id == submission.id,
         )).scalars()} == {"kept": "selected", "removed": "selected"}

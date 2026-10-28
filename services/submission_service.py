@@ -421,6 +421,8 @@ class SubmissionService:
         if resume_status == ProcessStatus.AUTO_REJECTED.value:
             resume_status = ProcessStatus.FORM_SUBMITTED.value
             resume_step = initial_step
+        from services.workflow_service import current_workflow_step
+        resume_step = current_workflow_step({"workflow_step": resume_step, "data_json": existing.get("data_json")}, form_config)
         updates = {
             **submission_data,
             "data_json": stored_data,

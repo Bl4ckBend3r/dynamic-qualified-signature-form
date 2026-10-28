@@ -95,6 +95,7 @@ KNOWN_STEP_FIELDS = {
     "repeat_item_alias",
     "triggers",
     "active",
+    "show_only_when_current",
     "stage_type",
     "instruction",
     "side_effects",
@@ -741,6 +742,7 @@ class WorkflowConfigNormalizer:
                 "requires_user_action": bool(item.get("requires_user_action", self._user_action(step_id))),
                 "requires_officer_action": bool(item.get("requires_officer_action", item.get("type") == "manual_decision")),
                 "active": bool(item.get("active", True)),
+                "show_only_when_current": item.get("show_only_when_current") is True,
                 "stage_type": str(item.get("stage_type") or self._stage_type(item, step_id)).strip(),
                 "instruction": {
                     "title": str(instruction.get("title") or item.get("user_label") or label).strip(),

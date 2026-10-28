@@ -117,6 +117,7 @@ def normalize_instruction_config(
                 "final": _as_bool(raw_stage.get("final")),
                 "rejected": _as_bool(raw_stage.get("rejected")),
                 "active": _as_bool(raw_stage.get("active", True)),
+                "show_only_when_current": _as_bool(raw_stage.get("show_only_when_current", False)),
                 "inactive_reason": _plain_text(raw_stage.get("inactive_reason"), limit=500),
                 "sort_order": len(stages) + 1,
             }
@@ -148,14 +149,24 @@ def build_process_instruction_view(
         step = next((s for s in steps if s.get("id") == step_id), None)
         if step:
             content = (step.get("document_instructions") or {}).get(document_substate) or {}
-            following = next((s for s in steps if s.get("id") == step.get("next")), {})
+            visibility_by_key = {stage["key"]: stage["show_only_when_current"] for stage in config["stages"]}
+
+            def visible(candidate: Mapping[str, Any]) -> bool:
+                conditional = (
+                    _as_bool(candidate.get("show_only_when_current"))
+                    or visibility_by_key.get(candidate.get("id"), False)
+                )
+                return not conditional or candidate.get("id") == step_id
+
+            visible_steps = [candidate for candidate in steps if visible(candidate)]
+            following = next((s for s in steps if s.get("id") == step.get("next") and visible(s)), {})
             instruction = {
                 "title": config["title"] or DEFAULT_INSTRUCTION_TITLE, "description": config["description"], "has_instruction": True,
                 "current_stage_key": step_id, "current_stage_label": step.get("user_label") or step.get("admin_label"),
                 "current_stage_description": sanitize_instruction_html(content.get("description") or step.get("description")),
                 "next_action": sanitize_instruction_html(content.get("next_action") or step.get("next_action")),
                 "next_stage_key": following.get("id"), "next_stage_label": following.get("user_label") or following.get("admin_label"),
-                "stages": [{"key": s["id"], "label": s.get("user_label") or s.get("admin_label"), "current": s["id"] == step_id, "completed": False} for s in steps],
+                "stages": [{"key": s["id"], "label": s.get("user_label") or s.get("admin_label"), "current": s["id"] == step_id, "completed": False, "sort_order": index} for index, s in enumerate(visible_steps, start=1)],
             }
             return {"instruction": instruction, "form_instruction": instruction["description"], "has_form_instruction": True,
                     "current_step": step_id, "current_step_label": instruction["current_stage_label"], "next_action": instruction["next_action"],
@@ -201,9 +212,15 @@ def build_process_instruction_view(
         stages.append(fallback)
         current_stage = fallback
 
+    visible_stages = [stage for stage in stages if not stage.get("show_only_when_current", False) or stage.get("current")]
+    for index, stage in enumerate(visible_stages, start=1):
+        stage["sort_order"] = index
+
     next_stage = None
     if current_index is not None:
-        next_stage = next((item for item in stages[current_index + 1 :] if item.get("active", True)), None)
+        candidate = next((item for item in stages[current_index + 1 :] if item.get("active", True)), None)
+        if candidate and not candidate.get("show_only_when_current", False):
+            next_stage = candidate
 
     instruction = {
         "title": config["title"] or (DEFAULT_INSTRUCTION_TITLE if has_instruction else ""),
@@ -215,7 +232,7 @@ def build_process_instruction_view(
         "next_action": current_stage["next_action"] if current_stage else "",
         "next_stage_key": next_stage["key"] if next_stage else None,
         "next_stage_label": next_stage["label"] if next_stage else None,
-        "stages": stages,
+        "stages": visible_stages,
     }
     # Keep the original flat keys until existing API clients migrate to `instruction`.
     return {

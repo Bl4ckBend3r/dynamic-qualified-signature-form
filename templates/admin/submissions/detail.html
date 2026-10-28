@@ -27,6 +27,9 @@
             <span>{{ submission.form_name or form.name }}</span>
             {% if submission.created_at %}<span>Złożono: {{ submission.created_at|business_datetime('%d.%m.%Y, %H:%M') }}</span>{% endif %}
             <span>Wersja formularza: {{ form_version_label }}</span>
+            {% if form_version_updated_at %}<span>Opublikowano: {{ form_version_updated_at|business_datetime('%d.%m.%Y, %H:%M') }}</span>{% endif %}
+            {% if previous_form_version_label %}<span>Poprzednia wersja: {{ previous_form_version_label }}</span>{% endif %}
+            <a href="{{ url_for('admin.form_versions', form_id=form.id) }}">Historia wersji</a>
         </div>
         {% for event in version_upgrade_events %}
         <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>

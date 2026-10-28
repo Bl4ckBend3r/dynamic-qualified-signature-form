@@ -9,7 +9,8 @@ def config(*stages, title="Moja instrukcja", description="Opis ogólny"):
     return {"title": title, "description": description, "stages": list(stages)}
 
 
-def stage(label, statuses, *, next_action="", description="", final=False, rejected=False):
+def stage(label, statuses, *, next_action="", description="", final=False, rejected=False,
+          show_only_when_current=False):
     return {
         "label": label,
         "status_codes": statuses,
@@ -17,6 +18,7 @@ def stage(label, statuses, *, next_action="", description="", final=False, rejec
         "description": description,
         "final": final,
         "rejected": rejected,
+        "show_only_when_current": show_only_when_current,
     }
 
 
@@ -130,3 +132,74 @@ def test_inactive_instruction_is_preserved_but_not_exposed_publicly():
     assert inactive["inactive_reason"] == "Ten etap nie występuje już w workflow."
     view = build_process_instruction_view("REMOVED_STATUS", instruction_config=reconciled)
     assert all(item["key"] != "removed" for item in view["instruction_steps"])
+
+
+def test_conditional_stages_are_visible_only_while_current_and_renumbered():
+    instruction = config(
+        stage("Wniosek", ["FORM_SUBMITTED"]),
+        stage("Korekta", ["WAITING_FOR_CORRECTION"],
+              description="Popraw dane.", next_action="Wyślij korektę.", show_only_when_current=True),
+        stage("Decyzja", ["WAITING_FOR_OFFICER_DECISION"]),
+        stage("Odrzucony", ["OFFICER_REJECTED"], rejected=True, show_only_when_current=True),
+    )
+    normalized = normalize_instruction_config(instruction)
+    assert [item["show_only_when_current"] for item in normalized["stages"]] == [False, True, False, True]
+    assert normalize_instruction_config(config({"label": "Starszy etap", "status_codes": ["DRAFT"]}))["stages"][0]["show_only_when_current"] is False
+
+    before = build_process_instruction_view("FORM_SUBMITTED", instruction_config=instruction)
+    correction = build_process_instruction_view("WAITING_FOR_CORRECTION", instruction_config=instruction)
+    after = build_process_instruction_view("WAITING_FOR_OFFICER_DECISION", instruction_config=instruction)
+    rejected = build_process_instruction_view("OFFICER_REJECTED", instruction_config=instruction)
+
+    assert [item["label"] for item in before["instruction_steps"]] == ["Wniosek", "Decyzja"]
+    assert before["next_stage_label"] is None
+    assert before["instruction"]["next_stage_key"] is None
+    assert [item["label"] for item in correction["instruction_steps"]] == ["Wniosek", "Korekta", "Decyzja"]
+    assert correction["current_step_label"] == "Korekta"
+    assert correction["instruction"]["current_stage_description"] == "Popraw dane."
+    assert correction["next_action"] == "Wyślij korektę."
+    assert [item["label"] for item in after["instruction_steps"]] == ["Wniosek", "Decyzja"]
+    assert [item["label"] for item in rejected["instruction_steps"]] == ["Wniosek", "Decyzja", "Odrzucony"]
+    assert [item["sort_order"] for item in rejected["instruction_steps"]] == [1, 2, 3]
+
+
+def test_unmatched_status_keeps_fallback_without_revealing_conditional_stage():
+    view = build_process_instruction_view("UNKNOWN", instruction_config=config(
+        stage("Start", ["FORM_SUBMITTED"]),
+        stage("Przyszła korekta", ["WAITING_FOR_CORRECTION"], show_only_when_current=True),
+    ))
+    assert view["instruction_steps"][0]["label"] == "Start"
+    assert "UNKNOWN" in view["instruction_steps"][1]["label"]
+    assert view["instruction_steps"][-1]["fallback"] is True
+    assert view["next_stage_label"] is None
+
+
+def test_explicit_workflow_filters_conditional_stages_and_next_stage():
+    workflow = {"flow_mode": "explicit", "steps": [
+        {"id": "start", "user_label": "Wniosek", "next": "correction"},
+        {"id": "correction", "user_label": "Korekta", "next": "rejected",
+         "description": "Popraw dane.", "next_action": "Wyślij korektę.", "show_only_when_current": True},
+        {"id": "rejected", "user_label": "Odrzucony", "show_only_when_current": True},
+    ]}
+    before = build_process_instruction_view("FORM_SUBMITTED", workflow=workflow, step_id="start")
+    correction = build_process_instruction_view("WAITING_FOR_CORRECTION", workflow=workflow, step_id="correction")
+    rejected = build_process_instruction_view("OFFICER_REJECTED", workflow=workflow, step_id="rejected")
+
+    assert [item["label"] for item in before["instruction_steps"]] == ["Wniosek"]
+    assert before["instruction"]["next_stage_key"] is None
+    assert before["next_stage_label"] is None
+    assert [item["label"] for item in correction["instruction_steps"]] == ["Wniosek", "Korekta"]
+    assert correction["current_step_label"] == "Korekta"
+    assert correction["instruction"]["current_stage_description"] == "Popraw dane."
+    assert correction["next_action"] == "Wyślij korektę."
+    assert correction["next_stage_label"] is None
+    assert [item["label"] for item in rejected["instruction_steps"]] == ["Wniosek", "Odrzucony"]
+    assert [item["sort_order"] for item in rejected["instruction_steps"]] == [1, 2]
+
+    config_only = config({"key": "correction", **stage("Korekta", ["WAITING_FOR_CORRECTION"],
+                                                     show_only_when_current=True)})
+    legacy_workflow = {**workflow, "steps": [{key: value for key, value in item.items()
+                                               if key != "show_only_when_current"} for item in workflow["steps"]]}
+    legacy_before = build_process_instruction_view("FORM_SUBMITTED", workflow=legacy_workflow,
+                                                   step_id="start", instruction_config=config_only)
+    assert [item["label"] for item in legacy_before["instruction_steps"]] == ["Wniosek", "Odrzucony"]

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import json
 from typing import Iterable, Mapping
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from models import Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from services.admin_form_service import sync_form_fields, validate_admin_form_config
@@ -82,11 +82,14 @@ class FormVersionService:
         ).scalars().first()
 
     def resolve_for_submission(self, db, submission: FormSubmission) -> FormVersion | None:
+        """Use the current published definition after validating the stored link."""
         if submission.form_version_id:
             version = db.get(FormVersion, submission.form_version_id)
-            if version and version.form.slug == submission.form_slug:
-                return version
-        return None
+            if version is None or version.form.slug != submission.form_slug:
+                return None
+            return self.resolve_published(db, version.form_id) or version
+        form_id = db.execute(select(Form.id).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        return self.resolve_published(db, form_id) if form_id is not None else None
 
     def resolve_rendered_version(self, db, form: Form, version_id: int) -> FormVersion | None:
         return db.execute(
@@ -398,27 +401,23 @@ class FormVersionService:
         return not is_final_status(submission.process_status) and outcome in {"", FinalOutcome.ACTIVE.value}
 
     def upgrade_active_submissions(self, db, form: Form, version: FormVersion, *, actor_id: int | None) -> int:
-        """Process IDs in bounded pages inside the caller's publication transaction."""
+        """Synchronize every linked submission in bounded ORM pages."""
         upgraded = 0
         last_id = 0
         while True:
-            ids = db.execute(
-                select(FormSubmission.id).where(
+            submissions = db.execute(
+                select(FormSubmission).where(
                     FormSubmission.form_slug == form.slug,
-                    FormSubmission.form_version_id.is_not(None),
-                    FormSubmission.form_version_id != version.id,
+                    or_(FormSubmission.form_version_id.is_(None), FormSubmission.form_version_id != version.id),
                     FormSubmission.id > last_id,
-                ).order_by(FormSubmission.id).limit(100)
+                ).order_by(FormSubmission.id).limit(100).with_for_update()
             ).scalars().all()
-            if not ids:
+            if not submissions:
                 break
-            for submission_id in ids:
-                submission = db.execute(
-                    select(FormSubmission).where(FormSubmission.id == submission_id).with_for_update()
-                ).scalar_one()
+            for submission in submissions:
                 if self.upgrade_submission(db, submission, version, actor_id=actor_id):
                     upgraded += 1
-            last_id = ids[-1]
+            last_id = submissions[-1].id
             db.flush()
         return upgraded
 
@@ -426,89 +425,51 @@ class FormVersionService:
         self, db, submission: FormSubmission, latest: FormVersion | None = None,
         *, actor_id: int | None = None,
     ) -> bool:
-        """Reconcile one active submission before switching its immutable version pointer."""
-        if not self.is_active_submission(submission):
-            return False
-        old_version = self.resolve_for_submission(db, submission)
-        if old_version is None:
+        """Switch the current configuration pointer without changing case state."""
+        old_version = db.get(FormVersion, submission.form_version_id) if submission.form_version_id else None
+        if submission.form_version_id and old_version is None:
             raise FormVersionError("Zgłoszenie nie ma poprawnej historycznej wersji formularza.")
-        latest = latest or self.resolve_published(db, old_version.form_id)
-        if latest is None or latest.form_id != old_version.form_id or latest.status != FORM_VERSION_PUBLISHED:
+        if old_version is not None and old_version.form.slug != submission.form_slug:
+            raise FormVersionError("Wersja zgłoszenia należy do innego formularza.")
+        latest = latest or self.resolve_for_submission(db, submission)
+        if latest is None or latest.status != FORM_VERSION_PUBLISHED or latest.form.slug != submission.form_slug or (old_version and latest.form_id != old_version.form_id):
             raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
-        if old_version.id == latest.id:
+        if old_version is not None and old_version.id == latest.id:
             return False
 
-        old_definition = old_version.definition_json or {}
-        new_definition = latest.definition_json or {}
-        from services.field_availability_service import FieldAvailabilityService
         from services.workflow_service import current_workflow_step
-
-        availability = FieldAvailabilityService()
-        old_step = current_workflow_step(submission, old_definition)
-        target_step = old_step
-        new_steps = set(availability.step_ids(new_definition))
-        if new_steps and old_step not in new_steps:
-            mapping = (new_definition.get("workflow") or {}).get("step_migration") or {}
-            if not isinstance(mapping, Mapping):
-                raise FormVersionValidationError(["Mapowanie usuniętych etapów workflow musi być obiektem."])
-            target_step = str(mapping.get(old_step) or "").strip()
-            if target_step not in new_steps:
-                raise FormVersionValidationError([
-                    f'Aktywne zgłoszenie jest na usuniętym etapie „{old_step}”; wskaż workflow.step_migration.{old_step}.'
-                ])
-
+        old_step = current_workflow_step(submission, (old_version.definition_json if old_version else latest.definition_json) or {})
         data = dict(submission.data_json or {})
-        errors = self.submission_data_errors(submission, new_definition, step=target_step, db=db)
-        invalid_training = self.invalid_training_selections(db, submission, new_definition)
-        invalidated = self._invalidate_unsigned_documents(db, submission, old_definition, new_definition)
-        rewind_step, changed_documents = self._reconcile_new_document_requirements(
-            db, submission, old_definition, new_definition, target_step)
-        if rewind_step:
-            target_step = rewind_step
-        previous_status = submission.process_status
-        if rewind_step:
-            target_config = next((step for step in (new_definition.get("workflow") or {}).get("steps") or []
-                                  if step.get("id") == target_step), {})
-            submission.process_status = str(target_config.get("status") or previous_status)
         now = datetime.now(timezone.utc)
         data["_form_version_upgrade"] = {
-            "old_version_id": old_version.id,
+            "old_version_id": old_version.id if old_version else None,
             "new_version_id": latest.id,
             "upgraded_at": now.isoformat(),
-            "missing_fields": sorted(errors),
-            "invalid_training_ids": invalid_training,
+            "missing_fields": [],
+            "invalid_training_ids": [],
             "missing_documents": [],
         }
         submission.data_json = data
         submission.form_version_id = latest.id
-        if target_step != old_step or not submission.workflow_step:
-            submission.workflow_step = target_step
-        if target_step != old_step and (submission.workflow_stage or rewind_step):
-            submission.workflow_stage = target_step
         submission.updated_at = now
         db.add(SubmissionWorkflowEvent(
             submission_id=submission.id,
             public_submission_id=submission.submission_id,
             form_slug=submission.form_slug,
-            previous_status=previous_status,
+            previous_status=submission.process_status,
             new_status=submission.process_status,
             previous_step=old_step,
-            new_step=target_step,
+            new_step=old_step,
             actor_id=actor_id,
             actor_role="admin" if actor_id else "system",
             source="form_version_upgrade",
             reason="Zgłoszenie uzgodniono z nową opublikowaną wersją formularza.",
             side_effects={
-                "old_version_id": old_version.id,
+                "old_version_id": old_version.id if old_version else None,
                 "new_version_id": latest.id,
-                "old_version_label": old_version.version_label,
+                "old_version_label": old_version.version_label if old_version else "",
                 "new_version_label": latest.version_label,
-                "missing_fields": sorted(errors),
-                "invalid_training_ids": invalid_training,
-                "rewind_document_step": rewind_step,
-                "changed_documents": changed_documents,
-                "workflow_step_mapping": {old_step: target_step} if old_step != target_step else {},
-                "superseded_file_ids": invalidated,
+                "workflow_step_preserved": old_step,
             },
         ))
         db.flush()
@@ -613,11 +574,13 @@ class FormVersionService:
         """Use fields available now or at an earlier stage, keeping new sections."""
         from form_loader import normalize_form_definition
         from services.field_availability_service import FieldAvailabilityService
+        from services.workflow_service import current_workflow_step
 
         normalized = normalize_form_definition(dict(definition))
         availability = FieldAvailabilityService()
         steps = availability.step_ids(normalized)
-        current = availability.resolve_step(normalized, step or submission.workflow_step or availability.initial_step(normalized))
+        current = availability.resolve_step(normalized, current_workflow_step(
+            {"workflow_step": step or submission.workflow_step, "data_json": submission.data_json}, normalized))
         due = steps[:steps.index(current) + 1] if current in steps else [current]
         due_fields = []
         for raw in normalized.get("fields") or []:

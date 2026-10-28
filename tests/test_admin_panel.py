@@ -7557,6 +7557,7 @@ def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app,
     workflow["initial_step"] = "submission"
     workflow["steps"][0]["description"] = "Urzędnik sprawdza dane."
     workflow["steps"][0]["next_action"] = "Poczekaj na wynik weryfikacji."
+    workflow["steps"][0]["show_only_when_current"] = True
 
     response = admin_client.post(
         f"/admin/forms/{form_id}/edit",
@@ -7584,11 +7585,15 @@ def test_workflow_builder_saves_order_and_generates_user_instructions(admin_app,
         assert form.definition_json["workflow"]["legacy_extension"] == {"preserve": True}
         assert form.user_instruction_config["stages"][0]["label"] == "Weryfikacja wniosku"
         assert form.user_instruction_config["stages"][0]["next_action"] == "Poczekaj na wynik weryfikacji."
+        assert form.user_instruction_config["stages"][0]["show_only_when_current"] is True
+        assert form.definition_json["workflow"]["steps"][0]["show_only_when_current"] is True
 
     reopened = admin_client.get(f"/admin/forms/{form_id}/edit?tab=instructions").get_data(as_text=True)
     assert "Urzędnik sprawdza dane." in reopened
     assert "Poczekaj na wynik weryfikacji." in reopened
     assert "syncLinkedInstructionValues();" in reopened
+    assert "Pokaż etap tylko wtedy, gdy jest aktualny" in reopened
+    assert '"show_only_when_current": true' in reopened or '&#34;show_only_when_current&#34;: true' in reopened
 
 
 def test_workflow_builder_preserves_manual_diagram_layout_after_save(admin_app, admin_client):
@@ -7838,6 +7843,47 @@ def test_existing_instruction_config_is_loaded_into_workflow_instruction_editors
     assert "isWorkflowInstructionEditorEvent" in rendered
     assert "if (!isWorkflowInstructionEditorEvent(event)) syncWorkflowBuilder();" in rendered
     assert "if (isWorkflowInstructionEditorEvent(event)) return;" in rendered
+
+
+def test_conditional_instruction_checkbox_updates_workflow_and_preview(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="conditional_preview", definition_json=readable_workflow_definition())
+    login(admin_client)
+    html = admin_client.get(f"/admin/forms/{form_id}/edit?tab=instructions").get_data(as_text=True)
+    script = (Path(__file__).parents[1] / "static" / "js" / "workflow_stage_editor.js").read_text(encoding="utf-8")
+    html, replacements = re.subn(
+        r'<script\s+src="[^"]*workflow_stage_editor\.js"></script>',
+        lambda _match: f"<script>{script}</script>", html, count=1,
+    )
+    assert replacements == 1
+
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.set_content(html, wait_until="domcontentloaded")
+        review = page.locator('[data-instruction-step-id="review"]')
+        checkbox = review.locator("[data-show-only-when-current]")
+        assert checkbox.is_checked() is False
+        checkbox.check()
+        workflow = json.loads(page.locator("[data-workflow-builder-json]").input_value())
+        assert next(step for step in workflow["steps"] if step["id"] == "review")["show_only_when_current"] is True
+        preview = page.locator("[data-live-instruction-stages]")
+        assert "Weryfikacja wniosku" not in preview.inner_text()
+        headings = preview.locator(".instruction-preview-stage strong").all_text_contents()
+        assert all(heading.startswith(f"{index}. ") for index, heading in enumerate(headings, start=1))
+        page.locator("[data-instruction-preview-current-step]").select_option("review")
+        assert "Weryfikacja wniosku" in preview.inner_text()
+        headings = preview.locator(".instruction-preview-stage strong").all_text_contents()
+        assert all(heading.startswith(f"{index}. ") for index, heading in enumerate(headings, start=1))
+        assert "Tylko gdy aktualny" in review.inner_text()
+        assert errors == []
+        browser.close()
 
 
 def test_workflow_instruction_html_is_sanitized_before_save_and_returned_as_safe_html(admin_app, admin_client):

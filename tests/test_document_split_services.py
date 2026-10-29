@@ -16,6 +16,7 @@ from services.documents.document_storage_service import DocumentStorageError, Do
 from services.documents.document_view_service import DocumentViewService
 from services.documents.pdf_render_service import PdfRenderError, PdfRenderService
 from services.documents.signed_document_service import SignedDocumentError, SignedDocumentService
+from services.submission_service import SubmissionService
 
 
 class DummyStorage:
@@ -41,6 +42,32 @@ class DummyStorage:
     def update_csv_row_by_submission_id(self, slug, submission_id, updates):
         self.updated.append((slug, submission_id, updates))
         return True
+
+
+class TransactionalPdfStorage:
+    def __init__(self, initial=None):
+        self.files = dict(initial or {})
+
+    def pdf_storage_path(self, slug, filename, document_type=None, signed=None):
+        return f"output/{slug}/pdf/{filename}"
+
+    def exists(self, path):
+        return path in self.files
+
+    def read_bytes(self, path):
+        return self.files[path]
+
+    def write_bytes(self, path, content, content_type=None):
+        self.files[path] = bytes(content)
+
+    def delete(self, path, missing_ok=False):
+        if path in self.files:
+            del self.files[path]
+        elif not missing_ok:
+            raise FileNotFoundError(path)
+
+    def save_pdf(self, slug, filename, document_bytes, **kwargs):
+        self.files[self.pdf_storage_path(slug, filename, **kwargs)] = bytes(document_bytes)
 
 
 class FakePdfRenderer:
@@ -283,6 +310,103 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
     assert repository.updated == [("abc", {"signed_pdf_filename": "sample-abc-signed.pdf"})]
     assert repository.recorded[0][1]["filename"] == "sample-abc-signed.pdf"
     assert repository.recorded[0][1]["signed"] is True
+
+
+def test_transactional_pdf_write_deletes_new_file_when_later_step_fails():
+    storage = TransactionalPdfStorage()
+    service = DocumentStorageService()
+
+    with pytest.raises(RuntimeError, match="metadata"):
+        with service.transactional_pdf_write(
+            storage=storage,
+            slug="sample",
+            filename="document.pdf",
+            document_bytes=b"new",
+            document_type=None,
+            signed=False,
+        ):
+            raise RuntimeError("metadata failed")
+
+    assert storage.files == {}
+
+
+def test_transactional_pdf_write_restores_previous_file_when_later_step_fails():
+    path = "output/sample/pdf/document.pdf"
+    storage = TransactionalPdfStorage({path: b"previous"})
+    service = DocumentStorageService()
+
+    with pytest.raises(RuntimeError, match="metadata"):
+        with service.transactional_pdf_write(
+            storage=storage,
+            slug="sample",
+            filename="document.pdf",
+            document_bytes=b"replacement",
+            document_type=None,
+            signed=False,
+        ):
+            raise RuntimeError("metadata failed")
+
+    assert storage.files[path] == b"previous"
+
+
+def test_document_signing_service_rolls_back_pdf_and_does_not_update_submission_when_metadata_fails(tmp_path):
+    storage = TransactionalPdfStorage()
+    repository = DummyRepository(metadata=None)
+    repository.supports_file_metadata = True
+    repository.record_file = lambda *_args, **_kwargs: False
+    signing_service = DocumentSigningService(
+        storage=storage,
+        submission_repository=repository,
+        submission_service=SimpleNamespace(build_signed_pdf_filename=lambda *_args: "signed.pdf"),
+        verifier=lambda _path: {
+            "is_signed": True,
+            "signature_type": "mszafir",
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "trusted": True,
+            "validation_status": "VALID",
+        },
+    )
+    uploaded_file = SimpleNamespace(
+        filename="signed.pdf",
+        mimetype="application/pdf",
+        read=lambda: b"%PDF-1.4\nsigned",
+    )
+
+    with pytest.raises(RuntimeError, match="metadanych"):
+        signing_service.upload_signed_submission_pdf(
+            slug="sample", submission_id="abc", uploaded_file=uploaded_file, temp_dir=tmp_path
+        )
+
+    assert storage.files == {}
+    assert repository.updated == []
+
+
+def test_submission_service_requires_pdf_metadata_for_database_repository(monkeypatch):
+    storage = TransactionalPdfStorage()
+    repository = DummyRepository(metadata=None)
+    repository.supports_file_metadata = True
+    metadata_service = SimpleNamespace(record_generated_document=lambda **_kwargs: False)
+    service = SubmissionService(
+        repository,
+        storage=storage,
+        document_service=SimpleNamespace(document_storage_service=DocumentStorageService()),
+        submission_document_service=metadata_service,
+    )
+    monkeypatch.setattr(service, "_render_form_pdf_bytes", lambda *_args, **_kwargs: b"%PDF-1.4\nform")
+
+    with pytest.raises(RuntimeError, match="metadanych"):
+        service._generate_form_pdf(
+            form_slug="sample",
+            form_config={},
+            submission_id="abc",
+            submission_data={},
+            submission={"submission_id": "abc", "form_slug": "sample"},
+            pdf_filename="sample-abc.pdf",
+        )
+
+    assert storage.files == {}
+    assert repository.updated == []
 
 
 def test_document_signing_service_rejects_indeterminate_trust(tmp_path):

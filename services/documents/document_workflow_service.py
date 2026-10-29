@@ -1253,10 +1253,11 @@ class DocumentWorkflowService:
             document_key = sha256(document_id.encode("utf-8")).hexdigest()[:12]
             filename = f"{row['submission_id']}-{step_key}-{document_key}-{signer}-{digest[:16]}-{uuid4().hex[:8]}.{extension}"
             try:
-                storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage,
+                pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
                     slug=row["form_slug"], filename=filename, document_bytes=data,
                     document_type=self.documents._storage_document_type(document_id),
                     signed=requires_signature)
+                storage_path = pdf_write.storage_path
             except Exception:
                 target["verification_result"] = "VERIFICATION_ERROR"
                 target["substate"] = "verification_error"
@@ -1388,6 +1389,18 @@ class DocumentWorkflowService:
                 signature_status=str(verification.get("validation_status") or "not_required").lower(),
                 signature_validation_result=verification, uploaded_by_source=signer)
             if not recorded:
+                try:
+                    self.documents.document_storage_service.rollback_pdf_write(
+                        storage=self.documents.storage,
+                        receipt=pdf_write,
+                    )
+                except Exception:
+                    current_app.logger.exception(
+                        "document_storage_rollback_failed submission_id=%s document_id=%s filename=%s",
+                        row["submission_id"],
+                        document_id,
+                        filename,
+                    )
                 target["verification_result"] = "VERIFICATION_ERROR"
                 target["substate"] = "verification_error"
                 self._save(row, step, state, token, "verification_error", "DOCUMENT_METADATA_FAILED", signer)
@@ -1742,9 +1755,10 @@ class DocumentWorkflowService:
             raise ValueError("Najpierw wygeneruj dokument.")
         digest = sha256(data).hexdigest()
         filename = f"{row['submission_id']}-{sha256(document_id.encode()).hexdigest()[:12]}-upgrade-{digest[:16]}.{extension}"
-        storage_path = self.documents.document_storage_service.save_pdf(storage=self.documents.storage,
+        pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
             slug=row["form_slug"], filename=filename, document_bytes=data,
             document_type=self.documents._storage_document_type(document_id), signed=signature_required)
+        storage_path = pdf_write.storage_path
         verification = {}
         outcome = "VALID_SIGNATURE"
         verification_message = "Dokument został przyjęty."
@@ -1844,6 +1858,18 @@ class DocumentWorkflowService:
             signature_status=str(verification.get("validation_status") or "not_required").lower(),
             signature_validation_result=verification, uploaded_by_source="participant")
         if not recorded:
+            try:
+                self.documents.document_storage_service.rollback_pdf_write(
+                    storage=self.documents.storage,
+                    receipt=pdf_write,
+                )
+            except Exception:
+                current_app.logger.exception(
+                    "document_storage_rollback_failed submission_id=%s document_id=%s filename=%s",
+                    row["submission_id"],
+                    document_id,
+                    filename,
+                )
             raise ValueError("Nie udało się zapisać metadanych dokumentu.")
         if accepted:
             self._refresh_version_gap(submission)

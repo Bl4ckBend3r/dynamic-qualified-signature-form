@@ -1164,6 +1164,7 @@ def test_document_signature_failure_messages(composite_env, monkeypatch, failure
     from signature_verifier import verify_signed_pdf
     env = composite_env()
     env.enter()
+    canonical_paths_before_upload = set(env.services.document_service.storage.direct_files)
     if failure == 'unsigned':
         monkeypatch.setattr(env.services.document_signing_service, 'verifier', verify_signed_pdf)
     elif failure == 'unsupported':
@@ -1184,6 +1185,8 @@ def test_document_signature_failure_messages(composite_env, monkeypatch, failure
     assert result['result'] == expected
     assert env.row()['workflow_stage'] == 'paper'
     assert env.state()['substate'] == ('verification_failed' if failure in {'unsigned', 'unsupported'} else 'verification_error')
+    if failure == 'metadata':
+        assert set(env.services.document_service.storage.direct_files) == canonical_paths_before_upload
     page = env.app.test_client().get(f"/do-podpisania?submission_id={env.public_id}&token={env.row()['access_token']}")
     assert result['message'] in page.text
     assert env.document.view(env.row(), env.definition)['files'][0]['can_upload']

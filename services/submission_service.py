@@ -21,6 +21,7 @@ from services.access_token_service import AccessTokenService
 from services.compliance_service import ComplianceService
 from services.field_availability_service import FieldAvailabilityService
 from services.document_naming_service import build_signed_submission_pdf_filename, build_submission_pdf_filename
+from services.documents.document_storage_service import DocumentStorageService
 from services.form_submission_mapper import FORM_FIELD_MAP, build_submission_from_form, validate_required_submission_fields
 from services.process_service import OfficerDecision, ProcessStatus, build_initial_process_fields, build_legacy_process_fields, build_process_state
 from services.qualification_condition_service import QualificationConditionService
@@ -566,21 +567,36 @@ class SubmissionService:
         require_metadata: bool = False,
     ) -> None:
         pdf_bytes = self._render_form_pdf_bytes(form_config, submission_id, submission_data)
-        self.storage.save_pdf(form_slug, pdf_filename, pdf_bytes)
-        logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
-        metadata_recorded = self.submission_document_service.record_generated_document(
-            submission_id=submission_id,
-            form_slug=form_slug,
-            filename=pdf_filename,
-            file_bytes=pdf_bytes,
-            document_id="form_submission",
-            document_type=SubmissionDocumentType.FORM_PDF,
-            storage=self.storage,
+        metadata_required = require_metadata or bool(
+            getattr(self.submission_repository, "supports_file_metadata", False)
         )
-        if require_metadata and not metadata_recorded:
-            raise RuntimeError("Nie udało się zapisać metadanych wygenerowanego PDF.")
+        storage_service = (
+            getattr(self.document_service, "document_storage_service", None)
+            or DocumentStorageService()
+        )
+        with storage_service.transactional_pdf_write(
+            storage=self.storage,
+            slug=form_slug,
+            filename=pdf_filename,
+            document_bytes=pdf_bytes,
+            document_type=SubmissionDocumentType.FORM_PDF,
+            signed=False,
+        ) as storage_path:
+            logger.info("Upload PDF do Nextcloud zakonczony sukcesem: %s", pdf_filename)
+            metadata_recorded = self.submission_document_service.record_generated_document(
+                submission_id=submission_id,
+                form_slug=form_slug,
+                filename=pdf_filename,
+                file_bytes=pdf_bytes,
+                document_id="form_submission",
+                document_type=SubmissionDocumentType.FORM_PDF,
+                storage_path=storage_path,
+                storage=self.storage,
+            )
+            if metadata_required and not metadata_recorded:
+                raise RuntimeError("Nie udało się zapisać metadanych wygenerowanego PDF.")
         updated = self.submission_repository.update(submission_id, {"pdf_filename": pdf_filename})
-        if require_metadata and not updated:
+        if metadata_required and not updated:
             raise RuntimeError("Nie udało się powiązać wygenerowanego PDF ze zgłoszeniem.")
         submission["pdf_filename"] = pdf_filename
         if self.audit_log_service:

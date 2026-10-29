@@ -303,26 +303,27 @@ class DocumentService:
             template_html=self.resolve_document_template(document),
             context=context,
         )
-        storage_path = self.document_storage_service.save_pdf(
+        with self.document_storage_service.transactional_pdf_write(
             storage=self.storage,
             slug=slug,
             filename=filename,
             document_bytes=document_bytes,
             document_type=self._storage_document_type(document_id),
             signed=False,
-        )
-        recorded = self.submission_document_service.record_generated_document(
-            submission_id=submission_id,
-            form_slug=slug,
-            filename=filename,
-            file_bytes=document_bytes,
-            document_id=document_id,
-            document_type=self._document_metadata_type(document_id, signed=False),
-            agreement_number=agreement_number,
-            workflow_step_at_upload=composite["id"] if composite else "",
-            storage_path=storage_path,
-            storage=self.storage,
-        )
+        ) as storage_path:
+            recorded = self.submission_document_service.record_generated_document(
+                submission_id=submission_id,
+                form_slug=slug,
+                filename=filename,
+                file_bytes=document_bytes,
+                document_id=document_id,
+                document_type=self._document_metadata_type(document_id, signed=False),
+                agreement_number=agreement_number,
+                workflow_step_at_upload=composite["id"] if composite else "",
+                storage_path=storage_path,
+                storage=self.storage,
+            )
+            self._require_metadata_record(recorded, filename)
         self._log_document_write(
             submission,
             filename=filename,
@@ -330,7 +331,6 @@ class DocumentService:
             storage_path=storage_path,
             metadata_recorded=recorded,
         )
-        self._require_metadata_record(recorded, filename)
         updates = self._generated_updates(document_id, filename)
         if document_id == DocumentType.AGREEMENT:
             updates["agreement_generated_at"] = resolved_context_extra["generated_date"]
@@ -517,27 +517,28 @@ class DocumentService:
                 template_html=template_html,
                 context=context,
             )
-            storage_path = self.document_storage_service.save_pdf(
+            with self.document_storage_service.transactional_pdf_write(
                 storage=self.storage,
                 slug=slug,
                 filename=filename,
                 document_bytes=document_bytes,
                 document_type=self._storage_document_type(document_id),
                 signed=False,
-            )
-            recorded = self.submission_document_service.record_generated_document(
-                submission_id=submission_id,
-                form_slug=slug,
-                filename=filename,
-                file_bytes=document_bytes,
-                document_id=document_id,
-                document_type=self._document_metadata_type(document_id, signed=False),
-                agreement_number=record["agreement_number"],
-                training_key=str(item_id),
-                workflow_step_at_upload=(self.composite_step(row, form_config) or {}).get("id", ""),
-                storage_path=storage_path,
-                storage=self.storage,
-            )
+            ) as storage_path:
+                recorded = self.submission_document_service.record_generated_document(
+                    submission_id=submission_id,
+                    form_slug=slug,
+                    filename=filename,
+                    file_bytes=document_bytes,
+                    document_id=document_id,
+                    document_type=self._document_metadata_type(document_id, signed=False),
+                    agreement_number=record["agreement_number"],
+                    training_key=str(item_id),
+                    workflow_step_at_upload=(self.composite_step(row, form_config) or {}).get("id", ""),
+                    storage_path=storage_path,
+                    storage=self.storage,
+                )
+                self._require_metadata_record(recorded, filename)
             self._log_document_write(
                 submission,
                 filename=filename,
@@ -545,7 +546,6 @@ class DocumentService:
                 storage_path=storage_path,
                 metadata_recorded=recorded,
             )
-            self._require_metadata_record(recorded, filename)
             generated_documents.append(record)
 
         updates = {
@@ -615,29 +615,30 @@ class DocumentService:
                     )
                     is_valid = False
         if is_valid:
-            storage_path = self.document_storage_service.save_pdf(
+            with self.document_storage_service.transactional_pdf_write(
                 storage=self.storage,
                 slug=slug,
                 filename=signed_filename,
                 document_bytes=uploaded_bytes,
                 document_type=self._storage_document_type(document_id),
                 signed=True,
-            )
-            recorded = self.submission_document_service.record_signed_document(
-                submission_id=self._submission_id(submission),
-                form_slug=slug,
-                filename=signed_filename,
-                file_bytes=uploaded_bytes,
-                document_id=document_id,
-                document_type=self._document_metadata_type(document_id, signed=True),
-                original_filename=str(uploaded_file.filename or ""),
-                signature_status="valid" if is_valid else "invalid",
-                signature_validation_result=verification,
-                training_key=str(instance_id or ""),
-                storage_path=storage_path,
-                storage=self.storage,
-                uploaded_by_source="participant",
-            )
+            ) as storage_path:
+                recorded = self.submission_document_service.record_signed_document(
+                    submission_id=self._submission_id(submission),
+                    form_slug=slug,
+                    filename=signed_filename,
+                    file_bytes=uploaded_bytes,
+                    document_id=document_id,
+                    document_type=self._document_metadata_type(document_id, signed=True),
+                    original_filename=str(uploaded_file.filename or ""),
+                    signature_status="valid" if is_valid else "invalid",
+                    signature_validation_result=verification,
+                    training_key=str(instance_id or ""),
+                    storage_path=storage_path,
+                    storage=self.storage,
+                    uploaded_by_source="participant",
+                )
+                self._require_metadata_record(recorded, signed_filename)
             self._log_document_write(
                 submission,
                 filename=signed_filename,
@@ -645,7 +646,6 @@ class DocumentService:
                 storage_path=storage_path,
                 metadata_recorded=recorded,
             )
-            self._require_metadata_record(recorded, signed_filename)
 
         updates = self._signed_updates(
             row,

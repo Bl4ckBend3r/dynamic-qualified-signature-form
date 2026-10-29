@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from flask import Flask
 
 from services.document_service import DocumentService, build_signed_filename
 from services import declaration_service
@@ -50,6 +51,9 @@ class TransactionalPdfStorage:
 
     def pdf_storage_path(self, slug, filename, document_type=None, signed=None):
         return f"output/{slug}/pdf/{filename}"
+
+    def ensure_form_output_structure(self, _slug):
+        return None
 
     def exists(self, path):
         return path in self.files
@@ -407,6 +411,229 @@ def test_submission_service_requires_pdf_metadata_for_database_repository(monkey
 
     assert storage.files == {}
     assert repository.updated == []
+
+
+def test_submission_pdf_failure_is_persisted_and_retry_is_idempotent(monkeypatch, caplog):
+    class Repository:
+        supports_file_metadata = True
+        session_factory = object()
+
+        def __init__(self):
+            self.row = None
+            self.claim_token = ""
+            self.workflow_events = []
+
+        def create(self, submission):
+            self.row = {**submission, "id": 1}
+            submission["id"] = 1
+            return submission["submission_id"]
+
+        def update(self, submission_id, updates):
+            assert self.row and self.row["submission_id"] == submission_id
+            self.row.update(updates)
+            return True
+
+        def get_by_id(self, submission_id):
+            return dict(self.row) if self.row and self.row["submission_id"] == submission_id else None
+
+        def claim_document_operation(self, submission_id, step_id, token):
+            if self.claim_token or not self.row or self.row["process_status"] != "PDF_GENERATION_FAILED":
+                return False
+            self.claim_token = token
+            return True
+
+        def release_document_operation(self, submission_id, token):
+            if self.claim_token == token:
+                self.claim_token = ""
+
+        def record_workflow_event(self, submission_id, event):
+            self.workflow_events.append((submission_id, event))
+
+    class Compliance:
+        def build_unversioned_snapshots(self, *_args, **_kwargs):
+            return []
+
+        def record_submission_acceptances(self, **_kwargs):
+            return None
+
+    class Qualification:
+        def field_catalog(self, _config):
+            return []
+
+        def evaluate(self, *_args, **_kwargs):
+            return {"failed_conditions": []}
+
+    class Attachments:
+        calls = 0
+
+        def validate_uploads(self, *_args, **_kwargs):
+            return [], {}
+
+        def persist(self, **_kwargs):
+            self.calls += 1
+
+    class Workflow:
+        calls = 0
+
+        def enter_submission_review(self, _submission, _config):
+            self.calls += 1
+
+    class Mail:
+        received = 0
+
+        def dispatch_submission_received(self, _submission_id):
+            self.received += 1
+
+    class Metadata:
+        calls = 0
+
+        def record_generated_document(self, **_kwargs):
+            self.calls += 1
+            return True
+    class Sla:
+        calls = 0
+
+        def initialize_submission(self, *_args, **_kwargs):
+            self.calls += 1
+
+    class Assignment:
+        calls = 0
+
+        def auto_assign_created(self, *_args, **_kwargs):
+            self.calls += 1
+
+    repository = Repository()
+    storage = TransactionalPdfStorage()
+    workflow = Workflow()
+    mail = Mail()
+    metadata = Metadata()
+    sla = Sla()
+    assignment = Assignment()
+    document_storage = DocumentStorageService()
+    service = SubmissionService(
+        repository,
+        storage=storage,
+        workflow_service=workflow,
+        document_service=SimpleNamespace(
+            document_storage_service=document_storage,
+            build_download_url=lambda _submission, filename: f"/download/{filename}",
+        ),
+        mail_dispatch_service=mail,
+        submission_document_service=metadata,
+        qualification_condition_service=Qualification(),
+        compliance_service=Compliance(),
+        submission_attachment_service=Attachments(),
+        submission_assignment_service=assignment,
+        workflow_sla_service=sla,
+    )
+    monkeypatch.setattr(service, "validate_form", lambda *_args, **_kwargs: {
+        "values": {"participant_note": "DANE-WRAZLIWE-TEST"},
+        "mapped_submission": {},
+        "attachments": [],
+        "errors": {},
+        "map_meta": {"saved_fields": [], "skipped_fields": []},
+    })
+    render_fails = {"value": True}
+
+    def render(*_args, **_kwargs):
+        if render_fails["value"]:
+            raise RuntimeError("renderer unavailable")
+        return b"%PDF-1.4\nretry"
+
+    monkeypatch.setattr(service, "_render_form_pdf_bytes", render)
+    app = Flask(__name__)
+    app.secret_key = "test"
+    app.add_url_rule(
+        "/upload-signed/<slug>/<submission_id>",
+        endpoint="documents.upload_signed_pdf",
+        view_func=lambda slug, submission_id: "",
+        methods=["POST"],
+    )
+    form_config = {"title": "Sample", "fields": [], "workflow": {"initial_step": "submission"}}
+
+    with app.test_request_context("/"), caplog.at_level(logging.ERROR):
+        first = service.submit_form("sample", form_config, {}, submission_id="abc")
+
+    assert first["ok"] is True
+    assert first["result"]["processing_pending"] is True
+    assert first["result"]["can_continue"] is False
+    assert repository.row["process_status"] == "PDF_GENERATION_FAILED"
+    assert repository.row["pdf_filename"] == ""
+    assert workflow.calls == 0
+    assert mail.received == 0
+    assert metadata.calls == 0
+    assert sla.calls == 0
+    assert assignment.calls == 0
+    assert "error_type=RuntimeError" in caplog.text
+    assert "DANE-WRAZLIWE-TEST" not in caplog.text
+
+    render_fails["value"] = False
+    with app.test_request_context("/"):
+        retried = service.retry_form_pdf_generation("abc", form_config)
+
+    assert retried["processing_pending"] is False
+    assert retried["pdf_filename"] == "sample-abc.pdf"
+    assert repository.row["process_status"] == "FORM_SUBMITTED"
+    assert repository.row["pdf_filename"] == "sample-abc.pdf"
+    assert "_pdf_generation_retry" not in repository.row["data_json"]
+    assert len(storage.files) == 1
+    assert metadata.calls == 1
+    assert workflow.calls == 1
+    assert mail.received == 1
+    assert sla.calls == 1
+    assert assignment.calls == 1
+
+    with pytest.raises(ValueError, match="nie oczekuje"):
+        service.retry_form_pdf_generation("abc", form_config)
+    assert len(storage.files) == 1
+    assert metadata.calls == 1
+
+    repository.row["process_status"] = "RETURNED_FOR_CORRECTION"
+    repository.row["workflow_step"] = "returned_for_correction"
+    repository.row["workflow_stage"] = "returned_for_correction"
+    repository.row["data_json"] = {
+        **repository.row["data_json"],
+        "_correction_history": [{
+            "previous_status": "FORM_SUBMITTED",
+            "previous_step": "submission",
+        }],
+    }
+    render_fails["value"] = True
+    with app.test_request_context("/correction", method="POST"):
+        correction = service.submit_correction_form(
+            "sample",
+            form_config,
+            {},
+            submission_id="abc",
+            access_token=repository.row["access_token"],
+        )
+
+    assert correction["ok"] is True
+    assert correction["result"]["processing_pending"] is True
+    assert repository.row["process_status"] == "PDF_GENERATION_FAILED"
+    retry_state = repository.row["data_json"]["_pdf_generation_retry"]
+    assert retry_state["continuation"] == "correction"
+    assert "-korekta-" in retry_state["pdf_filename"]
+    assert workflow.calls == 1
+    assert mail.received == 1
+    assert repository.workflow_events == []
+
+    render_fails["value"] = False
+    with app.test_request_context("/"):
+        correction_retry = service.retry_form_pdf_generation("abc", form_config)
+
+    assert correction_retry["processing_pending"] is False
+    assert correction_retry["pdf_filename"] == retry_state["pdf_filename"]
+    assert repository.row["process_status"] == "FORM_SUBMITTED"
+    assert "_pdf_generation_retry" not in repository.row["data_json"]
+    assert workflow.calls == 2
+    assert mail.received == 2
+    assert len(repository.workflow_events) == 1
+    assert repository.workflow_events[0][1]["source"] == "correction_resubmitted"
+    assert sla.calls == 1
+    assert assignment.calls == 1
+    assert len(storage.files) == 2
+    assert metadata.calls == 2
 
 
 def test_document_signing_service_rejects_indeterminate_trust(tmp_path):

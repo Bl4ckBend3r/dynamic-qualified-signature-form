@@ -22,7 +22,7 @@ from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
-from services.process_service import build_process_state
+from services.process_service import ProcessStatus, build_process_state
 from services.public_submission_status_service import build_public_submission_status
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
@@ -902,8 +902,13 @@ def show_result(slug: str, submission_id: str):
     submission = access.submission
 
     row = submission.get("row") or submission
-    pdf_filename = row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
-    signed_pdf_filename = row.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
+    processing_pending = str(row.get("process_status") or "") == ProcessStatus.PDF_GENERATION_FAILED.value
+    pdf_filename = "" if processing_pending else (
+        row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
+    )
+    signed_pdf_filename = "" if processing_pending else (
+        row.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
+    )
 
     verification = None
     signed_exists = bool(signed_pdf_filename)
@@ -935,7 +940,12 @@ def show_result(slug: str, submission_id: str):
         "signed_pdf_filename": signed_pdf_filename if signed_exists else "",
         "signed_pdf_url": None,
         "upload_url": "",
-        "can_continue": True,
+        "can_continue": not processing_pending,
+        "processing_pending": processing_pending,
+        "qualification_message": (
+            "Zgłoszenie zostało zapisane. Dokument PDF oczekuje na bezpieczne ponowienie przygotowania."
+            if processing_pending else ""
+        ),
         # The result page is read-only and must not reflect a stored participant
         # credential into HTML, links, hidden fields or browser storage.
         "participant_credential": "",

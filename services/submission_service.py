@@ -135,6 +135,7 @@ class SubmissionService:
             submission_id=submission_id,
             dispatch_received=False,
             start_workflow=False,
+            initialize_operations=False,
         )
         try:
             self.compliance_service.record_submission_acceptances(
@@ -164,18 +165,169 @@ class SubmissionService:
         except Exception:
             self.compliance_service.remove_incomplete_submission(submission_id)
             raise
+        try:
+            self._generate_form_pdf(
+                form_slug=form_slug,
+                form_config=form_config,
+                submission_id=submission_id,
+                submission_data=submission_data,
+                submission=submission,
+                pdf_filename=pdf_filename,
+            )
+        except Exception as exc:
+            self._mark_pdf_generation_failed(submission, pdf_filename=pdf_filename, error=exc)
+            result = self._build_submission_result(
+                submission=submission,
+                form_config=form_config,
+                pdf_filename="",
+                qualification=qualification,
+                processing_pending=True,
+            )
+            return {
+                "ok": True,
+                "errors": {},
+                "values": submission_data,
+                "submission": submission,
+                "result": result,
+            }
+
+        auto_rejected = self._continue_submission_after_pdf(submission, form_config, qualification)
+        result = self._build_submission_result(
+            submission=submission,
+            form_config=form_config,
+            pdf_filename=pdf_filename,
+            qualification=qualification,
+            auto_rejected=auto_rejected,
+        )
+        return {
+            "ok": True,
+            "errors": {},
+            "values": submission_data,
+            "submission": submission,
+            "result": result,
+        }
+
+    def retry_form_pdf_generation(self, submission_id: str, form_config: dict) -> dict:
+        submission = self.submission_repository.get_by_id(submission_id)
+        if not submission:
+            raise ValueError("Nie znaleziono zgłoszenia.")
+        if str(submission.get("process_status") or "") != ProcessStatus.PDF_GENERATION_FAILED.value:
+            raise ValueError("To zgłoszenie nie oczekuje na ponowienie generowania PDF.")
+        claim = getattr(self.submission_repository, "claim_document_operation", None)
+        release = getattr(self.submission_repository, "release_document_operation", None)
+        if not callable(claim) or not callable(release):
+            raise RuntimeError("Repozytorium nie obsługuje bezpiecznego ponowienia generowania PDF.")
+        step = str(submission.get("workflow_step") or submission.get("workflow_stage") or "submission")
+        token = f"pdf-retry-{uuid4().hex}"
+        if not claim(submission_id, step, token):
+            raise ValueError("Generowanie PDF jest już wykonywane. Spróbuj ponownie później.")
+        try:
+            data_json = self._qualification_data(submission)
+            retry_state = data_json.get("_pdf_generation_retry") or {}
+            submission_data = {
+                key: value for key, value in data_json.items() if not str(key).startswith("_")
+            }
+            pdf_filename = str(retry_state.get("pdf_filename") or self.build_pdf_filename(
+                str(submission.get("form_slug") or ""), submission_id,
+            ))
+            try:
+                self._generate_form_pdf(
+                    form_slug=str(submission.get("form_slug") or ""),
+                    form_config=form_config,
+                    submission_id=submission_id,
+                    submission_data=submission_data,
+                    submission=submission,
+                    pdf_filename=pdf_filename,
+                )
+            except Exception as exc:
+                self._mark_pdf_generation_failed(
+                    submission,
+                    pdf_filename=pdf_filename,
+                    error=exc,
+                    continuation=str(retry_state.get("continuation") or "submission"),
+                )
+                raise
+
+            restored_data = dict(data_json)
+            restored_data.pop("_pdf_generation_retry", None)
+            restored_status = str(retry_state.get("previous_process_status") or ProcessStatus.FORM_SUBMITTED.value)
+            restored_updates = {
+                "process_status": restored_status,
+                "workflow_step": str(retry_state.get("previous_workflow_step") or step),
+                "workflow_stage": str(retry_state.get("previous_workflow_stage") or step),
+                "data_json": restored_data,
+            }
+            if not self.submission_repository.update(submission_id, restored_updates):
+                raise RuntimeError("Nie udało się przywrócić procesu po wygenerowaniu PDF.")
+            submission.update(restored_updates)
+            qualification = restored_data.get("_qualification") or {}
+            if str(retry_state.get("continuation") or "submission") == "correction":
+                auto_rejected, blocked_by_condition = self._continue_correction_after_pdf(
+                    submission,
+                    form_config,
+                    qualification,
+                )
+            else:
+                auto_rejected = self._continue_submission_after_pdf(submission, form_config, qualification)
+                blocked_by_condition = auto_rejected
+            return self._build_submission_result(
+                submission=submission,
+                form_config=form_config,
+                pdf_filename=pdf_filename,
+                qualification=qualification,
+                auto_rejected=auto_rejected,
+                can_continue=not blocked_by_condition,
+            )
+        finally:
+            release(submission_id, token)
+
+    def _mark_pdf_generation_failed(
+        self,
+        submission: dict,
+        *,
+        pdf_filename: str,
+        error: Exception,
+        continuation: str = "submission",
+    ) -> None:
+        data_json = self._qualification_data(submission)
+        existing_retry = data_json.get("_pdf_generation_retry") or {}
+        retry_state = {
+            "pdf_filename": pdf_filename,
+            "previous_process_status": str(
+                existing_retry.get("previous_process_status")
+                or submission.get("process_status")
+                or ProcessStatus.FORM_SUBMITTED.value
+            ),
+            "previous_workflow_step": str(
+                existing_retry.get("previous_workflow_step") or submission.get("workflow_step") or "submission"
+            ),
+            "previous_workflow_stage": str(
+                existing_retry.get("previous_workflow_stage") or submission.get("workflow_stage") or "submission"
+            ),
+            "continuation": str(existing_retry.get("continuation") or continuation),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        updates = {
+            "process_status": ProcessStatus.PDF_GENERATION_FAILED.value,
+            "pdf_filename": "",
+            "data_json": {**data_json, "_pdf_generation_retry": retry_state},
+        }
+        if not self.submission_repository.update(submission["submission_id"], updates):
+            raise RuntimeError("Nie udało się zapisać stanu błędu generowania PDF.") from error
+        submission.update(updates)
+        logger.error(
+            "submission_pdf_generation_failed submission_id=%s error_type=%s",
+            submission["submission_id"],
+            type(error).__name__,
+        )
+
+    def _continue_submission_after_pdf(self, submission: dict, form_config: dict, qualification: dict) -> bool:
+        self._initialize_submission_operations(submission["submission_id"], form_config)
         failed_conditions = qualification.get("failed_conditions", [])
-
-        auto_rejected = any(
-            condition.get("failure_action") == "auto_reject"
-            for condition in failed_conditions
-        )
-
+        auto_rejected = any(item.get("failure_action") == "auto_reject" for item in failed_conditions)
         requires_officer_decision = any(
-            condition.get("failure_action") == "officer_decision"
-            for condition in failed_conditions
+            item.get("failure_action") == "officer_decision" for item in failed_conditions
         )
-
         if auto_rejected:
             self._auto_reject_submission(
                 submission,
@@ -183,29 +335,14 @@ class SubmissionService:
                 previous_status=str(submission.get("process_status") or ProcessStatus.FORM_SUBMITTED.value),
             )
         elif requires_officer_decision:
-            self._mark_officer_decision_required(
-                submission,
-                qualification,
-            )
+            self._mark_officer_decision_required(submission, qualification)
         elif self.workflow_service:
             self.workflow_service.enter_submission_review(submission, form_config)
         if self.mail_dispatch_service:
             try:
-                self.mail_dispatch_service.dispatch_submission_received(submission_id)
+                self.mail_dispatch_service.dispatch_submission_received(submission["submission_id"])
             except Exception as exc:
-                current_app.logger.exception(
-                    "submission_received_mail_failed error=%s",
-                    exc.__class__.__name__,
-                )
-
-        self._generate_form_pdf(
-            form_slug=form_slug,
-            form_config=form_config,
-            submission_id=submission_id,
-            submission_data=submission_data,
-            submission=submission,
-            pdf_filename=pdf_filename,
-        )
+                current_app.logger.exception("submission_received_mail_failed error=%s", exc.__class__.__name__)
         admin_notification = form_config.get("new_submission_notification") or {}
         if (
             self.mail_dispatch_service
@@ -214,37 +351,153 @@ class SubmissionService:
             and hasattr(self.mail_dispatch_service, "dispatch_new_submission_notification")
         ):
             try:
-                self.mail_dispatch_service.dispatch_new_submission_notification(submission_id)
+                self.mail_dispatch_service.dispatch_new_submission_notification(submission["submission_id"])
             except Exception as exc:
                 current_app.logger.exception("new_submission_notification_failed error=%s", exc.__class__.__name__)
+        return auto_rejected
 
-        result = {
+    def _continue_correction_after_pdf(
+        self,
+        submission: dict,
+        form_config: dict,
+        qualification: dict,
+    ) -> tuple[bool, bool]:
+        failed_conditions = qualification.get("failed_conditions", [])
+        auto_rejected = any(
+            condition.get("failure_action") == "auto_reject"
+            for condition in failed_conditions
+        )
+        requires_officer_decision = any(
+            condition.get("failure_action") == "officer_decision"
+            for condition in failed_conditions
+        )
+        blocked_by_condition = (
+            auto_rejected
+            or requires_officer_decision
+            or any(
+                bool(condition.get("cancel_process_on_failure"))
+                for condition in failed_conditions
+            )
+        )
+        submission_id = submission["submission_id"]
+        form_slug = submission["form_slug"]
+        resume_status = str(submission.get("process_status") or ProcessStatus.FORM_SUBMITTED.value)
+        resume_step = str(submission.get("workflow_step") or "submission")
+        initial_step = str((form_config.get("workflow") or {}).get("initial_step") or "submission")
+
+        if auto_rejected:
+            self._auto_reject_submission(
+                submission,
+                qualification,
+                previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                previous_step="returned_for_correction",
+            )
+        elif requires_officer_decision:
+            self._mark_officer_decision_required(
+                submission,
+                qualification,
+                previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                previous_step="returned_for_correction",
+            )
+        else:
+            self.submission_repository.record_workflow_event(
+                submission_id,
+                {
+                    "previous_status": ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                    "new_status": resume_status,
+                    "previous_step": "returned_for_correction",
+                    "new_step": resume_step,
+                    "actor_role": "participant",
+                    "reason": "correction_resubmitted",
+                    "source": "correction_resubmitted",
+                },
+            )
+            if self.audit_log_service:
+                self.audit_log_service.log_event(
+                    "CORRECTION_RESUBMITTED",
+                    submission_id,
+                    form_slug,
+                    old_value=ProcessStatus.RETURNED_FOR_CORRECTION.value,
+                    new_value=resume_status,
+                )
+            if self.mail_dispatch_service:
+                try:
+                    self.mail_dispatch_service.dispatch_submission_received(submission_id)
+                except Exception as exc:
+                    current_app.logger.exception(
+                        "correction_received_mail_failed error=%s",
+                        exc.__class__.__name__,
+                    )
+            if resume_step == initial_step and self.workflow_service:
+                self.workflow_service.enter_submission_review(submission, form_config)
+        return auto_rejected, blocked_by_condition
+
+    def _initialize_submission_operations(self, submission_id: str, form_config: dict) -> None:
+        if self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
+            self.workflow_sla_service.initialize_submission(
+                self.submission_repository.session_factory,
+                public_submission_id=submission_id,
+                form_config=form_config,
+            )
+        if self.submission_assignment_service and hasattr(self.submission_repository, "session_factory"):
+            try:
+                self.submission_assignment_service.auto_assign_created(
+                    self.submission_repository.session_factory,
+                    submission_id=submission_id,
+                    form_config=form_config,
+                )
+            except Exception:
+                logger.exception(
+                    "Automatyczny przydział zgłoszenia %s nie powiódł się; sprawa pozostaje w kolejce.",
+                    submission_id,
+                )
+
+    def _build_submission_result(
+        self,
+        *,
+        submission: dict,
+        form_config: dict,
+        pdf_filename: str,
+        qualification: dict,
+        auto_rejected: bool = False,
+        processing_pending: bool = False,
+        can_continue: bool | None = None,
+    ) -> dict:
+        submission_id = submission["submission_id"]
+        form_slug = submission["form_slug"]
+        return {
             "submission_id": submission_id,
             "access_token": submission.get("access_token", ""),
             "form_slug": form_slug,
             "pdf_filename": pdf_filename,
-            "pdf_url": self.document_service.build_download_url(submission, pdf_filename) if self.document_service else "",
+            "pdf_url": (
+                self.document_service.build_download_url(submission, pdf_filename)
+                if self.document_service and pdf_filename and not processing_pending else ""
+            ),
             "signature_request_id": "mobywatel-manual",
             "signature_status": "manual",
             "signed_pdf_filename": "",
             "signed_pdf_url": None,
-            "upload_url": url_for("documents.upload_signed_pdf", slug=form_slug, submission_id=submission_id),
+            "upload_url": (
+                url_for("documents.upload_signed_pdf", slug=form_slug, submission_id=submission_id)
+                if not processing_pending else ""
+            ),
             "form_title": form_config["title"],
             "verification": None,
             "auto_rejected": auto_rejected,
-            "qualification_message": qualification.get("user_message") or (
-                "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
-                if auto_rejected
-                else ""
+            "processing_pending": processing_pending,
+            "qualification_message": (
+                "Zgłoszenie zostało zapisane. Dokument PDF oczekuje na bezpieczne ponowienie przygotowania."
+                if processing_pending
+                else qualification.get("user_message") or (
+                    "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
+                    if auto_rejected else ""
+                )
             ),
-            "can_continue": not auto_rejected,
-        }
-        return {
-            "ok": True,
-            "errors": {},
-            "values": submission_data,
-            "submission": submission,
-            "result": result,
+            "can_continue": (
+                not processing_pending
+                and (not auto_rejected if can_continue is None else can_continue)
+            ),
         }
 
     def validate_form(self, form_config: dict, request_form) -> dict:
@@ -280,6 +533,7 @@ class SubmissionService:
         dispatch_received: bool = True,
         start_workflow: bool = True,
         form_version_id: int | None = None,
+        initialize_operations: bool = True,
     ) -> dict:
         submission_id = submission_id or str(uuid4())
         document_ids = self._enabled_document_ids(form_config)
@@ -313,21 +567,8 @@ class SubmissionService:
             "workflow_stage": initial_step,
         }
         self.submission_repository.create(submission)
-        if self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
-            self.workflow_sla_service.initialize_submission(
-                self.submission_repository.session_factory,
-                public_submission_id=submission_id,
-                form_config=form_config,
-            )
-        if self.submission_assignment_service and hasattr(self.submission_repository, "session_factory"):
-            try:
-                self.submission_assignment_service.auto_assign_created(
-                    self.submission_repository.session_factory,
-                    submission_id=submission_id,
-                    form_config=form_config,
-                )
-            except Exception:
-                logger.exception("Automatyczny przydział zgłoszenia %s nie powiódł się; sprawa pozostaje w kolejce.", submission_id)
+        if initialize_operations:
+            self._initialize_submission_operations(submission_id, form_config)
         logger.info(
             "submission_created",
             extra={"event": "submission_created", "operation": "submission_create"},
@@ -452,83 +693,43 @@ class SubmissionService:
             workflow_step=str(existing.get("workflow_step") or "returned_for_correction"),
         )
         refreshed = {**existing, **updates}
-        failed_conditions = qualification.get(
-            "failed_conditions",
-            [],
-        )
-
-        auto_rejected = any(
-            condition.get("failure_action") == "auto_reject"
-            for condition in failed_conditions
-        )
-
-        requires_officer_decision = any(
-            condition.get("failure_action") == "officer_decision"
-            for condition in failed_conditions
-        )
-        blocked_by_condition = (
-            auto_rejected
-            or requires_officer_decision
-            or any(
-                bool(condition.get("cancel_process_on_failure"))
-                for condition in failed_conditions
-            )
-        )
-
-        if auto_rejected:
-            self._auto_reject_submission(
-                refreshed,
-                qualification,
-                previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                previous_step="returned_for_correction",
-            )
-        elif requires_officer_decision:
-            self._mark_officer_decision_required(
-                refreshed,
-                qualification,
-                previous_status=ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                previous_step="returned_for_correction",
-            )
-
-        else:
-            self.submission_repository.record_workflow_event(
-                submission_id,
-                {
-                    "previous_status": ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                    "new_status": resume_status,
-                    "previous_step": "returned_for_correction",
-                    "new_step": updates["workflow_step"],
-                    "actor_role": "participant",
-                    "reason": "correction_resubmitted",
-                    "source": "correction_resubmitted",
-                },
-            )
-            if self.audit_log_service:
-                self.audit_log_service.log_event(
-                    "CORRECTION_RESUBMITTED",
-                    submission_id,
-                    form_slug,
-                    old_value=ProcessStatus.RETURNED_FOR_CORRECTION.value,
-                    new_value=resume_status,
-                )
-            if self.mail_dispatch_service:
-                try:
-                    self.mail_dispatch_service.dispatch_submission_received(submission_id)
-                except Exception as exc:
-                    current_app.logger.exception("correction_received_mail_failed error=%s", exc.__class__.__name__)
-            if resume_step == initial_step and self.workflow_service:
-                self.workflow_service.enter_submission_review(refreshed, form_config)
-
         self.storage.ensure_form_output_structure(form_slug)
         base_filename = Path(self.build_pdf_filename(form_slug, submission_id))
         pdf_filename = f"{base_filename.stem}-korekta-{uuid4().hex[:8]}{base_filename.suffix}"
-        self._generate_form_pdf(
-            form_slug=form_slug,
-            form_config=form_config,
-            submission_id=submission_id,
-            submission_data=submission_data,
-            submission=refreshed,
-            pdf_filename=pdf_filename,
+        try:
+            self._generate_form_pdf(
+                form_slug=form_slug,
+                form_config=form_config,
+                submission_id=submission_id,
+                submission_data=submission_data,
+                submission=refreshed,
+                pdf_filename=pdf_filename,
+            )
+        except Exception as exc:
+            self._mark_pdf_generation_failed(
+                refreshed,
+                pdf_filename=pdf_filename,
+                error=exc,
+                continuation="correction",
+            )
+            return {
+                "ok": True,
+                "errors": {},
+                "values": submission_data,
+                "submission": refreshed,
+                "result": self._build_submission_result(
+                    submission=refreshed,
+                    form_config=form_config,
+                    pdf_filename="",
+                    qualification=qualification,
+                    processing_pending=True,
+                ),
+            }
+
+        auto_rejected, blocked_by_condition = self._continue_correction_after_pdf(
+            refreshed,
+            form_config,
+            qualification,
         )
         return {
             "ok": True,
@@ -1196,6 +1397,9 @@ class SubmissionService:
                     or bool(workflow_document_action(step, document_id))
                 )
             )
+            can_view_status_details = True
+        if str(row.get("process_status") or "") == ProcessStatus.PDF_GENERATION_FAILED.value:
+            can_sign_documents = False
             can_view_status_details = True
         return {
             "submission_id": submission_id,

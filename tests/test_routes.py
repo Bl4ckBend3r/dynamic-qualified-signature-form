@@ -424,6 +424,41 @@ def test_show_result_does_not_render_stored_access_token(client, app, valid_form
     assert row["access_token"] not in html
 
 
+def test_pdf_generation_failed_result_disables_download_and_signing(client, app):
+    row = {
+        "submission_id": "pdf-failed-1",
+        "form_slug": "formularz_zgloszeniowy",
+        "form_name": "Formularz zgłoszeniowy",
+        "access_token": "secret-token",
+        "process_status": "PDF_GENERATION_FAILED",
+        "workflow_step": "submission",
+        "pdf_filename": "",
+    }
+    app.testing_storage.csv_rows = [row]
+
+    response = client.get(
+        "/result/formularz_zgloszeniowy/pdf-failed-1?token=secret-token"
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Oczekuje na przygotowanie" in html
+    assert "Pobierz PDF" not in html
+    assert "Przejdź do dokumentów do podpisania" not in html
+    assert "Utworzono" not in html
+
+    upload = client.post(
+        "/upload-signed/formularz_zgloszeniowy/pdf-failed-1",
+        data={
+            "access_token": "secret-token",
+            "signed_pdf": (io.BytesIO(b"%PDF-1.4\nsigned"), "signed.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 302
+    assert not any("pdf-failed-1-signed.pdf" in path for path in app.testing_storage.saved_pdfs)
+
+
 def test_download_pdf_returns_generated_pdf(client, app, valid_form_data, monkeypatch):
     import app as app_module
 

@@ -1120,6 +1120,67 @@ def test_admin_submission_edit_requires_scoped_edit_and_sensitive_permissions(ad
     }).status_code == 403
 
 
+def test_admin_can_retry_failed_submission_pdf(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={"title": "PDF retry", "fields": []})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="pdf-retry-admin",
+            form_slug="sample_form",
+            process_status="PDF_GENERATION_FAILED",
+            workflow_step="submission",
+            workflow_stage="submission",
+            data_json={"_pdf_generation_retry": {"pdf_filename": "sample_form-pdf-retry-admin.pdf"}},
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_service, "_render_form_pdf_bytes",
+        lambda *_args, **_kwargs: b"%PDF-1.4\nadmin retry",
+    )
+    monkeypatch.setattr(
+        admin_app.extensions["services"].mail_dispatch_service,
+        "dispatch_submission_received",
+        lambda *_args, **_kwargs: None,
+    )
+    login(admin_client)
+
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert detail.status_code == 200
+    assert "Ponów generowanie PDF" in detail.get_data(as_text=True)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-pdf",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert response.status_code == 302
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        files = db.execute(select(SubmissionFile).where(
+            SubmissionFile.submission_id == submission_pk,
+            SubmissionFile.document_type == "form_pdf",
+        )).scalars().all()
+        assert saved.process_status == "FORM_SUBMITTED"
+        assert saved.pdf_filename == "sample_form-pdf-retry-admin.pdf"
+        assert "_pdf_generation_retry" not in saved.data_json
+        assert len(files) == 1 and files[0].filename == saved.pdf_filename
+
+    repeated = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-pdf",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    assert repeated.status_code == 302
+    with factory() as db:
+        repeated_files = db.execute(select(SubmissionFile).where(
+            SubmissionFile.submission_id == submission_pk,
+            SubmissionFile.document_type == "form_pdf",
+        )).scalars().all()
+        assert len(repeated_files) == 1
+
+
 def test_admin_submission_edit_requires_confirmation_for_qualification_change(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     form_id = create_form(admin_app, definition_json={

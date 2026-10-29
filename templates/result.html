@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% set auto_rejected = result.auto_rejected|default(false) %}
+{% set processing_pending = result.processing_pending|default(false) %}
 {% set qualification_message = result.qualification_message|default('', true) %}
 {% set result_primary_message = (qualification_message or result.message|default('', true) or "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.") if auto_rejected else qualification_message %}
 
@@ -80,7 +81,8 @@
 
         <div class="result-item">
             <span class="result-label">Status PDF</span>
-            <span class="badge badge-success">Utworzono</span>
+            {% if processing_pending %}<span class="badge badge-warning">Oczekuje na przygotowanie</span>
+            {% else %}<span class="badge badge-success">Utworzono</span>{% endif %}
         </div>
 
         {% if has_signature_flow %}
@@ -98,7 +100,7 @@
     <div class="download-links">
         {% if result.pdf_url %}<a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>{% endif %}
 
-        {% if result.can_continue|default(true) and participant_credential %}<a
+        {% if not processing_pending and result.can_continue|default(true) and participant_credential %}<a
             class="btn-primary"
             href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=participant_credential) }}"
         >
@@ -110,7 +112,7 @@
         {% endif %}
     </div>
 
-    {% if has_signature_flow and signature_mode == "trusted_profile" %}
+    {% if not processing_pending and has_signature_flow and signature_mode == "trusted_profile" %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Podpis w mObywatelu</h3>
@@ -125,7 +127,7 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow and signature_mode == "qualified" %}
+    {% if not processing_pending and has_signature_flow and signature_mode == "qualified" %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Podpis kwalifikowany</h3>
@@ -138,7 +140,7 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow and signature_mode == "optional" %}
+    {% if not processing_pending and has_signature_flow and signature_mode == "optional" %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Podpis dokumentu</h3>
@@ -151,7 +153,7 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow and participant_credential %}
+    {% if not processing_pending and has_signature_flow and participant_credential %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Wgraj podpisany PDF</h3>

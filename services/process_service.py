@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 class ProcessStatus(StrEnum):
     FORM_SUBMITTED = "FORM_SUBMITTED"
+    PDF_GENERATION_FAILED = "PDF_GENERATION_FAILED"
     AUTO_REJECTED = "AUTO_REJECTED"
     RETURNED_FOR_CORRECTION = "RETURNED_FOR_CORRECTION"
     WAITING_FOR_OFFICER_DECISION = "WAITING_FOR_OFFICER_DECISION"
@@ -252,6 +253,7 @@ def build_process_state(row: Mapping[str, Any]) -> ProcessState:
         and is_declaration_required(row)
     )
     blocked_statuses = {
+        ProcessStatus.PDF_GENERATION_FAILED,
         ProcessStatus.AUTO_REJECTED,
         ProcessStatus.RETURNED_FOR_CORRECTION,
         ProcessStatus.AGREEMENT_BLOCKED,

@@ -43,6 +43,12 @@ def test_transition_matrix_for_target_statuses():
     assert not can_transition("SUBMITTED", "COMPLETED")
 
 
+def test_pdf_generation_failure_has_controlled_label_and_resume_transition():
+    assert get_status_label("PDF_GENERATION_FAILED") == "Zgłoszenie zapisane — dokument wymaga ponowienia"
+    assert can_transition("PDF_GENERATION_FAILED", "SUBMITTED")
+    assert not can_transition("PDF_GENERATION_FAILED", "COMPLETED")
+
+
 def test_export_status_catalog_for_frontend_contains_legacy_mappings():
     catalog = export_status_catalog_for_frontend()
 

@@ -49,6 +49,18 @@
         </div>
     </div>
 </header>
+{% if submission.process_status == 'PDF_GENERATION_FAILED' %}
+<div class="admin-alert admin-alert-warning">
+    <strong>Dokument PDF nie został przygotowany.</strong>
+    Dane zgłoszenia i załączniki zostały zachowane, a workflow i powiadomienia są wstrzymane.
+    {% if can_manage_documents %}
+    <form method="post" action="{{ url_for('admin.submission_pdf_retry', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <button class="admin-button" type="submit">Ponów generowanie PDF</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 <div class="admin-submission-layout">
 <div class="admin-submission-main">

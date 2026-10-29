@@ -827,6 +827,39 @@ def submission_detail(form_id: int, submission_pk: int):
         )
 
 
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/retry-pdf")
+@login_required
+def submission_pdf_retry(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_manage_documents")
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        if submission.process_status != ProcessStatus.PDF_GENERATION_FAILED.value:
+            flash("To zgłoszenie nie oczekuje na ponowienie generowania PDF.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        public_submission_id = submission.submission_id
+        form_config = _submission_form_config(db, form, submission)
+
+    try:
+        current_app.extensions["services"].submission_service.retry_form_pdf_generation(
+            public_submission_id,
+            form_config,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception as exc:
+        current_app.logger.error(
+            "submission_pdf_retry_failed submission_id=%s error_type=%s",
+            public_submission_id,
+            type(exc).__name__,
+        )
+        flash("Nie udało się ponownie przygotować PDF. Stan zgłoszenia został zachowany.", "error")
+    else:
+        flash("PDF został przygotowany, a proces zgłoszenia wznowiony.", "success")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/edit", methods=["GET", "POST"])
 @login_required
 def submission_edit(form_id: int, submission_pk: int):

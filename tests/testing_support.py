@@ -31,6 +31,9 @@ class InMemoryStorage:
     def write_bytes(self, path, content, content_type=None):
         self.direct_files[path] = bytes(content)
 
+    def write_text(self, path, content, content_type=None):
+        self.direct_files[path] = content.encode("utf-8")
+
     def read_bytes(self, path):
         if path not in self.direct_files:
             raise FileNotFoundError(path)

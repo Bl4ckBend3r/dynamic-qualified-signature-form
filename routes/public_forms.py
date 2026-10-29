@@ -1064,7 +1064,11 @@ def logo_asset(logo_id: int, filename: str):
         logo_path = Path(logo.storage_path)
         if not logo_path.exists():
             abort(404)
-        return send_file(logo_path, mimetype=logo.mime_type or None)
+        response = send_file(logo_path, mimetype=logo.mime_type or None)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if logo.mime_type == "image/svg+xml":
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        return response
 
 
 def list_public_db_forms() -> list[dict]:

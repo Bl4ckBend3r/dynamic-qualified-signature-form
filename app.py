@@ -72,20 +72,6 @@ def _apply_runtime_env_overrides(app: Flask, *, enabled: bool) -> None:
             in {"1", "true", "yes", "tak", "on"}
         )
 
-    if "LOCAL_STORAGE_PATH" in os.environ:
-        app.config["LOCAL_STORAGE_PATH"] = os.getenv(
-            "LOCAL_STORAGE_PATH",
-            "./data/storage",
-        ).strip()
-
-    if "STORAGE_FAILOVER_RETRY_SECONDS" in os.environ:
-        app.config["STORAGE_FAILOVER_RETRY_SECONDS"] = int(
-            os.getenv(
-                "STORAGE_FAILOVER_RETRY_SECONDS",
-                "30",
-            )
-        )
-
     if "DATABASE_URL" in os.environ:
         app.config["DATABASE_URL"] = os.getenv("DATABASE_URL", "").strip()
     if "AUTO_CREATE_DB_SCHEMA" in os.environ:

@@ -3762,6 +3762,30 @@ def test_super_admin_manages_import_instruction_and_download_is_protected(admin_
         assert db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one_or_none() is None
 
 
+def test_html_import_instruction_is_downloaded_as_attachment(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    page = admin_client.get("/admin/site/documents").get_data(as_text=True)
+    token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        "/admin/site/documents",
+        data={
+            "csrf_token": token,
+            "document_type": "form_import_instruction",
+            "document_file": (io.BytesIO(b"<script>alert(1)</script>"), "instruction.html", "text/html"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        document_id = db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one().id
+
+    download = admin_client.get(f"/admin/site/documents/{document_id}/file")
+    assert download.status_code == 200
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+    assert download.headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
     create_user(admin_app)
     definition = {
@@ -5846,6 +5870,33 @@ def test_super_admin_can_toggle_logo_and_fetch_asset(admin_app, admin_client):
         logo = db.get(Logo, logo_id)
         assert logo.active is False
     assert admin_client.get(f"/admin/logos/{logo_id}/asset").status_code == 200
+
+
+def test_svg_logo_assets_are_sandboxed(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "logo.svg"
+    logo_path.parent.mkdir(parents=True, exist_ok=True)
+    logo_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="SVG",
+            filename="logo.svg",
+            storage_path=str(logo_path),
+            mime_type="image/svg+xml",
+            size_bytes=logo_path.stat().st_size,
+            checksum_sha256="abc",
+            active=True,
+        )
+        db.add(logo)
+        db.commit()
+        logo_id = logo.id
+
+    for path in (f"/admin/logos/{logo_id}/asset", f"/assets/logos/{logo_id}/logo.svg"):
+        response = admin_client.get(path)
+        assert response.status_code == 200
+        assert response.headers["Content-Security-Policy"].startswith("sandbox")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
 
 
 def test_regular_admin_cannot_toggle_logo(admin_app, admin_client):

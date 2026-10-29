@@ -92,7 +92,11 @@ def logo_asset(logo_id: int):
         logo_path = logo_asset_path_for_user(logo, g.admin_user, manage_all=has_permission(db, "can_manage_site"))
         if not logo_path:
             abort(404)
-        return send_file(logo_path, mimetype=logo.mime_type or None)
+        response = send_file(logo_path, mimetype=logo.mime_type or None)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if logo.mime_type == "image/svg+xml":
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        return response
 
 
 @bp.post("/logos/<int:logo_id>/delete")

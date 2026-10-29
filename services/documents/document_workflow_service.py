@@ -5,6 +5,7 @@ from copy import deepcopy
 from hashlib import sha256
 from uuid import uuid4
 import json
+import logging
 import time
 from signature_verifier import signature_verification_result
 
@@ -27,6 +28,9 @@ from flask import current_app
 from services.upload_validation import validate_pdf_upload
 from services.workflow_state_service import DocumentState
 from services.training_service import parse_training_snapshots
+
+
+logger = logging.getLogger(__name__)
 
 
 DOCUMENT_SUBSTATES = {
@@ -433,7 +437,7 @@ class DocumentWorkflowService:
                         if name:
                             return name
             except Exception:
-                pass
+                logger.warning("training_name_snapshot_lookup_failed", exc_info=True)
         for item in parse_training_snapshots(row.get("selected_trainings")):
             if str(item.get("id") or "") == training_key:
                 name = str(item.get("name") or "").strip()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import logging
 from pathlib import PurePosixPath
 from uuid import uuid4
 from typing import Protocol
@@ -9,6 +10,9 @@ from typing import Protocol
 from form_loader import evaluate_visible_if
 from services.upload_validation import UploadValidationError, validate_attachment_upload
 from signature_verifier import signature_verification_result, verify_signed_pdf_bytes
+
+
+logger = logging.getLogger(__name__)
 
 
 ATTACHMENT_DOCUMENT_TYPE = "submission_attachment"
@@ -282,7 +286,7 @@ class SubmissionAttachmentService:
                 try:
                     self.storage.delete(path, missing_ok=True)
                 except Exception:
-                    pass
+                    logger.warning("submission_attachment_cleanup_failed", exc_info=True)
             raise
 
     def _persist_legacy(self, form_slug, submission_id, attachments, workflow_step, source):

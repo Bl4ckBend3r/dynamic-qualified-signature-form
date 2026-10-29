@@ -3106,6 +3106,21 @@ a.admin-stat:focus-visible {
   font-size: 0.94rem;
   line-height: 1.5;
 }
+.training-section-heading__content {
+  min-width: 0;
+}
+.training-section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--admin-space-2);
+}
+.training-section-actions__active {
+  min-height: 38px;
+  padding: 0 var(--admin-space-2);
+  white-space: nowrap;
+}
 .training-edit-form,
 .training-message-form,
 .training-attendance-form,
@@ -3382,6 +3397,10 @@ a.admin-stat:focus-visible {
   .training-subcard__heading {
     align-items: stretch;
     flex-direction: column;
+  }
+  .training-section-actions {
+    justify-content: flex-start;
+    width: 100%;
   }
   .training-edit-grid,
   .training-message-form,

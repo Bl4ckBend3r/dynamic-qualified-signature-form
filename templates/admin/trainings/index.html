@@ -71,6 +71,8 @@
         {% set panel_id = 'training-panel-' ~ loop.index %}
         {% set is_open = open_training_id == training.id %}
         {% set can_edit_training = can_edit_catalog and training.in_catalog and not training.get('archived') %}
+        {% set edit_form_id = 'training-edit-form-' ~ loop.index %}
+        {% set delete_form_id = 'training-delete-form-' ~ loop.index %}
         <article class="training-row{% if is_open %} is-open{% endif %}" id="training-{{ training.id }}" data-training-row>
             <div class="training-row__header">
                 <button class="training-row__toggle" type="button" aria-expanded="{{ 'true' if is_open else 'false' }}" aria-controls="{{ panel_id }}" data-training-toggle>
@@ -94,12 +96,19 @@
             </dl>
 
             <div class="training-details" id="{{ panel_id }}" data-training-panel {% if not is_open %}hidden{% endif %}>
-                <div class="training-section-heading">
-                    <div><h2>Szczegóły szkolenia</h2><p>ID: <code>{{ training.id }}</code>{% if training.get('version') %} · wersja {{ training.version }}{% endif %}</p></div>
+                <div class="training-section-heading training-details-heading">
+                    <div class="training-section-heading__content"><h2>Szczegóły szkolenia</h2><p>ID: <code>{{ training.id }}</code>{% if training.get('version') %} · wersja {{ training.version }}{% endif %}</p></div>
+                    {% if can_edit_training %}
+                    <div class="training-section-actions">
+                        <label class="training-check training-section-actions__active"><input type="checkbox" name="training_item_active" value="0" form="{{ edit_form_id }}" {% if training.get('active', true) %}checked{% endif %}><span>Aktywne</span></label>
+                        <button class="admin-button" type="submit" form="{{ edit_form_id }}">Zapisz</button>
+                        <button class="admin-button-danger" type="submit" form="{{ delete_form_id }}">Usuń</button>
+                    </div>
+                    {% endif %}
                 </div>
 
                 {% if can_edit_training %}
-                <form class="training-edit-form" method="post" action="{{ url_for('admin.training_catalog_update_inline', form_id=form.id, training_id=training.id) }}" data-training-edit-form>
+                <form class="training-edit-form" id="{{ edit_form_id }}" method="post" action="{{ url_for('admin.training_catalog_update_inline', form_id=form.id, training_id=training.id) }}" data-training-edit-form>
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="training_item_id" value="{{ training.id }}">
                     <input type="hidden" name="training_active_present" value="1">
@@ -110,7 +119,6 @@
                         <label><span>Liczba miejsc </span><input type="number" name="training_item_capacity" value="{{ training.capacity if training.capacity is not none else '' }}" min="0" step="1" required></label>
                         <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ training.sort_order or loop.index }}" min="0" step="1"></label>
                         {{ selection_group_editor(training.selection_group or '') }}
-                        <label class="training-check"><input type="checkbox" name="training_item_active" value="0" {% if training.get('active', true) %}checked{% endif %}><span>Aktywne i dostępne dla nowych wyborów</span></label>
                         <label class="training-field-wide"><span>Opis</span><textarea name="training_item_description" rows="4">{{ training.description or '' }}</textarea></label>
                         <label class="training-field-wide"><span>Komentarz administratora</span><textarea name="training_item_admin_comment" rows="3">{{ training.admin_comment or '' }}</textarea></label>
                         <label class="training-field-wide"><span>Komentarz przy małej liczbie miejsc</span><textarea name="training_item_low_seats_comment" rows="3">{{ training.low_seats_comment or '' }}</textarea></label>
@@ -142,9 +150,11 @@
 
                     <div class="training-form-actions">
                         <button class="admin-button-secondary" type="reset" data-training-cancel>Anuluj</button>
-                        {% if not training.get('active', true) %}<button class="admin-button-secondary" type="submit" name="catalog_action" value="restore">Przywróć</button>{% endif %}
-                        <button class="admin-button" type="submit">Zapisz zmiany</button>
                     </div>
+                </form>
+                <form id="{{ delete_form_id }}" method="post" action="{{ url_for('admin.training_catalog_delete_inline', form_id=form.id, training_id=training.id) }}"
+                      data-admin-confirm-message="Czy na pewno chcesz usunąć szkolenie „{{ training.name }}”? Jeżeli szkolenie było już używane w zgłoszeniach, zostanie zarchiwizowane zamiast trwale usunięte.">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                 </form>
                 {% else %}
                 <div class="training-readonly-state">

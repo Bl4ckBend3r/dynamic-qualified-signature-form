@@ -210,6 +210,8 @@ def training_catalog_update_inline(form_id: int, training_id: str):
             if request.form.get("catalog_action") == "restore":
                 parsed[0]["active"] = True
             updated_field = deepcopy(current_field or {})
+            if not current_item.get("active", True) and parsed[0].get("active"):
+                updated_field["enabled"] = True
             updated_field["catalog"] = [
                 parsed[0]
                 if isinstance(item, dict)
@@ -256,6 +258,54 @@ def training_catalog_update_inline(form_id: int, training_id: str):
             db.rollback()
             flash(str(exc) or "Niepoprawne dane szkolenia.", "error")
     return redirect(redirect_target)
+
+
+@bp.post("/forms/<int:form_id>/training-management/<training_id>/delete")
+@login_required
+def training_catalog_delete_inline(form_id: int, training_id: str):
+    validate_csrf()
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_edit_form")
+        db.refresh(form, with_for_update=True)
+        current_definition = deepcopy(form.definition_json or {})
+        current_field = TrainingCatalogService.get_training_field(current_definition)
+        current_catalog = list((current_field or {}).get("catalog") or [])
+        current_item = next((item for item in current_catalog
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == training_id), None)
+        if current_item is None:
+            abort(404)
+        if current_item.get("archived"):
+            abort(409, description="Archiwalne szkolenie jest tylko do odczytu.")
+        try:
+            updated_field = deepcopy(current_field)
+            updated_field["catalog"] = [item for item in current_catalog
+                if not (isinstance(item, dict) and str(item.get("id") or "").strip() == training_id)]
+            updated_definition = deepcopy(current_definition)
+            TrainingCatalogService._replace_training_field(updated_definition, updated_field)
+            reason = str(request.form.get("training_item_change_reason") or "").strip()
+            catalog_service = TrainingCatalogService()
+            updated_definition, actions = catalog_service.reconcile_definition(
+                current_definition, updated_definition,
+                used_training_ids=_used_training_ids_for_form(db, form.slug),
+                removal_reasons={training_id: reason} if reason else {},
+                actor_id=g.admin_user.id,
+            )
+            action = next((item for item in actions if item.get("training_id") == training_id
+                           and item.get("action") in {"deleted", "archived"}), None)
+            if action is None:
+                raise ValueError("Nie udało się ustalić wyniku usunięcia szkolenia.")
+            errors = catalog_service.validate_field(catalog_service.get_training_field(updated_definition))
+            if errors:
+                raise ValueError(" ".join(errors))
+            form.definition_json = updated_definition
+            db.commit()
+            _audit_training_catalog_actions(form.slug, actions)
+            flash(("Szkolenie było używane w zgłoszeniach i zostało zarchiwizowane."
+                   if action["action"] == "archived" else "Szkolenie zostało usunięte."), "success")
+        except (TrainingManagementError, ValueError) as exc:
+            db.rollback()
+            flash(str(exc) or "Nie udało się usunąć szkolenia.", "error")
+    return redirect(url_for("admin.training_management", form_id=form_id))
 
 
 @bp.get("/forms/<int:form_id>/training-management/<training_id>")

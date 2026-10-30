@@ -127,6 +127,72 @@ def db_session_factory():
 
 from .auth import get_current_user, login_required, permission_required, role_required  # noqa: E402,F401
 
+@bp.get("/diagnostics")
+@login_required
+def diagnostics():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+
+    handler = current_app.extensions.get(
+        "runtime_log_buffer"
+    )
+
+    services = current_app.extensions.get(
+        "services"
+    )
+
+    storage = (
+        getattr(services, "storage", None)
+        if services is not None
+        else None
+    )
+
+    storage_type = (
+        type(storage).__name__
+        if storage is not None
+        else ""
+    )
+
+    storage_failover_enabled = bool(
+        storage is not None
+        and hasattr(storage, "primary")
+    )
+
+    storage_primary_type = ""
+
+    if storage_failover_enabled:
+        storage_primary_type = type(
+            storage.primary
+        ).__name__
+
+    from signature_verifier import (
+        check_signature_trust_configuration,
+    )
+
+    signature_status = (
+        check_signature_trust_configuration()
+    )
+
+    return render_template(
+        "admin/diagnostics.html",
+        runtime_logs_available=(
+            handler is not None
+        ),
+        runtime_logs_count=(
+            len(handler.records)
+            if handler is not None
+            else 0
+        ),
+        storage_type=storage_type,
+        storage_failover_enabled=(
+            storage_failover_enabled
+        ),
+        storage_primary_type=(
+            storage_primary_type
+        ),
+        signature_status=signature_status,
+    )
+
 
 @bp.get("/storage-diagnostics")
 @login_required
@@ -412,7 +478,7 @@ def runtime_logs():
     ).strip()
 
     endpoint_name = str(
-        request.args.get("endpoint") or ""
+        request.args.get("endpoint_filter") or ""
     ).strip()
 
     allowed_levels = {
@@ -522,15 +588,15 @@ def runtime_logs():
 
     if handler is not None:
         logs = handler.snapshot(
-        limit=limit,
-        level=level,
-        query=query,
-        logger_name=logger_name,
-        event_name=event_name,
-        endpoint_name=endpoint_name,
-        date_from=date_from,
-        date_to=date_to,
-    )
+            limit=limit,
+            level=level,
+            query=query,
+            logger_name=logger_name,
+            event_name=event_name,
+            endpoint_name=endpoint_name,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
         for entry in logs:
             try:
@@ -570,6 +636,9 @@ def runtime_logs():
         filters={
             "q": query,
             "level": level,
+            "logger": logger_name,
+            "event": event_name,
+            "endpoint_filter": endpoint_name,
             "limit": limit,
             "date_from": raw_from,
             "date_to": raw_to,

@@ -47,7 +47,7 @@
                 level=filters.level,
                 logger=filters.logger,
                 event=filters.event,
-                endpoint=filters.endpoint,
+                endpoint_filter=filters.endpoint_filter,
                 limit=filters.limit
               ) }}"
             >
@@ -118,8 +118,8 @@
           <span>Endpoint</span>
           <input
             type="text"
-            name="endpoint"
-            value="{{ filters.endpoint }}"
+            name="endpoint_filter"
+            value="{{ filters.endpoint_filter }}"
             placeholder="np. documents"
           >
         </label>

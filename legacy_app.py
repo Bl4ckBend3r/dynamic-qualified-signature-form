@@ -31,10 +31,11 @@ from werkzeug.exceptions import HTTPException
 
 from config import Config
 from form_loader import (
-    validate_submission,
-    extract_submission_data,
-    build_submission_view,
+    apply_pesel_derived_values,
     build_consents_view,
+    build_submission_view,
+    extract_submission_data,
+    validate_submission,
 )
 from pdf_generator import generate_pdf
 from signature_verifier import verify_signed_pdf
@@ -42,7 +43,6 @@ from services.nextcloud_storage import (
     NextcloudStorageError,
     create_nextcloud_storage_from_env,
 )
-from services.email_service import send_submission_decision_email
 from services.access_token_service import AccessTokenService
 from services.document_service import (
     DocumentType,
@@ -63,7 +63,6 @@ from services.process_service import (
     build_process_state,
     get_officer_decision,
     is_agreement_required,
-    should_send_officer_decision_email,
 )
 from services.training_agreement_service import (
     build_training_agreement_number as service_build_training_agreement_number,
@@ -357,6 +356,7 @@ def get_training_agreement_config(form_definition: dict) -> dict:
     return {
         "enabled": bool(config.get("enabled", True)),
         "template": config.get("template", ""),
+        "template_html": config.get("template_html", ""),
         "filename_pattern": config.get("filename_pattern") or "{first_name}_{last_name}-{training_id}-umowa.pdf",
         "signature_required": bool(config.get("signature_required", True)),
         "repeat_over": config.get("repeat_over") or "selected_trainings",
@@ -423,94 +423,6 @@ def build_signature_update_fields(
             else ProcessStatus.DECLARATION_SIGNATURE_INVALID.value
         ),
     }
-
-
-def build_decision_email_content(submission: dict, accepted: bool) -> tuple[str, str]:
-    template_name = (
-        "emails/decision_accepted.html"
-        if accepted
-        else "emails/decision_rejected.html"
-    )
-
-    html_body = render_template(
-        template_name,
-        submission_id=submission["submission_id"],
-        form_title=submission["form_title"],
-    )
-
-    if accepted:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"Możesz przejść do podpisywania dokumentów w zakładce „Do podpisania”.\n\n"
-            f"Pozdrawiamy\n"
-        )
-    else:
-        text_body = (
-            f"Dzień dobry,\n\n"
-            f"wniosek dotyczący formularza „{submission['form_title']}” nie został zaakceptowany.\n\n"
-            f"ID wniosku: {submission['submission_id']}\n\n"
-            f"W razie pytań prosimy o kontakt z urzędem.\n\n"
-            f"Pozdrawiamy\n"
-        )
-
-    return html_body, text_body
-
-
-def maybe_send_decision_email(submission: dict) -> None:
-    row = submission["row"]
-
-    email = row.get("email", "").strip()
-    if not email:
-        logger.warning(
-            "Brak adresu e-mail dla wniosku %s",
-            submission["submission_id"],
-        )
-        return
-
-    officer_decision = get_officer_decision(row)
-
-    if officer_decision == OfficerDecision.MISSING:
-        return
-
-    if not should_send_officer_decision_email(row):
-        return
-
-    accepted = officer_decision == OfficerDecision.ACCEPTED
-    decision_value = officer_decision.value
-    html_body, text_body = build_decision_email_content(submission, accepted)
-
-    send_submission_decision_email(
-        smtp_host=app.config["SMTP_HOST"],
-        smtp_port=app.config["SMTP_PORT"],
-        smtp_user=app.config["SMTP_USER"],
-        smtp_password=app.config["SMTP_PASSWORD"],
-        mail_from=app.config["MAIL_FROM"],
-        to_email=email,
-        submission_id=submission["submission_id"],
-        form_title=submission["form_title"],
-        accepted=accepted,
-        html_body=html_body,
-        text_body=text_body,
-    )
-
-    storage.update_csv_row_by_submission_id(
-        submission["form_slug"],
-        submission["submission_id"],
-        {
-            "officer_decision_email_sent": "Tak",
-            "decision_email_sent": "Tak",
-            "decision_email_sent_for": decision_value,
-        },
-    )
-
-    logger.info(
-        "Wysłano e-mail decyzji '%s' na adres %s dla wniosku %s",
-        decision_value,
-        email,
-        submission["submission_id"],
-    )
 
 
 @app.context_processor
@@ -619,6 +531,7 @@ def submit(slug: str):
 
     submission_id = str(uuid4())
     submission_data = extract_submission_data(form_definition, request.form)
+    submission_data = apply_pesel_derived_values(form_definition, submission_data)
     submission_data.update(
         build_initial_process_fields(
             declaration_required=is_document_enabled(form_definition, DocumentType.DECLARATION),
@@ -830,6 +743,7 @@ def declaration_form(slug: str, submission_id: str):
 
     if request.method == "POST":
         declaration_data = extract_submission_data(declaration_definition, request.form)
+        declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
         values.update(declaration_data)
         errors = validate_submission(declaration_definition, declaration_data)
         training_field = get_training_selection_field(form_definition)
@@ -1130,11 +1044,6 @@ def api_acceptance_status(submission_id: str):
             "message": "Nie znaleziono wniosku o podanym ID.",
         }, 200
 
-    try:
-        maybe_send_decision_email(submission)
-    except Exception as exc:
-        logger.exception("Nie udało się wysłać e-maila decyzji: %s", exc)
-
     if submission["officer_decision"] == OfficerDecision.REJECTED.value:
         return {
             "exists": True,
@@ -1337,8 +1246,10 @@ def documents_to_sign():
 def download_pdf(slug: str, filename: str):
     try:
         submission = find_submission_by_pdf(slug, filename)
-        if submission and not access_token_service.verify_token(submission, request.args.get("token")):
-            abort(403)
+        if not submission or not access_token_service.verify_required_token(
+            submission, request.args.get("token")
+        ):
+            abort(404)
         pdf_bytes = storage.get_pdf_bytes(slug, filename)
     except HTTPException:
         raise

@@ -6,7 +6,7 @@ pytest.importorskip("sqlalchemy")
 
 from database import create_session_factory
 from models import Base, FormSubmission, SubmissionFile, SubmissionWorkflowEvent
-from scripts.report_strict_mode_stabilization import build_parser, main, write_report
+from scripts.diagnostics.report_strict_mode_stabilization import build_parser, main, write_report
 from services.legacy_fallback_report_service import LegacyFallbackReportService
 from services.strict_mode_stabilization_service import StrictModeStabilizationService
 from services.submission_document_service import SubmissionDocumentType

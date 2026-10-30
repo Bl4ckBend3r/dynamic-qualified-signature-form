@@ -1,4 +1,6 @@
-from services.workflow_service import WorkflowService
+import pytest
+
+from services.workflow_service import WorkflowService, WorkflowTransitionError
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_workflow_history_service import SubmissionWorkflowHistoryService
 
@@ -67,10 +69,42 @@ def workflow_config():
     }
 
 
+@pytest.mark.parametrize("status", ["AUTO_REJECTED", "RETURNED_FOR_CORRECTION"])
+def test_blocked_qualification_status_cannot_follow_regular_workflow_edge(status):
+    repository = FakeRepository()
+    repository.rows["abc"]["process_status"] = status
+    service = WorkflowService(repository)
+
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("abc", "officer_review")
+
+    assert repository.rows["abc"]["workflow_step"] == "submission"
+    assert repository.events == []
+
+
 def test_resolves_next_step_with_decision():
     service = WorkflowService()
 
     assert service.resolve_next_step(workflow_config(), "officer_review", "accepted") == "declaration"
+
+
+def test_builder_officer_stage_requires_explicit_catalog_decision():
+    repository = FakeRepository()
+    service = WorkflowService(repository)
+    config = workflow_config()
+    config["workflow"]["steps"][1] = {
+        "id": "officer_review", "stage_type": "officer_action", "next": "declaration",
+    }
+    config["workflow"]["decision_types"] = [{
+        "step_id": "officer_review", "code": "conditionally_accepted",
+        "label": "Akceptacja warunkowa", "target_step": "declaration",
+    }]
+    row = repository.rows["abc"]
+    service.enter_submission_review(row, config)
+    assert row["workflow_step"] == "officer_review"
+    assert service.resolve_next_step(config, "officer_review") is None
+    assert not service.can_execute_step(row, config, "declaration")
+    assert service.resolve_next_step(config, "officer_review", "conditionally_accepted") == "declaration"
 
 
 def test_transition_updates_repository():
@@ -200,3 +234,128 @@ def test_workflow_and_decision_rollback_when_strict_disabled():
     assert workflow["used_legacy_fallback"] is True
     assert decision["source"] == "legacy_form_submission"
     assert decision["used_legacy_fallback"] is True
+
+
+def test_transition_runs_registered_side_effects_and_records_results():
+    repository = FakeRepository()
+    calls = []
+
+    def generate_document(**context):
+        calls.append(context["target_step"])
+        return {"filename": "agreement.pdf"}
+
+    service = WorkflowService(
+        repository,
+        side_effect_handlers={"generate_document": generate_document},
+    )
+
+    assert service.transition_to(
+        "abc",
+        "agreement",
+        metadata={
+            "side_effects": ["generate_document", "send_email"],
+            "user_message": "Umowa jest gotowa.",
+        },
+    )
+    assert calls == ["agreement"]
+    event = repository.events[-1][1]
+    assert event["side_effects"]["generate_document"]["status"] == "completed"
+    assert event["side_effects"]["send_email"]["status"] == "skipped"
+    assert event["user_message"] == "Umowa jest gotowa."
+
+
+def test_explicit_submission_without_decision_runs_document_to_final():
+    from unittest.mock import Mock
+    repository = FakeRepository()
+    document = Mock()
+    document.generate_document.return_value = {"enabled": True, "filename": "document.pdf"}
+    service = WorkflowService(repository, document_service=document)
+    config = {"workflow": {"flow_mode": "explicit", "initial_step": "submission", "steps": [
+        {"id": "submission", "type": "form_submit", "stage_type": "user_action", "next": "document"},
+        {"id": "document", "stage_type": "document", "action": "generate_document", "document_id": "declaration", "next": "completed"},
+        {"id": "completed", "stage_type": "final", "final": True},
+    ]}}
+    service.enter_submission_review(repository.rows["abc"], config)
+    assert repository.rows["abc"]["workflow_stage"] == "completed"
+    document.generate_document.assert_called_once()
+
+
+def test_explicit_decision_stops_before_document_and_branches_per_option():
+    from test_workflow_v2_validation import explicit_workflow
+    workflow = explicit_workflow()
+    workflow["decision_types"] = [{"code": code, "step_id": "review", "target_step": target} for code, target in [("a", "step_a"), ("b", "step_b"), ("c", "completed")]]
+    service = WorkflowService(FakeRepository())
+    row = service.submission_repository.rows["abc"]
+    service.enter_submission_review(row, {"workflow": workflow})
+    assert row["workflow_stage"] == "review"
+    assert service.resolve_next_step({"workflow": workflow}, "review") is None
+    assert [service.resolve_next_step({"workflow": workflow}, "review", code) for code in "abc"] == ["step_a", "step_b", "completed"]
+
+
+def test_explicit_transition_rejects_shortcut_and_requires_decision_code():
+    repository = FakeRepository()
+    service = WorkflowService(repository)
+    definition = {"workflow": {"flow_mode": "explicit", "initial_step": "submitted", "steps": [
+        {"id": "submitted", "stage_type": "user_action", "next": "review", "status": "FORM_SUBMITTED"},
+        {"id": "review", "stage_type": "decision", "decision_scope": "submission", "status": "WAITING_FOR_OFFICER_DECISION"},
+        {"id": "document", "stage_type": "documents", "status": "DECLARATION_READY"},
+    ], "decision_types": [{"code": "accept", "step_id": "review", "target_step": "document"}]}}
+    repository.rows["abc"].update(workflow_step="submitted", process_status="FORM_SUBMITTED")
+
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("abc", "document", form_config=definition)
+    assert not repository.events
+
+    service.transition_to("abc", "review", form_config=definition)
+    assert repository.rows["abc"]["workflow_step"] == "review"
+    assert (repository.events[-1][1]["previous_step"], repository.events[-1][1]["new_step"]) == ("submitted", "review")
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("abc", "document", form_config=definition)
+    assert repository.rows["abc"]["workflow_step"] == "review"
+    service.transition_to("abc", "document", metadata={"officer_decision": "accept"}, form_config=definition)
+    assert repository.rows["abc"]["workflow_step"] == "document"
+
+
+def test_explicit_officer_action_requires_human_actor():
+    repository = FakeRepository()
+    service = WorkflowService(repository)
+    definition = {"workflow": {"flow_mode": "explicit", "steps": [
+        {"id": "officer", "stage_type": "officer_action", "next": "done"},
+        {"id": "done", "stage_type": "final"},
+    ]}}
+    repository.rows["abc"]["workflow_step"] = "officer"
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("abc", "done", form_config=definition)
+    assert service.transition_to("abc", "done", actor="officer", form_config=definition)
+
+
+def test_preflight_rejects_missing_automatic_document_before_decision_commit():
+    from unittest.mock import Mock
+
+    document_service = Mock()
+    document_service.get_document_by_id.return_value = None
+    service = WorkflowService(FakeRepository(), document_service=document_service)
+    definition = {"workflow": {"flow_mode": "explicit", "steps": [
+        {"id": "generate", "stage_type": "system", "action": "generate_document",
+         "document_id": "missing", "next": "done"},
+        {"id": "done", "stage_type": "final"},
+    ]}}
+    with pytest.raises(WorkflowTransitionError):
+        service.validate_automatic_path(definition, "generate")
+
+
+def test_explicit_signature_precedes_decision_and_officer_action_is_not_decision():
+    repository = FakeRepository()
+    service = WorkflowService(repository)
+    config = {"workflow": {"flow_mode": "explicit", "steps": [
+        {"id": "submission", "type": "form_submit", "stage_type": "user_action", "next": "signature"},
+        {"id": "signature", "stage_type": "document", "action": "await_signature", "next": "review"},
+        {"id": "review", "stage_type": "decision"},
+        {"id": "officer", "stage_type": "officer_action", "requires_officer_action": True, "next": "review"},
+    ]}}
+    row = repository.rows["abc"]
+    service.enter_submission_review(row, config)
+    assert row["workflow_stage"] == "signature"
+    service.advance_after_action(row, config)
+    assert row["workflow_stage"] == "review"
+    assert service.resolve_next_step(config, "officer") == "review"

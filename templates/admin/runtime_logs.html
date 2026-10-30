@@ -1,0 +1,203 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Logi aplikacji{% endblock %}
+
+{% block content %}
+<div class="runtime-logs-page">
+
+  <div class="admin-page-title">
+    <div>
+      <p class="admin-eyebrow">Diagnostyka systemu</p>
+      <h1>Logi aplikacji</h1>
+      <p class="runtime-logs-description">
+        Logi bieżącego procesu aplikacji.
+      </p>
+    </div>
+  </div>
+
+  {% if not log_buffer_enabled %}
+    <div class="admin-alert admin-alert-error">
+      Bufor logów aplikacji nie jest dostępny.
+    </div>
+  {% else %}
+
+    <section class="admin-card runtime-logs-panel">
+
+      <div class="runtime-logs-panel-header">
+        <div>
+          <h2>Filtry logów</h2>
+          <p>
+            Filtruj logi, wybierz zakres czasu lub wyszukaj konkretną operację.
+          </p>
+        </div>
+
+        <div class="runtime-logs-presets">
+          {% for minutes, label in [
+            (15, "15 min"),
+            (60, "1 godz."),
+            (360, "6 godz."),
+            (1440, "24 godz.")
+          ] %}
+            <a
+              class="runtime-log-preset{% if filters.since_minutes == minutes %} is-active{% endif %}"
+              href="{{ url_for(
+                'admin.runtime_logs',
+                since_minutes=minutes,
+                q=filters.q,
+                level=filters.level,
+                logger=filters.logger,
+                event=filters.event,
+                endpoint_filter=filters.endpoint_filter,
+                limit=filters.limit
+              ) }}"
+            >
+              {{ label }}
+            </a>
+          {% endfor %}
+        </div>
+      </div>
+
+      <form
+        method="get"
+        class="runtime-logs-filters"
+      >
+
+        <label>
+          <span>Szukaj</span>
+          <input
+            type="search"
+            name="q"
+            value="{{ filters.q }}"
+            placeholder="np. submission_id, nextcloud, exception"
+          >
+        </label>
+
+        <label>
+          <span>Poziom</span>
+          <select name="level">
+            <option value="">Wszystkie</option>
+
+            {% for value in [
+              "DEBUG",
+              "INFO",
+              "WARNING",
+              "ERROR",
+              "CRITICAL"
+            ] %}
+              <option
+                value="{{ value }}"
+                {% if filters.level == value %}selected{% endif %}
+              >
+                {{ value }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>
+          <span>Logger / moduł</span>
+          <input
+            type="text"
+            name="logger"
+            value="{{ filters.logger }}"
+            placeholder="np. signature_verifier"
+          >
+        </label>
+
+        <label>
+          <span>Event</span>
+          <input
+            type="text"
+            name="event"
+            value="{{ filters.event }}"
+            placeholder="np. http_request_failed"
+          >
+        </label>
+
+        <label>
+          <span>Endpoint</span>
+          <input
+            type="text"
+            name="endpoint_filter"
+            value="{{ filters.endpoint_filter }}"
+            placeholder="np. documents"
+          >
+        </label>
+
+        <label>
+          <span>Od</span>
+          <input
+            type="datetime-local"
+            name="date_from"
+            value="{{ filters.date_from }}"
+          >
+        </label>
+
+        <label>
+          <span>Do</span>
+          <input
+            type="datetime-local"
+            name="date_to"
+            value="{{ filters.date_to }}"
+          >
+        </label>
+
+        <div class="runtime-filter-actions">
+          <button
+            class="admin-button"
+            type="submit"
+          >
+            Filtruj
+          </button>
+
+          <a
+            class="admin-button-secondary"
+            href="{{ url_for('admin.runtime_logs') }}"
+          >
+            Wyczyść
+          </a>
+        </div>
+
+      </form>
+
+    </section>
+
+    <section class="runtime-console">
+
+      <div class="runtime-console-header">
+        <span>APPLICATION LOG</span>
+
+        <span>
+          {{ logs|length }} / {{ stored_count }}
+        </span>
+      </div>
+
+      <div
+        class="runtime-console-output"
+        role="log"
+        aria-label="Logi aplikacji"
+      >
+        {% if logs %}
+
+          {% for item in logs %}
+            <div
+              class="runtime-console-line runtime-console-line--{{ item.level|lower }}"
+              data-level="{{ item.level }}"
+            >{{ item.rendered }}</div>
+          {% endfor %}
+
+        {% else %}
+
+          <div class="runtime-console-empty">
+            Brak logów spełniających wybrane kryteria.
+          </div>
+
+        {% endif %}
+      </div>
+
+    </section>
+
+  {% endif %}
+
+</div>
+{% endblock %}

@@ -1,171 +1,178 @@
 {% extends "admin/base.html" %}
-{% block title %}Stopka maila{% endblock %}
+{% block title %}{{ 'Stopka ogólna' if is_global else 'Stopka formularza' }}{% endblock %}
 {% block content %}
 {% set selected_logo = footer.logo if footer.logo and footer.logo.active else none %}
+{% set legacy_logo_url = footer.logo_path if footer.logo_path and (footer.logo_path.startswith('https://') or footer.logo_path.startswith('http://')) else '' %}
+{% set cancel_url = url_for('admin.global_mail_footer_edit') if is_global else url_for('admin.mail_footers_list', form_id=form.id) %}
 <div class="admin-page-title">
     <div>
-        <p class="admin-eyebrow">Stopki maili</p>
-        <h1>Stopka maila</h1>
+        <p class="admin-eyebrow">Stopki e-mail</p>
+        <h1>{{ 'Stopka ogólna' if is_global else 'Stopka formularza: ' ~ form.name }}</h1>
+        <p>{{ footer_usage_label }}</p>
+        {% if not is_global %}<p class="admin-field-help">Mail początkowy po rejestracji wniosku zawsze używa stopki ogólnej.</p>{% endif %}
     </div>
-    <div class="admin-actions">
-        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
-    </div>
+    <div class="admin-actions"><a class="admin-button-secondary" href="{{ cancel_url }}">Anuluj</a></div>
 </div>
 
-<form method="post" class="admin-form-card admin-form">
+<form method="post" class="admin-form-card admin-form" data-footer-editor data-legacy-logo-url="{{ legacy_logo_url }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Dane podstawowe</h2>
-        </div>
+        <div class="admin-form-section-header"><h2>Reguła użycia</h2></div>
         <div class="admin-form-grid">
-            <div class="admin-field">
-                <label class="admin-field-label" for="footer-name">Nazwa stopki</label>
-                <input id="footer-name" name="name" value="{{ footer.name }}" required>
-                <p class="admin-field-help">Nazwa widoczna tylko w panelu administracyjnym.</p>
-            </div>
-            <label class="admin-switch">
-                <input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}>
-                <span>
-                    <strong>Aktywna</strong>
-                    <small>Stopka może być używana w wiadomościach.</small>
-                </span>
-            </label>
-            <label class="admin-switch admin-form-wide">
-                <input type="checkbox" name="is_default" {% if footer.is_default %}checked{% endif %}>
-                <span>
-                    <strong>Domyślna</strong>
-                    <small>Ta stopka będzie wybierana automatycznie dla nowych szablonów maili tego formularza.</small>
-                </span>
-            </label>
+            <label><span>Nazwa stopki</span><input id="footer-name" name="name" value="{{ footer.name }}" required></label>
+            <label class="admin-switch"><input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}><span><strong>Aktywna</strong><small>{% if is_global %}Nieaktywna stopka nie będzie dodawana do maili globalnych.{% else %}Nieaktywna stopka formularza automatycznie użyje stopki ogólnej.{% endif %}</small></span></label>
+            {% if not is_global %}
+                <label class="admin-switch admin-form-wide"><input type="checkbox" name="use_global" {% if footer.use_global %}checked{% endif %}><span><strong>Używaj stopki ogólnej zamiast stopki formularza</strong><small>Maile procesowe formularza pominą tę stopkę.</small></span></label>
+            {% endif %}
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Logo w stopce</h2>
-        </div>
-        <div class="admin-logo-picker">
-            <div class="admin-field">
-                <label class="admin-field-label" for="footer-logo">Logo z biblioteki</label>
-                <select id="footer-logo" name="logo_id" data-logo-select>
-                    <option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>
-                    {% for logo in logos %}
-                        <option
-                            value="{{ logo.id }}"
-                            data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}"
-                            data-logo-name="{{ logo.name }}"
-                            {% if footer.logo_id == logo.id %}selected{% endif %}
-                        >{{ logo.name }}</option>
-                    {% endfor %}
-                </select>
-                <p class="admin-field-help">Logo można dodać tylko z poziomu konta super_admin.</p>
-            </div>
-            <div class="admin-logo-preview" data-logo-preview>
-                {% if selected_logo %}
-                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
-                    <span>{{ selected_logo.name }}</span>
-                {% else %}
-                    <span>Nie wybrano logo.</span>
-                {% endif %}
-            </div>
+        <div class="admin-form-section-header"><h2>Logo w stopce</h2><p>Wybierz logo, jego położenie, wyrównanie i opcjonalny rozmiar.</p></div>
+        <p class="admin-help">Logo w stopce jest niezależne od logo formularza i logo platformy.</p>
+        <div class="admin-form-grid">
+            <label><span>Logo z biblioteki</span><select id="footer-logo" name="logo_id" data-logo-select><option value="" data-preview-url="" data-logo-name="Brak logo">Brak logo</option>{% for logo in logos %}<option value="{{ logo.id }}" data-preview-url="{{ url_for('public_forms.logo_asset', logo_id=logo.id, filename=logo.filename) }}" data-logo-name="{{ logo.name }}" {% if footer.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select><small>Logo można dodać tylko z poziomu konta super_admin.</small></label>
+            <label><span>Położenie logo</span><select name="logo_position" data-logo-position>
+                <option value="top" {% if (footer.logo_position or 'top') == 'top' %}selected{% endif %}>Nad treścią stopki</option>
+                <option value="bottom" {% if footer.logo_position == 'bottom' %}selected{% endif %}>Pod treścią stopki</option>
+                <option value="left" {% if footer.logo_position == 'left' %}selected{% endif %}>Po lewej stronie treści</option>
+                <option value="right" {% if footer.logo_position == 'right' %}selected{% endif %}>Po prawej stronie treści</option>
+                <option value="inline" {% if footer.logo_position == 'inline' %}selected{% endif %}>W miejscu znacznika w treści HTML</option>
+            </select></label>
+            <label><span>Wyrównanie logo</span><select name="logo_alignment" data-logo-alignment><option value="left" {% if (footer.logo_alignment or 'left') == 'left' %}selected{% endif %}>Do lewej</option><option value="center" {% if footer.logo_alignment == 'center' %}selected{% endif %}>Do środka</option><option value="right" {% if footer.logo_alignment == 'right' %}selected{% endif %}>Do prawej</option></select></label>
+            <label><span>Szerokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_width" min="20" max="800" step="1" value="{{ footer.logo_width if footer.logo_width is not none else '' }}" data-logo-width><small>px</small></span><small>Puste pole zachowuje proporcje obrazu.</small></label>
+            <label><span>Wysokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_height" min="20" max="400" step="1" value="{{ footer.logo_height if footer.logo_height is not none else '' }}" data-logo-height><small>px</small></span><small>Puste pole zachowuje proporcje obrazu.</small></label>
+            <p class="admin-form-wide admin-help" data-inline-logo-help {% if footer.logo_position != 'inline' %}hidden{% endif %}>Wstaw znacznik <code>{% raw %}{{ footer_logo }}{% endraw %}</code> w treści HTML stopki w miejscu, w którym ma pojawić się logo.</p>
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Treść HTML</h2>
-            <p>Treść zostanie doklejona na końcu wiadomości w domyślnym stylu platformy.</p>
-        </div>
-        <div class="admin-field">
-            <label class="admin-field-label" for="footer-html">Treść HTML</label>
-            <textarea id="footer-html" name="html_body" rows="16" data-footer-html>{{ footer.html_body }}</textarea>
+        <div class="admin-form-section-header"><h2>Treść stopki</h2><p>Dozwolone jest bezpieczne formatowanie: akapity, pogrubienie, kursywa, listy i linki.</p></div>
+        <div class="admin-form-grid">
+            <label class="admin-form-wide"><span>Treść HTML</span><textarea id="footer-html" name="html_body" rows="7" data-footer-rich data-preview-source="body">{{ footer.html_body or '' }}</textarea></label>
+            <label class="admin-form-wide"><span>Dane kontaktowe</span><textarea name="contact_html" rows="5" data-footer-rich data-preview-source="contact">{{ footer.contact_html or '' }}</textarea></label>
+            <label class="admin-form-wide"><span>Linki</span><textarea name="links_text" rows="4" data-footer-links placeholder="Polityka prywatności|https://example.pl/polityka">{% for link in footer.links or [] %}{{ link.get('label', '') }}|{{ link.get('url', '') }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea><small>Jeden link w wierszu: etykieta|adres.</small></label>
+            <label class="admin-form-wide"><span>Tekst prawny</span><textarea name="legal_text" rows="5" data-footer-rich data-preview-source="legal">{{ footer.legal_text or '' }}</textarea></label>
         </div>
     </section>
 
     <section class="admin-form-section">
-        <div class="admin-form-section-header">
-            <h2>Podgląd</h2>
-            <p>Finalny mail zostanie opakowany w domyślny layout platformy.</p>
-        </div>
-        <div class="admin-preview-card">
-            <div class="admin-preview-logo" data-preview-logo>
-                {% if selected_logo %}
-                    <img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}">
-                {% else %}
-                    <span>Nie wybrano logo dla tej stopki.</span>
-                {% endif %}
-            </div>
-            <div class="admin-preview-content" data-preview-html>
-                {% if footer.html_body %}
-                    {{ footer.html_body|safe }}
-                {% else %}
-                    <p>Brak treści HTML stopki.</p>
-                {% endif %}
-            </div>
+        <div class="admin-form-section-header"><h2>Podgląd stopki e-mail</h2><p>Przykładowy mail pokazuje układ treści, logo, danych kontaktowych, linków i tekstu prawnego.</p></div>
+        <div class="mail-footer-example">
+            <div class="mail-footer-example__subject"><strong>Temat:</strong> Przykładowa wiadomość dotycząca zgłoszenia</div>
+            <div class="mail-footer-example__body"><p>Dzień dobry,</p><p>to jest przykładowa treść wiadomości wysyłanej przez aplikację.</p></div>
+            <footer class="mail-footer-example__footer" data-preview-footer-layout>
+                <div class="admin-preview-logo admin-align-{{ footer.logo_alignment or 'left' }}" data-preview-logo>{% if selected_logo %}<img src="{{ url_for('public_forms.logo_asset', logo_id=selected_logo.id, filename=selected_logo.filename) }}" alt="{{ selected_logo.name }}" onerror="this.remove()">{% endif %}</div>
+                <div data-preview-footer-content>
+                    <div data-preview-footer-body>{% if footer.html_body %}{{ footer.html_body|safe }}{% else %}<p>Brak treści stopki.</p>{% endif %}</div>
+                    <div data-preview-footer-contact>{{ (footer.contact_html or '')|safe }}</div>
+                    <div data-preview-footer-links>{% for link in footer.links or [] %}<a href="{{ link.get('url') }}">{{ link.get('label') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+                    <div data-preview-footer-legal>{{ (footer.legal_text or '')|safe }}</div>
+                </div>
+            </footer>
         </div>
     </section>
 
-    <div class="admin-form-actions">
-        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Anuluj</a>
-        <button class="admin-button" type="submit">Zapisz</button>
-    </div>
+    <div class="admin-form-actions"><a class="admin-button-secondary" href="{{ cancel_url }}">Anuluj</a><button class="admin-button" type="submit">Zapisz stopkę</button></div>
 </form>
 
 <script>
 (() => {
-    const select = document.querySelector("[data-logo-select]");
-    const pickerPreview = document.querySelector("[data-logo-preview]");
-    const previewLogo = document.querySelector("[data-preview-logo]");
-    const htmlInput = document.querySelector("[data-footer-html]");
-    const htmlPreview = document.querySelector("[data-preview-html]");
+    const form = document.querySelector("[data-footer-editor]");
+    const logoSelect = form.querySelector("[data-logo-select]");
+    let logoSelectionChanged = false;
+    const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "A"]);
+    function safeHtml(value) {
+        const template = document.createElement("template"); template.innerHTML = String(value || "");
+        template.content.querySelectorAll("*").forEach((node) => {
+            if (!allowed.has(node.tagName)) { node.replaceWith(...node.childNodes); return; }
+            const href = node.tagName === "A" ? String(node.getAttribute("href") || "") : "";
+            [...node.attributes].forEach((attribute) => node.removeAttribute(attribute.name));
+            if (node.tagName === "A" && /^(https?:|mailto:|tel:)/i.test(href)) { node.href = href; node.rel = "noopener noreferrer"; }
+        });
+        return template.innerHTML;
+    }
+    function insert(textarea, tag, attrs = "") { const start = textarea.selectionStart || 0; const end = textarea.selectionEnd || start; const text = textarea.value.slice(start, end) || "tekst"; textarea.setRangeText(tag === "br" ? "<br>" : `<${tag}${attrs}>${text}</${tag}>`, start, end, "end"); textarea.dispatchEvent(new Event("input", {bubbles: true})); textarea.focus(); }
+    form.querySelectorAll("[data-footer-rich]").forEach((textarea) => {
+        const toolbar = document.createElement("div"); toolbar.className = "instruction-format-toolbar";
+        [["strong", "B"], ["em", "I"], ["ul", "• Lista"], ["ol", "1. Lista"], ["p", "Akapit"], ["br", "↵"]].forEach(([tag, label]) => { const button = document.createElement("button"); button.type = "button"; button.className = "instruction-format-button"; button.textContent = label; button.addEventListener("click", () => insert(textarea, tag)); toolbar.append(button); });
+        const link = document.createElement("button"); link.type = "button"; link.className = "instruction-format-button"; link.textContent = "Link"; link.addEventListener("click", () => { const href = prompt("Adres linku", "https://"); if (href) insert(textarea, "a", ` href="${href.replace(/[\"<>]/g, "")}"`); }); toolbar.append(link); textarea.before(toolbar);
+    });
+    function render() {
+        const logoPlaceholder = "\u007b\u007b footer_logo \u007d\u007d";
+        const position = form.querySelector("[data-logo-position]")?.value || "top";
+        const alignment = form.querySelector("[data-logo-alignment]")?.value || "left";
+        const width = Number.parseInt(form.querySelector("[data-logo-width]")?.value || "", 10);
+        const height = Number.parseInt(form.querySelector("[data-logo-height]")?.value || "", 10);
+        const layout = form.querySelector("[data-preview-footer-layout]");
+        const content = form.querySelector("[data-preview-footer-content]");
+        const logo = form.querySelector("[data-preview-logo]");
+        const body = form.querySelector("[data-preview-footer-body]");
+        const bodySource = form.querySelector('[data-preview-source="body"]');
 
-    const setEmptyLogo = () => {
-        pickerPreview.replaceChildren();
-        const pickerText = document.createElement("span");
-        pickerText.textContent = "Nie wybrano logo.";
-        pickerPreview.append(pickerText);
-
-        previewLogo.replaceChildren();
-        const previewText = document.createElement("span");
-        previewText.textContent = "Nie wybrano logo dla tej stopki.";
-        previewLogo.append(previewText);
-    };
-
-    const renderLogo = () => {
-        if (!select || !pickerPreview || !previewLogo) {
-            return;
-        }
-        const selected = select.options[select.selectedIndex];
-        const url = selected?.dataset.previewUrl || "";
-        const name = selected?.dataset.logoName || "Brak logo";
-        if (url) {
-            const pickerImage = document.createElement("img");
-            pickerImage.src = url;
-            pickerImage.alt = name;
-            const pickerText = document.createElement("span");
-            pickerText.textContent = name;
-            pickerPreview.replaceChildren(pickerImage, pickerText);
-
-            const previewImage = document.createElement("img");
-            previewImage.src = url;
-            previewImage.alt = name;
-            previewLogo.replaceChildren(previewImage);
+        let bodyHtml = safeHtml(bodySource?.value || "");
+        if (position === "inline") {
+            bodyHtml = bodyHtml.split(logoPlaceholder).join('<span data-preview-inline-logo></span>');
         } else {
-            setEmptyLogo();
+            bodyHtml = bodyHtml.split(logoPlaceholder).join("");
         }
-    };
+        if (body) body.innerHTML = bodyHtml || "<p>Brak treści stopki.</p>";
+        const mappings = {contact: "[data-preview-footer-contact]", legal: "[data-preview-footer-legal]"};
+        form.querySelectorAll('[data-preview-source]:not([data-preview-source="body"])').forEach((source) => {
+            const target = form.querySelector(mappings[source.dataset.previewSource]);
+            if (target) target.innerHTML = safeHtml(source.value);
+        });
 
-    const renderHtml = () => {
-        if (!htmlInput || !htmlPreview) {
-            return;
+        const links = form.querySelector("[data-preview-footer-links]");
+        if (links) {
+            links.replaceChildren();
+            String(form.querySelector("[data-footer-links]")?.value || "").split(/\r?\n/).forEach((line) => {
+                const [label, url] = line.split("|");
+                if (!label || !/^(https?:|mailto:|tel:)/i.test(url || "")) return;
+                const anchor = document.createElement("a");
+                anchor.textContent = label.trim(); anchor.href = url.trim(); anchor.rel = "noopener noreferrer";
+                if (links.childNodes.length) links.append(" · ");
+                links.append(anchor);
+            });
         }
-        htmlPreview.innerHTML = htmlInput.value.trim() || "<p>Brak treści HTML stopki.</p>";
-    };
 
-    select?.addEventListener("change", renderLogo);
-    htmlInput?.addEventListener("input", renderHtml);
+        const option = logoSelect?.selectedOptions?.[0];
+        if (logo) {
+            logo.style.textAlign = alignment;
+            logo.replaceChildren();
+            const previewUrl = option?.dataset.previewUrl || (!logoSelectionChanged ? form.dataset.legacyLogoUrl : "");
+            if (previewUrl) {
+                const image = document.createElement("img");
+                image.src = previewUrl; image.alt = option?.dataset.logoName || "Logo stopki";
+                image.addEventListener("error", () => image.remove());
+                image.style.width = Number.isInteger(width) ? `${width}px` : (Number.isInteger(height) ? "auto" : "160px");
+                image.style.height = Number.isInteger(height) ? `${height}px` : "auto";
+                image.style.maxWidth = "800px"; image.style.maxHeight = "400px";
+                logo.append(image);
+            }
+        }
+
+        if (layout && content && logo) {
+            layout.classList.remove("is-logo-top", "is-logo-bottom", "is-logo-left", "is-logo-right", "is-logo-inline");
+            const inlineSlot = body?.querySelector("[data-preview-inline-logo]");
+            if (position === "inline" && inlineSlot) {
+                inlineSlot.replaceWith(logo); layout.classList.add("is-logo-inline");
+            } else if (position === "left") {
+                layout.prepend(logo); layout.classList.add("is-logo-left");
+            } else if (position === "right") {
+                layout.append(logo); layout.classList.add("is-logo-right");
+            } else if (position === "bottom" || position === "inline") {
+                layout.append(logo); layout.classList.add("is-logo-bottom");
+            } else {
+                layout.prepend(logo); layout.classList.add("is-logo-top");
+            }
+        }
+        const inlineHelp = form.querySelector("[data-inline-logo-help]");
+        if (inlineHelp) inlineHelp.hidden = position !== "inline";
+    }
+    logoSelect?.addEventListener("change", () => { logoSelectionChanged = true; });
+    form.addEventListener("input", render); form.addEventListener("change", render); render();
 })();
 </script>
 {% endblock %}

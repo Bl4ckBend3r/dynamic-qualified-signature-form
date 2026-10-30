@@ -1,0 +1,18 @@
+{# Compatibility adapter. The implementation is shared with declarations. #}
+{% set document_builder_type = 'agreement' %}
+{% set document_builder_title = 'Umowa' %}
+{% set document_builder_description = 'Jedna umowa nadal odpowiada jednemu konkretnemu szkoleniu.' %}
+{% set document_builder_document = agreement_builder_document %}
+{% set document_builder_updated_at = agreement_builder_updated_at|default('') %}
+{% set document_builder_is_new = agreement_builder_is_new|default(true) %}
+{% set document_builder_variables = agreement_template_variables %}
+{% set document_builder_submissions = agreement_preview_submissions %}
+{% set document_builder_can_show_html = agreement_builder_can_show_html %}
+{% set document_docx_metadata = agreement_docx_metadata %}
+{% set document_builder_standalone = agreement_builder_standalone|default(false) %}
+{% set document_builder_save_url = url_for('admin.agreement_builder_save', form_id=form.id) %}
+{% set document_builder_preview_url = url_for('admin.agreement_template_preview', form_id=form.id) %}
+{% set document_builder_pdf_url = url_for('admin.agreement_template_example_pdf', form_id=form.id) %}
+{% set document_builder_import_url = url_for('admin.agreement_docx_import_builder', form_id=form.id) %}
+{% include "admin/forms/_document_builder.html" %}
+{# Static compatibility markers: agreement-builder__toolset data-builder-preview-viewport data-builder-preview-canvas data-agreement-builder-preview-page data-builder-view-mode="split" data-builder-view-mode="editor" data-builder-view-mode="preview" data-builder-variables-toggle data-builder-size-mode="editor-wide" data-builder-size-mode="preview-wide" #}

@@ -1,0 +1,516 @@
+{
+  "title": "Wniosek o rezerwację biletów lotniczych",
+  "name": "Wniosek o rezerwację biletów lotniczych",
+  "slug": "loty",
+  "description": "Załącznik do Regulaminu udostępniania biletów lotniczych z puli Urzędu Marszałkowskiego Województwa Lubuskiego w Zielonej Górze.",
+  "submit_label": "Generuj i wyślij",
+  "fields": [
+    {
+      "type": "radio",
+      "name": "typ_wnioskodawcy",
+      "label": "Typ wnioskodawcy",
+      "required": true,
+      "options": [
+        {
+          "value": "urzednik",
+          "label": "Urzędnik"
+        },
+        {
+          "value": "ambasador_wojewodztwa",
+          "label": "Ambasador Województwa"
+        },
+        {
+          "value": "jednostka_lub_spolka",
+          "label": "Wojewódzkie samorządowe jednostki organizacyjne oraz spółki"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "name": "miejscowosc",
+      "label": "Miejscowość",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "date",
+      "name": "data_wniosku",
+      "label": "Data wniosku",
+      "required": true,
+      "width": "half"
+    },
+    {
+      "type": "radio",
+      "name": "rodzaj_biletu",
+      "label": "Proszę o rezerwację biletów",
+      "required": true,
+      "options": [
+        "odpłatnych",
+        "nieodpłatnych"
+      ]
+    },
+    {
+      "type": "repeatable_group",
+      "name": "podrozni",
+      "label": "Osoby objęte wnioskiem",
+      "item_label": "Osoba",
+      "min_items": 1,
+      "max_items": 5,
+      "add_label": "Dodaj osobę",
+      "required": true,
+      "applicant_record": true,
+      "decision_contact_email_field": "email",
+      "submission_confirmation": {"enabled": true, "email_field": "email"},
+      "item_context_fields": {
+        "first_name": "imie",
+        "last_name": "nazwisko",
+        "email": "email",
+        "phone": "telefon"
+      },
+      "decision_completion": {
+        "policy": "ALL",
+        "step_ids": [
+          "dit_decision_urzednik",
+          "dit_decision_ambasador",
+          "dit_decision_jednostka"
+        ],
+        "next": "completed"
+      },
+      "decision_email": {
+        "automatic": true,
+        "template_type": "repeatable_item_decision"
+      },
+      "fields": [
+        {
+          "type": "text",
+          "name": "imie",
+          "label": "Imię",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "text",
+          "name": "nazwisko",
+          "label": "Nazwisko",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "text",
+          "name": "stanowisko_departament_wydzial",
+          "label": "Stanowisko / Departament / Wydział",
+          "required": true,
+          "visible_if": {
+            "scope": "root",
+            "field": "typ_wnioskodawcy",
+            "operator": "equals",
+            "value": "urzednik"
+          }
+        },
+        {
+          "type": "text",
+          "name": "stanowisko_departament_wydzial_jednostka",
+          "label": "Stanowisko / Departament / Wydział / Jednostka organizacyjna",
+          "required": true,
+          "visible_if": {
+            "scope": "root",
+            "field": "typ_wnioskodawcy",
+            "operator": "equals",
+            "value": "jednostka_lub_spolka"
+          }
+        },
+        {
+          "type": "date",
+          "name": "ieg_waw_dzien",
+          "label": "Trasa IEG → WAW — data lotu",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "time",
+          "name": "ieg_waw_godzina",
+          "label": "Trasa IEG → WAW — godzina lotu",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "date",
+          "name": "waw_ieg_dzien",
+          "label": "Trasa WAW → IEG — data lotu",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "time",
+          "name": "waw_ieg_godzina",
+          "label": "Trasa WAW → IEG — godzina lotu",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "tel",
+          "name": "telefon",
+          "label": "Telefon kontaktowy",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "type": "email",
+          "name": "email",
+          "label": "Adres e-mail",
+          "required": true,
+          "width": "half"
+        }
+      ],
+      "item_summary_groups": [
+        {
+          "label": "IEG → WAW",
+          "fields": [
+            "ieg_waw_dzien",
+            "ieg_waw_godzina"
+          ]
+        },
+        {
+          "label": "WAW → IEG",
+          "fields": [
+            "waw_ieg_dzien",
+            "waw_ieg_godzina"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "textarea",
+      "name": "cel_podrozy_uzasadnienie",
+      "label": "Cel podróży wraz z uzasadnieniem",
+      "required": true
+    },
+    {
+      "type": "file",
+      "name": "plik",
+      "label": "Załącznik",
+      "required": false,
+      "allowed_extensions": [
+        "pdf"
+      ],
+      "allowed_mime_types": [
+        "application/pdf"
+      ],
+      "max_size_mb": 10,
+      "max_files": 1,
+      "document_type": "flight_request_attachment",
+      "category": "request_attachment"
+    },
+    {
+      "type": "textarea",
+      "name": "dane_do_faktury",
+      "label": "Dane do faktury",
+      "required": true,
+      "visible_if": {
+        "field": "rodzaj_biletu",
+        "operator": "equals",
+        "value": "odpłatnych"
+      }
+    }
+  ],
+  "documents": [
+    {
+      "id": "declaration",
+      "kind": "generated_pdf",
+      "label": "Deklaracja prawdziwości danych",
+      "enabled": true,
+      "signature_required": true,
+      "allowed_signatures": [
+        "mszafir",
+        "profil_zaufany"
+      ],
+      "template_source": "html",
+      "document_type": "declaration",
+      "generation_mode": "single",
+      "signer": {
+        "source": "applicant_record_id",
+        "group": "podrozni",
+        "email_field": "email",
+        "name_fields": [
+          "imie",
+          "nazwisko"
+        ]
+      },
+      "template_html": "<main><h1>Wniosek o rezerwację biletów lotniczych</h1><p>{{ miejscowosc }}, {{ data_wniosku }}</p><p><strong>Typ wnioskodawcy:</strong> {{ typ_wnioskodawcy }}<br><strong>Rodzaj biletu:</strong> {{ rodzaj_biletu }}</p><table><thead><tr><th>Lp.</th><th>Imię i nazwisko</th>{% if typ_wnioskodawcy == 'urzednik' %}<th>Stanowisko / Departament / Wydział</th>{% elif typ_wnioskodawcy == 'jednostka_lub_spolka' %}<th>Stanowisko / Departament / Wydział / Jednostka organizacyjna</th>{% endif %}<th>IEG → WAW</th><th>WAW → IEG</th><th>Kontakt</th></tr></thead><tbody>{% for osoba in podrozni %}<tr><td>{{ loop.index }}{% if osoba.is_applicant %} — wnioskodawca{% endif %}</td><td>{{ osoba.imie }} {{ osoba.nazwisko }}</td>{% if typ_wnioskodawcy == 'urzednik' %}<td>{{ osoba.stanowisko_departament_wydzial }}</td>{% elif typ_wnioskodawcy == 'jednostka_lub_spolka' %}<td>{{ osoba.stanowisko_departament_wydzial_jednostka }}</td>{% endif %}<td>{{ osoba.ieg_waw_dzien }} {{ osoba.ieg_waw_godzina }}</td><td>{{ osoba.waw_ieg_dzien }} {{ osoba.waw_ieg_godzina }}</td><td>{{ osoba.telefon }}<br>{{ osoba.email }}</td></tr>{% endfor %}</tbody></table><h2>Cel podróży i uzasadnienie</h2><p>{{ cel_podrozy_uzasadnienie }}</p>{% if rodzaj_biletu == 'odpłatnych' %}<h2>Dane do faktury</h2><p>{{ dane_do_faktury }}</p>{% endif %}<h2>Osoba składająca wniosek</h2><p>{{ applicant.imie }} {{ applicant.nazwisko }} ({{ applicant.email }})</p></main>"
+    }
+  ],
+  "signature": {
+    "mode": "none",
+    "allow_trusted_profile": false,
+    "allow_qualified_signature": false,
+    "require_before_submit": false,
+    "show_user_choice": false
+  },
+  "workflow": {
+    "schema_version": 2,
+    "name": "Rezerwacja biletów lotniczych",
+    "initial_step": "initial_submission",
+    "allow_correction": true,
+    "requires_declaration": true,
+    "requires_contract": false,
+    "electronic_signature_required": true,
+    "signed_document_uploader": "beneficiary",
+    "send_email_notifications": true,
+    "declaration_template_source": "html",
+    "declaration_template_html": "<p>Deklaracja dla {{ applicant.imie }} {{ applicant.nazwisko }}</p>",
+    "steps": [
+      {
+        "id": "initial_submission",
+        "type": "form_submit",
+        "label": "Złożenie wniosku",
+        "status": "FORM_SUBMITTED",
+        "next": "initial_acceptance"
+      },
+      {
+        "id": "initial_acceptance",
+        "type": "manual_decision",
+        "label": "Weryfikacja / akceptacja wniosku",
+        "user_label": "Wniosek oczekuje na weryfikację",
+        "status": "WAITING_FOR_OFFICER_DECISION",
+        "description": "Sprawdzimy Twój wniosek przed udostępnieniem deklaracji.",
+        "next_action": "Poczekaj na decyzję urzędnika.",
+        "decisions": {
+          "accepted": "declaration_generation",
+          "rejected": "end_rejected"
+        }
+      },
+      {
+        "id": "declaration_generation",
+        "label": "Generowanie deklaracji",
+        "status": "DECLARATION_READY",
+        "next": "declaration_generated"
+      },
+      {
+        "id": "declaration_generated",
+        "label": "Deklaracja wygenerowana",
+        "status": "DECLARATION_GENERATED",
+        "next": "declaration_signature"
+      },
+      {
+        "id": "declaration_signature",
+        "label": "Oczekiwanie na podpis elektroniczny",
+        "status": "DECLARATION_WAITING_FOR_SIGNATURE",
+        "next": "declaration_signed"
+      },
+      {
+        "id": "declaration_signed",
+        "label": "Deklaracja podpisana",
+        "status": "DECLARATION_SIGNED",
+        "transitions": [
+          {
+            "when": {
+              "scope": "root",
+              "field": "typ_wnioskodawcy",
+              "operator": "equals",
+              "value": "urzednik"
+            },
+            "next": "urzednik_review"
+          },
+          {
+            "when": {
+              "scope": "root",
+              "field": "typ_wnioskodawcy",
+              "operator": "equals",
+              "value": "ambasador_wojewodztwa"
+            },
+            "next": "ambasador_review"
+          },
+          {
+            "when": {
+              "scope": "root",
+              "field": "typ_wnioskodawcy",
+              "operator": "equals",
+              "value": "jednostka_lub_spolka"
+            },
+            "next": "jednostka_spolka_review"
+          }
+        ]
+      },
+      {
+        "id": "urzednik_review",
+        "label": "Weryfikacja — urzędnik",
+        "status": "WAITING_FOR_REVIEW",
+        "next": "dit_decision_urzednik"
+      },
+      {
+        "id": "ambasador_review",
+        "label": "Weryfikacja — ambasador",
+        "status": "WAITING_FOR_REVIEW",
+        "next": "dit_decision_ambasador"
+      },
+      {
+        "id": "jednostka_spolka_review",
+        "label": "Weryfikacja — jednostka / spółka",
+        "status": "WAITING_FOR_REVIEW",
+        "next": "dit_decision_jednostka"
+      },
+      {
+        "id": "dit_decision_urzednik",
+        "type": "manual_decision",
+        "label": "Decyzja DIT — urzędnik",
+        "status": "WAITING_FOR_OFFICER_DECISION",
+        "next": "completed"
+      },
+      {
+        "id": "dit_decision_ambasador",
+        "type": "manual_decision",
+        "label": "Decyzja DIT — ambasador",
+        "status": "WAITING_FOR_OFFICER_DECISION",
+        "next": "completed"
+      },
+      {
+        "id": "dit_decision_jednostka",
+        "type": "manual_decision",
+        "label": "Decyzja DIT — jednostka / spółka",
+        "status": "WAITING_FOR_OFFICER_DECISION",
+        "next": "completed"
+      },
+      {
+        "id": "completed",
+        "type": "end",
+        "label": "Proces zakończony",
+        "status": "PROCESS_COMPLETED",
+        "final": true
+      },
+      {
+        "id": "end_rejected",
+        "type": "end",
+        "label": "Wniosek odrzucony",
+        "status": "OFFICER_REJECTED",
+        "final": true,
+        "rejected": true
+      }
+    ],
+    "decision_types": [
+      {
+        "code": "accepted",
+        "label": "Zaakceptowano",
+        "semantic_category": "positive",
+        "step_id": "initial_acceptance",
+        "target_step": "declaration_generation",
+        "scope": "submission",
+        "active": true
+      },
+      {
+        "code": "rejected",
+        "label": "Odrzucono",
+        "semantic_category": "negative",
+        "step_id": "initial_acceptance",
+        "target_step": "end_rejected",
+        "require_reason": true,
+        "scope": "submission",
+        "active": true
+      },
+      {
+        "code": "bilet_bezplatny",
+        "label": "Bilet bezpłatny",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_urzednik",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 0
+      },
+      {
+        "code": "bilet_ze_znizka",
+        "label": "Bilet ze zniżką",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_urzednik",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 1
+      },
+      {
+        "code": "brak_biletow_pula_wykorzystana",
+        "label": "Brak biletów — pula wykorzystana",
+        "semantic_category": "negative",
+        "step_id": "dit_decision_urzednik",
+        "target_step": "completed",
+        "require_reason": true,
+        "active": true,
+        "scope": "item",
+        "sort_order": 2
+      },
+      {
+        "code": "bilet_bezplatny",
+        "label": "Bilet bezpłatny",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_ambasador",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 0
+      },
+      {
+        "code": "bilet_ze_znizka",
+        "label": "Bilet ze zniżką",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_ambasador",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 1
+      },
+      {
+        "code": "brak_biletow_pula_wykorzystana",
+        "label": "Brak biletów — pula wykorzystana",
+        "semantic_category": "negative",
+        "step_id": "dit_decision_ambasador",
+        "target_step": "completed",
+        "require_reason": true,
+        "active": true,
+        "scope": "item",
+        "sort_order": 2
+      },
+      {
+        "code": "bilet_bezplatny",
+        "label": "Bilet bezpłatny",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_jednostka",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 0
+      },
+      {
+        "code": "bilet_ze_znizka",
+        "label": "Bilet ze zniżką",
+        "semantic_category": "positive",
+        "step_id": "dit_decision_jednostka",
+        "target_step": "completed",
+        "require_reason": false,
+        "active": true,
+        "scope": "item",
+        "sort_order": 1
+      },
+      {
+        "code": "brak_biletow_pula_wykorzystana",
+        "label": "Brak biletów — pula wykorzystana",
+        "semantic_category": "negative",
+        "step_id": "dit_decision_jednostka",
+        "target_step": "completed",
+        "require_reason": true,
+        "active": true,
+        "scope": "item",
+        "sort_order": 2
+      }
+    ]
+  },
+  "qualification_conditions": {
+    "enabled": false,
+    "conditions": []
+  },
+  "rules": [],
+  "notifications": []
+}

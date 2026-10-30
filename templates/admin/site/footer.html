@@ -1,0 +1,99 @@
+{% extends "admin/base.html" %}
+{% from "partials/site_footer_layout.html" import render_site_footer %}
+{% block title %}Stopka strony{% endblock %}
+{% block content %}
+<div class="admin-page-title">
+    <div><p class="admin-eyebrow">Serwis publiczny</p><h1>Stopka strony</h1><p>Konfiguracja widoczna na publicznych stronach platformy.</p></div>
+</div>
+
+<form method="post" class="admin-form-card admin-form" data-site-footer-editor>
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Układ stopki</h2><p>Treść i widoczność lewej oraz prawej części.</p></div>
+        <div class="admin-form-grid">
+            <label><span>Nazwa konfiguracji</span><input name="name" value="{{ footer.name }}" required></label>
+            <label class="admin-switch"><input type="checkbox" name="is_active" {% if footer.is_active or footer.id is none %}checked{% endif %}><span><strong>Aktywna</strong><small>Nieaktywna konfiguracja nie wyświetla własnej treści ani logo.</small></span></label>
+            <label><span>Układ stopki</span><select name="layout">
+                <option value="single" {% if footer.layout == 'single' %}selected{% endif %}>Jedna kolumna</option>
+                <option value="two_columns" {% if (footer.layout or 'two_columns') == 'two_columns' %}selected{% endif %}>Dwie kolumny</option>
+                <option value="left_logo_right_content" {% if footer.layout == 'left_logo_right_content' %}selected{% endif %}>Logo po lewej, treść po prawej</option>
+                <option value="left_content_right_logo" {% if footer.layout == 'left_content_right_logo' %}selected{% endif %}>Treść po lewej, logo po prawej</option>
+            </select></label>
+            <label class="admin-form-wide"><span>Lewa kolumna — HTML</span><textarea name="left_html" rows="7">{{ footer.left_html or '' }}</textarea><small>Dozwolone są akapity, pogrubienie, kursywa, listy i bezpieczne linki.</small></label>
+            <label class="admin-form-wide"><span>Prawa kolumna — HTML</span><textarea name="right_html" rows="7">{{ footer.right_html or '' }}</textarea><small>Jeśli obie kolumny są puste, użyta zostanie dotychczasowa treść HTML.</small></label>
+            <label class="admin-form-wide"><span>Dotychczasowa treść HTML (fallback)</span><textarea name="html_body" rows="5">{{ footer.html_body or '' }}</textarea><small>Pole zgodności wstecznej dla konfiguracji utworzonych przed dodaniem kolumn.</small></label>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Logo w stopce strony</h2><p>Źródłem logo jest wyłącznie ta konfiguracja.</p></div>
+        <p class="admin-help">Logo w stopce jest niezależne od logo formularza i logo platformy.</p>
+        <div class="admin-form-grid">
+            <label><span>Logo z biblioteki</span><select name="logo_id"><option value="">Brak logo</option>{% for logo in logos %}<option value="{{ logo.id }}" {% if footer.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select></label>
+            <label><span>Położenie logo</span><select name="logo_position"><option value="top" {% if (footer.logo_position or 'top') == 'top' %}selected{% endif %}>Nad kolumnami</option><option value="bottom" {% if footer.logo_position == 'bottom' %}selected{% endif %}>Pod kolumnami</option><option value="left" {% if footer.logo_position == 'left' %}selected{% endif %}>W lewej kolumnie</option><option value="right" {% if footer.logo_position == 'right' %}selected{% endif %}>W prawej kolumnie</option><option value="inline" {% if footer.logo_position == 'inline' %}selected{% endif %}>W miejscu znacznika</option></select></label>
+            <label><span>Wyrównanie logo</span><select name="logo_alignment"><option value="left" {% if (footer.logo_alignment or 'left') == 'left' %}selected{% endif %}>Do lewej</option><option value="center" {% if footer.logo_alignment == 'center' %}selected{% endif %}>Do środka</option><option value="right" {% if footer.logo_alignment == 'right' %}selected{% endif %}>Do prawej</option></select></label>
+            <label><span>Szerokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_width" min="20" max="800" value="{{ footer.logo_width if footer.logo_width is not none else '' }}"><small>px</small></span></label>
+            <label><span>Wysokość logo</span><span class="admin-input-with-unit"><input type="number" name="logo_height" min="20" max="400" value="{{ footer.logo_height if footer.logo_height is not none else '' }}"><small>px</small></span></label>
+            <p class="admin-form-wide admin-help">Dla położenia inline wstaw w wybranej treści znacznik <code>{% raw %}{{ footer_logo }}{% endraw %}</code>. Bez znacznika logo nie zostanie wyświetlone.</p>
+        </div>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Media społecznościowe</h2><p>Aktywne pozycje są wyświetlane według wartości „Kolejność”.</p></div>
+        <div class="admin-form-grid">
+            <label><span>Położenie ikon social media</span><select name="social_position" data-social-position><option value="left" {% if (footer.social_position or 'left') == 'left' %}selected{% endif %}>W lewej części</option><option value="right" {% if footer.social_position == 'right' %}selected{% endif %}>W prawej części</option><option value="bottom" {% if footer.social_position == 'bottom' %}selected{% endif %}>Na dole stopki</option><option value="inline" {% if footer.social_position == 'inline' %}selected{% endif %}>W miejscu znacznika</option></select></label>
+            <label><span>Styl ikon</span><select name="social_icon_style"><option value="gold" {% if (footer.social_icon_style or 'gold') == 'gold' %}selected{% endif %}>Złoty</option><option value="light" {% if footer.social_icon_style == 'light' %}selected{% endif %}>Jasny</option><option value="dark" {% if footer.social_icon_style == 'dark' %}selected{% endif %}>Ciemny</option><option value="brand" {% if footer.social_icon_style == 'brand' %}selected{% endif %}>Kolory marek</option></select></label>
+            <label class="admin-switch"><input type="checkbox" name="social_show_labels" {% if footer.social_show_labels %}checked{% endif %}><span><strong>Pokaż etykiety obok ikon</strong><small>Domyślnie etykiety są dostępne tylko dla czytników ekranu.</small></span></label>
+            <p class="admin-form-wide admin-help" data-social-inline-help {% if footer.social_position != 'inline' %}hidden{% endif %}>Wstaw znacznik <code>{% raw %}{{ footer_social_links }}{% endraw %}</code> w treści lewej lub prawej części stopki. Jeśli znacznika zabraknie, ikony pojawią się pod całą stopką.</p>
+        </div>
+
+        <div class="admin-footer-social-rows" data-social-rows>
+            {% for link in social_links %}
+                <div class="admin-footer-social-row" data-social-row>
+                    <label><span>Platforma</span><select name="social_platform"><option value="facebook" {% if link.platform == 'facebook' %}selected{% endif %}>Facebook</option><option value="youtube" {% if link.platform == 'youtube' %}selected{% endif %}>YouTube</option><option value="instagram" {% if link.platform == 'instagram' %}selected{% endif %}>Instagram</option><option value="linkedin" {% if link.platform == 'linkedin' %}selected{% endif %}>LinkedIn</option><option value="x" {% if link.platform == 'x' %}selected{% endif %}>X</option><option value="www" {% if link.platform == 'www' %}selected{% endif %}>WWW</option></select></label>
+                    <label><span>URL</span><input type="url" name="social_url" value="{{ link.url }}" placeholder="https://..."></label>
+                    <label><span>Etykieta dostępności</span><input name="social_label" value="{{ link.label }}"></label>
+                    <label><span>Kolejność</span><input type="number" name="social_sort_order" value="{{ link.sort_order }}"></label>
+                    <label class="admin-switch"><input type="checkbox" name="social_active_index" value="{{ loop.index0 }}" {% if link.is_active %}checked{% endif %}><span><strong>Aktywny</strong></span></label>
+                    <button type="button" class="admin-button admin-button--secondary" data-remove-social>Usuń</button>
+                </div>
+            {% endfor %}
+        </div>
+        <button type="button" class="admin-button admin-button--secondary" data-add-social>Dodaj odnośnik</button>
+    </section>
+
+    <section class="admin-form-section">
+        <div class="admin-form-section-header"><h2>Podgląd rzeczywistej stopki</h2><p>Podgląd jest generowany przez ten sam renderer co widok publiczny i odświeża się po zapisaniu formularza.</p></div>
+        <div class="site-footer-admin-preview" data-site-footer-preview>{{ render_site_footer(footer_preview, footer_contact, footer_service_documents, false) }}</div>
+    </section>
+    <div class="admin-form-actions"><button class="admin-button" type="submit">Zapisz stopkę strony</button></div>
+</form>
+
+<template data-social-row-template>
+    <div class="admin-footer-social-row" data-social-row>
+        <label><span>Platforma</span><select name="social_platform"><option value="facebook">Facebook</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="linkedin">LinkedIn</option><option value="x">X</option><option value="www">WWW</option></select></label>
+        <label><span>URL</span><input type="url" name="social_url" placeholder="https://..."></label>
+        <label><span>Etykieta dostępności</span><input name="social_label"></label>
+        <label><span>Kolejność</span><input type="number" name="social_sort_order" value="1"></label>
+        <label class="admin-switch"><input type="checkbox" name="social_active_index" checked><span><strong>Aktywny</strong></span></label>
+        <button type="button" class="admin-button admin-button--secondary" data-remove-social>Usuń</button>
+    </div>
+</template>
+<script>
+(() => {
+    const rows = document.querySelector("[data-social-rows]");
+    const template = document.querySelector("[data-social-row-template]");
+    const socialPosition = document.querySelector("[data-social-position]");
+    const inlineHelp = document.querySelector("[data-social-inline-help]");
+    const reindex = () => rows?.querySelectorAll("[data-social-row]").forEach((row, index) => {
+        row.querySelector('[name="social_active_index"]').value = String(index);
+        const order = row.querySelector('[name="social_sort_order"]');
+        if (!order.value) order.value = String(index + 1);
+    });
+    document.querySelector("[data-add-social]")?.addEventListener("click", () => { rows.append(template.content.cloneNode(true)); reindex(); });
+    rows?.addEventListener("click", (event) => { if (event.target.closest("[data-remove-social]")) { event.target.closest("[data-social-row]").remove(); reindex(); } });
+    socialPosition?.addEventListener("change", () => { inlineHelp.hidden = socialPosition.value !== "inline"; });
+    reindex();
+})();
+</script>
+{% endblock %}

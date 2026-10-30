@@ -1,17 +1,54 @@
 {% extends "base.html" %}
+{% set auto_rejected = result.auto_rejected|default(false) %}
+{% set qualification_message = result.qualification_message|default('', true) %}
+{% set result_primary_message = (qualification_message or result.message|default('', true) or "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału.") if auto_rejected else qualification_message %}
 
-{% block title %}Zgłosznie zapisane{% endblock %}
+{% block title %}Potwierdzamy Twoje zgłoszenie{% endblock %}
 
 {% block content %}
 {% set signature = result.signature if result.signature is defined and result.signature else {} %}
 {% set signature_mode = signature.mode if signature.mode is defined else "none" %}
 {% set has_signature_flow = signature_mode != "none" %}
+{% set participant_credential = result.participant_credential|default(result.access_token|default('')) %}
 
 <div class="card result-card">
     <div class="card-header">
-        <h2>Zgłosznie zapisane</h2>
-        <p>Formularz został przetworzony.</p>
+        <h2>Potwierdzamy przesłanie Twojego zgłoszenia</h2>
+
     </div>
+
+    {% if auto_rejected %}
+<section class="qualification-result qualification-result--rejected"
+         role="alert"
+         aria-labelledby="qualification-result-title">
+
+    <div class="qualification-result__icon" aria-hidden="true"></div>
+
+    <div class="qualification-result__content">
+        <span class="qualification-result__label">
+            Wynik weryfikacji
+        </span>
+
+        <h3 id="qualification-result-title">
+            Odrzucenie zgłoszenia
+        </h3>
+
+        <p>
+            {{ result_primary_message }}
+        </p>
+
+        <div class="qualification-result__status">
+            <span>Status zgłoszenia</span>
+            <strong>Odrzucony</strong>
+        </div>
+    </div>
+</section>
+
+{% elif result_primary_message %}
+<div class="result-box result-box--completed" role="status">
+    <p>{{ result_primary_message }}</p>
+</div>
+{% endif %}
 
     <div class="result-grid">
         <div class="result-item">
@@ -21,7 +58,7 @@
 
         <div class="result-item">
             <span class="result-label">Identyfikator zgłoszenia</span>
-            <span class="result-value">{{ result.submission_id }}</span>
+            <span class="result-value" data-testid="submission-id">{{ result.submission_id }}</span>
         </div>
 
         {% if has_signature_flow %}
@@ -59,14 +96,14 @@
     </div>
 
     <div class="download-links">
-        <a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>
+        {% if result.pdf_url %}<a class="btn-secondary" href="{{ result.pdf_url }}">Pobierz PDF</a>{% endif %}
 
-        <a
+        {% if result.can_continue|default(true) and participant_credential %}<a
             class="btn-primary"
-            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id) }}"
+            href="{{ url_for('documents.documents_to_sign', submission_id=result.submission_id, token=participant_credential) }}"
         >
             Przejdź do dokumentów do podpisania
-        </a>
+        </a>{% endif %}
 
         {% if has_signature_flow and result.signed_pdf_url %}
             <a class="btn-primary" href="{{ result.signed_pdf_url }}">Pobierz podpisany PDF</a>
@@ -114,13 +151,15 @@
     </div>
     {% endif %}
 
-    {% if has_signature_flow %}
+    {% if has_signature_flow and participant_credential %}
     <div class="card" style="margin-top: 24px;">
         <div class="card-header">
             <h3>Wgraj podpisany PDF</h3>
         </div>
 
         <form method="post" action="{{ result.upload_url }}" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}">
+            <input type="hidden" name="access_token" value="{{ participant_credential }}">
             <div class="form-row width-full">
                 <label for="signed_pdf">Podpisany plik PDF</label>
                 <input type="file" id="signed_pdf" name="signed_pdf" accept="application/pdf" required>
@@ -149,7 +188,7 @@
                 <span class="result-value">{{ result.verification.provider or "-" }}</span>
             </div>
             <div class="result-item">
-                <span class="result-label">Podpis Szafir / KIR</span>
+                <span class="result-label">Podpis elektroniczny</span>
                 <span class="result-value">{{ "Tak" if result.verification.is_szafir_signature else "Nie" }}</span>
             </div>
             <div class="result-item">
@@ -172,4 +211,21 @@
         <a href="{{ url_for('public_forms.index') }}">Powrót do formularza</a>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{% set credential = result.participant_credential|default(result.access_token|default('')) %}
+{% if credential %}
+<script type="application/json" id="result-session-data">{{ {'submission_id': result.submission_id, 'credential': credential}|tojson }}</script>
+<script>
+    try {
+        const resultSessionData = JSON.parse(document.getElementById('result-session-data').textContent);
+        sessionStorage.setItem(
+            `participant-access:${window.APP_BASE_PATH}:` + resultSessionData.submission_id,
+            resultSessionData.credential
+        );
+        sessionStorage.setItem(`participant-last-submission:${window.APP_BASE_PATH}`, resultSessionData.submission_id);
+    } catch (_) { /* The credential-bearing link still works if storage is unavailable. */ }
+</script>
+{% endif %}
 {% endblock %}

@@ -4,19 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block extra_css %}{% endblock %}
+    <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
+<link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}?v=2" type="image/x-icon">
 </head>
-<body>
+<body class="public-ui">
     <div class="page-shell">
         {% include "partials/header.html" %}
 
         <main class="site-main">
             <div class="container">
                 {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
+                    {# A result page already displays its primary message inside the result card. #}
+                    {% set visible_flashes = namespace(items=[]) %}
+                    {% for category, message in messages %}
+                        {% if not result_primary_message|default('') or message != result_primary_message %}
+                            {% set visible_flashes.items = visible_flashes.items + [(category, message)] %}
+                        {% endif %}
+                    {% endfor %}
+                    {% if visible_flashes.items %}
                         <div class="flash-stack">
-                            {% for category, message in messages %}
+                            {% for category, message in visible_flashes.items %}
                                 <div class="flash flash-{{ category }}">{{ message }}</div>
                             {% endfor %}
                         </div>
@@ -29,6 +39,9 @@
 
         {% include "partials/footer.html" %}
     </div>
+    <script>
+        window.APP_BASE_PATH = {{ app_base_path|tojson }};
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

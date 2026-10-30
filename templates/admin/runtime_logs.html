@@ -10,16 +10,9 @@
       <p class="admin-eyebrow">Diagnostyka systemu</p>
       <h1>Logi aplikacji</h1>
       <p class="runtime-logs-description">
-        Podgląd zdarzeń z bieżącego procesu aplikacji.
+        Logi bieżącego procesu aplikacji.
       </p>
     </div>
-
-    <a
-      class="admin-button-secondary"
-      href="{{ url_for('admin.storage_diagnostics') }}"
-    >
-      Diagnostyka storage
-    </a>
   </div>
 
   {% if not log_buffer_enabled %}
@@ -32,8 +25,10 @@
 
       <div class="runtime-logs-panel-header">
         <div>
-          <h2>Filtry</h2>
-          <p>Wybierz zakres czasu i rodzaj zdarzeń.</p>
+          <h2>Filtry logów</h2>
+          <p>
+            Filtruj logi, wybierz zakres czasu lub wyszukaj konkretną operację.
+          </p>
         </div>
 
         <div class="runtime-logs-presets">
@@ -50,6 +45,9 @@
                 since_minutes=minutes,
                 q=filters.q,
                 level=filters.level,
+                logger=filters.logger,
+                event=filters.event,
+                endpoint=filters.endpoint,
                 limit=filters.limit
               ) }}"
             >
@@ -59,15 +57,18 @@
         </div>
       </div>
 
-      <form method="get" class="runtime-logs-filters">
+      <form
+        method="get"
+        class="runtime-logs-filters"
+      >
 
-        <label class="runtime-filter-search">
+        <label>
           <span>Szukaj</span>
           <input
             type="search"
             name="q"
             value="{{ filters.q }}"
-            placeholder="np. nextcloud, storage, exception"
+            placeholder="np. submission_id, nextcloud, exception"
           >
         </label>
 
@@ -75,7 +76,14 @@
           <span>Poziom</span>
           <select name="level">
             <option value="">Wszystkie</option>
-            {% for value in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] %}
+
+            {% for value in [
+              "DEBUG",
+              "INFO",
+              "WARNING",
+              "ERROR",
+              "CRITICAL"
+            ] %}
               <option
                 value="{{ value }}"
                 {% if filters.level == value %}selected{% endif %}
@@ -84,6 +92,36 @@
               </option>
             {% endfor %}
           </select>
+        </label>
+
+        <label>
+          <span>Logger / moduł</span>
+          <input
+            type="text"
+            name="logger"
+            value="{{ filters.logger }}"
+            placeholder="np. signature_verifier"
+          >
+        </label>
+
+        <label>
+          <span>Event</span>
+          <input
+            type="text"
+            name="event"
+            value="{{ filters.event }}"
+            placeholder="np. http_request_failed"
+          >
+        </label>
+
+        <label>
+          <span>Endpoint</span>
+          <input
+            type="text"
+            name="endpoint"
+            value="{{ filters.endpoint }}"
+            placeholder="np. documents"
+          >
         </label>
 
         <label>
@@ -104,23 +142,12 @@
           >
         </label>
 
-        <label>
-          <span>Liczba wyników</span>
-          <select name="limit">
-            {% for value in [50, 100, 200, 500] %}
-              <option
-                value="{{ value }}"
-                {% if filters.limit == value %}selected{% endif %}
-              >
-                {{ value }}
-              </option>
-            {% endfor %}
-          </select>
-        </label>
-
         <div class="runtime-filter-actions">
-          <button class="admin-button" type="submit">
-            Zastosuj filtry
+          <button
+            class="admin-button"
+            type="submit"
+          >
+            Filtruj
           </button>
 
           <a
@@ -132,92 +159,45 @@
         </div>
 
       </form>
+
     </section>
 
-    <div class="runtime-logs-summary">
-      <div class="admin-card runtime-summary-card">
-        <span>Wyświetlono</span>
-        <strong>{{ logs|length }}</strong>
-        <small>wpisów</small>
+    <section class="runtime-console">
+
+      <div class="runtime-console-header">
+        <span>APPLICATION LOG</span>
+
+        <span>
+          {{ logs|length }} / {{ stored_count }}
+        </span>
       </div>
 
-      <div class="admin-card runtime-summary-card">
-        <span>W buforze</span>
-        <strong>{{ stored_count }}</strong>
-        <small>wpisów procesu</small>
+      <div
+        class="runtime-console-output"
+        role="log"
+        aria-label="Logi aplikacji"
+      >
+        {% if logs %}
+
+          {% for item in logs %}
+            <div
+              class="runtime-console-line runtime-console-line--{{ item.level|lower }}"
+              data-level="{{ item.level }}"
+            >{{ item.rendered }}</div>
+          {% endfor %}
+
+        {% else %}
+
+          <div class="runtime-console-empty">
+            Brak logów spełniających wybrane kryteria.
+          </div>
+
+        {% endif %}
       </div>
 
-      <div class="admin-card runtime-summary-card">
-        <span>Poziom</span>
-        <strong>{{ filters.level or "Wszystkie" }}</strong>
-        <small>aktywny filtr</small>
-      </div>
-    </div>
-
-    {% if logs %}
-      <div class="runtime-log-list">
-
-        {% for item in logs %}
-          <article class="admin-card runtime-log-entry">
-            <div class="runtime-log-row">
-
-              <time class="runtime-log-time">
-                {{ item.display_time }}
-              </time>
-
-              <span class="runtime-log-level runtime-log-level--{{ item.level|lower }}">
-                {{ item.level }}
-              </span>
-
-              <div class="runtime-log-content">
-                <div class="runtime-log-message">
-                  {{ item.message }}
-                </div>
-
-                <div class="runtime-log-meta">
-                  <code>{{ item.logger }}</code>
-
-                  {% if item.endpoint %}
-                    <span>{{ item.endpoint }}</span>
-                  {% endif %}
-                </div>
-              </div>
-
-              <details class="runtime-log-details">
-                <summary>Szczegóły</summary>
-
-                <div class="runtime-log-details-body">
-                  <p>
-                    <strong>Event:</strong>
-                    {{ item.event or "-" }}
-                  </p>
-
-                  <p>
-                    <strong>Request ID:</strong>
-                    <code>{{ item.request_id or "-" }}</code>
-                  </p>
-
-                  <p>
-                    <strong>Correlation ID:</strong>
-                    <code>{{ item.correlation_id or "-" }}</code>
-                  </p>
-
-                  <pre>{{ item.rendered }}</pre>
-                </div>
-              </details>
-
-            </div>
-          </article>
-        {% endfor %}
-
-      </div>
-    {% else %}
-      <div class="admin-card runtime-logs-empty">
-        <strong>Brak logów</strong>
-        <p>Nie znaleziono wpisów dla wybranych filtrów.</p>
-      </div>
-    {% endif %}
+    </section>
 
   {% endif %}
+
 </div>
 {% endblock %}

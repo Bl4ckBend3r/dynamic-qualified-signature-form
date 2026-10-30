@@ -195,6 +195,9 @@ class RuntimeLogBufferHandler(logging.Handler):
         limit: int = 200,
         level: str = "",
         query: str = "",
+        logger_name: str = "",
+        event_name: str = "",
+        endpoint_name: str = "",
         date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> list[dict]:
@@ -209,6 +212,18 @@ class RuntimeLogBufferHandler(logging.Handler):
 
         query = str(
             query or ""
+        ).strip().lower()
+
+        logger_name = str(
+            logger_name or ""
+        ).strip().lower()
+
+        event_name = str(
+            event_name or ""
+        ).strip().lower()
+
+        endpoint_name = str(
+            endpoint_name or ""
         ).strip().lower()
 
         with self.lock:
@@ -240,6 +255,33 @@ class RuntimeLogBufferHandler(logging.Handler):
                 continue
 
             if level and entry["level"] != level:
+                continue
+
+            if (
+                logger_name
+                and logger_name
+                not in str(
+                    entry.get("logger") or ""
+                ).lower()
+            ):
+                continue
+
+            if (
+                event_name
+                and event_name
+                not in str(
+                    entry.get("event") or ""
+                ).lower()
+            ):
+                continue
+
+            if (
+                endpoint_name
+                and endpoint_name
+                not in str(
+                    entry.get("endpoint") or ""
+                ).lower()
+            ):
                 continue
 
             if query:

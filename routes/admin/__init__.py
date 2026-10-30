@@ -403,6 +403,18 @@ def runtime_logs():
         request.args.get("level") or ""
     ).strip().upper()
 
+    logger_name = str(
+        request.args.get("logger") or ""
+    ).strip()
+
+    event_name = str(
+        request.args.get("event") or ""
+    ).strip()
+
+    endpoint_name = str(
+        request.args.get("endpoint") or ""
+    ).strip()
+
     allowed_levels = {
         "",
         "DEBUG",
@@ -510,12 +522,15 @@ def runtime_logs():
 
     if handler is not None:
         logs = handler.snapshot(
-            limit=limit,
-            level=level,
-            query=query,
-            date_from=date_from,
-            date_to=date_to,
-        )
+        limit=limit,
+        level=level,
+        query=query,
+        logger_name=logger_name,
+        event_name=event_name,
+        endpoint_name=endpoint_name,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
         for entry in logs:
             try:

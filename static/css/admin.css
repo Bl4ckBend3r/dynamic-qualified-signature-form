@@ -6920,7 +6920,6 @@ body.agreement-builder-window {
   }
 }
 
-
 /* Runtime logs panel */
 
 .runtime-logs-description {
@@ -6929,8 +6928,8 @@ body.agreement-builder-window {
 }
 
 .runtime-logs-panel {
-  padding: 22px;
   margin-bottom: 18px;
+  padding: 22px;
 }
 
 .runtime-logs-panel-header {
@@ -6976,18 +6975,14 @@ body.agreement-builder-window {
 }
 
 .runtime-log-preset.is-active {
+  border-color: var(--color-info);
   background: var(--color-info-bg);
   color: var(--color-info);
-  border-color: var(--color-info);
 }
 
 .runtime-logs-filters {
   display: grid;
-  grid-template-columns:
-    minmax(260px, 2fr)
-    minmax(140px, 0.8fr)
-    minmax(190px, 1fr)
-    minmax(190px, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   align-items: end;
 }
@@ -7006,174 +7001,103 @@ body.agreement-builder-window {
 
 .runtime-logs-filters input,
 .runtime-logs-filters select {
+  box-sizing: border-box;
   width: 100%;
   min-height: 42px;
 }
 
-.runtime-filter-search {
-  grid-column: span 2;
-}
-
 .runtime-filter-actions {
+  grid-column: 1 / -1;
   display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 
-.runtime-logs-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 18px;
-}
-
-.runtime-summary-card {
-  display: grid;
-  gap: 3px;
-  padding: 16px 18px;
-}
-
-.runtime-summary-card span,
-.runtime-summary-card small {
-  color: var(--color-text-muted);
-}
-
-.runtime-summary-card strong {
-  font-size: 1.45rem;
-}
-
-.runtime-log-list {
-  display: grid;
-  gap: 10px;
-}
-
-.runtime-log-entry {
-  padding: 0;
+.runtime-console {
   overflow: hidden;
+  border: 1px solid #263246;
+  border-radius: 8px;
+  background: #0b1020;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
 
-.runtime-log-row {
-  display: grid;
-  grid-template-columns:
-    155px
-    95px
-    minmax(0, 1fr)
-    auto;
-  gap: 16px;
-  align-items: center;
-  padding: 16px 18px;
-}
-
-.runtime-log-time {
-  white-space: nowrap;
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.runtime-log-level {
-  display: inline-flex;
-  justify-content: center;
-  min-width: 78px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 800;
-}
-
-.runtime-log-level--debug {
-  background: var(--color-surface-muted);
-}
-
-.runtime-log-level--info {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-}
-
-.runtime-log-level--warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-
-.runtime-log-level--error,
-.runtime-log-level--critical {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
-}
-
-.runtime-log-content {
-  min-width: 0;
-}
-
-.runtime-log-message {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.runtime-log-meta {
+.runtime-console-header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  margin-top: 5px;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #263246;
+  background: #141b2d;
+  color: #9ca9bd;
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    "Courier New",
+    monospace;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
-.runtime-log-details summary {
-  cursor: pointer;
-  white-space: nowrap;
+.runtime-console-output {
+  max-height: 680px;
+  overflow: auto;
+  padding: 12px 0;
+  background: #0b1020;
+  color: #d8e1ef;
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    "Courier New",
+    monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.runtime-console-line {
+  min-width: max-content;
+  padding: 2px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.runtime-console-line:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.runtime-console-line--debug {
+  color: #8d99aa;
+}
+
+.runtime-console-line--info {
+  color: #d8e1ef;
+}
+
+.runtime-console-line--warning {
+  color: #ffd166;
+}
+
+.runtime-console-line--error {
+  color: #ff8585;
+}
+
+.runtime-console-line--critical {
+  background: rgba(255, 70, 70, 0.08);
+  color: #ff6b6b;
   font-weight: 700;
 }
 
-.runtime-log-details[open] {
-  grid-column: 1 / -1;
-}
-
-.runtime-log-details-body {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--color-border);
-}
-
-.runtime-log-details-body pre {
-  margin: 12px 0 0;
-  padding: 14px;
-  overflow-x: auto;
-  border-radius: 8px;
-  background: var(--color-surface-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.8rem;
-}
-
-.runtime-logs-empty {
-  padding: 36px 20px;
+.runtime-console-empty {
+  padding: 30px 14px;
+  color: #8d99aa;
   text-align: center;
-}
-
-.runtime-logs-empty p {
-  margin-bottom: 0;
-  color: var(--color-text-muted);
 }
 
 @media (max-width: 1050px) {
   .runtime-logs-filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .runtime-filter-search {
-    grid-column: 1 / -1;
-  }
-
-  .runtime-log-row {
-    grid-template-columns:
-      145px
-      90px
-      minmax(0, 1fr);
-  }
-
-  .runtime-log-details {
-    grid-column: 1 / -1;
   }
 }
 
@@ -7187,11 +7111,8 @@ body.agreement-builder-window {
     grid-template-columns: 1fr;
   }
 
-  .runtime-filter-search {
-    grid-column: auto;
-  }
-
   .runtime-filter-actions {
+    grid-column: auto;
     width: 100%;
   }
 
@@ -7199,93 +7120,8 @@ body.agreement-builder-window {
     flex: 1;
   }
 
-  .runtime-logs-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .runtime-log-row {
-    grid-template-columns: 1fr auto;
-    gap: 9px 12px;
-  }
-
-  .runtime-log-content,
-  .runtime-log-details {
-    grid-column: 1 / -1;
-  }
-}
-
-/* Runtime logs - equal filter widths */
-
-.runtime-logs-filters {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.runtime-filter-search {
-  grid-column: auto;
-}
-
-.runtime-filter-actions {
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-}
-
-@media (max-width: 1050px) {
-  .runtime-logs-filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .runtime-filter-search {
-    grid-column: auto;
-  }
-}
-
-@media (max-width: 700px) {
-  .runtime-logs-filters {
-    grid-template-columns: 1fr;
-  }
-
-  .runtime-filter-actions {
-    grid-column: auto;
-  }
-}
-
-/* Runtime logs - equal summary cards */
-
-.runtime-logs-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: stretch;
-}
-
-.runtime-logs-summary .runtime-summary-card {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 118px;
-  margin: 0;
-  padding: 18px;
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.runtime-logs-summary .runtime-summary-card span,
-.runtime-logs-summary .runtime-summary-card strong,
-.runtime-logs-summary .runtime-summary-card small {
-  margin: 0;
-}
-
-.runtime-logs-summary .runtime-summary-card strong {
-  margin: 7px 0 5px;
-}
-
-@media (max-width: 700px) {
-  .runtime-logs-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .runtime-logs-summary .runtime-summary-card {
-    min-height: 110px;
+  .runtime-console-output {
+    max-height: 560px;
+    font-size: 0.75rem;
   }
 }

@@ -34,7 +34,11 @@
         {% for event in version_upgrade_events %}
         <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>
         {% endfor %}
-        {% if version_upgrade_state.get('missing_fields') or version_upgrade_state.get('invalid_training_ids') %}<p class="admin-alert admin-alert-warning">Zgłoszenie wymaga uzupełnienia danych przez uczestnika.</p>{% endif %}
+        {% if version_upgrade_state.get('missing_fields') %}
+        <p class="admin-alert admin-alert-warning">
+            Zgłoszenie wymaga uzupełnienia obowiązkowych danych przez uczestnika.
+        </p>
+        {% endif %}
         <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>
         {% for section in workflow_view.sections %}{% if section.is_current %}<a href="#workflow-step-{{ loop.index }}">Przejdź do aktualnego etapu</a>{% endif %}{% endfor %}</div>
     </div>

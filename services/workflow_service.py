@@ -308,13 +308,27 @@ class WorkflowService:
             return False
         if str(submission.get("process_status") or "") in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
-        if getattr(self.submission_repository, "session_factory", None):
+        decision_transition = bool(
+            str((metadata or {}).get("officer_decision") or "").strip()
+        )
+
+        if (
+            getattr(self.submission_repository, "session_factory", None)
+            and not decision_transition
+        ):
             from services.form_version_service import FormVersionError, FormVersionService
             with self.submission_repository.session_factory() as db:
-                model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one()
+                model = db.execute(
+                    select(FormSubmission).where(
+                        FormSubmission.submission_id == submission_id
+                    )
+                ).scalar_one()
                 if (model.data_json or {}).get("_form_version_upgrade"):
                     try:
-                        FormVersionService().require_submission_data_complete(db, model)
+                        FormVersionService().require_submission_data_complete(
+                            db,
+                            model,
+                        )
                     except FormVersionError as exc:
                         raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)
@@ -412,10 +426,19 @@ class WorkflowService:
         old_status = getattr(submission, "process_status", None)
         if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
-        if db is not None and (submission.data_json or {}).get("_form_version_upgrade"):
+        decision_transition = bool(str(decision_code or "").strip())
+
+        if (
+            db is not None
+            and (submission.data_json or {}).get("_form_version_upgrade")
+            and not decision_transition
+        ):
             from services.form_version_service import FormVersionError, FormVersionService
             try:
-                FormVersionService().require_submission_data_complete(db, submission)
+                FormVersionService().require_submission_data_complete(
+                    db,
+                    submission,
+                )
             except FormVersionError as exc:
                 raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)

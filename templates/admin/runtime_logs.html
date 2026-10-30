@@ -1,0 +1,223 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Logi aplikacji{% endblock %}
+
+{% block content %}
+<div class="runtime-logs-page">
+
+  <div class="admin-page-title">
+    <div>
+      <p class="admin-eyebrow">Diagnostyka systemu</p>
+      <h1>Logi aplikacji</h1>
+      <p class="runtime-logs-description">
+        Podgląd zdarzeń z bieżącego procesu aplikacji.
+      </p>
+    </div>
+
+    <a
+      class="admin-button-secondary"
+      href="{{ url_for('admin.storage_diagnostics') }}"
+    >
+      Diagnostyka storage
+    </a>
+  </div>
+
+  {% if not log_buffer_enabled %}
+    <div class="admin-alert admin-alert-error">
+      Bufor logów aplikacji nie jest dostępny.
+    </div>
+  {% else %}
+
+    <section class="admin-card runtime-logs-panel">
+
+      <div class="runtime-logs-panel-header">
+        <div>
+          <h2>Filtry</h2>
+          <p>Wybierz zakres czasu i rodzaj zdarzeń.</p>
+        </div>
+
+        <div class="runtime-logs-presets">
+          {% for minutes, label in [
+            (15, "15 min"),
+            (60, "1 godz."),
+            (360, "6 godz."),
+            (1440, "24 godz.")
+          ] %}
+            <a
+              class="runtime-log-preset{% if filters.since_minutes == minutes %} is-active{% endif %}"
+              href="{{ url_for(
+                'admin.runtime_logs',
+                since_minutes=minutes,
+                q=filters.q,
+                level=filters.level,
+                limit=filters.limit
+              ) }}"
+            >
+              {{ label }}
+            </a>
+          {% endfor %}
+        </div>
+      </div>
+
+      <form method="get" class="runtime-logs-filters">
+
+        <label class="runtime-filter-search">
+          <span>Szukaj</span>
+          <input
+            type="search"
+            name="q"
+            value="{{ filters.q }}"
+            placeholder="np. nextcloud, storage, exception"
+          >
+        </label>
+
+        <label>
+          <span>Poziom</span>
+          <select name="level">
+            <option value="">Wszystkie</option>
+            {% for value in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] %}
+              <option
+                value="{{ value }}"
+                {% if filters.level == value %}selected{% endif %}
+              >
+                {{ value }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>
+          <span>Od</span>
+          <input
+            type="datetime-local"
+            name="date_from"
+            value="{{ filters.date_from }}"
+          >
+        </label>
+
+        <label>
+          <span>Do</span>
+          <input
+            type="datetime-local"
+            name="date_to"
+            value="{{ filters.date_to }}"
+          >
+        </label>
+
+        <label>
+          <span>Liczba wyników</span>
+          <select name="limit">
+            {% for value in [50, 100, 200, 500] %}
+              <option
+                value="{{ value }}"
+                {% if filters.limit == value %}selected{% endif %}
+              >
+                {{ value }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <div class="runtime-filter-actions">
+          <button class="admin-button" type="submit">
+            Zastosuj filtry
+          </button>
+
+          <a
+            class="admin-button-secondary"
+            href="{{ url_for('admin.runtime_logs') }}"
+          >
+            Wyczyść
+          </a>
+        </div>
+
+      </form>
+    </section>
+
+    <div class="runtime-logs-summary">
+      <div class="admin-card runtime-summary-card">
+        <span>Wyświetlono</span>
+        <strong>{{ logs|length }}</strong>
+        <small>wpisów</small>
+      </div>
+
+      <div class="admin-card runtime-summary-card">
+        <span>W buforze</span>
+        <strong>{{ stored_count }}</strong>
+        <small>wpisów procesu</small>
+      </div>
+
+      <div class="admin-card runtime-summary-card">
+        <span>Poziom</span>
+        <strong>{{ filters.level or "Wszystkie" }}</strong>
+        <small>aktywny filtr</small>
+      </div>
+    </div>
+
+    {% if logs %}
+      <div class="runtime-log-list">
+
+        {% for item in logs %}
+          <article class="admin-card runtime-log-entry">
+            <div class="runtime-log-row">
+
+              <time class="runtime-log-time">
+                {{ item.display_time }}
+              </time>
+
+              <span class="runtime-log-level runtime-log-level--{{ item.level|lower }}">
+                {{ item.level }}
+              </span>
+
+              <div class="runtime-log-content">
+                <div class="runtime-log-message">
+                  {{ item.message }}
+                </div>
+
+                <div class="runtime-log-meta">
+                  <code>{{ item.logger }}</code>
+
+                  {% if item.endpoint %}
+                    <span>{{ item.endpoint }}</span>
+                  {% endif %}
+                </div>
+              </div>
+
+              <details class="runtime-log-details">
+                <summary>Szczegóły</summary>
+
+                <div class="runtime-log-details-body">
+                  <p>
+                    <strong>Event:</strong>
+                    {{ item.event or "-" }}
+                  </p>
+
+                  <p>
+                    <strong>Request ID:</strong>
+                    <code>{{ item.request_id or "-" }}</code>
+                  </p>
+
+                  <p>
+                    <strong>Correlation ID:</strong>
+                    <code>{{ item.correlation_id or "-" }}</code>
+                  </p>
+
+                  <pre>{{ item.rendered }}</pre>
+                </div>
+              </details>
+
+            </div>
+          </article>
+        {% endfor %}
+
+      </div>
+    {% else %}
+      <div class="admin-card runtime-logs-empty">
+        <strong>Brak logów</strong>
+        <p>Nie znaleziono wpisów dla wybranych filtrów.</p>
+      </div>
+    {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}

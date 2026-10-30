@@ -80,6 +80,8 @@ TECHNICAL_SORT_FIELDS = {"created_at", "process_status", "officer_decision", "em
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 
 
+
+
 @bp.errorhandler(403)
 def admin_forbidden(error):
     return render_template(
@@ -122,6 +124,276 @@ def db_session_factory():
 
 from .auth import get_current_user, login_required, permission_required, role_required  # noqa: E402,F401
 
+
+@bp.get("/storage-diagnostics")
+@login_required
+def storage_diagnostics():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+
+    services = current_app.extensions["services"]
+    storage = services.storage
+
+    result = {
+        "storage_type": type(storage).__name__,
+        "failover_enabled": hasattr(storage, "primary"),
+        "primary_type": "",
+        "primary_available": None,
+        "output_dir": "",
+        "nextcloud_output_exists": None,
+        "nextcloud_error": "",
+        "declarations": [],
+    }
+
+    primary = storage
+
+    if hasattr(storage, "primary"):
+        result["primary_type"] = type(storage.primary).__name__
+        result["primary_available"] = storage.primary_available
+        primary = storage.primary
+
+    result["output_dir"] = getattr(primary, "output_dir", "")
+
+    try:
+        result["nextcloud_output_exists"] = primary.exists(
+            primary.output_dir
+        )
+    except Exception as exc:
+        result["nextcloud_error"] = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    with db_session_factory()() as db:
+        rows = (
+            db.execute(
+                select(SubmissionFile)
+                .where(
+                    SubmissionFile.document_id == "declaration"
+                )
+                .order_by(SubmissionFile.id.desc())
+                .limit(20)
+            )
+            .scalars()
+            .all()
+        )
+
+        for row in rows:
+            exists = None
+            error = ""
+
+            try:
+                exists = primary.exists(row.storage_path)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+
+            result["declarations"].append(
+                {
+                    "id": row.id,
+                    "submission_id": row.public_submission_id,
+                    "form_slug": row.form_slug,
+                    "document_type": row.document_type,
+                    "filename": row.filename,
+                    "storage_path": row.storage_path,
+                    "status": row.status,
+                    "signed": row.signed,
+                    "signature_status": row.signature_status,
+                    "workflow_step": row.workflow_step_at_upload,
+                    "exists_on_nextcloud": exists,
+                    "storage_error": error,
+                }
+            )
+
+    return result
+
+@bp.get("/runtime-logs")
+@login_required
+def runtime_logs():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    handler = current_app.extensions.get(
+        "runtime_log_buffer"
+    )
+
+    app_timezone = ZoneInfo(
+        current_app.config.get(
+            "APP_TIMEZONE",
+            "Europe/Warsaw",
+        )
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(app_timezone)
+
+    query = str(
+        request.args.get("q") or ""
+    ).strip()
+
+    level = str(
+        request.args.get("level") or ""
+    ).strip().upper()
+
+    allowed_levels = {
+        "",
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    }
+
+    if level not in allowed_levels:
+        abort(400)
+
+    limit = parse_int(
+        request.args.get("limit"),
+        200,
+    )
+    limit = max(10, min(limit, 500))
+
+    raw_from = str(
+        request.args.get("date_from") or ""
+    ).strip()
+
+    raw_to = str(
+        request.args.get("date_to") or ""
+    ).strip()
+
+    since_minutes = parse_int(
+        request.args.get("since_minutes"),
+        0,
+    )
+
+    date_from = None
+    date_to = None
+
+    def parse_local_datetime(value):
+        if not value:
+            return None
+
+        parsed = datetime.fromisoformat(value)
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(
+                tzinfo=app_timezone
+            )
+
+        return parsed.astimezone(timezone.utc)
+
+    try:
+        date_from = parse_local_datetime(
+            raw_from
+        )
+        date_to = parse_local_datetime(
+            raw_to
+        )
+    except ValueError:
+        abort(400)
+
+    if since_minutes > 0:
+        since_minutes = min(
+            since_minutes,
+            1440,
+        )
+        date_from = now_utc - timedelta(
+            minutes=since_minutes
+        )
+        date_to = now_utc
+
+        raw_from = (
+            date_from
+            .astimezone(app_timezone)
+            .strftime("%Y-%m-%dT%H:%M")
+        )
+
+        raw_to = (
+            now_local
+            .strftime("%Y-%m-%dT%H:%M")
+        )
+
+    elif not raw_from and not raw_to:
+        # Domyślnie ostatnia godzina.
+        date_from = now_utc - timedelta(
+            hours=1
+        )
+        date_to = now_utc
+
+        raw_from = (
+            date_from
+            .astimezone(app_timezone)
+            .strftime("%Y-%m-%dT%H:%M")
+        )
+
+        raw_to = (
+            now_local
+            .strftime("%Y-%m-%dT%H:%M")
+        )
+
+    if (
+        date_from
+        and date_to
+        and date_from > date_to
+    ):
+        abort(400)
+
+    logs = []
+
+    if handler is not None:
+        logs = handler.snapshot(
+            limit=limit,
+            level=level,
+            query=query,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+        for entry in logs:
+            try:
+                timestamp = datetime.fromisoformat(
+                    str(
+                        entry.get(
+                            "timestamp",
+                            "",
+                        )
+                    ).replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+
+                entry["display_time"] = (
+                    timestamp
+                    .astimezone(app_timezone)
+                    .strftime(
+                        "%d.%m.%Y %H:%M:%S"
+                    )
+                )
+            except (TypeError, ValueError):
+                entry["display_time"] = (
+                    entry.get("timestamp") or "-"
+                )
+
+    return render_template(
+        "admin/runtime_logs.html",
+        logs=logs,
+        log_buffer_enabled=handler is not None,
+        stored_count=(
+            len(handler.records)
+            if handler is not None
+            else 0
+        ),
+        filters={
+            "q": query,
+            "level": level,
+            "limit": limit,
+            "date_from": raw_from,
+            "date_to": raw_to,
+            "since_minutes": since_minutes,
+        },
+    )
 
 def normalize_slug(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower()).strip("_")

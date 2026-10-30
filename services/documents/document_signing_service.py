@@ -70,11 +70,16 @@ class DocumentSigningService:
         if not verification.get("is_signed"):
             self._record_verification_rejection("unsigned")
             raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
-        outcome = signature_verification_result(verification, ["mszafir"])
+        outcome = signature_verification_result(
+            verification,
+            ["mszafir", "profil_zaufany"],
+        )
         if outcome != "VALID_SIGNATURE":
             self._record_verification_rejection(str(verification.get("reason_code") or outcome).lower())
             if outcome == "SIGNATURE_TYPE_NOT_ALLOWED":
-                raise ValueError("Przeslany plik nie jest podpisem Szafir / KIR.")
+                raise ValueError(
+                    "Przesłany plik nie jest dopuszczalnym podpisem mSzafir ani Profilem Zaufanym."
+                )
             if outcome == "VERIFICATION_ERROR":
                 raise ValueError("Nie udało się obecnie zweryfikować podpisu PDF.")
             if outcome == "NO_SIGNATURE":

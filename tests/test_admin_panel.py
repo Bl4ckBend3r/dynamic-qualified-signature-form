@@ -5303,7 +5303,7 @@ def test_platform_mail_layout_has_expected_defaults():
     assert "#1d2e5b" in html
     assert "#c8a35d" in html
     assert "Dzien dobry Jan" in html
-    assert "Numer zgloszenia" in html
+    assert "Numer zgłoszenia" in html
 
 
 def test_mail_template_edit_does_not_expose_style_controls(admin_app, admin_client):
@@ -5347,7 +5347,7 @@ def test_mail_template_preview_renders_platform_layout(admin_app, admin_client):
 
     assert "platform-mail-card" in html
     assert "#f0f1f5" in html
-    assert "Numer zgloszenia" in html
+    assert "Numer zgłoszenia" in html
 
 
 def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admin_app, admin_client):

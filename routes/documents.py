@@ -883,7 +883,10 @@ def upload_signed_pdf(slug: str, submission_id: str):
             uploaded_file=request.files.get("signed_pdf"),
             temp_dir=current_app.config["TEMP_DIR"],
         )
-        flash("Wykryto poprawny podpis Szafir / KIR.", "success")
+        flash(
+            "Podpis elektroniczny został poprawnie zweryfikowany.",
+            "success",
+        )
     except ValueError as exc:
         flash(str(exc), "error")
     except Exception as exc:

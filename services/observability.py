@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
@@ -117,6 +118,147 @@ class TextLogFormatter(logging.Formatter):
         return redact_log_text(super().format(record))
 
 
+class RuntimeLogBufferHandler(logging.Handler):
+    def __init__(self, capacity: int = 1000) -> None:
+        super().__init__()
+        self.records = deque(
+            maxlen=max(
+                100,
+                min(int(capacity), 5000),
+            )
+        )
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            rendered = self.format(record)
+
+            entry = {
+                "timestamp": datetime.now(
+                    timezone.utc
+                ).isoformat(
+                    timespec="milliseconds"
+                ).replace(
+                    "+00:00",
+                    "Z",
+                ),
+                "level": record.levelname,
+                "logger": record.name,
+                "event": redact_log_text(
+                    getattr(
+                        record,
+                        "event",
+                        record.getMessage(),
+                    )
+                ),
+                "message": redact_log_text(
+                    record.getMessage()
+                ),
+                "request_id": redact_log_text(
+                    getattr(
+                        record,
+                        "request_id",
+                        "",
+                    )
+                ),
+                "correlation_id": redact_log_text(
+                    getattr(
+                        record,
+                        "correlation_id",
+                        "",
+                    )
+                ),
+                "endpoint": redact_log_text(
+                    getattr(
+                        record,
+                        "endpoint",
+                        "",
+                    )
+                ),
+                "exception_type": redact_log_text(
+                    getattr(
+                        record,
+                        "exception_type",
+                        "",
+                    )
+                ),
+                "rendered": rendered,
+            }
+
+            self.records.append(entry)
+
+        except Exception:
+            self.handleError(record)
+
+    def snapshot(
+        self,
+        *,
+        limit: int = 200,
+        level: str = "",
+        query: str = "",
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> list[dict]:
+        limit = max(
+            1,
+            min(int(limit), 500),
+        )
+
+        level = str(
+            level or ""
+        ).strip().upper()
+
+        query = str(
+            query or ""
+        ).strip().lower()
+
+        with self.lock:
+            records = list(self.records)
+
+        result = []
+
+        for entry in reversed(records):
+            try:
+                entry_time = datetime.fromisoformat(
+                    str(entry["timestamp"]).replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+            except (TypeError, ValueError):
+                entry_time = None
+
+            if date_from and (
+                entry_time is None
+                or entry_time < date_from
+            ):
+                continue
+
+            if date_to and (
+                entry_time is None
+                or entry_time > date_to
+            ):
+                continue
+
+            if level and entry["level"] != level:
+                continue
+
+            if query:
+                searchable = " ".join(
+                    str(value or "")
+                    for value in entry.values()
+                ).lower()
+
+                if query not in searchable:
+                    continue
+
+            result.append(dict(entry))
+
+            if len(result) >= limit:
+                break
+
+        return result
+
+
 def configure_logging(app: Flask) -> None:
     root = logging.getLogger()
     root.setLevel(str(app.config.get("LOG_LEVEL") or "INFO").upper())
@@ -144,6 +286,63 @@ def configure_logging(app: Flask) -> None:
             service_name=str(app.config.get("SERVICE_NAME") or app.config.get("APP_NAME") or "application"),
         )
     )
+    runtime_handler = next(
+        (
+            item
+            for item in root.handlers
+            if getattr(
+                item,
+                "_runtime_log_buffer_handler",
+                False,
+            )
+        ),
+        None,
+    )
+
+    if runtime_handler is None:
+        runtime_handler = RuntimeLogBufferHandler(
+            capacity=int(
+                app.config.get(
+                    "ADMIN_RUNTIME_LOG_BUFFER_SIZE",
+                    1000,
+                )
+            )
+        )
+        runtime_handler._runtime_log_buffer_handler = True
+        root.addHandler(runtime_handler)
+
+    runtime_handler.setLevel(root.level)
+    runtime_handler.setFormatter(formatter)
+
+    for existing_filter in tuple(
+        runtime_handler.filters
+    ):
+        if isinstance(
+            existing_filter,
+            ContextFilter,
+        ):
+            runtime_handler.removeFilter(
+                existing_filter
+            )
+
+    runtime_handler.addFilter(
+        ContextFilter(
+            environment=str(
+                app.config.get("ENV")
+                or "development"
+            ),
+            service_name=str(
+                app.config.get("SERVICE_NAME")
+                or app.config.get("APP_NAME")
+                or "application"
+            ),
+        )
+    )
+
+    app.extensions[
+        "runtime_log_buffer"
+    ] = runtime_handler
+
     app.logger.setLevel(root.level)
     if default_handler in app.logger.handlers:
         app.logger.removeHandler(default_handler)

@@ -284,6 +284,42 @@ def test_document_signing_service_saves_signed_submission_pdf(tmp_path):
     assert repository.recorded[0][1]["filename"] == "sample-abc-signed.pdf"
     assert repository.recorded[0][1]["signed"] is True
 
+def test_document_signing_service_accepts_trusted_profile_submission_pdf(tmp_path):
+    storage = DummyStorage()
+    repository = DummyRepository(metadata=None)
+    signing_service = DocumentSigningService(
+        storage=storage,
+        submission_repository=repository,
+        submission_service=SimpleNamespace(
+            build_signed_pdf_filename=lambda slug, submission_id: f"{slug}-{submission_id}-signed.pdf"
+        ),
+        verifier=lambda path: {
+            "is_signed": True,
+            "is_trusted_profile_signature": True,
+            "signature_type": "profil_zaufany",
+            "cryptographically_valid": True,
+            "integrity_ok": True,
+            "trusted": True,
+            "validation_status": "VALID",
+        },
+    )
+    uploaded_file = SimpleNamespace(
+        filename="profil-zaufany.pdf",
+        mimetype="application/pdf",
+        read=lambda: b"%PDF-1.4\nsigned",
+    )
+
+    result = signing_service.upload_signed_submission_pdf(
+        slug="sample",
+        submission_id="abc",
+        uploaded_file=uploaded_file,
+        temp_dir=tmp_path,
+    )
+
+    assert result.signed_filename == "sample-abc-signed.pdf"
+    assert repository.updated == [
+        ("abc", {"signed_pdf_filename": "sample-abc-signed.pdf"})
+    ]
 
 def test_document_signing_service_rejects_indeterminate_trust(tmp_path):
     signing_service = DocumentSigningService(

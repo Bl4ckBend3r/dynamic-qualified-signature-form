@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
-from flask import Flask, current_app, request, url_for
+from flask import Flask, current_app, has_app_context, request, url_for
 
 from form_loader import build_consents_view, build_submission_view
 from services.access_token_service import AccessTokenService
@@ -1421,13 +1421,17 @@ def build_document_pdf_context(
         parse_decimal_price("0") or 0,
     )
     
-    local_now = datetime.now(timezone.utc).astimezone(
-        ZoneInfo(
-            current_app.config.get(
-                "APP_TIMEZONE",
-                "Europe/Warsaw",
-            )
+    app_timezone = (
+        current_app.config.get(
+            "APP_TIMEZONE",
+            "Europe/Warsaw",
         )
+        if has_app_context()
+        else "Europe/Warsaw"
+    )
+
+    local_now = datetime.now(timezone.utc).astimezone(
+        ZoneInfo(app_timezone)
     )
         
     return {

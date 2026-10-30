@@ -6919,3 +6919,373 @@ body.agreement-builder-window {
     margin-left: auto;
   }
 }
+
+
+/* Runtime logs panel */
+
+.runtime-logs-description {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+}
+
+.runtime-logs-panel {
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.runtime-logs-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.runtime-logs-panel-header h2 {
+  margin: 0 0 4px;
+}
+
+.runtime-logs-panel-header p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.runtime-logs-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-log-preset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.runtime-log-preset:hover {
+  background: var(--color-surface-muted);
+}
+
+.runtime-log-preset.is-active {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border-color: var(--color-info);
+}
+
+.runtime-logs-filters {
+  display: grid;
+  grid-template-columns:
+    minmax(260px, 2fr)
+    minmax(140px, 0.8fr)
+    minmax(190px, 1fr)
+    minmax(190px, 1fr);
+  gap: 16px;
+  align-items: end;
+}
+
+.runtime-logs-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.runtime-logs-filters label > span {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.runtime-logs-filters input,
+.runtime-logs-filters select {
+  width: 100%;
+  min-height: 42px;
+}
+
+.runtime-filter-search {
+  grid-column: span 2;
+}
+
+.runtime-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.runtime-logs-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.runtime-summary-card {
+  display: grid;
+  gap: 3px;
+  padding: 16px 18px;
+}
+
+.runtime-summary-card span,
+.runtime-summary-card small {
+  color: var(--color-text-muted);
+}
+
+.runtime-summary-card strong {
+  font-size: 1.45rem;
+}
+
+.runtime-log-list {
+  display: grid;
+  gap: 10px;
+}
+
+.runtime-log-entry {
+  padding: 0;
+  overflow: hidden;
+}
+
+.runtime-log-row {
+  display: grid;
+  grid-template-columns:
+    155px
+    95px
+    minmax(0, 1fr)
+    auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+}
+
+.runtime-log-time {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.runtime-log-level {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 78px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.runtime-log-level--debug {
+  background: var(--color-surface-muted);
+}
+
+.runtime-log-level--info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.runtime-log-level--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.runtime-log-level--error,
+.runtime-log-level--critical {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.runtime-log-content {
+  min-width: 0;
+}
+
+.runtime-log-message {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.runtime-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 5px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.runtime-log-details summary {
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.runtime-log-details[open] {
+  grid-column: 1 / -1;
+}
+
+.runtime-log-details-body {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.runtime-log-details-body pre {
+  margin: 12px 0 0;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--color-surface-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.runtime-logs-empty {
+  padding: 36px 20px;
+  text-align: center;
+}
+
+.runtime-logs-empty p {
+  margin-bottom: 0;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 1050px) {
+  .runtime-logs-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-filter-search {
+    grid-column: 1 / -1;
+  }
+
+  .runtime-log-row {
+    grid-template-columns:
+      145px
+      90px
+      minmax(0, 1fr);
+  }
+
+  .runtime-log-details {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .runtime-logs-panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .runtime-logs-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-filter-search {
+    grid-column: auto;
+  }
+
+  .runtime-filter-actions {
+    width: 100%;
+  }
+
+  .runtime-filter-actions > * {
+    flex: 1;
+  }
+
+  .runtime-logs-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-log-row {
+    grid-template-columns: 1fr auto;
+    gap: 9px 12px;
+  }
+
+  .runtime-log-content,
+  .runtime-log-details {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Runtime logs - equal filter widths */
+
+.runtime-logs-filters {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.runtime-filter-search {
+  grid-column: auto;
+}
+
+.runtime-filter-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1050px) {
+  .runtime-logs-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-filter-search {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 700px) {
+  .runtime-logs-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-filter-actions {
+    grid-column: auto;
+  }
+}
+
+/* Runtime logs - equal summary cards */
+
+.runtime-logs-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.runtime-logs-summary .runtime-summary-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 118px;
+  margin: 0;
+  padding: 18px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.runtime-logs-summary .runtime-summary-card span,
+.runtime-logs-summary .runtime-summary-card strong,
+.runtime-logs-summary .runtime-summary-card small {
+  margin: 0;
+}
+
+.runtime-logs-summary .runtime-summary-card strong {
+  margin: 7px 0 5px;
+}
+
+@media (max-width: 700px) {
+  .runtime-logs-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-logs-summary .runtime-summary-card {
+    min-height: 110px;
+  }
+}

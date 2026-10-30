@@ -69,6 +69,9 @@ from services.logo_service import (
 from services.mail_dispatch_service import MailDispatchService
 from services.permission_service import PermissionService
 
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -204,6 +207,170 @@ def storage_diagnostics():
             )
 
     return result
+
+@bp.get("/signature-diagnostics")
+@login_required
+def signature_diagnostics():
+    if g.admin_user.role != ROLE_SUPER_ADMIN:
+        abort(403)
+
+    import hashlib
+    import os
+    from pathlib import Path
+
+    from cryptography import x509
+
+    from signature_verifier import (
+        PROJECT_ROOT,
+        check_signature_trust_configuration,
+        load_x509_certificate,
+    )
+
+    def configured_paths(variable_name):
+        result = []
+
+        for value in os.getenv(
+            variable_name,
+            "",
+        ).split(";"):
+            value = value.strip()
+
+            if not value:
+                continue
+
+            path = Path(value)
+
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+
+            result.append(path)
+
+        return result
+
+    def display_path(path):
+        try:
+            return str(
+                path.relative_to(PROJECT_ROOT)
+            )
+        except ValueError:
+            return path.name
+
+    def certificate_info(path):
+        result = {
+            "file": display_path(path),
+            "exists": path.exists(),
+            "sha256": None,
+            "subject": None,
+            "issuer": None,
+            "valid_from": None,
+            "valid_to": None,
+            "ca": None,
+            "error": "",
+        }
+
+        if not path.exists():
+            return result
+
+        try:
+            cert = load_x509_certificate(path)
+
+            result["sha256"] = hashlib.sha256(
+                cert.public_bytes(
+                    serialization.Encoding.DER
+                )
+            ).hexdigest()
+
+            result["subject"] = (
+                cert.subject.rfc4514_string()
+            )
+            result["issuer"] = (
+                cert.issuer.rfc4514_string()
+            )
+            result["valid_from"] = (
+                cert.not_valid_before_utc.isoformat()
+            )
+            result["valid_to"] = (
+                cert.not_valid_after_utc.isoformat()
+            )
+
+            try:
+                constraints = (
+                    cert.extensions
+                    .get_extension_for_class(
+                        x509.BasicConstraints
+                    )
+                    .value
+                )
+                result["ca"] = constraints.ca
+            except x509.ExtensionNotFound:
+                result["ca"] = None
+
+        except Exception as exc:
+            result["error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        return result
+
+    def file_info(path):
+        result = {
+            "file": display_path(path),
+            "exists": path.exists(),
+            "sha256": None,
+            "error": "",
+        }
+
+        if not path.exists():
+            return result
+
+        try:
+            result["sha256"] = hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+        except Exception as exc:
+            result["error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        return result
+
+    trust_status = (
+        check_signature_trust_configuration()
+    )
+
+    roots = [
+        certificate_info(path)
+        for path in configured_paths(
+            "SIGNATURE_TRUST_ROOTS"
+        )
+    ]
+
+    intermediates = [
+        certificate_info(path)
+        for path in configured_paths(
+            "SIGNATURE_INTERMEDIATE_CERTS"
+        )
+    ]
+
+    crls = [
+        file_info(path)
+        for path in configured_paths(
+            "SIGNATURE_CRL_FILES"
+        )
+    ]
+
+    return {
+        "trust_configuration": trust_status,
+        "allow_fetching": str(
+            os.getenv(
+                "SIGNATURE_ALLOW_FETCHING",
+                "",
+            )
+        ),
+        "trust_roots": roots,
+        "intermediate_certificates": intermediates,
+        "crl_files": crls,
+    }
 
 @bp.get("/runtime-logs")
 @login_required

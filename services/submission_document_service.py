@@ -218,6 +218,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def list_documents(self, submission_id: str) -> list[dict]:
@@ -227,6 +229,8 @@ class SubmissionDocumentService:
             return self.submission_repository.list_submission_files(submission_id)
         except Exception:
             self.logger.warning("Nie udalo sie odczytac metadanych dokumentow dla %s.", submission_id, exc_info=True)
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return []
 
     def get_document_file(
@@ -253,6 +257,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def sync_from_legacy_fields(self, submission: Mapping[str, Any]) -> list[dict]:

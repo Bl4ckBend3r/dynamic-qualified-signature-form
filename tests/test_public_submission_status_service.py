@@ -164,6 +164,27 @@ def test_pdf_generation_failure_overrides_explicit_workflow_and_disables_documen
     assert status["can_upload_signed_agreement"] is False
 
 
+def test_pdf_continuation_pending_remains_publicly_blocked_after_status_restore():
+    row = accepted_row(
+        process_status="FORM_SUBMITTED",
+        workflow_step="submission",
+        workflow_stage="submission",
+        data_json={
+            "_pdf_generation_retry": {
+                "phase": "continuation_pending",
+                "pdf_filename": "sample.pdf",
+            }
+        },
+    )
+
+    status = build_public_submission_status(row)
+
+    assert status["effective_process_status"] == "PDF_GENERATION_FAILED"
+    assert status["can_download_declaration"] is False
+    assert status["can_upload_signed_declaration"] is False
+    assert status["can_upload_signed_agreement"] is False
+
+
 def test_training_agreement_upload_is_available_only_after_download():
     agreement = {
         "id": "python",

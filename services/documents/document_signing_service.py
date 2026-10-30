@@ -11,7 +11,7 @@ from flask import current_app, has_app_context
 
 from services.documents.document_storage_service import DocumentStorageService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
-from services.process_service import ProcessStatus
+from services.process_service import has_pending_pdf_generation
 from services.upload_validation import UploadValidationError, validate_pdf_upload
 from signature_verifier import resolve_signature_policy, signature_verification_result, verify_signed_pdf
 
@@ -61,7 +61,7 @@ class DocumentSigningService:
             raise RuntimeError("DocumentSigningService is not configured.")
         if hasattr(self.submission_repository, "get_by_id"):
             submission = self.submission_repository.get_by_id(submission_id)
-            if submission and str(submission.get("process_status") or "") == ProcessStatus.PDF_GENERATION_FAILED.value:
+            if has_pending_pdf_generation(submission):
                 raise ValueError("Dokument PDF nie jest jeszcze gotowy do podpisania.")
 
         signed_pdf_filename = self.submission_service.build_signed_pdf_filename(slug, submission_id)

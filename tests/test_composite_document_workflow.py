@@ -1208,6 +1208,33 @@ def test_composite_state_machine(composite_env):
     env.repo.release_document_operation(env.public_id, 'first')
 
 
+def test_document_operation_lease_can_be_reclaimed_after_expiry(composite_env):
+    env = composite_env()
+    env.enter()
+    assert env.repo.claim_document_operation(env.public_id, 'paper', 'first')
+
+    with env.repo.session_factory() as db:
+        submission = db.execute(
+            select(FormSubmission).where(FormSubmission.submission_id == env.public_id)
+        ).scalar_one()
+        states = dict(submission.document_states or {})
+        states['document_operation_until'] = '0'
+        submission.document_states = states
+        db.commit()
+
+    assert env.repo.claim_document_operation(env.public_id, 'paper', 'second')
+    env.repo.release_document_operation(env.public_id, 'first')
+    states = env.row()['document_states']
+    states = json.loads(states) if isinstance(states, str) else states
+    assert states['document_operation'] == 'second'
+
+    env.repo.release_document_operation(env.public_id, 'second')
+    states = env.row()['document_states']
+    states = json.loads(states) if isinstance(states, str) else states
+    assert states['document_operation'] == ''
+    assert states['document_operation_until'] == '0'
+
+
 @pytest.mark.parametrize('outcome', ['INVALID', 'INDETERMINATE', 'UNSIGNED'])
 def test_composite_transition_requires_verified_signature(composite_env, outcome):
     env = composite_env()

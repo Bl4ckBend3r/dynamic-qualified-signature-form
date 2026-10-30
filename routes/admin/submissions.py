@@ -70,7 +70,7 @@ from services.admin_submission_service import (
     update_submission_answers,
 )
 from services.workflow_service import WorkflowTransitionError, current_workflow_step
-from services.process_service import ProcessStatus
+from services.process_service import ProcessStatus, has_pending_pdf_generation
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
 from services.training_agreement_service import get_training_selection_field
@@ -835,7 +835,10 @@ def submission_pdf_retry(form_id: int, submission_pk: int):
         submission = db.get(FormSubmission, submission_pk) or abort(404)
         if submission.form_slug != form.slug:
             abort(404)
-        if submission.process_status != ProcessStatus.PDF_GENERATION_FAILED.value:
+        if not has_pending_pdf_generation({
+            "process_status": submission.process_status,
+            "data_json": submission.data_json,
+        }):
             flash("To zgłoszenie nie oczekuje na ponowienie generowania PDF.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         public_submission_id = submission.submission_id

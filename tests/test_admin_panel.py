@@ -1181,6 +1181,49 @@ def test_admin_can_retry_failed_submission_pdf(admin_app, admin_client, monkeypa
         assert len(repeated_files) == 1
 
 
+def test_pdf_continuation_workflow_event_is_recorded_once_per_operation(admin_app):
+    create_form(admin_app, slug="pdf-event-once")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="pdf-event-once-1",
+            form_slug="pdf-event-once",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+
+    repository = admin_app.extensions["services"].submission_repository
+    event = {
+        "previous_status": "RETURNED_FOR_CORRECTION",
+        "new_status": "FORM_SUBMITTED",
+        "previous_step": "returned_for_correction",
+        "new_step": "submission",
+        "actor_role": "participant",
+        "reason": "correction_resubmitted",
+        "source": "correction_resubmitted",
+    }
+    key = "pdf-continuation:operation-1:correction_resubmitted"
+
+    assert repository.record_workflow_event_once(
+        "pdf-event-once-1", event, idempotency_key=key,
+    )
+    assert repository.record_workflow_event_once(
+        "pdf-event-once-1", event, idempotency_key=key,
+    )
+
+    with factory() as db:
+        rows = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission_pk,
+            SubmissionWorkflowEvent.source == "correction_resubmitted",
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].side_effects["idempotency_key"] == key
+
+
 def test_admin_submission_edit_requires_confirmation_for_qualification_change(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     form_id = create_form(admin_app, definition_json={

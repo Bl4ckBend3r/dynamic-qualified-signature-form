@@ -45,6 +45,34 @@ def test_backfill_defaults_to_dry_run_and_does_not_write(tmp_path):
         assert db.query(SubmissionWorkflowEvent).count() == 0
 
 
+def test_backfill_detects_pdf_from_retry_marker_when_legacy_filename_is_empty(tmp_path):
+    session_factory = make_session_factory(tmp_path)
+    storage_checks = []
+    with session_factory() as db:
+        add_submission(
+            db,
+            submission_id="pdf-retry",
+            pdf_filename="",
+            process_status="PDF_GENERATION_FAILED",
+            data_json={
+                "_pdf_generation_retry": {
+                    "pdf_filename": "sample-pdf-retry.pdf",
+                    "continuation": "submission",
+                }
+            },
+        )
+
+    report = BackfillP4Metadata(
+        session_factory,
+        file_exists=lambda path: storage_checks.append(path) or True,
+    ).run(submission_id="pdf-retry")
+
+    assert report["documents"]["created"] == 1
+    assert storage_checks == ["output/sample/pdf/sample-pdf-retry.pdf"]
+    with session_factory() as db:
+        assert db.query(SubmissionFile).count() == 0
+
+
 def test_backfill_apply_creates_documents_workflow_and_decision(tmp_path):
     session_factory = make_session_factory(tmp_path)
     agreements = [

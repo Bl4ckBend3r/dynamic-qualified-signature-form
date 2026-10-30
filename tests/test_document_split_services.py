@@ -17,6 +17,7 @@ from services.documents.document_storage_service import DocumentStorageError, Do
 from services.documents.document_view_service import DocumentViewService
 from services.documents.pdf_render_service import PdfRenderError, PdfRenderService
 from services.documents.signed_document_service import SignedDocumentError, SignedDocumentService
+from services.submission_document_service import SubmissionDocumentService
 from services.submission_service import SubmissionService
 
 
@@ -437,7 +438,7 @@ def test_submission_pdf_failure_is_persisted_and_retry_is_idempotent(monkeypatch
             return dict(self.row) if self.row and self.row["submission_id"] == submission_id else None
 
         def claim_document_operation(self, submission_id, step_id, token):
-            if self.claim_token or not self.row or self.row["process_status"] != "PDF_GENERATION_FAILED":
+            if self.claim_token or not self.row or not self.row.get("data_json", {}).get("_pdf_generation_retry"):
                 return False
             self.claim_token = token
             return True
@@ -481,7 +482,7 @@ def test_submission_pdf_failure_is_persisted_and_retry_is_idempotent(monkeypatch
     class Mail:
         received = 0
 
-        def dispatch_submission_received(self, _submission_id):
+        def dispatch_submission_received(self, _submission_id, **_kwargs):
             self.received += 1
 
     class Metadata:
@@ -636,6 +637,255 @@ def test_submission_pdf_failure_is_persisted_and_retry_is_idempotent(monkeypatch
     assert metadata.calls == 2
 
 
+def test_pdf_retry_resumes_continuation_without_regenerating_pdf_after_process_crash(monkeypatch):
+    class Repository:
+        session_factory = object()
+
+        def __init__(self):
+            self.row = {
+                "submission_id": "abc",
+                "form_slug": "sample",
+                "process_status": "PDF_GENERATION_FAILED",
+                "workflow_step": "submission",
+                "workflow_stage": "submission",
+                "pdf_filename": "",
+                "data_json": {
+                    "participant_note": "value",
+                    "_qualification": {"failed_conditions": []},
+                    "_pdf_generation_retry": {
+                        "operation_id": "11111111-1111-4111-8111-111111111111",
+                        "pdf_filename": "sample-abc.pdf",
+                        "previous_process_status": "FORM_SUBMITTED",
+                        "previous_workflow_step": "submission",
+                        "previous_workflow_stage": "submission",
+                        "continuation": "submission",
+                        "phase": "generation_pending",
+                    },
+                },
+            }
+            self.claim_token = ""
+
+        def get_by_id(self, submission_id):
+            return dict(self.row) if submission_id == "abc" else None
+
+        def update(self, submission_id, updates):
+            assert submission_id == "abc"
+            self.row.update(updates)
+            return True
+
+        def claim_document_operation(self, submission_id, step_id, token):
+            if self.claim_token or submission_id != "abc" or step_id != self.row["workflow_step"]:
+                return False
+            self.claim_token = token
+            return True
+
+        def release_document_operation(self, submission_id, token):
+            if submission_id == "abc" and self.claim_token == token:
+                self.claim_token = ""
+
+    repository = Repository()
+    service = SubmissionService(
+        repository,
+        storage=SimpleNamespace(),
+        document_service=SimpleNamespace(
+            build_download_url=lambda _submission, filename: f"/download/{filename}",
+        ),
+    )
+    calls = {"generate": 0, "continue": 0}
+
+    def generate(**kwargs):
+        calls["generate"] += 1
+        repository.update("abc", {"pdf_filename": kwargs["pdf_filename"]})
+        kwargs["submission"]["pdf_filename"] = kwargs["pdf_filename"]
+
+    def continue_after_pdf(*_args, **_kwargs):
+        calls["continue"] += 1
+        if calls["continue"] == 1:
+            raise RuntimeError("worker stopped")
+        return False
+
+    monkeypatch.setattr(service, "_generate_form_pdf", generate)
+    monkeypatch.setattr(service, "_continue_submission_after_pdf", continue_after_pdf)
+    app = Flask(__name__)
+    app.secret_key = "test"
+    app.add_url_rule(
+        "/upload-signed/<slug>/<submission_id>",
+        endpoint="documents.upload_signed_pdf",
+        view_func=lambda slug, submission_id: "",
+        methods=["POST"],
+    )
+
+    with app.test_request_context("/"):
+        with pytest.raises(RuntimeError, match="worker stopped"):
+            service.retry_form_pdf_generation("abc", {"title": "Sample"})
+
+    marker = repository.row["data_json"]["_pdf_generation_retry"]
+    assert marker["phase"] == "continuation_pending"
+    assert repository.row["process_status"] == "FORM_SUBMITTED"
+    assert repository.row["pdf_filename"] == "sample-abc.pdf"
+    assert calls == {"generate": 1, "continue": 1}
+    assert repository.claim_token == ""
+
+    with app.test_request_context("/"):
+        result = service.retry_form_pdf_generation("abc", {"title": "Sample"})
+
+    assert result["pdf_filename"] == "sample-abc.pdf"
+    assert calls == {"generate": 1, "continue": 2}
+    assert "_pdf_generation_retry" not in repository.row["data_json"]
+
+
+def test_pdf_continuation_qualification_effects_reuse_event_and_audit_keys():
+    class Repository:
+        def __init__(self):
+            self.events = {}
+
+        def update(self, _submission_id, _updates):
+            return True
+
+        def record_workflow_event_once(self, submission_id, event, *, idempotency_key):
+            self.events.setdefault(idempotency_key, (submission_id, event))
+            return True
+
+    class Audit:
+        def __init__(self):
+            self.event_ids = []
+
+        def log_event(self, *_args, **kwargs):
+            self.event_ids.append(kwargs["event_id"])
+
+    repository = Repository()
+    audit = Audit()
+    service = SubmissionService(
+        repository,
+        storage=SimpleNamespace(),
+        audit_log_service=audit,
+    )
+    evaluation = {
+        "failed_conditions": [{
+            "id": "age",
+            "field_name": "age",
+            "field_label": "Wiek",
+            "actual_value": 17,
+            "expected_value": 18,
+            "failure_action": "auto_reject",
+        }]
+    }
+    operation_id = "11111111-1111-4111-8111-111111111111"
+
+    for _ in range(2):
+        submission = {
+            "submission_id": "abc",
+            "form_slug": "sample",
+            "process_status": "FORM_SUBMITTED",
+            "workflow_step": "submission",
+        }
+        service._auto_reject_submission(
+            submission,
+            evaluation,
+            operation_id=operation_id,
+        )
+
+    assert len(repository.events) == 1
+    assert len(set(audit.event_ids)) == 1
+
+
+def test_pdf_failure_marker_survives_database_outage_after_operation_started():
+    class Repository:
+        def __init__(self):
+            self.calls = 0
+            self.row = {
+                "submission_id": "abc",
+                "form_slug": "sample",
+                "process_status": "FORM_SUBMITTED",
+                "workflow_step": "submission",
+                "workflow_stage": "submission",
+                "data_json": {"participant_note": "private"},
+            }
+
+        def update(self, submission_id, updates):
+            assert submission_id == "abc"
+            self.calls += 1
+            if self.calls > 1:
+                raise ConnectionError("database unavailable")
+            self.row.update(updates)
+            return True
+
+    repository = Repository()
+    service = SubmissionService(repository, storage=SimpleNamespace())
+
+    service._prepare_pdf_generation_retry(
+        repository.row,
+        pdf_filename="sample-abc.pdf",
+        continuation="submission",
+    )
+    persisted_marker = dict(repository.row["data_json"]["_pdf_generation_retry"])
+
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        service._mark_pdf_generation_failed(
+            repository.row,
+            pdf_filename="sample-abc.pdf",
+            error=RuntimeError("renderer failed"),
+        )
+
+    assert repository.row["process_status"] == "PDF_GENERATION_FAILED"
+    assert repository.row["data_json"]["_pdf_generation_retry"] == persisted_marker
+    assert persisted_marker["previous_process_status"] == "FORM_SUBMITTED"
+
+
+def test_required_audit_failure_removes_only_new_incomplete_submission(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.row = None
+
+        def create(self, submission):
+            self.row = dict(submission)
+            return submission["submission_id"]
+
+    class Compliance:
+        def __init__(self, repository):
+            self.repository = repository
+            self.removed = []
+
+        def build_unversioned_snapshots(self, *_args, **_kwargs):
+            return []
+
+        def remove_incomplete_submission(self, submission_id):
+            self.removed.append(submission_id)
+            if self.repository.row and self.repository.row["submission_id"] == submission_id:
+                self.repository.row = None
+
+    class Audit:
+        def log_event(self, *_args, **_kwargs):
+            raise OSError("nextcloud unavailable")
+
+    repository = Repository()
+    compliance = Compliance(repository)
+    service = SubmissionService(
+        repository,
+        storage=SimpleNamespace(ensure_form_output_structure=lambda _slug: None),
+        compliance_service=compliance,
+        audit_log_service=Audit(),
+    )
+    monkeypatch.setattr(service, "validate_form", lambda *_args, **_kwargs: {
+        "values": {"name": "Jan"},
+        "mapped_submission": {},
+        "attachments": [],
+        "errors": {},
+        "map_meta": {"saved_fields": [], "skipped_fields": []},
+    })
+
+    with pytest.raises(OSError, match="nextcloud unavailable"):
+        service.submit_form(
+            "sample",
+            {"title": "Sample", "fields": []},
+            {},
+            submission_id="audit-failed",
+        )
+
+    assert compliance.removed == ["audit-failed"]
+    assert repository.row is None
+
+
 def test_document_signing_service_rejects_indeterminate_trust(tmp_path):
     signing_service = DocumentSigningService(
         storage=DummyStorage(),
@@ -661,6 +911,73 @@ def test_document_signing_service_rejects_indeterminate_trust(tmp_path):
         signing_service.upload_signed_submission_pdf(
             slug="sample", submission_id="abc", uploaded_file=uploaded_file, temp_dir=tmp_path
         )
+
+
+def test_document_signing_service_blocks_continuation_pending_pdf(tmp_path):
+    repository = SimpleNamespace(
+        get_by_id=lambda _submission_id: {
+            "process_status": "FORM_SUBMITTED",
+            "data_json": {
+                "_pdf_generation_retry": {
+                    "phase": "continuation_pending",
+                    "pdf_filename": "sample.pdf",
+                }
+            },
+        }
+    )
+    signing_service = DocumentSigningService(
+        storage=DummyStorage(),
+        submission_repository=repository,
+        submission_service=SimpleNamespace(build_signed_pdf_filename=lambda *_args: "signed.pdf"),
+    )
+    uploaded_file = SimpleNamespace(
+        filename="signed.pdf",
+        mimetype="application/pdf",
+        read=lambda: b"%PDF-1.4\nsigned",
+    )
+
+    with pytest.raises(ValueError, match="nie jest jeszcze gotowy"):
+        signing_service.upload_signed_submission_pdf(
+            slug="sample",
+            submission_id="abc",
+            uploaded_file=uploaded_file,
+            temp_dir=tmp_path,
+        )
+
+
+def test_document_metadata_read_failure_is_not_reported_as_empty_in_database_mode():
+    class Repository:
+        supports_file_metadata = True
+
+        def list_submission_files(self, _submission_id):
+            raise ConnectionError("database unavailable")
+
+        def get_document_by_type(self, *_args):
+            raise ConnectionError("database unavailable")
+
+        def get_submission_file_for_document(self, *_args, **_kwargs):
+            raise ConnectionError("database unavailable")
+
+    service = SubmissionDocumentService(submission_repository=Repository())
+
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        service.list_documents("abc")
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        service.get_document_by_type("abc", "form_pdf")
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        service.get_document_file("abc", document_type="form_pdf")
+
+
+def test_document_metadata_read_failure_remains_soft_for_legacy_repository():
+    class Repository:
+        supports_file_metadata = False
+
+        def list_submission_files(self, _submission_id):
+            raise ConnectionError("legacy storage unavailable")
+
+    service = SubmissionDocumentService(submission_repository=Repository())
+
+    assert service.list_documents("abc") == []
 
 
 def test_document_signing_service_delegates_declaration_and_agreement_uploads():

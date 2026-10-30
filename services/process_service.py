@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping
@@ -68,6 +69,28 @@ FIELD_OFFICER_DECISION_EMAIL_SENT = "officer_decision_email_sent"
 LEGACY_FIELD_OFFICER_DECISION = "acceptance_required"
 LEGACY_FIELD_OFFICER_EMAIL_REQUESTED = "acceptance_email_sent"
 LEGACY_FIELD_DECISION_EMAIL_SENT = "decision_email_sent"
+
+
+def pdf_generation_retry_state(row: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(row, Mapping):
+        return {}
+    data = row.get("data_json") or {}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    if not isinstance(data, Mapping):
+        return {}
+    state = data.get("_pdf_generation_retry") or {}
+    return dict(state) if isinstance(state, Mapping) else {}
+
+
+def has_pending_pdf_generation(row: Mapping[str, Any] | None) -> bool:
+    return bool(pdf_generation_retry_state(row)) or (
+        isinstance(row, Mapping)
+        and str(row.get("process_status") or "") == ProcessStatus.PDF_GENERATION_FAILED.value
+    )
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ from services.process_service import (
     is_declaration_required,
     is_declaration_signature_valid,
     is_yes,
+    has_pending_pdf_generation,
 )
 from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
 from services.workflow_config_service import (
@@ -102,8 +103,12 @@ def build_public_submission_status(
 ) -> dict[str, Any]:
     state = build_process_state(row)
     workflow_context = _workflow_context(row, form_config=form_config, current_step=current_step)
-    pdf_generation_failed = state.status == ProcessStatus.PDF_GENERATION_FAILED
-    status = state.status if pdf_generation_failed else (_status_for_workflow_context(workflow_context) or state.status)
+    pdf_generation_failed = has_pending_pdf_generation(row)
+    status = (
+        ProcessStatus.PDF_GENERATION_FAILED
+        if pdf_generation_failed
+        else (_status_for_workflow_context(workflow_context) or state.status)
+    )
     decision = get_officer_decision(row)
     rejected = status in REJECTED_STATUSES or decision == OfficerDecision.REJECTED
     correction = status in CORRECTION_STATUSES
@@ -300,8 +305,16 @@ def build_public_submission_status(
         "status": current_status,
         "composite_document": composite,
         "current_workflow_step": current_status["step"],
-        "effective_process_status": state.status.value,
-        "process_status_label": get_status_label(state.status.value),
+        "effective_process_status": (
+            ProcessStatus.PDF_GENERATION_FAILED.value
+            if pdf_generation_failed
+            else state.status.value
+        ),
+        "process_status_label": get_status_label(
+            ProcessStatus.PDF_GENERATION_FAILED.value
+            if pdf_generation_failed
+            else state.status.value
+        ),
         "application_status": application_status,
         "declaration_status": declaration_status,
         "agreement_status": agreement_status,

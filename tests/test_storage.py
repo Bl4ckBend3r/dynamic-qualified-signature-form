@@ -42,6 +42,22 @@ def test_audit_repository_writes_independent_event_files():
     assert "output/example-form/audit/audit_log.jsonl" not in storage.direct_files
 
 
+def test_audit_service_reuses_explicit_event_id_for_idempotent_retry():
+    from repositories.audit_log_repository import StorageAuditLogRepository
+    from services.audit_log_service import AuditLogService
+    from testing_support import InMemoryStorage
+
+    storage = InMemoryStorage({})
+    service = AuditLogService(StorageAuditLogRepository(storage))
+    event_id = "00000000-0000-4000-8000-000000000003"
+
+    first = service.log_event("CORRECTION_RESUBMITTED", "abc", "sample", event_id=event_id)
+    second = service.log_event("CORRECTION_RESUBMITTED", "abc", "sample", event_id=event_id)
+
+    assert first["event_id"] == second["event_id"] == event_id
+    assert list(storage.direct_files) == [f"output/sample/audit/events/{event_id}.jsonl"]
+
+
 @pytest.mark.parametrize(
     "entry",
     [

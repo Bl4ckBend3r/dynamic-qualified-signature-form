@@ -477,6 +477,47 @@ def test_download_pdf_returns_generated_pdf(client, app, valid_form_data, monkey
     assert response.data.startswith(b"%PDF-1.4")
 
 
+def test_download_pdf_returns_503_when_required_audit_is_unavailable(
+    client, app, monkeypatch,
+):
+    row = {
+        "submission_id": "audit-download-1",
+        "form_slug": "formularz_zgloszeniowy",
+        "form_name": "Formularz zgłoszeniowy",
+        "access_token": "secret-token",
+        "pdf_filename": "audit-download.pdf",
+    }
+    app.testing_storage.csv_rows = [row]
+    app.testing_storage.saved_pdfs[
+        "output/formularz_zgloszeniowy/pdf/audit-download.pdf"
+    ] = b"%PDF-1.4\n"
+
+    def fail_audit(*_args, **_kwargs):
+        raise OSError("nextcloud unavailable")
+
+    monkeypatch.setattr(app.extensions["services"].audit_log_service, "log_event", fail_audit)
+    response = client.get(
+        f"/downloads/pdfs/formularz_zgloszeniowy/{row['pdf_filename']}?token={row['access_token']}"
+    )
+
+    assert response.status_code == 503
+    assert response.mimetype != "application/pdf"
+
+
+def test_download_pdf_returns_503_when_document_dependency_is_unavailable(client, app, monkeypatch):
+    def fail_lookup(*_args, **_kwargs):
+        raise ConnectionError("database unavailable")
+
+    monkeypatch.setattr(app.extensions["services"].submission_repository, "find_by_pdf", fail_lookup)
+
+    response = client.get(
+        "/downloads/pdfs/formularz_zgloszeniowy/audit-download.pdf?token=secret-token"
+    )
+
+    assert response.status_code == 503
+    assert response.mimetype != "application/pdf"
+
+
 def test_download_pdf_returns_403_without_valid_token(client, app, valid_form_data, monkeypatch):
     import app as app_module
 

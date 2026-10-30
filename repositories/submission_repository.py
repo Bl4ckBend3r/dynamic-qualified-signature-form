@@ -69,6 +69,28 @@ class SubmissionRepository:
     def record_workflow_event(self, submission_id: str, event: dict) -> bool:
         return False
 
+    def record_workflow_event_once(
+        self,
+        submission_id: str,
+        event: dict,
+        *,
+        idempotency_key: str,
+    ) -> bool:
+        for existing in self.list_workflow_events(submission_id):
+            side_effects = existing.get("side_effects") or {}
+            if isinstance(side_effects, dict) and str(side_effects.get("idempotency_key") or "") == idempotency_key:
+                return True
+        return self.record_workflow_event(
+            submission_id,
+            {
+                **event,
+                "side_effects": {
+                    **dict(event.get("side_effects") or {}),
+                    "idempotency_key": idempotency_key,
+                },
+            },
+        )
+
     def record_decision(self, submission_id: str, decision: dict) -> bool:
         return False
 
@@ -641,6 +663,64 @@ class PostgresSubmissionRepository(SubmissionRepository):
             )
             session.commit()
         logger.info("Zapisano event workflow dla zgloszenia %s w PostgreSQL.", wanted)
+        return True
+
+    def record_workflow_event_once(
+        self,
+        submission_id: str,
+        event: dict,
+        *,
+        idempotency_key: str,
+    ) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionWorkflowEvent
+
+        wanted = str(submission_id or "").strip()
+        key = str(idempotency_key or "").strip()
+        if not wanted or not key:
+            return False
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            candidates = session.execute(
+                select(SubmissionWorkflowEvent).where(
+                    SubmissionWorkflowEvent.submission_id == submission.id,
+                    SubmissionWorkflowEvent.source == str(event.get("source") or "system"),
+                )
+            ).scalars().all()
+            if any(
+                str((candidate.side_effects or {}).get("idempotency_key") or "") == key
+                for candidate in candidates
+            ):
+                session.commit()
+                return True
+            side_effects = {
+                **dict(event.get("side_effects") or {}),
+                "idempotency_key": key,
+            }
+            session.add(SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status=str(event.get("previous_status") or ""),
+                new_status=str(event.get("new_status") or ""),
+                previous_step=str(event.get("previous_step") or ""),
+                new_step=str(event.get("new_step") or ""),
+                actor_id=event.get("actor_id"),
+                actor_email=str(event.get("actor_email") or ""),
+                actor_role=str(event.get("actor_role") or "system"),
+                reason=str(event.get("reason") or ""),
+                decision_code=str(event.get("decision_code") or ""),
+                user_message=str(event.get("user_message") or ""),
+                side_effects=side_effects,
+                source=str(event.get("source") or "system"),
+            ))
+            session.commit()
         return True
 
     def record_decision(self, submission_id: str, decision: dict) -> bool:

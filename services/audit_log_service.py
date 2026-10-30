@@ -19,9 +19,10 @@ class AuditLogService:
         new_value=None,
         actor: str = "system",
         metadata: dict | None = None,
+        event_id: str = "",
     ) -> dict:
         entry = {
-            "event_id": str(uuid4()),
+            "event_id": str(event_id or uuid4()),
             "submission_id": submission_id,
             "form_slug": form_slug,
             "event_type": event_type,

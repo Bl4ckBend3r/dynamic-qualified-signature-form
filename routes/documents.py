@@ -22,7 +22,7 @@ from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
-from services.process_service import ProcessStatus, build_process_state
+from services.process_service import ProcessStatus, build_process_state, has_pending_pdf_generation
 from services.public_submission_status_service import build_public_submission_status
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
@@ -902,7 +902,7 @@ def show_result(slug: str, submission_id: str):
     submission = access.submission
 
     row = submission.get("row") or submission
-    processing_pending = str(row.get("process_status") or "") == ProcessStatus.PDF_GENERATION_FAILED.value
+    processing_pending = has_pending_pdf_generation(row)
     pdf_filename = "" if processing_pending else (
         row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
     )
@@ -1496,12 +1496,20 @@ def download_pdf(slug: str, filename: str):
             (metadata or {}).get("storage_path", ""),
             True,
         )
-        services.audit_log_service.log_event(
-            "DOCUMENT_DOWNLOADED",
-            submission.get("submission_id", ""),
-            slug,
-            metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
-        )
+        try:
+            services.audit_log_service.log_event(
+                "DOCUMENT_DOWNLOADED",
+                submission.get("submission_id", ""),
+                slug,
+                metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
+            )
+        except Exception as exc:
+            logger.error(
+                "document_download_audit_failed submission_id=%s error_type=%s",
+                submission.get("submission_id", ""),
+                type(exc).__name__,
+            )
+            abort(503, description="Nie można teraz zarejestrować pobrania dokumentu.")
         raw_training_agreements = submission.get("training_agreements")
         if isinstance(raw_training_agreements, str):
             try:
@@ -1530,18 +1538,26 @@ def download_pdf(slug: str, filename: str):
                 agreement_key,
                 clean_filename,
             ):
-                services.audit_log_service.log_event(
-                    "agreement_downloaded_by_beneficiary",
-                    submission.get("submission_id", ""),
-                    slug,
-                    metadata={
-                        "filename": clean_filename,
-                        "training_key": agreement_key,
-                    },
-                )
+                try:
+                    services.audit_log_service.log_event(
+                        "agreement_downloaded_by_beneficiary",
+                        submission.get("submission_id", ""),
+                        slug,
+                        metadata={
+                            "filename": clean_filename,
+                            "training_key": agreement_key,
+                        },
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "agreement_download_audit_failed submission_id=%s error_type=%s",
+                        submission.get("submission_id", ""),
+                        type(exc).__name__,
+                    )
+                    abort(503, description="Nie można teraz zarejestrować pobrania umowy.")
     except HTTPException:
         raise
-    except Exception:
+    except (FileNotFoundError, ValueError):
         logger.warning(
             "Document download failed slug=%s filename=%s.",
             slug,
@@ -1549,6 +1565,14 @@ def download_pdf(slug: str, filename: str):
             exc_info=True,
         )
         abort(404)
+    except Exception as exc:
+        logger.error(
+            "document_download_dependency_failed slug=%s filename=%s error_type=%s",
+            slug,
+            Path(filename).name,
+            type(exc).__name__,
+        )
+        abort(503, description="Dokument jest chwilowo niedostępny.")
 
     return send_file(
         BytesIO(download.pdf_bytes),
@@ -1600,12 +1624,20 @@ def download_signed_pdf(slug: str, filename: str):
             (metadata or {}).get("storage_path", ""),
             True,
         )
-        services.audit_log_service.log_event(
-            "DOCUMENT_DOWNLOADED",
-            submission.get("submission_id", ""),
-            slug,
-            metadata={"filename": clean_filename, "signed": True},
-        )
+        try:
+            services.audit_log_service.log_event(
+                "DOCUMENT_DOWNLOADED",
+                submission.get("submission_id", ""),
+                slug,
+                metadata={"filename": clean_filename, "signed": True},
+            )
+        except Exception as exc:
+            logger.error(
+                "signed_document_download_audit_failed submission_id=%s error_type=%s",
+                submission.get("submission_id", ""),
+                type(exc).__name__,
+            )
+            abort(503, description="Nie można teraz zarejestrować pobrania dokumentu.")
         return send_file(
             BytesIO(download.pdf_bytes),
             mimetype=download.mimetype,
@@ -1614,7 +1646,7 @@ def download_signed_pdf(slug: str, filename: str):
         )
     except HTTPException:
         raise
-    except Exception:
+    except (FileNotFoundError, ValueError):
         logger.warning(
             "Signed document download failed slug=%s filename=%s.",
             slug,
@@ -1622,3 +1654,11 @@ def download_signed_pdf(slug: str, filename: str):
             exc_info=True,
         )
         abort(404)
+    except Exception as exc:
+        logger.error(
+            "signed_document_download_dependency_failed slug=%s filename=%s error_type=%s",
+            slug,
+            Path(filename).name,
+            type(exc).__name__,
+        )
+        abort(503, description="Dokument jest chwilowo niedostępny.")

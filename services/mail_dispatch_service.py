@@ -424,6 +424,9 @@ class MailDispatchService:
         sent_by_id: int | None = None,
         attachments: list | None = None,
         inline_images: list[dict[str, Any]] | None = None,
+        at_most_once_marker: str = "",
+        repeatable_group_key: str = "",
+        repeatable_item_id: str = "",
     ) -> MailDispatchResult:
         recipient = str(recipient or "").strip()
         subject = str(subject or "").strip()
@@ -497,13 +500,38 @@ class MailDispatchService:
             )
             current_app.logger.warning("mail_skipped reason=smtp_not_configured form_id=%s", getattr(form, "id", None))
             return MailDispatchResult("skipped", recipient, subject, "Brak konfiguracji SMTP.", log)
-        log = self.log_email(
-            db, form=form, submission=submission, template=template, footer=footer,
-            to_email=recipient, subject=subject, sent_by_id=sent_by_id, status="pending",
-            event_type=event_type, html_body=html_body, text_body=text_body,
-        )
-        if log is not None and callable(getattr(db, 'flush', None)):
-            db.flush()
+        if at_most_once_marker:
+            log = self._claim_at_most_once_delivery(
+                db,
+                form=form,
+                submission=submission,
+                template=template,
+                footer=footer,
+                recipient=recipient,
+                subject=subject,
+                sent_by_id=sent_by_id,
+                event_type=event_type,
+                html_body=html_body,
+                text_body=text_body,
+                marker=at_most_once_marker,
+                repeatable_group_key=repeatable_group_key,
+                repeatable_item_id=repeatable_item_id,
+            )
+            if log is None:
+                return MailDispatchResult(
+                    "skipped",
+                    recipient,
+                    subject,
+                    "Wiadomość została już trwale zarejestrowana.",
+                )
+        else:
+            log = self.log_email(
+                db, form=form, submission=submission, template=template, footer=footer,
+                to_email=recipient, subject=subject, sent_by_id=sent_by_id, status="pending",
+                event_type=event_type, html_body=html_body, text_body=text_body,
+            )
+            if log is not None and callable(getattr(db, 'flush', None)):
+                db.flush()
         try:
             sender(
                 **smtp_config,
@@ -534,6 +562,73 @@ class MailDispatchService:
                 log.error_message = error_message
             return MailDispatchResult("failed", recipient, subject, error_message, log)
 
+    def _claim_at_most_once_delivery(
+        self,
+        db,
+        *,
+        form,
+        submission,
+        template,
+        footer,
+        recipient: str,
+        subject: str,
+        sent_by_id: int | None,
+        event_type: str,
+        html_body: str,
+        text_body: str,
+        marker: str,
+        repeatable_group_key: str = "",
+        repeatable_item_id: str = "",
+    ):
+        if db is None or submission is None or not getattr(submission, "id", None):
+            raise RuntimeError("Trwały claim wiadomości wymaga zgłoszenia w bazie danych.")
+        from models import EmailLog, FormSubmission
+        from sqlalchemy import select
+
+        db.execute(
+            select(FormSubmission.id)
+            .where(FormSubmission.id == submission.id)
+            .with_for_update()
+        ).scalar_one()
+        existing = db.execute(
+            select(EmailLog).where(
+                EmailLog.submission_id == submission.id,
+                EmailLog.event_type == event_type,
+                EmailLog.to_email == recipient,
+                EmailLog.administrator_message == marker,
+                EmailLog.status.in_(("pending", "sent", "failed")),
+            )
+        ).scalars().first()
+        if existing is not None:
+            db.rollback()
+            return None
+        log = self.log_email(
+            db,
+            form=form,
+            submission=submission,
+            template=template,
+            footer=footer,
+            to_email=recipient,
+            subject=subject,
+            sent_by_id=sent_by_id,
+            status="pending",
+            event_type=event_type,
+            html_body=html_body,
+            text_body=text_body,
+        )
+        if log is None:
+            db.rollback()
+            raise RuntimeError("Nie udało się utworzyć trwałego claimu wiadomości.")
+        log.administrator_message = marker
+        log.repeatable_group_key = repeatable_group_key or None
+        log.repeatable_item_id = repeatable_item_id or None
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            raise
+        return log
+
     def dispatch_to_submission(
         self,
         *,
@@ -558,6 +653,7 @@ class MailDispatchService:
         participant_snapshot: dict | None = None,
         item_decision_id: int | None = None,
         force_send: bool = False,
+        at_most_once_key: str = "",
     ) -> MailDispatchResult:
         if bool(record_uuid) != bool(group_key) or (participant_snapshot is not None and not record_uuid):
             return MailDispatchResult('failed', error_message='Zdarzenie osoby wymaga grupy i UUID odbiorcy.')
@@ -572,7 +668,8 @@ class MailDispatchService:
                 definition=definition, sources=sources, event_type=event_type, event_id=event_id,
                 record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot,
                 item_decision_id=item_decision_id, sent_by_id=sent_by_id, extra_context=extra_context,
-                subject_template=subject_template, force_send=force_send)
+                subject_template=subject_template, force_send=force_send,
+                at_most_once_key=at_most_once_key)
         footer = self._footer_for_submission(db, form=form, submission=submission, event_type=event_type)
         if template is None or getattr(template, "is_active", True) is False:
             current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
@@ -607,6 +704,16 @@ class MailDispatchService:
         subject = self.render_subject(subject_template or getattr(template, "subject", ""), context)
         html_body, text_body, footer, inline_images = self._render_submission_message(
             db, form=form, submission=submission, template=template, context=context, event_type=event_type)
+        at_most_once_marker = ""
+        if at_most_once_key:
+            at_most_once_marker = json.dumps(
+                {
+                    "at_most_once_key": str(at_most_once_key),
+                    "event_type": event_type,
+                    "recipient": str(to_email or getattr(submission, "email", "")).strip(),
+                },
+                sort_keys=True,
+            )
         return self.dispatch_raw(
             event_type=event_type,
             recipient=to_email or getattr(submission, "email", ""),
@@ -622,6 +729,7 @@ class MailDispatchService:
             sent_by_id=sent_by_id,
             inline_images=inline_images,
             attachments=attachments or [],
+            at_most_once_marker=at_most_once_marker,
         )
 
     def dispatch_decision_email(self, submission_id: str, decision: str) -> MailDispatchResult:
@@ -872,7 +980,12 @@ class MailDispatchService:
             self._commit_email_log(db)
             return result
 
-    def dispatch_submission_received(self, submission_id: str) -> MailDispatchResult:
+    def dispatch_submission_received(
+        self,
+        submission_id: str,
+        *,
+        operation_id: str = "",
+    ) -> MailDispatchResult:
         database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
         if not database_url:
             return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
@@ -881,6 +994,8 @@ class MailDispatchService:
         from sqlalchemy import select
 
         with create_session_factory(database_url)() as db:
+            if operation_id and db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             submission = db.execute(
                 select(FormSubmission).where(FormSubmission.submission_id == submission_id)
             ).scalar_one_or_none()
@@ -912,11 +1027,21 @@ class MailDispatchService:
                 sources = MailRecipientResolver.configured_sources(definition, event, template, step_id=submission.workflow_stage or submission.workflow_step)
                 if sources is not None:
                     return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
-                        definition=definition, sources=sources, event_type=event, event_id='submission_created')
+                        definition=definition, sources=sources, event_type=event,
+                        event_id=operation_id or 'submission_created',
+                        at_most_once_key=operation_id)
             if any(isinstance(field, dict) and field.get("type") == "repeatable_group"
                    and (field.get("submission_confirmation") or {}).get("enabled")
                    for field in definition.get("fields") or []):
-                return self._dispatch_repeatable_confirmations(db, form, submission, template, definition)
+                return self._dispatch_repeatable_confirmations(
+                    db,
+                    form,
+                    submission,
+                    template,
+                    definition,
+                    event_id=operation_id or "submission_created",
+                    at_most_once_key=operation_id,
+                )
             if not str(submission.email or "").strip():
                 log = self.log_email(
                     db,
@@ -950,6 +1075,18 @@ class MailDispatchService:
                 template=None,
                 footer=footer,
                 inline_images=inline_images,
+                at_most_once_marker=(
+                    json.dumps(
+                        {
+                            "at_most_once_key": operation_id,
+                            "event_type": "submission_received",
+                            "recipient": str(submission.email or "").strip(),
+                        },
+                        sort_keys=True,
+                    )
+                    if operation_id
+                    else ""
+                ),
             )
             self._commit_email_log(db)
             return result
@@ -1007,14 +1144,24 @@ class MailDispatchService:
             self._commit_email_log(db)
             return result
 
-    def _dispatch_repeatable_confirmations(self, db, form, submission, template, definition) -> MailDispatchResult:
+    def _dispatch_repeatable_confirmations(
+        self,
+        db,
+        form,
+        submission,
+        template,
+        definition,
+        *,
+        event_id: str = "submission_created",
+        at_most_once_key: str = "",
+    ) -> MailDispatchResult:
         sources = [{"type": "repeatable_group", "group": field["name"],
                     "email_field": field["submission_confirmation"].get("email_field")}
                    for field in definition.get("fields", []) if field.get("type") == "repeatable_group"
                    and (field.get("submission_confirmation") or {}).get("enabled")]
         return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
-            definition=definition, sources=sources, event_type="submission_created", event_id="submission_created",
-            legacy_confirmation=True)
+            definition=definition, sources=sources, event_type="submission_created", event_id=event_id,
+            legacy_confirmation=True, at_most_once_key=at_most_once_key)
 
     def _record_mail_context(self, recipient, submission, form, definition, extra_context):
         from services.public_submission_status_service import build_readonly_submission_status
@@ -1043,7 +1190,7 @@ class MailDispatchService:
     def _dispatch_record_notifications(self, *, db, form, submission, template, definition, sources,
             event_type, event_id='', record_uuid='', group_key='', participant_snapshot=None,
             item_decision_id=None, sent_by_id=None, extra_context=None, subject_template='',
-            force_send=False, legacy_confirmation=False):
+            force_send=False, legacy_confirmation=False, at_most_once_key=''):
         from sqlalchemy import or_, select
         from models import EmailLog, FormSubmission, MailTemplate
         from form_loader import EMAIL_REGEX
@@ -1082,10 +1229,11 @@ class MailDispatchService:
             matches = [EmailLog.administrator_message == marker]
             if legacy_confirmation:
                 matches.append(EmailLog.administrator_message == f'confirmation_template:platform:{template.id}')
+            recorded_statuses = ("pending", "sent", "failed") if at_most_once_key else ("sent",)
             already_sent = db.execute(select(EmailLog.id).where(
                 EmailLog.submission_id == submission_pk, EmailLog.event_type == event_type,
                 EmailLog.repeatable_group_key == recipient.group_key, EmailLog.repeatable_item_id == recipient.record_uuid,
-                EmailLog.to_email == recipient.email, EmailLog.status == 'sent', or_(*matches),
+                EmailLog.to_email == recipient.email, EmailLog.status.in_(recorded_statuses), or_(*matches),
             )).first()
             if already_sent and not force_send:
                 db.commit()
@@ -1104,7 +1252,10 @@ class MailDispatchService:
                     subject=self.render_subject(subject_template or frozen_template.subject, context),
                     html_body=html_body, text_body=text_body, context=context, db=db, form=form,
                     submission=submission, template=log_template, footer=footer, sent_by_id=sent_by_id,
-                    inline_images=inline_images)
+                    inline_images=inline_images,
+                    at_most_once_marker=marker if at_most_once_key else "",
+                    repeatable_group_key=recipient.group_key,
+                    repeatable_item_id=recipient.record_uuid)
             except Exception as exc:
                 log = self.log_email(db, form=form, submission=submission, template=log_template, to_email=recipient.email,
                     sent_by_id=sent_by_id, event_type=event_type, status='failed', error_message=type(exc).__name__)
@@ -1124,7 +1275,13 @@ class MailDispatchService:
         return MailDispatchResult(status, recipient=only.recipient if only else '', subject=only.subject if only else '',
             error_message=only.error_message if only else '', log=only.log if only else None, deliveries=tuple(results))
 
-    def dispatch_auto_rejected_by_condition(self, submission_id: str, evaluation: dict) -> MailDispatchResult:
+    def dispatch_auto_rejected_by_condition(
+        self,
+        submission_id: str,
+        evaluation: dict,
+        *,
+        operation_id: str = "",
+    ) -> MailDispatchResult:
         message = str(evaluation.get("user_message") or "").strip() or (
             "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
         )
@@ -1149,6 +1306,7 @@ class MailDispatchService:
                 "qualification_message": message,
                 "qualification_message_html": escape(message),
             },
+            operation_id=operation_id,
         )
 
     def dispatch_returned_for_correction(
@@ -1209,6 +1367,7 @@ class MailDispatchService:
         extra_context: dict,
         recipient: str = "",
         include_correction_url: bool = False,
+        operation_id: str = "",
     ) -> MailDispatchResult:
         database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
         if not database_url:
@@ -1218,6 +1377,8 @@ class MailDispatchService:
         from sqlalchemy import select
 
         with create_session_factory(database_url)() as db:
+            if operation_id and db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             submission = db.execute(
                 select(FormSubmission).where(FormSubmission.submission_id == submission_id)
             ).scalar_one_or_none()
@@ -1269,6 +1430,8 @@ class MailDispatchService:
                 event_type=event_type,
                 files=self.submission_repository.list_submission_files(submission_id),
                 extra_context=context,
+                event_id=operation_id,
+                at_most_once_key=operation_id,
             )
             self._commit_email_log(db)
             return result

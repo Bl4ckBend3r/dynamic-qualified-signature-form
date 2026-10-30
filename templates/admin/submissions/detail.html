@@ -49,10 +49,11 @@
         </div>
     </div>
 </header>
-{% if submission.process_status == 'PDF_GENERATION_FAILED' %}
+{% set pdf_retry_state = submission.data_json.get('_pdf_generation_retry') if submission.data_json else none %}
+{% if submission.process_status == 'PDF_GENERATION_FAILED' or pdf_retry_state %}
 <div class="admin-alert admin-alert-warning">
-    <strong>Dokument PDF nie został przygotowany.</strong>
-    Dane zgłoszenia i załączniki zostały zachowane, a workflow i powiadomienia są wstrzymane.
+    <strong>Przygotowanie dokumentu PDF lub wznowienie procesu wymaga ponowienia.</strong>
+    Dane zgłoszenia i załączniki zostały zachowane, a dostęp do podpisywania pozostaje wstrzymany.
     {% if can_manage_documents %}
     <form method="post" action="{{ url_for('admin.submission_pdf_retry', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">

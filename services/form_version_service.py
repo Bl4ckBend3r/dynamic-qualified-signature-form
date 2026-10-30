@@ -593,6 +593,65 @@ class FormVersionService:
         # treści dokumentu i nie może wymuszać ponownego podpisania.
         return not old_allowed.issubset(new_allowed)
 
+    def missing_fields_form_definition(
+        self,
+        submission: FormSubmission,
+        definition: Mapping,
+        field_names,
+        *,
+        step: str | None = None,
+    ) -> dict:
+        base = self.completion_form_definition(
+            submission,
+            definition,
+            step=step,
+        )
+
+        required_names = {
+            str(name or "").strip()
+            for name in field_names
+            if str(name or "").strip()
+        }
+
+        fields = []
+        current_section = None
+        section_added = False
+
+        for raw in base.get("fields") or []:
+            if not isinstance(raw, dict):
+                continue
+
+            if raw.get("type") == "section":
+                current_section = dict(raw)
+                section_added = False
+                continue
+
+            name = str(raw.get("name") or "").strip()
+
+            if name not in required_names:
+                continue
+
+            if current_section is not None and not section_added:
+                fields.append(current_section)
+                section_added = True
+
+            field = dict(raw)
+
+            # Pole zostało już wskazane przez backend jako wymagające
+            # uzupełnienia, dlatego musi być widoczne niezależnie od
+            # pól sterujących, których nie pokazujemy w tym widoku.
+            field["required"] = True
+            field["readonly"] = False
+            field.pop("required_if", None)
+            field.pop("visible_if", None)
+
+            fields.append(field)
+
+        return {
+            **base,
+            "fields": fields,
+        }
+
     def completion_form_definition(self, submission: FormSubmission, definition: Mapping, *, step: str | None = None) -> dict:
         """Use fields available now or at an earlier stage, keeping new sections."""
         from form_loader import normalize_form_definition

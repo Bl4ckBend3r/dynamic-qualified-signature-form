@@ -174,20 +174,6 @@
             </div>
             {% endif %}
 
-            {% if g.admin_user.role == 'super_admin' %}
-            <a
-              class="{% if request.endpoint in [
-                'admin.diagnostics',
-                'admin.runtime_logs',
-                'admin.storage_diagnostics',
-                'admin.signature_diagnostics'
-              ] %}is-active{% endif %}"
-              href="{{ url_for('admin.diagnostics') }}"
-            >
-              Diagnostyka
-            </a>
-            {% endif %}
-
             <form
               method="post"
               action="{{ url_for('admin.logout') }}"

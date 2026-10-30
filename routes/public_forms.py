@@ -884,12 +884,45 @@ def complete_version_upgrade(slug: str, submission_id: str):
         definition = version.definition_json or {}
         form_meta, _ = version_to_public_form(db, form, version)
         service = services.form_version_service
-        edit_definition = service.completion_form_definition(submission, definition)
-        saved_values = service.submission_values(submission, edit_definition)
-        action = url_for("public_forms.complete_version_upgrade", slug=slug, submission_id=submission_id, token=token)
-        message = "Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane."
+
+        validation_definition = (
+            service.completion_form_definition(
+                submission,
+                definition,
+            )
+        )
+
+        saved_values = service.submission_values(
+            submission,
+            validation_definition,
+        )
+
+        state = service.refresh_submission_completion(
+            db,
+            submission,
+        )
+
+        edit_definition = (
+            service.missing_fields_form_definition(
+                submission,
+                definition,
+                state["errors"].keys(),
+            )
+        )
+
+        action = url_for(
+            "public_forms.complete_version_upgrade",
+            slug=slug,
+            submission_id=submission_id,
+            token=token,
+        )
+
+        message = (
+            "Formularz został zaktualizowany. "
+            "Przed kontynuowaniem uzupełnij wymagane dane."
+        )
+
         if request.method == "GET":
-            state = service.refresh_submission_completion(db, submission)
             db.commit()
             if state["complete"]:
                 return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
@@ -919,10 +952,26 @@ def complete_version_upgrade(slug: str, submission_id: str):
         )
         errors.update(attachment_errors)
         if errors:
+            error_definition = (
+                service.missing_fields_form_definition(
+                    submission,
+                    definition,
+                    errors.keys(),
+                )
+            )
+
             return render_template(
-                "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
-                errors=errors, values=values, form_action=action, correction_mode=True,
-                correction_message=message, access_token=token, version_upgrade_mode=True,
+                "form_page.html",
+                slug=slug,
+                form_meta=form_meta,
+                form_definition=error_definition,
+                errors=errors,
+                values=values,
+                form_action=action,
+                correction_mode=True,
+                correction_message=message,
+                access_token=token,
+                version_upgrade_mode=True,
             ), 400
 
         if attachments:

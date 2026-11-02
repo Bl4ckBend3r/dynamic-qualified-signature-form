@@ -5,7 +5,7 @@ import re
 from copy import deepcopy
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
 from jinja2 import TemplateSyntaxError, UndefinedError, meta
@@ -1441,6 +1441,53 @@ def declaration_docx_template_download(form_id: int):
         return send_file(BytesIO(content), mimetype=metadata.get("mime_type"), as_attachment=True, download_name=metadata.get("original_filename") or "szablon-deklaracji.docx")
 
 
+def _queue_docx_template_deletion(workflow: dict, metadata: dict) -> None:
+    path = str(metadata.get("storage_path") or "").strip()
+    if path:
+        pending = list(workflow.get("_docx_delete_pending") or [])
+        if path not in pending:
+            pending.append(path)
+        workflow["_docx_delete_pending"] = pending
+
+
+def _cleanup_deleted_docx_templates(db, form: Form) -> bool:
+    paths = list(((form.definition_json or {}).get("workflow") or {}).get("_docx_delete_pending") or [])
+    if not paths:
+        return True
+    service = current_app.extensions["services"].agreement_docx_template_service
+    try:
+        prefix = f"{service.storage.output_dir.rstrip('/')}/{form.slug}/templates/"
+        if any(
+            not path.startswith(prefix) or ".." in PurePosixPath(path).parts or "\\" in path
+            for path in paths
+        ):
+            current_app.logger.error("Nieprawidłowa ścieżka usuwanego szablonu DOCX formularza %s.", form.id)
+            return False
+        # Legacy submissions can still be rendering a template loaded before the DB commit.
+        if db.scalar(select(func.count(FormSubmission.id)).where(
+            FormSubmission.form_slug == form.slug, FormSubmission.form_version_id.is_(None),
+        )):
+            return False
+        for path in paths:
+            service.delete({"storage_path": path})
+        db.refresh(form)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        remaining = [path for path in workflow.get("_docx_delete_pending") or [] if path not in paths]
+        if remaining:
+            workflow["_docx_delete_pending"] = remaining
+        else:
+            workflow.pop("_docx_delete_pending", None)
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        current_app.logger.warning("Nie udało się dokończyć usuwania szablonu DOCX formularza %s.", form.id, exc_info=True)
+        return False
+
+
 @bp.post("/forms/<int:form_id>/declaration-template/docx/delete")
 @login_required
 def declaration_docx_template_delete(form_id: int):
@@ -1450,14 +1497,19 @@ def declaration_docx_template_delete(form_id: int):
         definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
         if editable_version is None:
-            current_app.extensions["services"].agreement_docx_template_service.delete(workflow.get("declaration_docx_template") or {})
+            _queue_docx_template_deletion(workflow, workflow.get("declaration_docx_template") or {})
         workflow.pop("declaration_docx_template", None)
         workflow["declaration_template_source"] = "builder" if workflow.get("declaration_builder_active_document") else "html"
         definition["workflow"] = workflow
         form.definition_json = definition
         _sync_editable_form_version(db, form)
         db.commit()
-        flash("Szablon DOCX deklaracji został usunięty.", "success")
+        cleanup_ok = editable_version is not None or _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Szablon DOCX deklaracji został usunięty."
+            if cleanup_ok else "Szablon usunięto z konfiguracji; usunięcie pliku oczekuje na ponowienie.",
+            "success" if cleanup_ok else "warning",
+        )
         return redirect(
     _form_editor_url(
         form.id,
@@ -1716,14 +1768,19 @@ def agreement_docx_template_delete(form_id: int):
         workflow = dict(definition.get("workflow") or {})
         metadata = workflow.get("contract_docx_template") or {}
         if editable_version is None:
-            current_app.extensions["services"].agreement_docx_template_service.delete(metadata)
+            _queue_docx_template_deletion(workflow, metadata)
         workflow.pop("contract_docx_template", None)
         workflow["contract_template_source"] = "builder" if workflow.get("contract_builder_active_document") else "html"
         definition["workflow"] = workflow
         form.definition_json = definition
         _sync_editable_form_version(db, form)
         db.commit()
-        flash("Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML.", "success")
+        cleanup_ok = editable_version is not None or _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML."
+            if cleanup_ok else "Szablon usunięto z konfiguracji; usunięcie pliku oczekuje na ponowienie.",
+            "success" if cleanup_ok else "warning",
+        )
         return redirect(
     _form_editor_url(
         form.id,

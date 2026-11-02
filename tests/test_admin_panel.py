@@ -10288,6 +10288,126 @@ def test_agreement_builder_launcher_uses_reusable_popup_and_reports_blocker(admi
         browser.close()
 
 
+@pytest.mark.parametrize("kind,metadata_key", [
+    ("agreement", "contract_docx_template"),
+    ("declaration", "declaration_docx_template"),
+])
+def test_docx_delete_commit_failure_preserves_active_template(admin_app, admin_client, monkeypatch, kind, metadata_key):
+    from sqlalchemy.orm import Session
+
+    create_user(admin_app)
+    path = f"output/delete_commit/templates/{kind}/{kind}-template.docx"
+    form_id = create_form(admin_app, slug="delete_commit", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {
+            metadata_key: {"storage_path": path}, f"{kind if kind == 'declaration' else 'contract'}_template_source": "docx",
+        },
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "commit", lambda self: (_ for _ in ()).throw(RuntimeError("DB unavailable")))
+        response = admin_client.post(f"/admin/forms/{form_id}/{kind}-template/docx/delete",
+                                     data={"csrf_token": admin_csrf(admin_client)})
+        assert response.status_code == 500
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow[metadata_key]["storage_path"] == path
+        assert workflow.get("_docx_delete_pending") is None
+    assert storage.direct_files[path] == b"old template"
+
+
+@pytest.mark.parametrize("kind,metadata_key", [
+    ("agreement", "contract_docx_template"),
+    ("declaration", "declaration_docx_template"),
+])
+def test_docx_delete_storage_failure_retries_idempotently(admin_app, admin_client, monkeypatch, kind, metadata_key):
+    create_user(admin_app)
+    path = f"output/delete_retry/templates/{kind}/{kind}-template.docx"
+    form_id = create_form(admin_app, slug="delete_retry", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {metadata_key: {"storage_path": path}},
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    service = admin_app.extensions["services"].agreement_docx_template_service
+    original_delete = service.delete
+    calls = []
+
+    def failing_once(metadata):
+        calls.append(metadata["storage_path"])
+        if len(calls) == 1:
+            raise OSError("Nextcloud unavailable")
+        original_delete(metadata)
+
+    monkeypatch.setattr(service, "delete", failing_once)
+    url = f"/admin/forms/{form_id}/{kind}-template/docx/delete"
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert metadata_key not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+    assert storage.direct_files[path] == b"old template"
+
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert metadata_key not in workflow
+        assert "_docx_delete_pending" not in workflow
+    assert path not in storage.direct_files
+    assert calls == [path, path]
+
+
+def test_docx_delete_recovers_after_commit_before_storage_cleanup(admin_app, admin_client, monkeypatch):
+    import routes.admin.forms as forms_routes
+
+    create_user(admin_app)
+    path = "output/delete_crash/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_crash", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"contract_docx_template": {"storage_path": path}},
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/agreement-template/docx/delete"
+    with monkeypatch.context() as patch:
+        patch.setattr(forms_routes, "_cleanup_deleted_docx_templates", lambda db, form: (_ for _ in ()).throw(RuntimeError("process stopped")))
+        assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 500
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert "contract_docx_template" not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+    assert storage.direct_files[path] == b"old template"
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert path not in storage.direct_files
+
+
+def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_client):
+    create_user(admin_app)
+    path = "output/delete_used/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_used", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"contract_docx_template": {"storage_path": path}},
+    })
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormSubmission(submission_id="delete-used-1", form_slug="delete_used"))
+        db.commit()
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/agreement-template/docx/delete"
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert storage.direct_files[path] == b"old template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert "contract_docx_template" not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+
+
 def test_agreement_docx_upload_also_prepares_editable_builder_draft(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="docx_builder_import", definition_json={"title": "Umowa", "fields": [], "workflow": {"requires_contract": True, "contract_template_source": "builder"}})

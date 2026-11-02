@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h1>Archiwum zgłoszeń</h1>
+<p>Zgłoszenia i powiązane dokumenty pozostają zachowane. Ten widok służy wyłącznie do odczytu.</p>
+<table class="admin-table">
+  <thead><tr><th>ID</th><th>Formularz</th><th>Osoba</th><th>Data archiwizacji</th><th>ID administratora</th></tr></thead>
+  <tbody>
+  {% for submission in submissions %}
+    {% set form = form_by_slug.get(submission.form_slug) %}
+    <tr>
+      <td>{% if form %}<a href="{{ url_for('admin.submission_archive_detail', form_id=form.id, submission_pk=submission.id) }}">{{ submission.submission_id }}</a>{% else %}{{ submission.submission_id }}{% endif %}</td>
+      <td>{{ submission.form_name }}</td>
+      <td>{{ submission.imiona }} {{ submission.nazwisko }}</td>
+      <td>{{ submission.deleted_at|business_datetime }}</td>
+      <td>{{ submission.deleted_by_user_id }}</td>
+    </tr>
+  {% else %}<tr><td colspan="5">Brak archiwalnych zgłoszeń.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% if pagination_urls.previous %}<a href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+{% if pagination_urls.next %}<a href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+{% endblock %}

@@ -148,7 +148,9 @@ class DocumentStorageService:
         strict_metadata: bool = False,
     ) -> bytes:
         clean_filename = Path(filename).name
-        if metadata and metadata.get("storage_path"):
+        if metadata is not None:
+            if not metadata.get("storage_path"):
+                raise DocumentStorageError("Brak ścieżki zapisanego dokumentu.")
             storage_path = validate_storage_path(str(metadata["storage_path"]))
             try:
                 if hasattr(storage, "read_bytes"):
@@ -158,17 +160,19 @@ class DocumentStorageService:
                 local_path = Path(storage_path)
                 if local_path.is_file():
                     return local_path.read_bytes()
-            except Exception:
+                raise FileNotFoundError(storage_path)
+            except Exception as exc:
                 if strict_metadata:
                     raise
                 logger.warning(
-                    "Document storage_path lookup failed; trying legacy filename lookup "
+                    "Document storage_path lookup failed; refusing legacy filename lookup "
                     "submission_id=%s filename=%s storage_path=%s.",
                     submission_id,
                     clean_filename,
                     storage_path,
                     exc_info=True,
                 )
+                raise DocumentStorageError("Nie udało się odczytać dokumentu pod zapisaną ścieżką.") from exc
 
         if strict_metadata:
             logger.error(

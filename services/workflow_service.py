@@ -538,6 +538,8 @@ class WorkflowService:
         audit_continuation: dict | None = None,
     ):
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
+        if getattr(submission, "deleted_at", None) is not None:
+            raise WorkflowTransitionError("Zgłoszenie jest archiwalne.")
         if pending_audit_state({"data_json": getattr(submission, "data_json", {})}):
             raise WorkflowTransitionError(
                 "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."

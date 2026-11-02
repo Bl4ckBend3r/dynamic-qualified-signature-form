@@ -153,6 +153,24 @@ def test_before_after_escalation_and_repeated_jobs_are_idempotent():
         assert db.query(SubmissionDeadlineNotification).count() == 3
 
 
+def test_archived_submission_does_not_create_or_dispatch_sla_notifications():
+    engine = _engine()
+    dispatcher = _FakeDispatcher()
+    service = WorkflowSlaService(dispatcher)
+    reminders = [{"offset": 0, "unit": "calendar_days", "recipients": ["participant"]}]
+    with Session(engine) as db:
+        submission, workflow = _seed(db, reminders=reminders)
+        deadline = service.enter_step(db, submission, "correction", form_config={"workflow": workflow}, now=NOW)
+        deadline.due_at = NOW
+        submission.deleted_at = NOW
+        db.commit()
+        result = service.process_due(db, now=NOW + timedelta(days=1))
+        assert result["claimed"] == 0
+        assert dispatcher.calls == []
+        assert db.query(SubmissionDeadlineNotification).count() == 0
+        assert service.enter_step(db, submission, "later", form_config={"workflow": workflow}) is None
+
+
 def test_completed_deadline_never_dispatches():
     engine = _engine()
     dispatcher = _FakeDispatcher()

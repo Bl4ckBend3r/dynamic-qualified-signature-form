@@ -681,7 +681,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def get_file_metadata(self, submission_id: str, filename: str, signed: bool | None = None) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_filename = Path(filename).name
@@ -692,7 +692,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 query = (
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.filename == wanted_filename)
                 )
                 if signed is not None:
@@ -705,7 +707,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def list_submission_files(self, submission_id: str) -> list[dict]:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         if not wanted_submission_id:
@@ -714,7 +716,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 rows = session.execute(
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .order_by(SubmissionFile.created_at.asc(), SubmissionFile.id.asc())
                 ).scalars().all()
                 return [self._row_to_dict(row) for row in rows]
@@ -731,7 +735,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         training_key: str = "",
     ) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_document_type = str(document_type or "").strip()
@@ -741,7 +745,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 query = (
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.document_type == wanted_document_type)
                 )
                 if filename:
@@ -756,7 +762,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def get_document_by_type(self, submission_id: str, document_type: str) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_document_type = str(document_type or "").strip()
@@ -767,7 +773,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 file_row = session.execute(
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.document_type == wanted_document_type)
                     .order_by(SubmissionFile.created_at.desc())
                 ).scalars().first()
@@ -781,7 +789,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import SubmissionWorkflowEvent
 
         wanted_submission_id = str(submission_id or "").strip()
-        if not wanted_submission_id:
+        if not wanted_submission_id or self.get_by_id(wanted_submission_id) is None:
             return []
         with self.session_factory() as session:
             rows = session.execute(
@@ -800,7 +808,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import SubmissionDecision
 
         wanted_submission_id = str(submission_id or "").strip()
-        if not wanted_submission_id:
+        if not wanted_submission_id or self.get_by_id(wanted_submission_id) is None:
             return []
         with self.session_factory() as session:
             rows = session.execute(

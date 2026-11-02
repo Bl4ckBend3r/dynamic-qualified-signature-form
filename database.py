@@ -50,4 +50,24 @@ def create_engine(database_url: str):
 @lru_cache(maxsize=4)
 def create_session_factory(database_url: str):
     _, sessionmaker = require_sqlalchemy()
-    return sessionmaker(bind=create_engine(database_url), expire_on_commit=False, future=True)
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session, with_loader_criteria
+
+    from models import FormSubmission
+
+    class ApplicationSession(Session):
+        pass
+
+    @event.listens_for(ApplicationSession, "do_orm_execute")
+    def hide_archived_submissions(execute_state):
+        if execute_state.is_select and not execute_state.execution_options.get("include_deleted_submissions"):
+            execute_state.statement = execute_state.statement.options(
+                with_loader_criteria(
+                    FormSubmission,
+                    lambda row: row.deleted_at.is_(None),
+                    include_aliases=True,
+                )
+            )
+
+    return sessionmaker(bind=create_engine(database_url), class_=ApplicationSession,
+                        expire_on_commit=False, future=True)

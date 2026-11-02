@@ -215,6 +215,29 @@ def test_document_storage_rollback_to_legacy_when_strict_disabled():
     assert storage.legacy_calls == [("sample", "plik.pdf")]
 
 
+@pytest.mark.parametrize("metadata", [
+    {"storage_path": "output/sample/deklaracje/plik.pdf"},
+    {"storage_path": ""},
+])
+def test_document_storage_does_not_fallback_to_another_pdf_when_metadata_path_fails(metadata):
+    storage = DummyStorage()
+    storage.direct.clear()
+    storage.legacy[("sample", "plik.pdf")] = b"%PDF from another submission"
+
+    with pytest.raises(DocumentStorageError):
+        DocumentStorageService().read_document_bytes(
+            storage=storage,
+            slug="sample",
+            filename="plik.pdf",
+            metadata=metadata,
+            submission_id="abc",
+            strict_metadata=False,
+        )
+
+    assert storage.read_paths == (["output/sample/deklaracje/plik.pdf"] if metadata["storage_path"] else [])
+    assert storage.legacy_calls == []
+
+
 def test_document_view_prefers_submission_file_metadata():
     service = DocumentViewService()
 

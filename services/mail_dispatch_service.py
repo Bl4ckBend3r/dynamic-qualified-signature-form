@@ -33,6 +33,24 @@ NEW_SUBMISSION_ADMIN_EVENT = "new_submission_admin"
 DOCUMENT_RECEIVED_ADMIN_EVENT = "document_received"
 
 
+def _is_archived_submission(db, submission) -> bool:
+    if submission is None:
+        return False
+    if getattr(submission, "deleted_at", None) is not None:
+        return True
+    submission_pk = getattr(submission, "id", None)
+    if db is None or submission_pk is None:
+        return False
+    from models import FormSubmission
+    from sqlalchemy import select
+
+    deleted_at = db.execute(
+        select(FormSubmission.deleted_at).where(FormSubmission.id == submission_pk)
+        .execution_options(include_deleted_submissions=True)
+    ).scalar_one_or_none()
+    return deleted_at is not None
+
+
 @dataclass(frozen=True)
 class MailDispatchRequest:
     event_type: str
@@ -429,6 +447,8 @@ class MailDispatchService:
         repeatable_group_key: str = "",
         repeatable_item_id: str = "",
     ) -> MailDispatchResult:
+        if _is_archived_submission(db, submission):
+            return MailDispatchResult("skipped", error_message="Zgłoszenie jest archiwalne.")
         recipient = str(recipient or "").strip()
         subject = str(subject or "").strip()
         if not recipient:
@@ -656,6 +676,8 @@ class MailDispatchService:
         force_send: bool = False,
         at_most_once_key: str = "",
     ) -> MailDispatchResult:
+        if _is_archived_submission(db, submission):
+            return MailDispatchResult("skipped", error_message="Zgłoszenie jest archiwalne.")
         if bool(record_uuid) != bool(group_key) or (participant_snapshot is not None and not record_uuid):
             return MailDispatchResult('failed', error_message='Zdarzenie osoby wymaga grupy i UUID odbiorcy.')
         version = getattr(submission, "form_version", None)

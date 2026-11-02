@@ -42,6 +42,8 @@ class FormSubmission(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    deleted_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     data_json: Mapped[dict] = mapped_column(JsonDict, default=dict, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     assigned_to_user_id: Mapped[int | None] = mapped_column(

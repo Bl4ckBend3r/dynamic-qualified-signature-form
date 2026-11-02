@@ -328,7 +328,7 @@ def submissions_all():
         if user.role != ROLE_SUPER_ADMIN and not slugs:
             submissions = []
         else:
-            query = select(FormSubmission)
+            query = select(FormSubmission).where(FormSubmission.deleted_at.is_(None))
             if user.role != ROLE_SUPER_ADMIN:
                 query = query.where(FormSubmission.form_slug.in_(slugs))
             query = current_app.extensions["services"].submission_assignment_service.apply_filters(
@@ -402,6 +402,65 @@ def submissions_all():
             submission_status_label=submission_status_label,
             submission_step_label=submission_step_label,
         )
+
+
+@bp.get("/submissions/archive")
+@login_required
+def submissions_archive():
+    with db_session_factory()() as db:
+        user = g.admin_user
+        form_ids = current_app.extensions["services"].permission_service.form_ids_with_permission(
+            db, user, "can_view_submissions"
+        )
+        forms = db.execute(select(Form).where(Form.id.in_(form_ids or [-1]))).scalars().all()
+        form_by_slug = {form.slug: form for form in forms}
+        query = select(FormSubmission).where(FormSubmission.deleted_at.is_not(None))
+        if user.role != ROLE_SUPER_ADMIN:
+            query = query.where(FormSubmission.form_slug.in_(list(form_by_slug) or [""]))
+        submissions = db.execute(
+            query.order_by(FormSubmission.deleted_at.desc(), FormSubmission.id.desc())
+            .execution_options(include_deleted_submissions=True)
+        ).scalars().all()
+        submissions, pagination = paginate_submissions(
+            submissions, request.args.get("page"), request.args.get("per_page")
+        )
+        return render_template(
+            "admin/submissions/archive.html", submissions=submissions,
+            form_by_slug=form_by_slug, pagination=pagination,
+            pagination_urls=_pagination_urls("admin.submissions_archive", pagination),
+        )
+
+
+@bp.get("/forms/<int:form_id>/submissions/archive/<int:submission_pk>")
+@login_required
+def submission_archive_detail(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id)
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.id == submission_pk,
+                FormSubmission.form_slug == form.slug,
+                FormSubmission.deleted_at.is_not(None),
+            ).execution_options(include_deleted_submissions=True)
+        ).scalar_one_or_none() or abort(404)
+        files = db.execute(select(SubmissionFile).where(SubmissionFile.submission_id == submission.id)
+                           .order_by(SubmissionFile.id)).scalars().all()
+        decisions = db.execute(select(SubmissionDecision).where(SubmissionDecision.submission_id == submission.id)
+                               .order_by(SubmissionDecision.id)).scalars().all()
+        events = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.submission_id == submission.id)
+                            .order_by(SubmissionWorkflowEvent.id)).scalars().all()
+        form_config = (
+            submission.form_version.definition_json if submission.form_version else form.definition_json
+        ) or {}
+        detail_view = build_submission_detail_sections(
+            form, submission, form_config,
+            include_sensitive=has_permission(db, "can_view_sensitive_data", form=form),
+            timezone_name=current_app.config.get("APP_TIMEZONE", "Europe/Warsaw"),
+        )
+        return render_template(
+            "admin/submissions/archive_detail.html", form=form, submission=submission,
+            files=files, decisions=decisions, events=events, detail_view=detail_view,
+        )
 @bp.get("/forms/<int:form_id>/submissions")
 @login_required
 def submissions_list(form_id: int):
@@ -409,7 +468,7 @@ def submissions_list(form_id: int):
         form = ensure_form_access(db, form_id)
         fields = active_fields_for_form(db, form.id)
         assignment_service = current_app.extensions["services"].submission_assignment_service
-        query = select(FormSubmission).where(FormSubmission.form_slug == form.slug)
+        query = select(FormSubmission).where(FormSubmission.form_slug == form.slug, FormSubmission.deleted_at.is_(None))
         query = assignment_service.apply_filters(query, request.args, current_user_id=g.admin_user.id)
         submissions = db.execute(query).scalars().all()
         submissions = filter_submissions(
@@ -481,7 +540,7 @@ def submissions_export(form_id: int):
         form = ensure_form_access(db, form_id, permission="can_export_data")
         fields = active_fields_for_form(db, form.id)
         submissions = db.execute(
-            select(FormSubmission).where(FormSubmission.form_slug == form.slug).order_by(FormSubmission.created_at)
+            select(FormSubmission).where(FormSubmission.form_slug == form.slug, FormSubmission.deleted_at.is_(None)).order_by(FormSubmission.created_at)
         ).scalars().all()
         can_view_sensitive = has_permission(db, "can_view_sensitive_data", form=form)
         classified = {
@@ -2846,47 +2905,32 @@ def submissions_delete_selected(form_id: int):
         form = ensure_form_access(db, form_id, manage=True)
         submissions = db.execute(
             select(FormSubmission).where(FormSubmission.id.in_(submission_ids), FormSubmission.form_slug == form.slug)
+            .execution_options(include_deleted_submissions=True).with_for_update()
         ).scalars().all()
         if not submissions:
             flash("Nie znaleziono zgłoszeń do usunięcia albo nie masz uprawnień.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         try:
-            delete_submissions_transactionally(db, submissions)
+            archived_count = archive_submissions_transactionally(submissions, g.admin_user.id)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
             current_app.logger.exception("Nie udało się usunąć zaznaczonych zgłoszeń dla formularza %s.", form_id)
             flash("Nie udało się usunąć zaznaczonych zgłoszeń. Spróbuj ponownie.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
-    flash(f"Usunięto zgłoszenia: {len(submissions)}.", "success")
+    flash(f"Zarchiwizowano zgłoszenia: {archived_count}.", "success")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
-def delete_submissions_transactionally(db, submissions: list[FormSubmission]) -> None:
-    ids = [submission.id for submission in submissions]
-    public_ids = [submission.submission_id for submission in submissions]
-    result_ids = db.execute(select(SubmissionChecklistItemResult.id).where(
-        SubmissionChecklistItemResult.submission_id.in_(ids)
-    )).scalars().all()
-    if result_ids:
-        db.query(SubmissionChecklistEvidence).filter(
-            SubmissionChecklistEvidence.result_id.in_(result_ids)
-        ).delete(synchronize_session=False)
-        db.query(SubmissionChecklistItemResult).filter(
-            SubmissionChecklistItemResult.id.in_(result_ids)
-        ).delete(synchronize_session=False)
-    db.query(SubmissionFile).filter(SubmissionFile.submission_id.in_(ids)).delete(synchronize_session=False)
-    db.query(SubmissionDecision).filter(
-        (SubmissionDecision.submission_id.in_(ids)) | (SubmissionDecision.public_submission_id.in_(public_ids))
-    ).delete(synchronize_session=False)
-    db.query(SubmissionWorkflowEvent).filter(
-        (SubmissionWorkflowEvent.submission_id.in_(ids)) | (SubmissionWorkflowEvent.public_submission_id.in_(public_ids))
-    ).delete(synchronize_session=False)
-    db.query(EmailLog).filter(
-        (EmailLog.submission_id.in_(ids)) | (EmailLog.public_submission_id.in_(public_ids))
-    ).delete(synchronize_session=False)
+def archive_submissions_transactionally(submissions: list[FormSubmission], actor_id: int) -> int:
+    now = datetime.now(timezone.utc)
+    count = 0
     for submission in submissions:
-        db.delete(submission)
+        if submission.deleted_at is None:
+            submission.deleted_at = now
+            submission.deleted_by_user_id = actor_id
+            count += 1
+    return count
 
 
 def _decision_error_frames(exc: Exception) -> str:

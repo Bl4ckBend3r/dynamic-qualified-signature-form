@@ -1,0 +1,28 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<p><a href="{{ url_for('admin.submissions_archive') }}">Archiwum zgłoszeń</a></p>
+<h1>Archiwalne zgłoszenie {{ submission.submission_id }}</h1>
+<dl>
+  <dt>Formularz</dt><dd>{{ form.name }}</dd>
+  <dt>Osoba</dt><dd>{{ submission.imiona }} {{ submission.nazwisko }}</dd>
+  <dt>E-mail</dt><dd>{{ submission.email }}</dd>
+  <dt>Data złożenia</dt><dd>{{ submission.created_at|business_datetime }}</dd>
+  <dt>Data archiwizacji</dt><dd>{{ submission.deleted_at|business_datetime }}</dd>
+  <dt>ID administratora</dt><dd>{{ submission.deleted_by_user_id }}</dd>
+  <dt>Status w chwili archiwizacji</dt><dd>{{ submission.process_status }}</dd>
+</dl>
+<h2>Dane zgłoszenia</h2>
+{% for section in detail_view.sections %}
+<section class="admin-card"><h3>{{ section.title }}</h3><dl>
+  {% for item in section['items'] %}<dt>{{ item.label }}</dt><dd>{{ item.value }}</dd>{% endfor %}
+</dl></section>
+{% endfor %}
+<h2>Szkolenia</h2>
+<ul>{% for training in detail_view.trainings %}<li>{{ training.name or training.label or training.id or training }}</li>{% else %}<li>Brak szkoleń.</li>{% endfor %}</ul>
+<h2>Dokumenty</h2>
+<ul>{% for file in files %}<li>{{ file.filename }} — {{ file.document_type }} ({{ file.status }})</li>{% else %}<li>Brak dokumentów.</li>{% endfor %}</ul>
+<h2>Decyzje</h2>
+<ul>{% for decision in decisions %}<li>{{ decision.decision }} — {{ decision.created_at|business_datetime if decision.created_at else '' }}</li>{% else %}<li>Brak decyzji.</li>{% endfor %}</ul>
+<h2>Historia workflow</h2>
+<ul>{% for event in events %}<li>{{ event.new_status }} — {{ event.created_at|business_datetime if event.created_at else '' }}</li>{% else %}<li>Brak zdarzeń.</li>{% endfor %}</ul>
+{% endblock %}

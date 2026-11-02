@@ -303,6 +303,13 @@ def test_transition_updates_repository():
     assert repository.events[0][1]["actor_role"] == "system"
 
 
+def test_archived_submission_cannot_transition_workflow():
+    submission = FakeSubmission()
+    submission.deleted_at = "archived"
+    with pytest.raises(WorkflowTransitionError, match="archiwalne"):
+        WorkflowService().transition_submission(submission, "WAITING_FOR_REVIEW")
+
+
 def test_transition_submission_validates_when_strict():
     service = WorkflowService()
     submission = FakeSubmission()

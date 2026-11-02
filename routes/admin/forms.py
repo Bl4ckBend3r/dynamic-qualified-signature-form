@@ -723,6 +723,7 @@ def form_delete(form_id: int):
         form = db.get(Form, form_id) or abort(404)
         submissions_count = db.execute(
             select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)
+            .execution_options(include_deleted_submissions=True)
         ).scalar() or 0
         if submissions_count:
             flash("Nie można usunąć formularza, ponieważ istnieją powiązane zgłoszenia.", "error")
@@ -907,7 +908,8 @@ def form_edit(form_id: int):
             (editable_version.definition_json if editable_version else form.definition_json) or {}
         ).get("documents", [])
         form.workflow_ids_locked = bool(
-            db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)).scalar()
+            db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)
+                       .execution_options(include_deleted_submissions=True)).scalar()
         )
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
@@ -1478,7 +1480,7 @@ def _cleanup_deleted_docx_templates(db, form: Form) -> bool:
         # Legacy submissions can still be rendering a template loaded before the DB commit.
         if db.scalar(select(func.count(FormSubmission.id)).where(
             FormSubmission.form_slug == form.slug, FormSubmission.form_version_id.is_(None),
-        )):
+        ).execution_options(include_deleted_submissions=True)):
             return False
         for path in paths:
             service.delete({"storage_path": path})

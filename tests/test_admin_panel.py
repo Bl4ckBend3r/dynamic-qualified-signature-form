@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -7041,10 +7041,10 @@ def test_submission_delete_button_is_hidden_until_selection(admin_app, admin_cli
 
     assert "Zgłoszenia formularza" in html
     assert re.search(r'<button\b(?=[^>]*data-delete-button)(?=[^>]*disabled)[^>]*>', html, re.S)
-    assert "Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć." in html
+    assert "Czy na pewno chcesz przenieść zaznaczone zgłoszenia do archiwum?" in html
 
 
-def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
+def test_bulk_delete_archives_submission_and_preserves_related_rows(admin_app, admin_client):
     user_id = create_user(admin_app)
     form_id = create_form(admin_app, slug="delete_rows", name="Delete Rows", user_id=user_id)
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
@@ -7052,7 +7052,7 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
         submission = FormSubmission(submission_id="abc", form_slug="delete_rows", form_name="Delete Rows")
         db.add(submission)
         db.flush()
-        db.add(SubmissionFile(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", filename="a.pdf", storage_path="x"))
+        db.add(SubmissionFile(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", filename="a.pdf", storage_path="x", document_type="form_pdf"))
         db.add(SubmissionDecision(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", decision="accepted"))
         db.add(SubmissionWorkflowEvent(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", new_status="FORM_SUBMITTED"))
         db.add(EmailLog(submission_id=submission.id, public_submission_id="abc", status="sent"))
@@ -7062,6 +7062,21 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
     with admin_client.session_transaction() as session:
         token = session["admin_csrf_token"]
 
+    with admin_app.app_context():
+        repository = admin_app.extensions["services"].submission_repository
+        assert len(repository.list_submission_files("abc")) == 1
+        assert repository.get_file_metadata("abc", "a.pdf") is not None
+        assert repository.get_submission_file_for_document("abc", document_type="form_pdf") is not None
+        assert repository.get_document_by_type("abc", "form_pdf") is not None
+        assert len(repository.list_workflow_events("abc")) == 1
+        assert len(repository.list_submission_decisions("abc")) == 1
+
+    rejected = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"submission_pk_ids": str(submission_pk)},
+    )
+    assert rejected.status_code == 400
+
     response = admin_client.post(
         f"/admin/forms/{form_id}/submissions/delete-selected",
         data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
@@ -7069,11 +7084,60 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
 
     assert response.status_code == 302
     with session_factory() as db:
-        assert db.query(FormSubmission).count() == 0
-        assert db.query(SubmissionFile).count() == 0
-        assert db.query(SubmissionDecision).count() == 0
-        assert db.query(SubmissionWorkflowEvent).count() == 0
-        assert db.query(EmailLog).count() == 0
+        assert db.get(FormSubmission, submission_pk) is None
+        archived = db.execute(
+            select(FormSubmission).where(FormSubmission.id == submission_pk)
+            .execution_options(include_deleted_submissions=True)
+        ).scalar_one()
+        assert archived.deleted_at is not None
+        assert archived.deleted_by_user_id == user_id
+        original_deleted_at = archived.deleted_at
+        assert db.query(SubmissionFile).count() == 1
+        assert db.query(SubmissionDecision).count() == 1
+        assert db.query(SubmissionWorkflowEvent).count() == 1
+        assert db.query(EmailLog).count() == 1
+
+    with admin_app.app_context():
+        repository = admin_app.extensions["services"].submission_repository
+        assert repository.get_by_id("abc") is None
+        assert repository.list_submission_files("abc") == []
+        assert repository.get_file_metadata("abc", "a.pdf") is None
+        assert repository.get_submission_file_for_document("abc", document_type="form_pdf") is None
+        assert repository.get_document_by_type("abc", "form_pdf") is None
+        assert repository.list_workflow_events("abc") == []
+        assert repository.list_submission_decisions("abc") == []
+        with session_factory() as db:
+            result = admin_app.extensions["services"].mail_dispatch_service.dispatch_to_submission(
+                db=db, form=db.get(Form, form_id),
+                submission=SimpleNamespace(id=submission_pk, deleted_at=None),
+            )
+            assert result.status == "skipped"
+            assert db.query(EmailLog).count() == 1
+
+    assert "abc" not in admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}").status_code == 404
+    assert "abc" in admin_client.get("/admin/submissions/archive").get_data(as_text=True)
+    archive_url = f"/admin/forms/{form_id}/submissions/archive/{submission_pk}"
+    archive_html = admin_client.get(archive_url).get_data(as_text=True)
+    assert "a.pdf" in archive_html and "Dane zgłoszenia" in archive_html
+    assert admin_client.post(archive_url, data={"csrf_token": token}).status_code == 405
+    form_delete = admin_client.post(f"/admin/forms/{form_id}/delete", data={"csrf_token": token})
+    assert form_delete.status_code == 302
+    with session_factory() as db:
+        assert db.get(Form, form_id) is not None
+
+    retry = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
+    )
+    assert retry.status_code == 302
+    with session_factory() as db:
+        archived = db.execute(
+            select(FormSubmission).where(FormSubmission.id == submission_pk)
+            .execution_options(include_deleted_submissions=True)
+        ).scalar_one()
+        assert archived.deleted_at == original_deleted_at
+        assert archived.deleted_by_user_id == user_id
 
 
 def test_regular_admin_cannot_delete_submission_without_form_permission(admin_app, admin_client):
@@ -7094,6 +7158,12 @@ def test_regular_admin_cannot_delete_submission_without_form_permission(admin_ap
     )
 
     assert response.status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        submission.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/archive/{submission_pk}").status_code == 403
+    assert "abc" not in admin_client.get("/admin/submissions/archive").get_data(as_text=True)
 
 
 def test_form_regulation_upload_and_public_link(admin_app, admin_client):
@@ -10411,14 +10481,18 @@ def test_docx_delete_recovers_after_commit_before_storage_cleanup(admin_app, adm
         assert "_docx_delete_pending" not in db.get(Form, form_id).definition_json["workflow"]
 
 
-def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_client):
+@pytest.mark.parametrize("archived", [False, True])
+def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_client, archived):
     create_user(admin_app)
     path = "output/delete_used/templates/agreement/agreement-template.docx"
     form_id = create_form(admin_app, slug="delete_used", definition_json={
         "title": "DOCX", "fields": [], "workflow": {"contract_docx_template": {"storage_path": path}},
     })
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
-        db.add(FormSubmission(submission_id="delete-used-1", form_slug="delete_used"))
+        db.add(FormSubmission(
+            submission_id="delete-used-1", form_slug="delete_used",
+            deleted_at=datetime.now(timezone.utc) if archived else None,
+        ))
         db.commit()
     storage = admin_app.extensions["services"].storage
     storage.direct_files[path] = b"old template"

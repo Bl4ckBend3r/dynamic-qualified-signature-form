@@ -62,7 +62,7 @@ def user_delete(user_id: int):
         current_cases = db.execute(
             select(func.count(FormSubmission.id)).where(
                 or_(FormSubmission.assigned_to_user_id == user.id, FormSubmission.assigned_by_user_id == user.id)
-            )
+            ).execution_options(include_deleted_submissions=True)
         ).scalar() or 0
         note_references = db.execute(
             select(func.count(SubmissionInternalNote.id)).where(

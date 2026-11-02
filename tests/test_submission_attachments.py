@@ -195,6 +195,48 @@ def test_failed_replacement_preserves_submission_and_previous_attachment(monkeyp
     assert list(storage.files) == [original_path]
 
 
+def test_orphan_report_is_read_only_and_does_not_infer_operation():
+    from scripts.migration.report_orphan_attachments import report_orphan_attachments
+
+    _, factory, _ = service_with_database()
+    with factory() as db:
+        submission = FormSubmission(submission_id="public-1", form_slug="safe-form")
+        db.add(submission)
+        db.flush()
+        root = "output/safe-form/submissions/public-1/attachments"
+        known = f"{root}/certificate/{'a' * 32}.pdf"
+        unknown = f"{root}/certificate/{'b' * 32}.pdf"
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id="public-1",
+            form_slug="safe-form", document_id="certificate", field_key="certificate",
+            filename=f"{'a' * 32}.pdf", storage_path=known,
+        ))
+        db.commit()
+
+    class ListingStorage:
+        output_dir = "output"
+
+        def list_children(self, path):
+            if path == root:
+                return [("certificate", True)]
+            if path == f"{root}/certificate":
+                return [(known.rsplit("/", 1)[-1], False),
+                        (unknown.rsplit("/", 1)[-1], False),
+                        ("unrelated.txt", False)]
+            return []
+
+    report = report_orphan_attachments(factory, ListingStorage())
+    assert report["dry_run"] is True
+    assert report["files_examined"] == 2
+    assert report["candidates"] == [{
+        "submission_id": "public-1", "form_slug": "safe-form",
+        "field_key": "certificate", "storage_path": unknown,
+        "operation_id": None,
+        "classification": "untracked_path_requires_manual_review",
+    }]
+    with factory() as db:
+        assert db.query(SubmissionFile).count() == 1
+
 def test_required_file_for_one_submission_does_not_use_another_submission_attachment():
     service, factory, _ = service_with_database()
     with factory() as db:

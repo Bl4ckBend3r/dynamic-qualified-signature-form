@@ -4,6 +4,29 @@ import json
 import pytest
 
 
+def test_nextcloud_list_children_keeps_only_immediate_entries(monkeypatch):
+    from services.nextcloud_storage import NextcloudStorage
+
+    storage = NextcloudStorage("https://cloud.example", "user", "secret")
+    xml = """<d:multistatus xmlns:d="DAV:">
+      <d:response><d:href>/remote.php/dav/files/user/output/form/submissions/id/attachments/</d:href></d:response>
+      <d:response><d:href>/remote.php/dav/files/user/output/form/submissions/id/attachments/certificate/</d:href>
+        <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/remote.php/dav/files/user/output/form/submissions/id/attachments/deeper/file.pdf</d:href></d:response>
+    </d:multistatus>"""
+    calls = []
+
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs["headers"]["Depth"]))
+        return type("Response", (), {"status_code": 207, "text": xml})()
+
+    monkeypatch.setattr(storage, "_request", request)
+    children = storage.list_children("output/form/submissions/id/attachments")
+    assert children == [("certificate", True)]
+    assert calls == [("PROPFIND", "output/form/submissions/id/attachments", "1")]
+
+
 def test_audit_log_requires_remote_storage(monkeypatch, tmp_path):
     from services.audit_log_service import AuditLogService
 

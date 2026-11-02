@@ -838,13 +838,16 @@ class SubmissionService:
                 "declaration_signature_type": "",
                 "declaration_signature_error": "Dane objęte podpisem zmieniły się podczas korekty; wymagana jest nowa deklaracja i podpis.",
             })
-        self.submission_repository.update(submission_id, updates)
-        self.submission_attachment_service.persist(
-            form_slug=form_slug,
-            submission_id=submission_id,
-            attachments=attachments,
-            workflow_step=str(existing.get("workflow_step") or "returned_for_correction"),
-        )
+        if attachments:
+            self.submission_attachment_service.persist(
+                form_slug=form_slug,
+                submission_id=submission_id,
+                attachments=attachments,
+                workflow_step=str(existing.get("workflow_step") or "returned_for_correction"),
+                submission_updates=updates,
+            )
+        else:
+            self.submission_repository.update(submission_id, updates)
         refreshed = {**existing, **updates}
         self.storage.ensure_form_output_structure(form_slug)
         base_filename = Path(self.build_pdf_filename(form_slug, submission_id))

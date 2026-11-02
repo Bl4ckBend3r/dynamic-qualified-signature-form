@@ -196,6 +196,7 @@ class SubmissionAttachmentService:
         attachments: list[PreparedAttachment],
         workflow_step: str = "",
         source: str = "participant",
+        submission_updates: dict | None = None,
     ) -> list[dict]:
         if not attachments:
             return []
@@ -204,14 +205,24 @@ class SubmissionAttachmentService:
 
         from sqlalchemy import func, select
         from models import Form, FormField, FormSubmission, SubmissionFile
+        from services.form_submission_mapper import FORM_SUBMISSION_COLUMNS, build_submission_from_form
 
         written_paths: list[str] = []
         result: list[dict] = []
         try:
             with self.submission_repository.session_factory() as db:
                 submission = db.execute(
-                    select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+                    select(FormSubmission).where(FormSubmission.submission_id == submission_id).with_for_update()
                 ).scalar_one()
+                if submission_updates:
+                    mapped, meta = build_submission_from_form(submission_updates, include_metadata=True)
+                    saved_columns = {
+                        item.rsplit("->", 1)[1]
+                        for item in meta["saved_fields"] if "->" in item
+                    }
+                    for key in saved_columns:
+                        if key in mapped and key in FORM_SUBMISSION_COLUMNS and key != "id":
+                            setattr(submission, key, mapped[key])
                 form = db.execute(select(Form).where(Form.slug == form_slug)).scalar_one_or_none()
                 field_classifications = {
                     field.name: field.data_classification
@@ -241,8 +252,8 @@ class SubmissionAttachmentService:
                         filename = f"{uuid4().hex}{item.extension}"
                         path = self._storage_path(form_slug, submission_id, field_key, filename)
                         self._ensure_parent(path)
-                        self.storage.write_bytes(path, item.content, item.mime_type)
                         written_paths.append(path)
+                        self.storage.write_bytes(path, item.content, item.mime_type)
                         if sha256(self.storage.read_bytes(path)).hexdigest() != item.checksum_sha256:
                             raise IOError("Weryfikacja SHA-256 zapisanego załącznika nie powiodła się.")
                         row = SubmissionFile(

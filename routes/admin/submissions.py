@@ -71,6 +71,7 @@ from services.admin_submission_service import (
 )
 from services.workflow_service import WorkflowTransitionError, current_workflow_step
 from services.process_service import ProcessStatus, has_pending_pdf_generation
+from services.audit_log_service import AuditPendingError, pending_audit_state
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
 from services.training_agreement_service import get_training_selection_field
@@ -638,7 +639,19 @@ def submission_detail(form_id: int, submission_pk: int):
                 "can_send_email", "can_edit_workflow",
             )
         }
+        audit_pending = pending_audit_state(submission)
+        audit_retry_permission = str(audit_pending.get("required_permission") or "can_edit_workflow")
+        can_retry_required_audit = bool(audit_pending) and services.permission_service.has_permission(
+            db,
+            g.admin_user,
+            audit_retry_permission,
+            form=form,
+        )
+        if audit_pending:
+            action_permissions = {key: False for key in action_permissions}
         correction_available = (
+            not audit_pending
+            and
             action_permissions["can_return_for_correction"]
             and services.submission_correction_service.can_return_for_correction(
                 submission, submission_form_config,
@@ -654,12 +667,12 @@ def submission_detail(form_id: int, submission_pk: int):
             "reason": str(submission.agreement_block_reason or "").strip(),
             "blocked_at": block_data.get("_agreement_blocked_at"),
             "source": str(block_data.get("_agreement_block_source") or "Warunki deklaracji"),
-            "can_manage": any((action_permissions["can_return_for_correction"], action_permissions["can_edit_workflow"], services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form), g.admin_user.role == ROLE_SUPER_ADMIN)),
-            "can_unblock": can_manage and g.admin_user.role == ROLE_SUPER_ADMIN,
-            "can_reject_final": services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form),
+            "can_manage": not audit_pending and any((action_permissions["can_return_for_correction"], action_permissions["can_edit_workflow"], services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form), g.admin_user.role == ROLE_SUPER_ADMIN)),
+            "can_unblock": not audit_pending and can_manage and g.admin_user.role == ROLE_SUPER_ADMIN,
+            "can_reject_final": not audit_pending and services.permission_service.has_permission(db, g.admin_user, "can_make_decision", form=form),
         }
         rollback_options = []
-        if action_permissions["can_edit_workflow"]:
+        if not audit_pending and action_permissions["can_edit_workflow"]:
             rollback_options = services.submission_stage_rollback_service.get_allowed_targets(
                 db,
                 submission,
@@ -816,7 +829,8 @@ def submission_detail(form_id: int, submission_pk: int):
             repeatable_groups=repeatable_groups,
             repeatable_item_decisions=repeatable_item_decisions,
             can_view_sensitive_data=can_view_sensitive_data,
-            can_edit_submission=can_manage and can_view_sensitive_data and not submission_edit_block_reason(submission, files),
+            can_edit_submission=not audit_pending and can_manage and can_view_sensitive_data and not submission_edit_block_reason(submission, files),
+            can_retry_required_audit=can_retry_required_audit,
             **action_permissions,
             internal_notes=internal_notes,
             notes_search=notes_search,
@@ -861,6 +875,129 @@ def submission_pdf_retry(form_id: int, submission_pk: int):
     else:
         flash("PDF został przygotowany, a proces zgłoszenia wznowiony.", "success")
     return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/retry-audit")
+@login_required
+def submission_audit_retry(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = db.get(Form, form_id) or abort(404)
+        submission = db.get(FormSubmission, submission_pk) or abort(404)
+        if submission.form_slug != form.slug:
+            abort(404)
+        marker = pending_audit_state(submission)
+        if not marker:
+            flash("To zgłoszenie nie oczekuje na ponowienie audytu.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        permission = str(marker.get("required_permission") or "can_edit_workflow")
+        ensure_form_access(db, form.id, permission=permission)
+        audit = current_app.extensions["services"].audit_log_service
+        continuation = dict(marker.get("continuation") or {})
+        continuation["_audit_operation_id"] = str(marker.get("operation_id") or "")
+        durable_continuation = continuation.get("kind") in {
+            "training_agreement_signed_upload",
+            "composite_training_agreement_signed_upload",
+            "composite_office_agreement_signed_upload",
+        }
+        try:
+            if not marker.get("audit_complete"):
+                audit.write_pending(marker)
+            if durable_continuation:
+                audit.mark_audit_complete(submission, str(marker.get("operation_id") or ""))
+            else:
+                audit.clear_pending(submission, str(marker.get("operation_id") or ""))
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            current_app.logger.error(
+                "required_audit_retry_failed submission_id=%s error_type=%s",
+                submission.submission_id,
+                type(exc).__name__,
+            )
+            flash("Nie udało się zapisać obowiązkowego audytu. Spróbuj ponownie później.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+
+        continuation_failed = False
+        if continuation.get("kind") == "returned_for_correction" and continuation.get("send_email"):
+            try:
+                current_app.extensions["services"].mail_dispatch_service.dispatch_returned_for_correction(
+                    submission.submission_id,
+                    reason=str(continuation.get("reason") or ""),
+                    message_to_user=str(continuation.get("message_to_user") or ""),
+                    cleared=bool(continuation.get("cleared")),
+                    recipient=str(continuation.get("recipient") or ""),
+                )
+            except Exception as exc:
+                current_app.logger.exception(
+                    "required_audit_continuation_mail_failed submission_id=%s error=%s",
+                    submission.submission_id,
+                    exc.__class__.__name__,
+                )
+                flash("Audyt zapisano, ale wiadomość e-mail wymaga ręcznego ponowienia.", "warning")
+        elif continuation.get("kind") == "blocked_agreement_rejection" and continuation.get("send_notification"):
+            result = current_app.extensions["services"].mail_dispatch_service.dispatch_decision_email(
+                submission.submission_id,
+                "rejected",
+            )
+            if result.status not in {"sent", "queued"}:
+                flash("Audyt zapisano, ale wiadomość e-mail nie została wysłana.", "warning")
+        elif continuation.get("kind") == "office_signed_agreement" and continuation.get("send_notification"):
+            decision = db.get(SubmissionDecision, int(continuation.get("decision_id") or 0))
+            if decision is None or decision.submission_id != submission.id:
+                flash("Audyt zapisano, ale nie znaleziono decyzji wymaganej do wysyłki.", "warning")
+            else:
+                result = type("OfficeMailResult", (), {
+                    "decision_record": decision,
+                    "decision_status": ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value,
+                    "training_ids": tuple(str(item) for item in continuation.get("training_ids") or ()),
+                })()
+                _notify_beneficiary_agreement_decision(db, form, submission, result)
+        elif continuation.get("kind") in {
+            "training_agreement_signed_upload",
+            "composite_training_agreement_signed_upload",
+            "composite_office_agreement_signed_upload",
+        }:
+            try:
+                current_app.extensions["services"].document_service.resume_training_agreement_upload(
+                    submission.submission_id,
+                    continuation,
+                )
+            except Exception as exc:
+                continuation_failed = True
+                current_app.logger.exception(
+                    "required_audit_training_agreement_continuation_failed submission_id=%s error=%s",
+                    submission.submission_id,
+                    exc.__class__.__name__,
+                )
+                flash(
+                    "Audyt zapisano, ale dalszy workflow lub powiadomienie wymaga ręcznej interwencji.",
+                    "warning",
+                )
+        elif continuation.get("kind") in {
+            "officer_decision",
+            "repeatable_item_decision",
+            "workflow_transition",
+        }:
+            try:
+                _resume_audited_workflow_continuation(db, form, submission, continuation)
+            except Exception as exc:
+                db.rollback()
+                current_app.logger.exception(
+                    "required_audit_workflow_continuation_failed submission_id=%s error=%s",
+                    submission.submission_id,
+                    exc.__class__.__name__,
+                )
+                flash(
+                    "Audyt zapisano, ale dalszy workflow lub powiadomienie wymaga ręcznej interwencji.",
+                    "warning",
+                )
+        if durable_continuation and continuation_failed:
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+        if durable_continuation and not continuation_failed:
+            audit.clear_pending(submission, str(marker.get("operation_id") or ""))
+            db.commit()
+        flash("Obowiązkowy audyt został zapisany; blokada operacji została usunięta.", "success")
+        return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 
 @bp.route("/forms/<int:form_id>/submissions/<int:submission_pk>/edit", methods=["GET", "POST"])
@@ -1185,6 +1322,11 @@ def participant_attachment_status(form_id: int, submission_pk: int, file_id: int
         attachment = db.get(SubmissionFile, file_id) or abort(404)
         if submission.form_slug != form.slug or attachment.submission_id != submission.id or not attachment.field_key:
             abort(404)
+        try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
+        except AuditPendingError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         status = str(request.form.get("attachment_status") or "").strip()
         if status not in {"valid", "requires_correction"}:
             abort(400)
@@ -1218,6 +1360,7 @@ def submission_stage_rollback(submission_id: str):
         submission_form_config = _submission_form_config(db, form, submission)
         previous_step = str(submission.workflow_step or submission.workflow_stage or "")
         try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
             result = service.rollback(
                 db,
                 submission,
@@ -1235,7 +1378,7 @@ def submission_stage_rollback(submission_id: str):
                 form_config=submission_form_config,
             )
             db.commit()
-        except StageRollbackError as exc:
+        except (AuditPendingError, StageRollbackError) as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
@@ -1307,14 +1450,22 @@ def submission_agreement_unblock(submission_id: str):
         ensure_form_access(db, form.id, manage=True)
         reason = request.form.get("reason", "").strip()
         try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
             result = current_app.extensions["services"].blocked_agreement_admin_service.unblock(
                 db,
                 submission,
                 reason=reason,
                 actor=g.admin_user,
             )
+            audit_marker = _stage_blocked_agreement_audit(
+                "AGREEMENT_UNBLOCKED",
+                submission,
+                result,
+                reason=reason,
+                permission="can_edit_workflow",
+            )
             db.commit()
-        except (BlockedAgreementActionError, PermissionError) as exc:
+        except (AuditPendingError, BlockedAgreementActionError, PermissionError) as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
@@ -1327,12 +1478,9 @@ def submission_agreement_unblock(submission_id: str):
             flash("Nie udało się odblokować umowy. Spróbuj ponownie.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
-        _log_blocked_agreement_action(
-            "AGREEMENT_UNBLOCKED",
-            submission,
-            result,
-            reason=reason,
-        )
+        if not _complete_required_audit(db, submission, audit_marker):
+            flash("Umowa została odblokowana, ale obowiązkowy audyt oczekuje na ponowienie.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         flash("Umowa została odblokowana i może przejść do generowania.", "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
@@ -1354,6 +1502,7 @@ def submission_reject_final(submission_id: str):
         send_notification = request.form.get("send_notification") == "on"
         _require_email_permission(db, form, send_notification)
         try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
             result = current_app.extensions["services"].blocked_agreement_admin_service.reject_final(
                 db,
                 submission,
@@ -1362,8 +1511,19 @@ def submission_reject_final(submission_id: str):
                 email_requested=send_notification,
                 authorized=True,
             )
+            audit_marker = _stage_blocked_agreement_audit(
+                "AGREEMENT_BLOCK_REJECTED_FINAL",
+                submission,
+                result,
+                reason=reason,
+                permission="can_make_decision",
+                continuation={
+                    "kind": "blocked_agreement_rejection",
+                    "send_notification": send_notification,
+                },
+            )
             db.commit()
-        except (BlockedAgreementActionError, PermissionError) as exc:
+        except (AuditPendingError, BlockedAgreementActionError, PermissionError) as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
@@ -1376,12 +1536,9 @@ def submission_reject_final(submission_id: str):
             flash("Nie udało się zakończyć procesu jako odrzuconego. Spróbuj ponownie.", "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
-        _log_blocked_agreement_action(
-            "AGREEMENT_BLOCK_REJECTED_FINAL",
-            submission,
-            result,
-            reason=reason,
-        )
+        if not _complete_required_audit(db, submission, audit_marker):
+            flash("Proces zakończono jako odrzucony, ale obowiązkowy audyt oczekuje na ponowienie.", "error")
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         if send_notification:
             mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_decision_email(
                 submission.submission_id,
@@ -1393,28 +1550,139 @@ def submission_reject_final(submission_id: str):
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
 
-def _log_blocked_agreement_action(event_type: str, submission, result, *, reason: str) -> None:
+def _stage_blocked_agreement_audit(event_type: str, submission, result, *, reason: str, permission: str, continuation: dict | None = None) -> dict:
+    operation_key = submission.updated_at.isoformat() if submission.updated_at else ""
+    return current_app.extensions["services"].audit_log_service.stage_pending(
+        submission,
+        event_type=event_type,
+        submission_id=submission.submission_id,
+        form_slug=submission.form_slug,
+        old_value=result.previous_status,
+        new_value=result.new_status,
+        actor=str(g.admin_user.email or g.admin_user.role),
+        metadata={
+            "reason": reason,
+            "original_block_reason": result.previous_block_reason,
+            "actor_id": g.admin_user.id,
+            "actor_role": g.admin_user.role,
+        },
+        required_permission=permission,
+        continuation=continuation,
+        operation_key=operation_key,
+    )
+
+
+def _stage_office_signed_agreement_audit(submission, result, *, send_notification: bool) -> dict:
+    decision = result.decision_record
+    if decision is None or decision.id is None:
+        raise AuditPendingError("Brak trwałego identyfikatora decyzji podpisu urzędu.")
+    return current_app.extensions["services"].audit_log_service.stage_pending(
+        submission,
+        event_type="OFFICE_SIGNED_AGREEMENT_REGISTERED",
+        submission_id=submission.submission_id,
+        form_slug=submission.form_slug,
+        old_value=str(decision.previous_status or ""),
+        new_value=str(result.final_status or result.decision_status or ""),
+        actor=str(g.admin_user.email or g.admin_user.role),
+        metadata={
+            "decision_id": decision.id,
+            "training_ids": list(result.training_ids or ()),
+            "found_count": result.found_count,
+        },
+        required_permission="can_sign_office_agreement",
+        continuation={
+            "kind": "office_signed_agreement",
+            "decision_id": decision.id,
+            "training_ids": list(result.training_ids or ()),
+            "send_notification": bool(send_notification),
+        },
+        operation_key=f"office-signed-agreement:{decision.id}",
+    )
+
+
+def _complete_required_audit(db, submission, marker: dict) -> bool:
     try:
-        current_app.extensions["services"].audit_log_service.log_event(
-            event_type,
-            submission.submission_id,
-            submission.form_slug,
-            old_value=result.previous_status,
-            new_value=result.new_status,
-            actor=str(g.admin_user.email or g.admin_user.role),
-            metadata={
-                "reason": reason,
-                "original_block_reason": result.previous_block_reason,
-                "actor_id": g.admin_user.id,
-                "actor_role": g.admin_user.role,
-            },
-        )
+        audit = current_app.extensions["services"].audit_log_service
+        audit.write_pending(marker)
+        audit.clear_pending(submission, str(marker.get("operation_id") or ""))
+        db.commit()
+        return True
     except Exception as exc:
         current_app.logger.exception(
-            "blocked_agreement_audit_failed public_submission_id=%s error=%s",
+            "required_audit_pending public_submission_id=%s error=%s",
             submission.submission_id,
             exc.__class__.__name__,
         )
+        db.rollback()
+        return False
+
+
+def _resume_audited_workflow_continuation(db, form, submission, continuation: dict) -> None:
+    services = current_app.extensions["services"]
+    definition = _submission_form_config(db, form, submission)
+    kind = str(continuation.get("kind") or "")
+    actor_id = continuation.get("actor_id")
+
+    if kind == "workflow_transition":
+        row = services.submission_repository.get_by_id(submission.submission_id)
+        if row:
+            services.workflow_service.resume_audited_transition(row, definition, continuation)
+        return
+
+    if kind == "repeatable_item_decision":
+        decision = db.get(RepeatableGroupItemDecision, int(continuation.get("decision_id") or 0))
+        if decision is None or decision.submission_id != submission.id:
+            raise LookupError("Nie znaleziono decyzji elementu wymaganej do kontynuacji.")
+        group_key = str(continuation.get("group_key") or "")
+        group = next(
+            (
+                item
+                for item in services.decision_definition_service.repeatable_groups(submission)
+                if item["key"] == group_key
+            ),
+            None,
+        )
+        services.mail_dispatch_service.dispatch_workflow_decision_event(
+            db=db,
+            form=form,
+            submission=submission,
+            decision=decision,
+            actor_id=actor_id,
+            group_config=(group or {}).get("config") or {},
+        )
+        db.commit()
+        row = services.submission_repository.get_by_id(submission.submission_id)
+        if row:
+            services.workflow_service.run_automatic_steps(row, definition)
+        return
+
+    if kind != "officer_decision":
+        return
+    if continuation.get("explicit_workflow"):
+        row = services.submission_repository.get_by_id(submission.submission_id)
+        if row:
+            services.workflow_service.run_automatic_steps(row, definition)
+            db.refresh(submission)
+        source_step = str(continuation.get("source_step") or "")
+        source_config = next(
+            (
+                step
+                for step in ((definition.get("workflow") or {}).get("steps") or [])
+                if str(step.get("id") or "") == source_step
+            ),
+            {},
+        )
+        services.mail_dispatch_service.dispatch_workflow_decision_event(
+            db=db,
+            form=form,
+            submission=submission,
+            decision=None,
+            actor_id=actor_id,
+            step_config=source_config,
+        )
+        db.commit()
+    elif continuation.get("accepted_after_correction"):
+        services.mail_dispatch_service.dispatch_correction_accepted(submission.submission_id)
 
 
 @bp.post("/submissions/<submission_id>/return-for-correction")
@@ -1443,6 +1711,7 @@ def submission_return_for_correction(submission_id: str):
         submission_form_config = _submission_form_config(db, form, submission)
         previous_step = str(submission.workflow_step or submission.workflow_stage or "")
         try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
             result = current_app.extensions["services"].submission_correction_service.return_for_correction(
                 db,
                 submission,
@@ -1460,8 +1729,37 @@ def submission_return_for_correction(submission_id: str):
                 new_step=str(submission.workflow_step or submission.workflow_stage or ""),
                 form_config=submission_form_config,
             )
+            audit_marker = current_app.extensions["services"].audit_log_service.stage_pending(
+                submission,
+                event_type="RETURNED_FOR_CORRECTION",
+                submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                old_value=result.previous_status,
+                new_value=result.new_status,
+                actor=str(g.admin_user.email or g.admin_user.role),
+                metadata={
+                    "reason": reason,
+                    "message_to_user": message_to_user,
+                    "cleared": result.cleared,
+                    "superseded_files": result.superseded_files,
+                },
+                required_permission="can_return_for_correction",
+                continuation={
+                    "kind": "returned_for_correction",
+                    "send_email": send_email,
+                    "recipient": result.recipient_email,
+                    "reason": reason,
+                    "message_to_user": message_to_user,
+                    "cleared": result.cleared,
+                },
+                operation_key=(
+                    submission.correction_requested_at.isoformat()
+                    if submission.correction_requested_at
+                    else ""
+                ),
+            )
             db.commit()
-        except (SubmissionCorrectionError, PermissionError) as exc:
+        except (AuditPendingError, SubmissionCorrectionError, PermissionError) as exc:
             db.rollback()
             if request.is_json:
                 return {"ok": False, "error": str(exc)}, 400
@@ -1489,27 +1787,19 @@ def submission_return_for_correction(submission_id: str):
             result.superseded_files,
             send_email,
         )
-        try:
-            current_app.extensions["services"].audit_log_service.log_event(
-                "RETURNED_FOR_CORRECTION",
-                submission.submission_id,
-                submission.form_slug,
-                old_value=result.previous_status,
-                new_value=result.new_status,
-                actor=str(g.admin_user.email or g.admin_user.role),
-                metadata={
-                    "reason": reason,
-                    "message_to_user": message_to_user,
-                    "cleared": result.cleared,
-                    "superseded_files": result.superseded_files,
-                },
+        if not _complete_required_audit(db, submission, audit_marker):
+            if request.is_json:
+                return {
+                    "ok": False,
+                    "operation_committed": True,
+                    "audit_pending": True,
+                    "submission_id": submission.submission_id,
+                }, 503
+            flash(
+                "Zgłoszenie wysłano do poprawy, ale obowiązkowy audyt oczekuje na ponowienie.",
+                "error",
             )
-        except Exception as exc:
-            current_app.logger.exception(
-                "returned_for_correction_audit_failed public_submission_id=%s error=%s",
-                submission.submission_id,
-                exc.__class__.__name__,
-            )
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         mail_status = "not_requested"
         if send_email:
             if not result.recipient_email:
@@ -1954,6 +2244,7 @@ def _notify_beneficiary_agreement_decision(
         "agreement_number": _get_primary_agreement_number(submission),
         "agreement_signed_by_office_at": decision_record.decided_at.isoformat() if decision_record.decided_at else "",
     },
+    at_most_once_key=f"office-agreement-mail:{decision_record.id}",
 )
 
     decision_record.email_sent = mail_result.sent
@@ -2029,6 +2320,15 @@ def submission_decision_update(form_id: int, submission_pk: int):
         if result["missing_reason"]:
             flash("Podaj powod odrzucenia albo skierowania wniosku do poprawy.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+        if result.get("audit_pending"):
+            flash(
+                "Decyzja została zapisana, ale obowiązkowy audyt oczekuje na ponowienie.",
+                "error",
+            )
+            return redirect(
+                request.form.get("next")
+                or url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id)
+            )
         if result.get("automatic_warning"):
             flash("Decyzja została zapisana, ale automatyczny etap workflow wymaga ponowienia lub interwencji.", "warning")
         if result.get("mail_warning"):
@@ -2077,7 +2377,8 @@ def office_document_step(form_id, submission_pk, step_id):
             response.headers["Cache-Control"] = "private, no-store"
             return response
         result = services.document_service.document_workflow.upload(row, definition, step_id, request.files.get("document_pdf"),
-            signer="office", instance=request.form.get("instance", ""), document_id=request.form.get("document_id", ""))
+            signer="office", instance=request.form.get("instance", ""), document_id=request.form.get("document_id", ""),
+            actor={"id": g.admin_user.id, "email": g.admin_user.email})
         flash("Podpis urzędu został przyjęty." if result["is_valid"] else "Nie udało się potwierdzić podpisu urzędu.", "success" if result["is_valid"] else "error")
     except ValueError as exc:
         if request.method == "GET":
@@ -2105,11 +2406,9 @@ def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key:
                 decision_code=request.form.get("decision_code", ""),
                 comment=request.form.get("comment", ""), actor=g.admin_user,
             )
+            db.flush()
             group = next((item for item in decision_service.repeatable_groups(submission) if item["key"] == group_key), None)
-            services.mail_dispatch_service.dispatch_workflow_decision_event(
-                db=db, form=form, submission=submission, decision=decision,
-                actor_id=g.admin_user.id, group_config=(group or {}).get("config") or {},
-            )
+            audit_marker = None
             completion = decision_service.completion_state(db, submission, group_key)
             if getattr(decision, "was_created", False) and completion.get("complete") and completion.get("target_step"):
                 target_step = str(completion["target_step"])
@@ -2121,7 +2420,30 @@ def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key:
                     actor=str(g.admin_user.email or "admin"),
                     reason=f"item_decision_completion:ALL:{completion.get('aggregate')}",
                     target_step=target_step,
+                    audit_operation_key=f"repeatable-item-decision:{decision.id}:{target_step}",
+                    audit_permission="can_make_decision",
+                    audit_continuation={
+                        "kind": "repeatable_item_decision",
+                        "decision_id": decision.id,
+                        "group_key": group_key,
+                        "actor_id": g.admin_user.id,
+                    },
                 )
+                audit_marker = pending_audit_state(submission)
+            db.commit()
+            if audit_marker and not _complete_required_audit(db, submission, audit_marker):
+                flash(
+                    "Decyzję zapisano, ale obowiązkowy audyt oczekuje na ponowienie.",
+                    "error",
+                )
+                return redirect(
+                    url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk)
+                    + "#repeatable-decisions"
+                )
+            services.mail_dispatch_service.dispatch_workflow_decision_event(
+                db=db, form=form, submission=submission, decision=decision,
+                actor_id=g.admin_user.id, group_config=(group or {}).get("config") or {},
+            )
             db.commit()
             definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
             row = services.submission_repository.get_by_id(submission.submission_id)
@@ -2225,12 +2547,22 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
         if submission.form_slug != form.slug:
             abort(404)
         try:
+            current_app.extensions["services"].audit_log_service.require_no_pending(submission)
             result = current_app.extensions["services"].office_signed_agreement_service.check(
                 db, form, submission, actor=g.admin_user,
                 training_key=request.form.get("training_key") or None,
                 email_requested=request.form.get("send_notification") == "on",
             )
-        except OfficeSignedAgreementError as exc:
+            audit_marker = (
+                _stage_office_signed_agreement_audit(
+                    submission,
+                    result,
+                    send_notification=request.form.get("send_notification") == "on",
+                )
+                if result.found
+                else None
+            )
+        except (AuditPendingError, OfficeSignedAgreementError) as exc:
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
@@ -2239,6 +2571,12 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
             flash(result.message + details, "warning" if result.missing_filenames or result.errors else "info")
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         db.commit()
+        if audit_marker and not _complete_required_audit(db, submission, audit_marker):
+            flash(
+                "Finalną umowę zapisano, ale obowiązkowy audyt oczekuje na ponowienie.",
+                "error",
+            )
+            return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         if request.form.get("send_notification") == "on":
             _notify_beneficiary_agreement_decision(db, form, submission, result)
         flash(result.message, "success")
@@ -2264,6 +2602,7 @@ def check_office_signed_agreements_bulk(form_id: int):
         for submission in submissions:
             checked_submissions += 1
             try:
+                current_app.extensions["services"].audit_log_service.require_no_pending(submission)
                 result = current_app.extensions["services"].office_signed_agreement_service.check(
                     db,
                     form,
@@ -2271,7 +2610,24 @@ def check_office_signed_agreements_bulk(form_id: int):
                     actor=g.admin_user,
                     email_requested=request.form.get("send_notification") == "on",
                 )
-            except OfficeSignedAgreementError as exc:
+                audit_marker = (
+                    _stage_office_signed_agreement_audit(
+                        submission,
+                        result,
+                        send_notification=request.form.get("send_notification") == "on",
+                    )
+                    if result.found
+                    else None
+                )
+                if audit_marker:
+                    db.commit()
+                    if not _complete_required_audit(db, submission, audit_marker):
+                        errors.append(
+                            f"{submission.submission_id}: obowiązkowy audyt oczekuje na ponowienie"
+                        )
+                        continue
+            except (AuditPendingError, OfficeSignedAgreementError) as exc:
+                db.rollback()
                 errors.append(f"{submission.submission_id}: {exc}")
                 continue
             checked_agreements += result.checked_count
@@ -2355,6 +2711,7 @@ def submissions_decisions_update(form_id: int):
     database_errors = 0
     automatic_warnings = 0
     mail_warnings = 0
+    audit_pending_count = 0
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
         if not current_app.extensions["services"].verification_checklist_service.can_make_decision(db, g.admin_user, form):
@@ -2413,6 +2770,7 @@ def submissions_decisions_update(form_id: int):
                 skipped_count += 1
                 continue
             saved_count += 1
+            audit_pending_count += bool(result.get("audit_pending"))
             automatic_warnings += bool(result.get("automatic_warning"))
             mail_warnings += bool(result.get("mail_warning"))
         if missing_reason_count:
@@ -2429,6 +2787,11 @@ def submissions_decisions_update(form_id: int):
             flash(f"Zapisano {automatic_warnings} decyzji, ale automatyczny etap workflow wymaga ponowienia lub interwencji.", "warning")
         if mail_warnings:
             flash(f"Zapisano {mail_warnings} decyzji, ale nie udało się wysłać powiadomienia.", "warning")
+        if audit_pending_count:
+            flash(
+                f"Zapisano {audit_pending_count} decyzji, których obowiązkowy audyt oczekuje na ponowienie.",
+                "error",
+            )
         flash(f"Zapisano decyzje: {saved_count}. Bez zmian: {skipped_count}.", "success" if saved_count else "warning")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
@@ -2645,6 +3008,8 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     if category != "correction":
         submission.correction_required = "Nie"
 
+    decision_at = datetime.now(timezone.utc)
+    submission.updated_at = decision_at
     try:
         workflow_service.transition_submission(
             submission,
@@ -2653,8 +3018,18 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             reason="officer_decision",
             target_step=target_step,
             decision_code=decision,
+            audit_operation_key=(
+                f"officer-decision:{submission.id}:{decision_at.isoformat()}:{decision}"
+            ),
+            audit_permission="can_make_decision",
+            audit_continuation={
+                "kind": "officer_decision",
+                "source_step": previous_step,
+                "explicit_workflow": workflow_config.get("flow_mode") == "explicit",
+                "accepted_after_correction": accepted_after_correction,
+                "actor_id": g.admin_user.id,
+            },
         )
-        submission.updated_at = datetime.now(timezone.utc)
         db.add(
             SubmissionDecision(
                 submission_id=submission.id,
@@ -2672,7 +3047,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 target_status=target_status or "",
                 email_requested=False,
                 email_sent=False,
-                decided_at=datetime.now(timezone.utc),
+                decided_at=decision_at,
             )
         )
         db.commit()
@@ -2685,6 +3060,21 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         else:
             current_app.logger.exception("officer_decision_domain_failed", extra=context)
         raise
+
+    audit_marker = pending_audit_state(submission)
+    if not _complete_required_audit(db, submission, audit_marker):
+        return {
+            "decision": decision,
+            "invalid_stage": False,
+            "missing_reason": False,
+            "public_submission_id": public_submission_id,
+            "schema_warning": False,
+            "send_mail": False,
+            "automatic_warning": False,
+            "mail_warning": False,
+            "audit_pending": True,
+            "skipped": False,
+        }
 
     current_app.logger.info(
         "officer_decision_saved",
@@ -2755,6 +3145,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         "send_mail": bool(mail_result and mail_result.sent),
         "automatic_warning": automatic_warning,
         "mail_warning": mail_warning,
+        "audit_pending": False,
         "skipped": False,
     }
 

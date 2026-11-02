@@ -1399,6 +1399,341 @@ def test_composite_training_agreements_keep_separate_locks(composite_env):
         assert all(t.status == 'agreement_signed_by_office' for t in db.execute(select(SubmissionTraining)).scalars())
 
 
+def _office_agreement_env(composite_env):
+    env = composite_env('agreement', office_signature=True)
+    env.definition['documents'][0]['generation_mode'] = 'per_training'
+    snapshot = {'id': 'a', 'name': 'Szkolenie a', 'price': '25.00', 'capacity': 3}
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        model.selected_trainings = json.dumps([snapshot])
+        db.add(env.services.submission_training_service._new_row(model.id, snapshot))
+        model.form_version.definition_json = deepcopy(env.definition)
+        db.commit()
+    env.enter()
+    assert env.document.upload(
+        env.row(), env.definition, 'paper', env.file(), instance='a'
+    )['is_valid']
+    env.verification['signature_count'] = 2
+    return env
+
+
+def test_composite_office_agreement_db_rollback_and_retry_are_idempotent(
+    composite_env, monkeypatch,
+):
+    env = _office_agreement_env(composite_env)
+    training_service = env.services.submission_training_service
+    original_finalize = training_service.finalize_composite_office_agreement_with_required_audit
+    original_save = env.services.document_service.document_storage_service.save_pdf_recoverable
+    saved_filenames = []
+
+    def capture_save(**kwargs):
+        saved_filenames.append(kwargs['filename'])
+        return original_save(**kwargs)
+
+    def fail_before_commit(*args, **kwargs):
+        original_finalize(*args, **kwargs)
+        raise RuntimeError('Interrupted before office DB commit')
+
+    monkeypatch.setattr(
+        env.services.document_service.document_storage_service,
+        'save_pdf_recoverable',
+        capture_save,
+    )
+    monkeypatch.setattr(
+        training_service,
+        'finalize_composite_office_agreement_with_required_audit',
+        fail_before_commit,
+    )
+    office_pdf = env.file(b'\n% participant signature\n\n% office signature\n')
+    with pytest.raises(RuntimeError, match='before office DB commit'):
+        env.document.upload(
+            env.row(), env.definition, 'paper', office_pdf,
+            signer='office', instance='a', actor={'id': 17, 'email': 'office@example.org'},
+        )
+
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        training = db.execute(select(SubmissionTraining)).scalar_one()
+        assert training.status != 'agreement_signed_by_office'
+        assert not env.state().get('office_filename')
+        assert '_audit_pending' not in (submission.data_json or {})
+    assert not [
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['uploaded_by_source'] == 'office' and item['signed']
+    ]
+
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        states = dict(submission.document_states or {})
+        states['document_operation_until'] = '0'
+        submission.document_states = states
+        db.commit()
+    monkeypatch.setattr(
+        training_service,
+        'finalize_composite_office_agreement_with_required_audit',
+        original_finalize,
+    )
+    result = env.document.upload(
+        env.row(), env.definition, 'paper',
+        env.file(b'\n% participant signature\n\n% office signature\n'),
+        signer='office', instance='a', actor={'id': 17, 'email': 'office@example.org'},
+    )
+
+    assert result['is_valid'] and result['completed']
+    assert len(saved_filenames) == 2 and len(set(saved_filenames)) == 1
+    office_files = [
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['uploaded_by_source'] == 'office' and item['signed']
+    ]
+    assert len(office_files) == 1
+    with env.repo.session_factory() as db:
+        assert db.execute(select(SubmissionTraining)).scalar_one().status == 'agreement_signed_by_office'
+
+
+def test_composite_office_agreement_audit_retry_finishes_only_missing_event(
+    composite_env, monkeypatch,
+):
+    from services.audit_log_service import AuditPendingError
+
+    env = _office_agreement_env(composite_env)
+    audit_repository = env.services.audit_log_service.repository
+    original_append = audit_repository.append
+    attempted_ids = []
+    fail_second = True
+
+    def fail_second_once(entry):
+        nonlocal fail_second
+        attempted_ids.append(entry['event_id'])
+        if len(attempted_ids) == 2 and fail_second:
+            fail_second = False
+            raise OSError('Nextcloud unavailable before second office audit')
+        return original_append(entry)
+
+    notifications = []
+    monkeypatch.setattr(audit_repository, 'append', fail_second_once)
+    monkeypatch.setattr(
+        env.services.mail_dispatch_service,
+        'dispatch_document_received_notification',
+        lambda *args, **kwargs: notifications.append((args, kwargs)),
+    )
+    with pytest.raises(AuditPendingError, match='audyt'):
+        env.document.upload(
+            env.row(), env.definition, 'paper',
+            env.file(b'\n% participant signature\n\n% office signature\n'),
+            signer='office', instance='a', actor={'id': 17, 'email': 'office@example.org'},
+        )
+
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = submission.data_json['_audit_pending']
+        training = db.execute(select(SubmissionTraining)).scalar_one()
+        assert training.status == 'agreement_signed_by_office'
+        assert [event['event_type'] for event in marker['events']] == [
+            'SIGNED_DOCUMENT_UPLOADED', 'SIGNATURE_VERIFIED'
+        ]
+        assert all(event['metadata']['signature_role'] == 'office' for event in marker['events'])
+        assert all(event['metadata']['actor_id'] == 17 for event in marker['events'])
+        assert all(event['actor'] == 'office@example.org' for event in marker['events'])
+        assert len({event['event_id'] for event in marker['events']}) == 2
+    assert env.row()['workflow_stage'] == 'paper'
+    assert notifications == []
+    with pytest.raises(ValueError, match='przetwarzany'):
+        env.document.upload(
+            env.row(), env.definition, 'paper',
+            env.file(b'\n% participant signature\n\n% office signature\n'),
+            signer='office', instance='a', actor={'id': 17, 'email': 'office@example.org'},
+        )
+
+    env.services.audit_log_service.write_pending(marker)
+    assert env.repo.clear_required_audit(env.public_id, marker['operation_id'])
+    env.services.document_service.resume_training_agreement_upload(
+        env.public_id, marker['continuation']
+    )
+
+    assert env.row()['workflow_stage'] == 'review'
+    assert notifications == []
+    required_ids = {event['event_id'] for event in marker['events']}
+    assert required_ids.issubset(set(attempted_ids))
+    assert all(attempted_ids.count(event_id) == 2 for event_id in required_ids)
+    assert len([
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['uploaded_by_source'] == 'office' and item['signed']
+    ]) == 1
+
+
+def test_composite_office_negative_verification_has_no_success_audit(composite_env, monkeypatch):
+    env = _office_agreement_env(composite_env)
+    env.verification['signature_count'] = 1
+    written_events = []
+    monkeypatch.setattr(
+        env.services.audit_log_service.repository,
+        'append',
+        lambda entry: written_events.append(dict(entry)),
+    )
+
+    result = env.document.upload(
+        env.row(), env.definition, 'paper',
+        env.file(b'\n% participant signature only\n'),
+        signer='office', instance='a', actor={'id': 17, 'email': 'office@example.org'},
+    )
+
+    assert result['result'] == 'INVALID_SIGNATURE'
+    assert not any(event['event_type'] == 'SIGNATURE_VERIFIED' for event in written_events)
+    with env.repo.session_factory() as db:
+        assert db.execute(select(SubmissionTraining)).scalar_one().status != 'agreement_signed_by_office'
+
+
+def test_composite_training_agreement_audit_retry_does_not_repeat_upload_or_verification(
+    composite_env, monkeypatch,
+):
+    from models import SubmissionTraining
+    from services.audit_log_service import AuditPendingError
+
+    env = composite_env('agreement', office_signature=True)
+    env.definition['documents'][0]['generation_mode'] = 'per_training'
+    snapshot = {'id': 'a', 'name': 'Szkolenie a', 'price': '25.00', 'capacity': 3}
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        model.selected_trainings = json.dumps([snapshot])
+        db.add(env.services.submission_training_service._new_row(model.id, snapshot))
+        model.form_version.definition_json = deepcopy(env.definition)
+        db.commit()
+    env.enter()
+
+    audit_repository = env.services.audit_log_service.repository
+    original_append = audit_repository.append
+    append_calls = 0
+    failed = False
+
+    def fail_second_once(entry):
+        nonlocal append_calls, failed
+        append_calls += 1
+        if append_calls == 2 and not failed:
+            failed = True
+            raise OSError('Nextcloud unavailable before second audit')
+        return original_append(entry)
+
+    original_verify = env.services.document_signing_service.verify_stored_pdf
+    verification_calls = 0
+
+    def count_verification(*args, **kwargs):
+        nonlocal verification_calls
+        verification_calls += 1
+        return original_verify(*args, **kwargs)
+
+    monkeypatch.setattr(audit_repository, 'append', fail_second_once)
+    monkeypatch.setattr(env.services.document_signing_service, 'verify_stored_pdf', count_verification)
+
+    with pytest.raises(AuditPendingError, match='obowiązkowy audyt'):
+        env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='a')
+
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = submission.data_json['_audit_pending']
+        training = db.execute(select(SubmissionTraining)).scalar_one()
+        assert training.is_locked is True
+        assert [item['event_type'] for item in marker['events']] == [
+            'SIGNED_DOCUMENT_UPLOADED', 'SIGNATURE_VERIFIED'
+        ]
+        assert marker['continuation']['kind'] == 'composite_training_agreement_signed_upload'
+
+    with pytest.raises(ValueError, match='już przetwarzany'):
+        env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='a')
+    assert verification_calls == 1
+
+    env.services.audit_log_service.write_pending(marker)
+    assert env.repo.clear_required_audit(env.public_id, marker['operation_id'])
+    env.services.document_service.resume_training_agreement_upload(
+        env.public_id, marker['continuation']
+    )
+
+    assert verification_calls == 1
+    signed_files = [
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['signed'] and item['training_key'] == 'a'
+    ]
+    assert len(signed_files) == 1
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        assert '_audit_pending' not in (submission.data_json or {})
+        lock_events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.public_submission_id == env.public_id,
+            SubmissionWorkflowEvent.source == 'agreement_uploaded_by_beneficiary',
+        )).scalars().all()
+        assert len(lock_events) == 1
+
+
+def test_composite_training_agreement_recovers_persisted_file_without_reverification(
+    composite_env, monkeypatch,
+):
+    from models import SubmissionTraining
+
+    env = composite_env('agreement', office_signature=True)
+    env.definition['documents'][0]['generation_mode'] = 'per_training'
+    snapshot = {'id': 'a', 'name': 'Szkolenie a', 'price': '25.00', 'capacity': 3}
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        model.selected_trainings = json.dumps([snapshot])
+        db.add(env.services.submission_training_service._new_row(model.id, snapshot))
+        model.form_version.definition_json = deepcopy(env.definition)
+        db.commit()
+    env.enter()
+
+    original_finalize = env.document._finalize_composite_training_agreement
+    original_verify = env.services.document_signing_service.verify_stored_pdf
+    verification_calls = 0
+
+    def count_verification(*args, **kwargs):
+        nonlocal verification_calls
+        verification_calls += 1
+        return original_verify(*args, **kwargs)
+
+    monkeypatch.setattr(env.services.document_signing_service, 'verify_stored_pdf', count_verification)
+    monkeypatch.setattr(
+        env.document,
+        '_finalize_composite_training_agreement',
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('Interrupted before state commit')),
+    )
+    with pytest.raises(RuntimeError, match='before state commit'):
+        env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='a')
+
+    with env.repo.session_factory() as db:
+        training = db.execute(select(SubmissionTraining)).scalar_one()
+        assert training.is_locked is False
+    assert len([
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['signed'] and item['training_key'] == 'a'
+    ]) == 1
+
+    monkeypatch.setattr(env.document, '_finalize_composite_training_agreement', original_finalize)
+    result = env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='a')
+
+    assert result['is_valid'] is True
+    assert verification_calls == 1
+    assert len([
+        item for item in env.services.submission_document_service.list_documents(env.public_id)
+        if item['signed'] and item['training_key'] == 'a'
+    ]) == 1
+    with env.repo.session_factory() as db:
+        assert db.execute(select(SubmissionTraining)).scalar_one().is_locked is True
+
+
 def test_training_agreement_upload_cannot_validate_another_instance(composite_env):
     from models import SubmissionTraining
 

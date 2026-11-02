@@ -32,6 +32,62 @@ def test_csv_submission_repository_crud():
     assert repository.list_by_form("test")[0]["email"] == "b@example.com"
 
 
+def test_submission_document_operation_lease_serializes_and_expires(tmp_path):
+    pytest.importorskip("sqlalchemy")
+
+    from database import create_session_factory
+    from models import Base, FormSubmission
+    from repositories.submission_repository import PostgresSubmissionRepository
+    from sqlalchemy import create_engine
+
+    database_url = f"sqlite:///{tmp_path / 'lease.db'}"
+    Base.metadata.create_all(create_engine(database_url, future=True))
+    session_factory = create_session_factory(database_url)
+    repository = PostgresSubmissionRepository(database_url, session_factory=session_factory)
+    repository.create({"submission_id": "lease-1", "form_slug": "sample", "form_name": "Sample"})
+
+    assert repository.claim_submission_document_operation(
+        "lease-1", "training-agreement-upload:a", "token-a", lease_seconds=900
+    ) is True
+    assert repository.claim_submission_document_operation(
+        "lease-1", "training-agreement-upload:a", "token-b", lease_seconds=900
+    ) is False
+
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="lease-1").one()
+        states = dict(submission.document_states or {})
+        states["document_operation_until"] = "0"
+        submission.document_states = states
+        db.commit()
+
+    assert repository.claim_submission_document_operation(
+        "lease-1", "training-agreement-upload:a", "token-b", lease_seconds=900
+    ) is True
+
+
+def test_submission_document_operation_claim_is_blocked_by_required_audit(tmp_path):
+    pytest.importorskip("sqlalchemy")
+
+    from database import create_session_factory
+    from models import Base, FormSubmission
+    from repositories.submission_repository import PostgresSubmissionRepository
+    from sqlalchemy import create_engine
+
+    database_url = f"sqlite:///{tmp_path / 'pending-audit.db'}"
+    Base.metadata.create_all(create_engine(database_url, future=True))
+    session_factory = create_session_factory(database_url)
+    repository = PostgresSubmissionRepository(database_url, session_factory=session_factory)
+    repository.create({"submission_id": "audit-1", "form_slug": "sample", "form_name": "Sample"})
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="audit-1").one()
+        submission.data_json = {"_audit_pending": {"operation_id": "required-audit-op"}}
+        db.commit()
+
+    assert repository.claim_submission_document_operation(
+        "audit-1", "training-agreement-upload:a", "token-a"
+    ) is False
+
+
 def test_postgres_repository_records_p4_dual_write_metadata(tmp_path):
     pytest.importorskip("sqlalchemy")
 

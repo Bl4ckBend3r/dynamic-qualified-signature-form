@@ -664,6 +664,283 @@ class SubmissionTrainingService:
             )
         return True
 
+    def lock_for_agreement_with_required_audit(
+        self,
+        db,
+        submission,
+        agreement_id: str,
+        *,
+        agreement_file: SubmissionFile,
+        verification: Mapping[str, Any],
+        submission_updates: Mapping[str, Any],
+        operation_token: str,
+        audit_log_service,
+    ) -> dict:
+        """Commit the seat lock and both required audit events as one DB unit."""
+        from services.audit_log_service import AuditPendingError
+
+        states = dict(submission.document_states or {})
+        if operation_token and states.get("document_operation") != operation_token:
+            raise AuditPendingError("Dzierżawa uploadu umowy wygasła lub została przejęta.")
+        if not self.lock_for_agreement(
+            db,
+            submission,
+            agreement_id,
+            agreement_file_id=agreement_file.id,
+        ):
+            raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+        for key in {
+            "training_agreements",
+            "agreement_signed",
+            "agreement_signature_valid",
+            "agreement_signed_filename",
+        }:
+            if key in submission_updates:
+                setattr(submission, key, submission_updates[key])
+        marker = audit_log_service.stage_pending_events(
+            submission,
+            submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            events=[
+                {
+                    "event_type": "SIGNED_DOCUMENT_UPLOADED",
+                    "metadata": {
+                        "document_id": "training_agreement",
+                        "filename": agreement_file.filename,
+                    },
+                },
+                {
+                    "event_type": "SIGNATURE_VERIFIED",
+                    "metadata": dict(verification or {}),
+                },
+            ],
+            operation_key=f"training-agreement-upload:{agreement_file.id}:{agreement_id}",
+            required_permission="can_manage_documents",
+            continuation={
+                "kind": "training_agreement_signed_upload",
+                "agreement_id": str(agreement_id),
+                "agreement_file_id": agreement_file.id,
+                "document_id": "training_agreement",
+                "filename": agreement_file.filename,
+                "checksum_sha256": agreement_file.checksum_sha256,
+            },
+        )
+        states.update(
+            document_operation="",
+            document_operation_key="",
+            document_operation_until="0",
+        )
+        submission.document_states = states
+        db.flush()
+        return marker
+
+    def finalize_composite_agreement_with_required_audit(
+        self,
+        db,
+        submission,
+        agreement_id: str,
+        *,
+        agreement_file: SubmissionFile,
+        verification: Mapping[str, Any],
+        submission_updates: Mapping[str, Any],
+        operation_token: str,
+        audit_log_service,
+        step_id: str,
+        document_id: str,
+        document_state: Mapping[str, Any],
+        completed: bool,
+    ) -> dict:
+        """Atomically persist a composite upload state, seat lock and audit marker."""
+        from services.audit_log_service import AuditPendingError
+
+        states = deepcopy(submission.document_states or {})
+        if states.get("document_operation") != operation_token:
+            raise AuditPendingError("Dzierżawa uploadu umowy wygasła lub została przejęta.")
+        if not self.lock_for_agreement(
+            db,
+            submission,
+            agreement_id,
+            agreement_file_id=agreement_file.id,
+        ):
+            raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+        for key in {
+            "training_agreements",
+            "agreement_signed",
+            "agreement_signature_valid",
+            "agreement_signed_filename",
+        }:
+            if key in submission_updates:
+                setattr(submission, key, submission_updates[key])
+        states.setdefault("workflow_documents", {})[step_id] = deepcopy(dict(document_state))
+        states.update(
+            document_operation="",
+            document_operation_key="",
+            document_operation_until="0",
+        )
+        submission.document_states = states
+        internal_event = "DOCUMENT_STEP_COMPLETED" if completed else "DOCUMENT_GROUP_FILE_ACCEPTED"
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            previous_status=submission.process_status,
+            new_status=submission.process_status,
+            previous_step=step_id,
+            new_step=step_id,
+            actor_role="participant",
+            reason=internal_event,
+            source=internal_event,
+            side_effects={
+                "document_id": str(document_id),
+                "training_key": str(agreement_id),
+                "agreement_file_id": agreement_file.id,
+            },
+        ))
+        marker = audit_log_service.stage_pending_events(
+            submission,
+            submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            events=[
+                {
+                    "event_type": "SIGNED_DOCUMENT_UPLOADED",
+                    "metadata": {
+                        "document_id": str(document_id),
+                        "filename": agreement_file.filename,
+                    },
+                },
+                {
+                    "event_type": "SIGNATURE_VERIFIED",
+                    "metadata": dict(verification or {}),
+                },
+            ],
+            operation_key=f"composite-training-agreement-upload:{agreement_file.id}:{agreement_id}",
+            required_permission="can_manage_documents",
+            continuation={
+                "kind": "composite_training_agreement_signed_upload",
+                "agreement_id": str(agreement_id),
+                "agreement_file_id": agreement_file.id,
+                "document_id": str(document_id),
+                "filename": agreement_file.filename,
+                "checksum_sha256": agreement_file.checksum_sha256,
+                "step_id": str(step_id),
+                "completed": bool(completed),
+            },
+        )
+        db.flush()
+        return marker
+
+    def finalize_composite_office_agreement_with_required_audit(
+        self,
+        db,
+        submission,
+        agreement_id: str,
+        *,
+        agreement_file: SubmissionFile,
+        verification: Mapping[str, Any],
+        operation_token: str,
+        audit_log_service,
+        step_id: str,
+        document_id: str,
+        document_state: Mapping[str, Any],
+        completed: bool,
+        actor: Mapping[str, Any],
+    ) -> dict:
+        """Atomically persist an office countersignature and its required audit."""
+        from services.audit_log_service import AuditPendingError
+
+        states = deepcopy(submission.document_states or {})
+        if states.get("document_operation") != operation_token:
+            raise AuditPendingError("Dzierżawa uploadu umowy wygasła lub została przejęta.")
+        if not self.lock_for_agreement(
+            db,
+            submission,
+            agreement_id,
+            agreement_file_id=agreement_file.id,
+        ):
+            raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+        training = db.query(SubmissionTraining).filter(
+            SubmissionTraining.submission_id == submission.id,
+            SubmissionTraining.agreement_id == str(agreement_id),
+        ).one_or_none()
+        if training is None:
+            raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+        training.status = "agreement_signed_by_office"
+        training.updated_at = datetime.now(timezone.utc)
+        states.setdefault("workflow_documents", {})[step_id] = deepcopy(dict(document_state))
+        states.update(
+            document_operation="",
+            document_operation_key="",
+            document_operation_until="0",
+        )
+        submission.document_states = states
+        actor_id = actor.get("id")
+        actor_email = str(actor.get("email") or "")
+        internal_event = "DOCUMENT_STEP_COMPLETED" if completed else "DOCUMENT_GROUP_FILE_ACCEPTED"
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            previous_status=submission.process_status,
+            new_status=submission.process_status,
+            previous_step=step_id,
+            new_step=step_id,
+            actor_id=actor_id,
+            actor_email=actor_email,
+            actor_role="office",
+            reason=internal_event,
+            source=internal_event,
+            side_effects={
+                "document_id": str(document_id),
+                "training_key": str(agreement_id),
+                "office_file_id": agreement_file.id,
+            },
+        ))
+        actor_name = actor_email or "office"
+        actor_metadata = {
+            "signature_role": "office",
+            "actor_id": actor_id,
+            "actor_email": actor_email,
+        }
+        marker = audit_log_service.stage_pending_events(
+            submission,
+            submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            events=[
+                {
+                    "event_type": "SIGNED_DOCUMENT_UPLOADED",
+                    "actor": actor_name,
+                    "metadata": {
+                        **actor_metadata,
+                        "document_id": str(document_id),
+                        "filename": agreement_file.filename,
+                    },
+                },
+                {
+                    "event_type": "SIGNATURE_VERIFIED",
+                    "actor": actor_name,
+                    "metadata": {
+                        **dict(verification or {}),
+                        **actor_metadata,
+                    },
+                },
+            ],
+            operation_key=f"composite-office-agreement-upload:{agreement_file.id}:{agreement_id}",
+            required_permission="can_make_decision",
+            continuation={
+                "kind": "composite_office_agreement_signed_upload",
+                "agreement_id": str(agreement_id),
+                "agreement_file_id": agreement_file.id,
+                "document_id": str(document_id),
+                "filename": agreement_file.filename,
+                "checksum_sha256": agreement_file.checksum_sha256,
+                "step_id": str(step_id),
+                "completed": bool(completed),
+                "dispatch_document_notification": False,
+            },
+        )
+        db.flush()
+        return marker
+
     @staticmethod
     def _new_row(submission_id: int, training: Mapping[str, Any]) -> SubmissionTraining:
         now = datetime.now(timezone.utc)

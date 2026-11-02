@@ -10,6 +10,7 @@ from services.submission_training_service import (
     SubmissionTrainingService,
     TrainingSelectionError,
 )
+from services.audit_log_service import AuditLogService
 
 
 FIELD = {
@@ -132,6 +133,101 @@ def test_uploading_agreement_locks_only_its_training(db):
     assert rows["excel"].is_locked is False
     event = db.query(SubmissionWorkflowEvent).filter_by(source="agreement_uploaded_by_beneficiary").one()
     assert event.side_effects["submission_training_id"] == rows["python"].id
+
+
+def _prepare_required_audit_lock(db):
+    submission = make_submission(db)
+    service = SubmissionTrainingService()
+    service.save(db, submission, FIELD, ["python"])
+    submission.training_agreements = json.dumps([
+        {"id": "agreement-python", "training_id": "python", "filename": "python.pdf"}
+    ])
+    submission.document_states = {
+        "document_operation": "lease-token",
+        "document_operation_key": "training-agreement-upload:agreement-python",
+        "document_operation_until": "9999999999",
+    }
+    signed_file = SubmissionFile(
+        submission_id=submission.id,
+        public_submission_id=submission.submission_id,
+        form_slug=submission.form_slug,
+        document_id="training_agreement",
+        document_type="signed_training_agreement",
+        filename="python-signed.pdf",
+        storage_path="output/sample/python-signed.pdf",
+        checksum_sha256="abc123",
+        signed=True,
+    )
+    db.add(signed_file)
+    db.commit()
+    return service, db.get(FormSubmission, submission.id), db.get(SubmissionFile, signed_file.id)
+
+
+def test_training_lock_and_required_audit_marker_share_one_transaction(db):
+    service, submission, signed_file = _prepare_required_audit_lock(db)
+
+    marker = service.lock_for_agreement_with_required_audit(
+        db,
+        submission,
+        "agreement-python",
+        agreement_file=signed_file,
+        verification={"result": "VALID_SIGNATURE", "signature_type": "mszafir"},
+        submission_updates={
+            "training_agreements": json.dumps([{
+                "id": "agreement-python",
+                "training_id": "python",
+                "filename": "python.pdf",
+                "signed_filename": "python-signed.pdf",
+                "signature_valid": True,
+            }]),
+            "agreement_signature_valid": "Tak",
+        },
+        operation_token="lease-token",
+        audit_log_service=AuditLogService(object()),
+    )
+    db.commit()
+
+    training = db.query(SubmissionTraining).filter_by(submission_id=submission.id).one()
+    assert training.is_locked is True
+    assert training.agreement_file_id == signed_file.id
+    assert json.loads(submission.training_agreements)[0]["signature_valid"] is True
+    assert submission.data_json["_audit_pending"] == marker
+    assert [item["event_type"] for item in marker["events"]] == [
+        "SIGNED_DOCUMENT_UPLOADED",
+        "SIGNATURE_VERIFIED",
+    ]
+    assert len({item["event_id"] for item in marker["events"]}) == 2
+    assert submission.document_states["document_operation"] == ""
+    assert db.query(SubmissionWorkflowEvent).filter_by(
+        source="agreement_uploaded_by_beneficiary"
+    ).count() == 1
+
+
+def test_training_lock_rolls_back_together_with_required_audit_marker(db):
+    service, submission, signed_file = _prepare_required_audit_lock(db)
+
+    service.lock_for_agreement_with_required_audit(
+        db,
+        submission,
+        "agreement-python",
+        agreement_file=signed_file,
+        verification={"result": "VALID_SIGNATURE"},
+        submission_updates={"agreement_signature_valid": "Tak"},
+        operation_token="lease-token",
+        audit_log_service=AuditLogService(object()),
+    )
+    db.rollback()
+    db.expire_all()
+
+    restored = db.get(FormSubmission, submission.id)
+    training = db.query(SubmissionTraining).filter_by(submission_id=restored.id).one()
+    assert training.is_locked is False
+    assert restored.agreement_signature_valid != "Tak"
+    assert "_audit_pending" not in (restored.data_json or {})
+    assert restored.document_states["document_operation"] == "lease-token"
+    assert db.query(SubmissionWorkflowEvent).filter_by(
+        source="agreement_uploaded_by_beneficiary"
+    ).count() == 0
 
 
 def test_public_template_uses_one_bulk_uploader_even_for_single_training():

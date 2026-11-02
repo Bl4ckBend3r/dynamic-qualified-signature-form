@@ -62,6 +62,19 @@
     {% endif %}
 </div>
 {% endif %}
+{% set audit_pending = submission.data_json.get('_audit_pending') if submission.data_json else none %}
+{% if audit_pending %}
+<div class="admin-alert admin-alert-danger">
+    <strong>Obowiązkowy audyt tej operacji nie został jeszcze zapisany.</strong>
+    Kolejne zależne operacje pozostają zablokowane do czasu uzgodnienia wpisu z Nextcloud.
+    {% if can_retry_required_audit %}
+    <form method="post" action="{{ url_for('admin.submission_audit_retry', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <button class="admin-button" type="submit">Ponów zapis audytu</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 <div class="admin-submission-layout">
 <div class="admin-submission-main">

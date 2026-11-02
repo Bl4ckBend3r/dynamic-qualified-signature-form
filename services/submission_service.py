@@ -41,6 +41,7 @@ from services.workflow_service import (
     workflow_step_document_id,
 )
 from services.workflow_state_service import FinalOutcome, final_outcome_for_status
+from services.audit_log_service import pending_audit_state
 
 logger = logging.getLogger(__name__)
 
@@ -1570,7 +1571,7 @@ class SubmissionService:
                 )
             )
             can_view_status_details = True
-        if has_pending_pdf_generation(row):
+        if has_pending_pdf_generation(row) or pending_audit_state(row):
             can_sign_documents = False
             can_view_status_details = True
         return {

@@ -265,14 +265,153 @@ class PostgresSubmissionRepository(SubmissionRepository):
         )
         return True
 
+    def apply_workflow_transition_with_audit(
+        self,
+        submission_id: str,
+        updates: dict,
+        event: dict,
+        marker: dict,
+        *,
+        expected_step: str | None = None,
+        replaces_audit_operation_id: str = "",
+    ) -> bool:
+        """Commit workflow state, its DB event and the required-audit marker atomically."""
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionWorkflowEvent
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        wanted = str(submission_id or "").strip()
+        if not wanted:
+            return False
+        mapped, meta = build_submission_from_form(updates, include_metadata=True)
+        saved_columns = {
+            item.rsplit("->", 1)[1]
+            for item in meta["saved_fields"]
+            if "->" in item
+        }
+        values = {
+            key: mapped[key]
+            for key in saved_columns
+            if key in mapped and key in FORM_SUBMISSION_COLUMNS and key not in {"id", "data_json"}
+        }
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            prior_marker = dict((submission.data_json or {}).get(AUDIT_PENDING_KEY) or {})
+            can_replace_marker = bool(
+                prior_marker.get("audit_complete")
+                and str(prior_marker.get("operation_id") or "")
+                == str(replaces_audit_operation_id or "")
+            )
+            if prior_marker and not can_replace_marker:
+                raise AuditPendingError(
+                    "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+                )
+            if expected_step is not None:
+                current_step = str(submission.workflow_step or submission.workflow_stage or "")
+                if current_step != str(expected_step):
+                    return False
+            for key, value in values.items():
+                setattr(submission, key, value)
+            submission.data_json = {
+                **dict(submission.data_json or {}),
+                AUDIT_PENDING_KEY: dict(marker),
+            }
+            session.add(
+                SubmissionWorkflowEvent(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    previous_status=str(event.get("previous_status") or ""),
+                    new_status=str(event.get("new_status") or ""),
+                    previous_step=str(event.get("previous_step") or ""),
+                    new_step=str(event.get("new_step") or ""),
+                    actor_id=event.get("actor_id"),
+                    actor_email=str(event.get("actor_email") or ""),
+                    actor_role=str(event.get("actor_role") or "system"),
+                    reason=str(event.get("reason") or ""),
+                    decision_code=str(event.get("decision_code") or ""),
+                    user_message=str(event.get("user_message") or ""),
+                    side_effects=dict(event.get("side_effects") or {}),
+                    source=str(event.get("source") or "workflow_transition_to"),
+                )
+            )
+            session.commit()
+        return True
+
+    def clear_required_audit(self, submission_id: str, operation_id: str) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        wanted = str(submission_id or "").strip()
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            data = dict(submission.data_json or {})
+            marker = data.get(AUDIT_PENDING_KEY) or {}
+            if not marker:
+                return True
+            if str(marker.get("operation_id") or "") != str(operation_id or ""):
+                raise AuditPendingError("Marker audytu zmienił się podczas operacji.")
+            data.pop(AUDIT_PENDING_KEY, None)
+            submission.data_json = data
+            session.commit()
+        return True
+
+    def mark_required_audit_complete(self, submission_id: str, operation_id: str) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == str(submission_id or "").strip())
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            data = dict(submission.data_json or {})
+            marker = dict(data.get(AUDIT_PENDING_KEY) or {})
+            if str(marker.get("operation_id") or "") != str(operation_id or ""):
+                raise AuditPendingError("Marker audytu zmienił się podczas operacji.")
+            marker["audit_complete"] = True
+            data[AUDIT_PENDING_KEY] = marker
+            submission.data_json = data
+            session.commit()
+        return True
+
     def claim_document_operation(self, submission_id: str, step_id: str, token: str) -> bool:
         """A durable lease serializes document operations across workers without holding PDF I/O locks."""
         import time
         from sqlalchemy import select, update, or_
         from models import FormSubmission
+        from services.audit_log_service import pending_audit_state
         with self.session_factory() as db:
-            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
-            if not model or (model.workflow_step or model.workflow_stage) != step_id:
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            model = db.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == submission_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if (
+                not model
+                or pending_audit_state(model)
+                or (model.workflow_step or model.workflow_stage) != step_id
+            ):
                 return False
             states = dict(model.document_states or {})
             prior = states.get("document_operation", "")
@@ -288,6 +427,45 @@ class PostgresSubmissionRepository(SubmissionRepository):
             ).values(document_states=states).execution_options(synchronize_session=False))
             db.commit()
             return result.rowcount == 1
+
+    def claim_submission_document_operation(
+        self,
+        submission_id: str,
+        operation_key: str,
+        token: str,
+        *,
+        lease_seconds: int = 900,
+    ) -> bool:
+        """Serialize a document operation that is not tied to one workflow step."""
+        import time
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import pending_audit_state
+
+        with self.session_factory() as db:
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            model = db.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == submission_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if model is None or pending_audit_state(model):
+                return False
+            states = dict(model.document_states or {})
+            if (
+                states.get("document_operation")
+                and float(states.get("document_operation_until") or 0) > time.time()
+            ):
+                return False
+            states.update(
+                document_operation=token,
+                document_operation_key=str(operation_key or ""),
+                document_operation_until=str(time.time() + max(1, int(lease_seconds))),
+            )
+            model.document_states = states
+            db.commit()
+            return True
 
     def update_if_workflow_step(self, submission_id, expected_step, updates):
         """Compare-and-set protects action completion from two concurrent callers."""
@@ -339,7 +517,11 @@ class PostgresSubmissionRepository(SubmissionRepository):
             if not model:
                 return
             states = dict(model.document_states or {})
-            states.update(document_operation="", document_operation_until="0")
+            states.update(
+                document_operation="",
+                document_operation_key="",
+                document_operation_until="0",
+            )
             db.execute(update(FormSubmission).where(FormSubmission.id == model.id,
                 FormSubmission.document_states["document_operation"].as_string() == token,
             ).values(document_states=states).execution_options(synchronize_session=False))

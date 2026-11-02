@@ -15,6 +15,7 @@ from statuses import (
     normalize_status,
 )
 from services.status_catalog import can_transition, get_status_label
+from services.audit_log_service import pending_audit_state
 from services.workflow_state_service import FinalOutcome, final_outcome_for_status
 from form_loader import evaluate_scoped_condition
 
@@ -165,7 +166,10 @@ class WorkflowService:
             version = db.get(FormVersion, submission["form_version_id"])
             return dict(version.definition_json or {}) if version else {}
 
-    def advance_after_action(self, submission: dict, form_config: dict, *, actor="system") -> None:
+    def advance_after_action(
+        self, submission: dict, form_config: dict, *, actor="system",
+        replaces_audit_operation_id: str = "",
+    ) -> None:
         """Complete the current action, follow its edge and run automatic nodes."""
         if (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
             return
@@ -180,17 +184,24 @@ class WorkflowService:
                 raise WorkflowTransitionError("Dokument nie spełnia jeszcze wymaganych warunków zakończenia.")
         target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
         if target:
-            self._enter_configured_step(submission, form_config, target, actor=actor)
+            self._enter_configured_step(
+                submission, form_config, target, actor=actor,
+                replaces_audit_operation_id=replaces_audit_operation_id,
+            )
             self.run_automatic_steps(submission, form_config)
 
-    def _enter_configured_step(self, submission, form_config, target, *, actor="system"):
+    def _enter_configured_step(
+        self, submission, form_config, target, *, actor="system",
+        replaces_audit_operation_id: str = "",
+    ):
         step = self._find_step(form_config, target)
         if not step or step.get("active", True) is False:
             raise WorkflowTransitionError("Przejście wskazuje nieistniejący lub nieaktywny etap.")
         status = step.get("status") or self._status_for_step(target)
         if not self.transition_to(submission["submission_id"], target, actor=actor,
                                   metadata={"target_status": status, "reason": "configured_workflow_edge", "expected_step": self.get_current_step(submission, form_config)},
-                                  form_config=form_config):
+                                  form_config=form_config,
+                                  replaces_audit_operation_id=replaces_audit_operation_id):
             raise WorkflowTransitionError("Nie udało się zapisać przejścia workflow.")
         submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
@@ -300,12 +311,27 @@ class WorkflowService:
         actor: str = "system",
         metadata: dict | None = None,
         form_config: dict | None = None,
+        replaces_audit_operation_id: str = "",
     ) -> bool:
         if not self.submission_repository:
             return False
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
+        prior_marker = pending_audit_state(submission)
+        replaces_audit_operation_id = str(replaces_audit_operation_id or "")
+        can_replace_marker = bool(
+            prior_marker.get("audit_complete")
+            and str(prior_marker.get("operation_id") or "") == replaces_audit_operation_id
+        )
+        if prior_marker and not can_replace_marker:
+            raise WorkflowTransitionError(
+                "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+            )
+        if can_replace_marker:
+            data = dict(submission.get("data_json") or {})
+            data.pop("_audit_pending", None)
+            submission["data_json"] = data
         if str(submission.get("process_status") or "") in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
         if getattr(self.submission_repository, "session_factory", None):
@@ -334,8 +360,108 @@ class WorkflowService:
         if target_step != old_step and has_document_workflow(old_definition, old_config) and not document_step_state(submission, old_step).get("completed"):
             raise WorkflowTransitionError("Najpierw zakończ wymagane czynności dokumentu.")
         target_status = str((metadata or {}).get("target_status") or self._status_for_step(target_step))
+        raw_side_effects = (metadata or {}).get("side_effects") or []
+        requested_side_effects = (
+            list(raw_side_effects)
+            if isinstance(raw_side_effects, (list, tuple, set))
+            else []
+        )
+        if self.audit_log_service and hasattr(
+            self.submission_repository, "apply_workflow_transition_with_audit"
+        ):
+            marker = self.audit_log_service.stage_pending(
+                submission,
+                event_type="WORKFLOW_STATUS_CHANGED",
+                submission_id=submission_id,
+                form_slug=submission.get("form_slug", ""),
+                old_value=old_step,
+                new_value=target_step,
+                actor=actor,
+                metadata={
+                    "reason": str((metadata or {}).get("reason") or ""),
+                    "target_status": target_status,
+                },
+                required_permission="can_edit_workflow",
+                continuation={
+                    "kind": "workflow_transition",
+                    "previous_step": old_step,
+                    "new_step": target_step,
+                    "requested_side_effects": requested_side_effects,
+                },
+                operation_key="|".join(
+                    (
+                        str(submission.get("updated_at") or submission.get("created_at") or ""),
+                        str(submission.get("process_status") or ""),
+                        old_step,
+                        target_step,
+                        str((metadata or {}).get("officer_decision") or ""),
+                    )
+                ),
+            )
+            updates = {
+                "workflow_step": target_step,
+                "workflow_stage": target_step,
+                "process_status": target_status,
+                "legacy_process_status": str(submission.get("legacy_process_status") or submission.get("process_status") or ""),
+                "final_outcome": final_outcome_for_status(target_status).value,
+            }
+            if isinstance((metadata or {}).get("document_states"), dict):
+                updates["document_states"] = dict((metadata or {})["document_states"])
+            if (metadata or {}).get("officer_decision"):
+                updates["officer_decision"] = str((metadata or {})["officer_decision"])
+            event = {
+                "previous_status": submission.get("process_status"),
+                "new_status": target_status,
+                "previous_step": old_step,
+                "new_step": target_step,
+                "actor_role": actor,
+                "reason": str((metadata or {}).get("reason") or ""),
+                "decision_code": str((metadata or {}).get("officer_decision") or ""),
+                "user_message": str((metadata or {}).get("user_message") or ""),
+                "side_effects": {"audit_operation_id": marker["operation_id"]},
+                "source": "workflow_transition_to",
+            }
+            updated = self.submission_repository.apply_workflow_transition_with_audit(
+                submission_id,
+                updates,
+                event,
+                marker,
+                expected_step=(metadata or {}).get("expected_step") or old_step,
+                replaces_audit_operation_id=replaces_audit_operation_id,
+            )
+            if not updated:
+                return False
+            logger.info(
+                "workflow_transition",
+                extra={"event": "workflow_transition", "operation": "workflow_transition", "workflow_step": target_step},
+            )
+            try:
+                self.audit_log_service.write_pending(marker)
+                if not self.submission_repository.clear_required_audit(
+                    submission_id, str(marker.get("operation_id") or "")
+                ):
+                    raise RuntimeError("Nie udało się usunąć markera obowiązkowego audytu.")
+            except Exception as exc:
+                logger.exception(
+                    "workflow_required_audit_pending submission_id=%s error_type=%s",
+                    submission_id,
+                    exc.__class__.__name__,
+                )
+                raise WorkflowTransitionError(
+                    "Przejście zapisano, ale obowiązkowy audyt oczekuje na ponowienie."
+                ) from exc
+            self._run_side_effects(
+                requested_side_effects,
+                submission_id=submission_id,
+                submission=submission,
+                target_step=target_step,
+                metadata=metadata or {},
+            )
+            self._transition_sla(submission_id, old_step, target_step)
+            return True
+
         side_effects = self._run_side_effects(
-            (metadata or {}).get("side_effects") or [],
+            requested_side_effects,
             submission_id=submission_id,
             submission=submission,
             target_step=target_step,
@@ -385,16 +511,8 @@ class WorkflowService:
                 actor=actor,
                 metadata=metadata or {},
             )
-        if updated and self.workflow_sla_service and hasattr(self.submission_repository, "session_factory"):
-            with self.submission_repository.session_factory() as db:
-                model = db.execute(
-                    select(FormSubmission).where(FormSubmission.submission_id == submission_id)
-                ).scalar_one_or_none()
-                if model is not None:
-                    self.workflow_sla_service.transition(
-                        db, model, previous_step=old_step, new_step=target_step
-                    )
-                    db.commit()
+        if updated:
+            self._transition_sla(submission_id, old_step, target_step)
         return updated
 
     def transition_submission(
@@ -407,8 +525,15 @@ class WorkflowService:
         target_step: str | None = None,
         strict: bool = False,
         decision_code: str = "",
+        audit_operation_key: str = "",
+        audit_permission: str = "",
+        audit_continuation: dict | None = None,
     ):
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
+        if pending_audit_state({"data_json": getattr(submission, "data_json", {})}):
+            raise WorkflowTransitionError(
+                "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+            )
         old_status = getattr(submission, "process_status", None)
         if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
@@ -474,14 +599,18 @@ class WorkflowService:
             extra={"event": "workflow_transition", "operation": "workflow_transition", "workflow_step": new_step},
         )
         if self.audit_log_service:
-            self.audit_log_service.log_event(
-                "WORKFLOW_STATUS_CHANGED",
-                getattr(submission, "submission_id", ""),
-                getattr(submission, "form_slug", ""),
+            self.audit_log_service.stage_pending(
+                submission,
+                event_type="WORKFLOW_STATUS_CHANGED",
+                submission_id=getattr(submission, "submission_id", ""),
+                form_slug=getattr(submission, "form_slug", ""),
                 old_value=old_status,
                 new_value=target_status,
                 actor=actor,
                 metadata={"reason": reason, "validated": transition_allowed},
+                required_permission=audit_permission,
+                continuation=audit_continuation,
+                operation_key=audit_operation_key,
             )
         return submission
 
@@ -604,6 +733,10 @@ class WorkflowService:
         if not self.submission_repository:
             return False
         submission_before = self.submission_repository.get_by_id(submission_id) or {}
+        if pending_audit_state(submission_before):
+            raise WorkflowTransitionError(
+                "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+            )
         definition = self.definition_for(submission_before)
         if definition.get("workflow", {}).get("flow_mode") == "explicit":
             raise WorkflowTransitionError("Wybierz skonfigurowaną opcję decyzji kierującą do poprawy.")
@@ -787,6 +920,43 @@ class WorkflowService:
             )
         except Exception:
             return False
+
+    def _transition_sla(self, submission_id: str, previous_step: str, new_step: str) -> None:
+        if not self.workflow_sla_service or not hasattr(self.submission_repository, "session_factory"):
+            return
+        with self.submission_repository.session_factory() as db:
+            model = db.execute(
+                select(FormSubmission).where(FormSubmission.submission_id == submission_id)
+            ).scalar_one_or_none()
+            if model is None:
+                return
+            self.workflow_sla_service.transition(
+                db,
+                model,
+                previous_step=previous_step,
+                new_step=new_step,
+            )
+            db.commit()
+
+    def resume_audited_transition(self, submission: dict, form_config: dict, continuation: dict) -> None:
+        if pending_audit_state(submission):
+            raise WorkflowTransitionError(
+                "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+            )
+        submission_id = str(submission.get("submission_id") or "")
+        previous_step = str(continuation.get("previous_step") or "")
+        new_step = str(continuation.get("new_step") or "")
+        self._run_side_effects(
+            continuation.get("requested_side_effects") or [],
+            submission_id=submission_id,
+            submission=submission,
+            target_step=new_step,
+            metadata={"reason": "required_audit_retry"},
+        )
+        self._transition_sla(submission_id, previous_step, new_step)
+        refreshed = self.submission_repository.get_by_id(submission_id) if self.submission_repository else None
+        if refreshed:
+            self.run_automatic_steps(refreshed, form_config)
 
     def _run_side_effects(
         self,

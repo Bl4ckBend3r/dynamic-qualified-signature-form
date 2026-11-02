@@ -614,6 +614,11 @@ class DocumentService:
                         result="INVALID_SIGNATURE",
                     )
                     is_valid = False
+        coordinated_training_upload = bool(
+            is_valid
+            and document_id == DocumentType.TRAINING_AGREEMENT
+            and current_app.config.get("DATABASE_URL")
+        )
         if is_valid:
             with self.document_storage_service.transactional_pdf_write(
                 storage=self.storage,
@@ -637,6 +642,7 @@ class DocumentService:
                     storage_path=storage_path,
                     storage=self.storage,
                     uploaded_by_source="participant",
+                    dispatch_notification=not coordinated_training_upload,
                 )
                 self._require_metadata_record(recorded, signed_filename)
             self._log_document_write(
@@ -658,17 +664,23 @@ class DocumentService:
         )
         if is_valid and document_id == DocumentType.DECLARATION:
             updates["data_json"] = self.signed_declaration_snapshot(row, uploaded_bytes, signed_filename)
-        self._update_submission(submission, updates)
+        if coordinated_training_upload:
+            # The normalized training row owns this status. It is committed with
+            # the required-audit marker by the route's finalization transaction.
+            updates.pop("process_status", None)
+        else:
+            self._update_submission(submission, updates)
         new_status = str(updates.get("process_status") or previous_status)
-        if is_valid and new_status != previous_status:
+        if is_valid and not coordinated_training_upload and new_status != previous_status:
             self._record_document_workflow_event(
                 submission,
                 previous_status=previous_status,
                 new_status=new_status,
                 document_id=document_id,
             )
-        self._audit("SIGNED_DOCUMENT_UPLOADED", submission, metadata={"document_id": document_id, "filename": signed_filename})
-        self._audit("SIGNATURE_VERIFIED" if is_valid else "SIGNATURE_INVALID", submission, metadata=verification)
+        if not coordinated_training_upload:
+            self._audit("SIGNED_DOCUMENT_UPLOADED", submission, metadata={"document_id": document_id, "filename": signed_filename})
+            self._audit("SIGNATURE_VERIFIED" if is_valid else "SIGNATURE_INVALID", submission, metadata=verification)
         return {
             "source_filename": source_filename,
             "signed_filename": signed_filename if is_valid else "",
@@ -676,6 +688,8 @@ class DocumentService:
             "is_signed": is_signed,
             "is_valid": is_valid,
             "updates": updates,
+            "checksum_sha256": sha256(uploaded_bytes).hexdigest() if is_valid else "",
+            "requires_audit_finalize": coordinated_training_upload,
         }
 
     def build_download_url(
@@ -907,7 +921,13 @@ class DocumentService:
         if workflow_document_action(step, document_id) != action:
             raise ValueError("Ta czynność dokumentowa nie jest dostępna na bieżącym etapie workflow.")
 
-    def _update_submission(self, submission: dict, updates: dict) -> bool:
+    def _update_submission(
+        self,
+        submission: dict,
+        updates: dict,
+        *,
+        advance_workflow: bool = True,
+    ) -> bool:
         row = self._row(submission)
         workflow = getattr(self, "workflow_service", None)
         definition = workflow.definition_for(row) if workflow else {}
@@ -919,7 +939,8 @@ class DocumentService:
         submission_id = self._submission_id(submission)
         if self.submission_repository and submission_id:
             saved = self.submission_repository.update(submission_id, updates)
-            if saved and explicit and submission_id not in workflow._driving and not self.composite_step(row, definition):
+            if (saved and advance_workflow and explicit and submission_id not in workflow._driving
+                    and not self.composite_step(row, definition)):
                 step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
                 document_id = workflow_step_document_id(step)
                 action = workflow_document_action(step, document_id)
@@ -933,6 +954,51 @@ class DocumentService:
                     workflow.advance_after_action(row, definition)
             return saved
         return False
+
+    def resume_training_agreement_upload(self, submission_id: str, continuation: Mapping[str, Any]) -> None:
+        """Run idempotent effects that must wait for both required audit events."""
+        row = self.submission_repository.get_by_id(submission_id) or {}
+        if not row:
+            raise RuntimeError("Nie znaleziono zgłoszenia dla kontynuacji uploadu umowy.")
+        if continuation.get("dispatch_document_notification", True):
+            current_app.extensions["services"].mail_dispatch_service.dispatch_document_received_notification(
+                submission_id,
+                document_id=str(continuation.get("document_id") or DocumentType.TRAINING_AGREEMENT),
+                filename=str(continuation.get("filename") or ""),
+                checksum_sha256=str(continuation.get("checksum_sha256") or ""),
+            )
+        workflow = getattr(self, "workflow_service", None)
+        definition = workflow.definition_for(row) if workflow else {}
+        if not workflow or (definition.get("workflow") or {}).get("flow_mode") != "explicit":
+            return
+        if submission_id in workflow._driving:
+            return
+        replaces_audit_operation_id = str(continuation.get("_audit_operation_id") or "")
+        if self.composite_step(row, definition):
+            if (
+                continuation.get("kind") in {
+                    "composite_training_agreement_signed_upload",
+                    "composite_office_agreement_signed_upload",
+                }
+                and continuation.get("completed")
+            ):
+                workflow.advance_after_action(
+                    row, definition,
+                    replaces_audit_operation_id=replaces_audit_operation_id,
+                )
+            return
+        step = workflow._find_step(definition, workflow.get_current_step(row, definition)) or {}
+        document_id = workflow_step_document_id(step)
+        if document_id != DocumentType.TRAINING_AGREEMENT:
+            return
+        agreements = normalize_selected_items(row.get("training_agreements"))
+        if workflow_document_action(step, document_id) == "await_signature" and agreements and all(
+            item.get("signature_valid") is True for item in agreements
+        ):
+            workflow.advance_after_action(
+                row, definition,
+                replaces_audit_operation_id=replaces_audit_operation_id,
+            )
 
     def _record_document_workflow_event(
         self,
@@ -1040,8 +1106,7 @@ class DocumentService:
             return OFFICE_FINAL_TYPE
         return self._document_metadata_type(document_id, signed=signed)
 
-    def record_composite_participant_signature(self, row, step, data, filename, instance, verification):
-        """Keep existing declaration snapshots and per-training seat locks in their services."""
+    def composite_participant_signature_updates(self, row, step, data, filename, instance, verification):
         document_id = step["document_id"]
         updates = {}
         if document_id in {"declaration", "agreement", "training_agreement"}:
@@ -1051,6 +1116,14 @@ class DocumentService:
             updates = self._signed_updates(row, document_id, filename, verification, True, True, target)
         if document_id == "declaration":
             updates["data_json"] = self.signed_declaration_snapshot(row, data, filename)
+        return updates
+
+    def record_composite_participant_signature(self, row, step, data, filename, instance, verification):
+        """Keep existing declaration snapshots and per-training seat locks in their services."""
+        document_id = step["document_id"]
+        updates = self.composite_participant_signature_updates(
+            row, step, data, filename, instance, verification
+        )
         if instance and document_id in {"agreement", "training_agreement"}:
             from sqlalchemy import select
             from models import FormSubmission, SubmissionFile

@@ -715,6 +715,147 @@ class DocumentWorkflowService:
             raise ValueError("Dokument jest już przetwarzany. Odśwież status za chwilę.")
         return token
 
+    def _finalize_composite_training_agreement(
+        self,
+        *,
+        row,
+        step,
+        state,
+        token,
+        instance,
+        document_id,
+        file_metadata,
+        verification,
+        submission_updates,
+        completed,
+    ):
+        from sqlalchemy import select
+        from models import Form, FormSubmission, SubmissionFile
+
+        with self.repository.session_factory() as db:
+            candidate = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == row["submission_id"]
+            )).scalar_one()
+            db.execute(select(Form).where(Form.slug == candidate.form_slug).with_for_update()).scalar_one_or_none()
+            submission = db.execute(select(FormSubmission).where(
+                FormSubmission.id == candidate.id
+            ).with_for_update()).scalar_one()
+            agreement_file = db.get(SubmissionFile, int(file_metadata.get("id") or 0))
+            if agreement_file is None or agreement_file.submission_id != submission.id:
+                raise RuntimeError("Nie znaleziono metadanych podpisanej umowy.")
+            marker = current_app.extensions["services"].submission_training_service.finalize_composite_agreement_with_required_audit(
+                db,
+                submission,
+                instance,
+                agreement_file=agreement_file,
+                verification=verification,
+                submission_updates=submission_updates,
+                operation_token=token,
+                audit_log_service=current_app.extensions["services"].audit_log_service,
+                step_id=step["id"],
+                document_id=document_id,
+                document_state=state,
+                completed=completed,
+            )
+            db.commit()
+        self._write_required_audit_and_resume(row["submission_id"], marker)
+        return marker
+
+    def _finalize_composite_office_agreement(
+        self,
+        *,
+        row,
+        step,
+        state,
+        token,
+        instance,
+        document_id,
+        document_type,
+        filename,
+        original_filename,
+        data,
+        storage_path,
+        mime_type,
+        agreement_number,
+        verification,
+        completed,
+        actor,
+    ):
+        from sqlalchemy import select
+        from models import Form, FormSubmission
+
+        with self.repository.session_factory() as db:
+            candidate = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == row["submission_id"]
+            )).scalar_one()
+            db.execute(select(Form).where(Form.slug == candidate.form_slug).with_for_update()).scalar_one_or_none()
+            submission = db.execute(select(FormSubmission).where(
+                FormSubmission.id == candidate.id
+            ).with_for_update()).scalar_one()
+            agreement_file = self.documents.submission_document_service.add_document_metadata_to_session(
+                db,
+                submission,
+                filename=filename,
+                file_bytes=data,
+                document_id=document_id,
+                document_type=document_type,
+                original_filename=original_filename,
+                storage_path=storage_path,
+                workflow_step_at_upload=step["id"],
+                training_key=instance,
+                agreement_number=agreement_number,
+                mime_type=mime_type,
+                signed=True,
+                status="signed",
+                signature_status=str(verification.get("validation_status") or "valid").lower(),
+                signature_validation_result=verification,
+                uploaded_by_source="office",
+            )
+            marker = current_app.extensions["services"].submission_training_service.finalize_composite_office_agreement_with_required_audit(
+                db,
+                submission,
+                instance,
+                agreement_file=agreement_file,
+                verification=verification,
+                operation_token=token,
+                audit_log_service=current_app.extensions["services"].audit_log_service,
+                step_id=step["id"],
+                document_id=document_id,
+                document_state=state,
+                completed=completed,
+                actor=dict(actor or {}),
+            )
+            db.commit()
+        self._write_required_audit_and_resume(row["submission_id"], marker)
+        return marker
+
+    def _write_required_audit_and_resume(self, submission_id, marker):
+        from services.audit_log_service import AuditPendingError
+
+        audit = current_app.extensions["services"].audit_log_service
+        try:
+            audit.write_pending(marker)
+            if not self.repository.mark_required_audit_complete(
+                submission_id, str(marker.get("operation_id") or "")
+            ):
+                raise RuntimeError("Nie znaleziono zgłoszenia podczas zwalniania markera audytu.")
+        except Exception as exc:
+            logger.error(
+                "composite_agreement_required_audit_failed submission_id=%s error_type=%s",
+                submission_id,
+                type(exc).__name__,
+            )
+            raise AuditPendingError(
+                "Umowa została przyjęta i miejsce zablokowane, ale obowiązkowy audyt oczekuje na ponowienie."
+            ) from exc
+        continuation = dict(marker.get("continuation") or {})
+        continuation["_audit_operation_id"] = str(marker.get("operation_id") or "")
+        self.documents.resume_training_agreement_upload(submission_id, continuation)
+        if not self.repository.clear_required_audit(
+            submission_id, str(marker.get("operation_id") or "")
+        ):
+            raise AuditPendingError("Nie znaleziono zgłoszenia podczas kończenia kontynuacji audytu.")
+
     def _save(self, row, step, state, token, substate, event, actor="system", *, field_values=None):
         state["substate"] = substate
         state["status"] = STATE_CODES.get(substate, DocumentState.PENDING.value)
@@ -1108,7 +1249,17 @@ class DocumentWorkflowService:
             self.documents.workflow_service.advance_after_action(self.repository.get_by_id(row["submission_id"]), definition)
         return existing
 
-    def _upload_group(self, submission, definition, step_id, uploaded_file, document_id, signer="participant", instance=""):
+    def _upload_group(
+        self,
+        submission,
+        definition,
+        step_id,
+        uploaded_file,
+        document_id,
+        signer="participant",
+        instance="",
+        actor=None,
+    ):
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Wybierz plik dokumentu.")
         current = self.repository.get_by_id(
@@ -1233,6 +1384,46 @@ class DocumentWorkflowService:
                         (item.get("instances") or {}).get(file["training_key"], {}).get("completed")
                         for file in item["files"])
                 completed = self._group_satisfied(state, documents, step)
+                if (
+                    signer == "participant"
+                    and collection
+                    and document_id in {"agreement", "training_agreement"}
+                    and policy["participant_signature"]
+                ):
+                    state["substate"] = "completed" if completed else "upload"
+                    state["status"] = STATE_CODES.get(
+                        state["substate"], DocumentState.PENDING.value
+                    )
+                    if completed:
+                        state["completed"] = True
+                    verification = dict(existing_signed.get("signature_validation_result") or {})
+                    updates = self.documents.composite_participant_signature_updates(
+                        row,
+                        {**step, "document_id": document_id},
+                        data,
+                        existing_signed["filename"],
+                        instance,
+                        verification,
+                    )
+                    self._finalize_composite_training_agreement(
+                        row=row,
+                        step=step,
+                        state=state,
+                        token=token,
+                        instance=instance,
+                        document_id=document_id,
+                        file_metadata=existing_signed,
+                        verification=verification,
+                        submission_updates=updates,
+                        completed=completed,
+                    )
+                    token = None
+                    return {
+                        "is_valid": True,
+                        "completed": completed,
+                        "result": "VALID_SIGNATURE",
+                        "message": "Dokument został przyjęty.",
+                    }
                 if completed:
                     self._complete(row, step, state, token)
                 else:
@@ -1251,7 +1442,15 @@ class DocumentWorkflowService:
             digest = sha256(data).hexdigest()
             step_key = sha256(step_id.encode("utf-8")).hexdigest()[:12]
             document_key = sha256(document_id.encode("utf-8")).hexdigest()[:12]
-            filename = f"{row['submission_id']}-{step_key}-{document_key}-{signer}-{digest[:16]}-{uuid4().hex[:8]}.{extension}"
+            atomic_office_candidate = bool(
+                signer == "office"
+                and collection
+                and document_id in {"agreement", "training_agreement"}
+                and requires_signature
+                and current_app.config.get("DATABASE_URL")
+            )
+            filename_suffix = "" if atomic_office_candidate else f"-{uuid4().hex[:8]}"
+            filename = f"{row['submission_id']}-{step_key}-{document_key}-{signer}-{digest[:16]}{filename_suffix}.{extension}"
             try:
                 pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
                     slug=row["form_slug"], filename=filename, document_bytes=data,
@@ -1376,18 +1575,33 @@ class DocumentWorkflowService:
                 )
             accepted = outcome == "VALID_SIGNATURE"
             verification["result_code"] = outcome
-            recorded = self.documents.submission_document_service.record_document_metadata(
-                submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename,
-                file_bytes=data, document_id=document_id,
-                document_type=self.documents.workflow_upload_metadata_type(document_id, signer=signer,
-                    signed=requires_signature), original_filename=uploaded_file.filename,
-                storage_path=storage_path, workflow_step_at_upload=step_id, training_key=instance,
-                agreement_number=next((file.get("agreement_number") or "" for file in metadata
-                    if file.get("filename") == target.get("generated_filename")), ""), mime_type=mime_type,
-                signed=bool(accepted and requires_signature),
-                status="signed" if accepted and requires_signature else "uploaded" if accepted else "rejected",
-                signature_status=str(verification.get("validation_status") or "not_required").lower(),
-                signature_validation_result=verification, uploaded_by_source=signer)
+            coordinated_training_upload = bool(
+                accepted
+                and signer == "participant"
+                and collection
+                and document_id in {"agreement", "training_agreement"}
+                and requires_signature
+                and current_app.config.get("DATABASE_URL")
+            )
+            coordinated_office_upload = bool(accepted and atomic_office_candidate)
+            document_type = self.documents.workflow_upload_metadata_type(
+                document_id, signer=signer, signed=requires_signature
+            )
+            agreement_number = next((file.get("agreement_number") or "" for file in metadata
+                if file.get("filename") == target.get("generated_filename")), "")
+            recorded = True
+            if not coordinated_office_upload:
+                recorded = self.documents.submission_document_service.record_document_metadata(
+                    submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename,
+                    file_bytes=data, document_id=document_id, document_type=document_type,
+                    original_filename=uploaded_file.filename, storage_path=storage_path,
+                    workflow_step_at_upload=step_id, training_key=instance,
+                    agreement_number=agreement_number, mime_type=mime_type,
+                    signed=bool(accepted and requires_signature),
+                    status="signed" if accepted and requires_signature else "uploaded" if accepted else "rejected",
+                    signature_status=str(verification.get("validation_status") or "not_required").lower(),
+                    signature_validation_result=verification, uploaded_by_source=signer,
+                    dispatch_notification=not coordinated_training_upload)
             if not recorded:
                 try:
                     self.documents.document_storage_service.rollback_pdf_write(
@@ -1444,11 +1658,7 @@ class DocumentWorkflowService:
 
             target.pop("verification_result", None)
             target.pop("verification_message", None)
-            if signer == "participant" and requires_signature and document_id in {"declaration", "agreement", "training_agreement"}:
-                self.documents.record_composite_participant_signature(row, {**step, "document_id": document_id},
-                    data, filename, instance, verification)
             if signer == "office":
-                self.documents.record_composite_office_signature(row, {**step, "document_id": document_id}, filename, instance)
                 target.update(office_filename=filename, completed=True)
                 target["substate"] = "completed"
             else:
@@ -1458,15 +1668,93 @@ class DocumentWorkflowService:
                 item["completed"] = bool(item.get("files")) and all(
                     (item.get("instances") or {}).get(file["training_key"], {}).get("completed")
                     for file in item["files"])
-            if self._group_satisfied(state, documents, step):
-                self._complete(row, step, state, token)
-                completed = True
+            completed = self._group_satisfied(state, documents, step)
+            if coordinated_training_upload:
+                state["substate"] = "completed" if completed else "upload"
+                state["status"] = STATE_CODES.get(
+                    state["substate"], DocumentState.PENDING.value
+                )
+                if completed:
+                    state["completed"] = True
+                file_metadata = next(
+                    (
+                        file
+                        for file in reversed(
+                            self.documents.submission_document_service.list_documents(row["submission_id"])
+                        )
+                        if file.get("filename") == filename
+                        and file.get("document_id") == document_id
+                        and file.get("training_key") == instance
+                        and file.get("signed")
+                    ),
+                    None,
+                )
+                if file_metadata is None:
+                    raise RuntimeError("Nie znaleziono zapisanych metadanych podpisanej umowy.")
+                updates = self.documents.composite_participant_signature_updates(
+                    row,
+                    {**step, "document_id": document_id},
+                    data,
+                    filename,
+                    instance,
+                    verification,
+                )
+                self._finalize_composite_training_agreement(
+                    row=row,
+                    step=step,
+                    state=state,
+                    token=token,
+                    instance=instance,
+                    document_id=document_id,
+                    file_metadata=file_metadata,
+                    verification=verification,
+                    submission_updates=updates,
+                    completed=completed,
+                )
+                token = None
+            elif coordinated_office_upload:
+                state["substate"] = "completed" if completed else "upload"
+                state["status"] = STATE_CODES.get(
+                    state["substate"], DocumentState.PENDING.value
+                )
+                if completed:
+                    state["completed"] = True
+                self._finalize_composite_office_agreement(
+                    row=row,
+                    step=step,
+                    state=state,
+                    token=token,
+                    instance=instance,
+                    document_id=document_id,
+                    document_type=document_type,
+                    filename=filename,
+                    original_filename=uploaded_file.filename,
+                    data=data,
+                    storage_path=storage_path,
+                    mime_type=mime_type,
+                    agreement_number=agreement_number,
+                    verification=verification,
+                    completed=completed,
+                    actor=actor,
+                )
+                token = None
             else:
-                self._save(row, step, state, token, "upload", "DOCUMENT_GROUP_FILE_ACCEPTED", signer)
+                if signer == "participant" and requires_signature and document_id in {"declaration", "agreement", "training_agreement"}:
+                    self.documents.record_composite_participant_signature(
+                        row, {**step, "document_id": document_id}, data, filename, instance, verification
+                    )
+                if signer == "office":
+                    self.documents.record_composite_office_signature(
+                        row, {**step, "document_id": document_id}, filename, instance
+                    )
+                if completed:
+                    self._complete(row, step, state, token)
+                else:
+                    self._save(row, step, state, token, "upload", "DOCUMENT_GROUP_FILE_ACCEPTED", signer)
         finally:
             if token:
                 self.repository.release_document_operation(row["submission_id"], token)
-        if completed:
+        if completed and not coordinated_training_upload and not coordinated_office_upload:
             self.documents.workflow_service.advance_after_action(self.repository.get_by_id(row["submission_id"]), definition)
         return {
             "is_valid": True,
@@ -1962,6 +2250,7 @@ class DocumentWorkflowService:
         signer="participant",
         instance="",
         document_id="",
+        actor=None,
     ):
         return self._upload_group(
             submission,
@@ -1971,6 +2260,7 @@ class DocumentWorkflowService:
             document_id,
             signer,
             instance,
+            actor,
         )
 
     def view(self, row, definition, *, signer="participant"):

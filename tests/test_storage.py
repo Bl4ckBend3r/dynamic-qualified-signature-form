@@ -58,6 +58,78 @@ def test_audit_service_reuses_explicit_event_id_for_idempotent_retry():
     assert list(storage.direct_files) == [f"output/sample/audit/events/{event_id}.jsonl"]
 
 
+def test_required_audit_uses_deterministic_operation_and_event_ids():
+    from services.audit_log_service import AuditLogService
+
+    service = AuditLogService(repository=object())
+    first = {"data_json": {}}
+    second = {"data_json": {}}
+
+    first_marker = service.stage_pending(
+        first,
+        event_type="RETURNED_FOR_CORRECTION",
+        submission_id="submission-1",
+        form_slug="sample",
+        operation_key="2026-10-30T10:00:00+00:00",
+    )
+    second_marker = service.stage_pending(
+        second,
+        event_type="RETURNED_FOR_CORRECTION",
+        submission_id="submission-1",
+        form_slug="sample",
+        operation_key="2026-10-30T10:00:00+00:00",
+    )
+
+    assert first_marker["operation_id"] == second_marker["operation_id"]
+    assert first_marker["event"]["event_id"] == second_marker["event"]["event_id"]
+
+
+def test_required_audit_event_list_retries_after_second_write_without_duplicates():
+    from repositories.audit_log_repository import StorageAuditLogRepository
+    from services.audit_log_service import AuditLogService
+    from testing_support import InMemoryStorage
+
+    storage = InMemoryStorage({})
+    persistent = StorageAuditLogRepository(storage)
+
+    class FailSecondOnce:
+        calls = 0
+        failed = False
+
+        def append(self, entry):
+            self.calls += 1
+            if self.calls == 2 and not self.failed:
+                self.failed = True
+                raise OSError("Nextcloud unavailable after first event")
+            persistent.append(entry)
+
+    service = AuditLogService(FailSecondOnce())
+    submission = {"data_json": {}}
+    marker = service.stage_pending_events(
+        submission,
+        submission_id="submission-1",
+        form_slug="sample",
+        operation_key="signed-training-agreement:file-17",
+        events=[
+            {"event_type": "SIGNED_DOCUMENT_UPLOADED", "metadata": {"filename": "signed.pdf"}},
+            {"event_type": "SIGNATURE_VERIFIED", "metadata": {"result": "VALID_SIGNATURE"}},
+        ],
+    )
+
+    with pytest.raises(OSError, match="after first event"):
+        service.write_pending(marker)
+    first_path = f"output/sample/audit/events/{marker['events'][0]['event_id']}.jsonl"
+    second_path = f"output/sample/audit/events/{marker['events'][1]['event_id']}.jsonl"
+    assert list(storage.direct_files) == [first_path]
+    assert "_audit_pending" in submission["data_json"]
+
+    service.write_pending(marker)
+
+    assert set(storage.direct_files) == {first_path, second_path}
+    assert len(marker["events"]) == 2
+    assert len({item["event_id"] for item in marker["events"]}) == 2
+
+
 @pytest.mark.parametrize(
     "entry",
     [

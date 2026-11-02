@@ -213,6 +213,61 @@ def test_transition_to_audit_retry_clears_marker_without_duplicate_business_even
     ]
 
 
+def test_audited_transition_retains_marker_during_failed_effect_and_retries_once(tmp_path):
+    from models import FormSubmission, SubmissionWorkflowEvent
+    from services.audit_log_service import pending_audit_state
+
+    service, repository, session_factory, audit_repository, storage = _atomic_workflow_env(tmp_path)
+    calls = []
+
+    def effect(**kwargs):
+        calls.append(kwargs["submission_id"])
+        if len(calls) == 1:
+            raise RuntimeError("temporary effect failure")
+
+    service.side_effect_handlers["test_effect"] = effect
+    with pytest.raises(WorkflowTransitionError, match="efekt|Efekt"):
+        service.transition_to(
+            "atomic-transition", "officer_review", form_config=workflow_config(),
+            metadata={"side_effects": ["test_effect"]},
+        )
+    marker = pending_audit_state(repository.get_by_id("atomic-transition"))
+    assert marker["audit_complete"] is True
+    audit_repository.fail = True  # Resume must not write to Nextcloud again.
+    service.resume_audited_transition(
+        repository.get_by_id("atomic-transition"), workflow_config(),
+        {**marker["continuation"], "_audit_operation_id": marker["operation_id"]},
+    )
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="atomic-transition").one()
+        assert "_audit_pending" not in (submission.data_json or {})
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission.id).count() == 1
+    assert calls == ["atomic-transition", "atomic-transition"]
+    assert len(storage.direct_files) == 1
+
+
+def test_audited_transition_survives_crash_before_continuation(tmp_path, monkeypatch):
+    from services.audit_log_service import pending_audit_state
+
+    service, repository, _, audit_repository, storage = _atomic_workflow_env(tmp_path)
+    original_resume = service.resume_audited_transition
+    monkeypatch.setattr(
+        service, "resume_audited_transition",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("process interrupted")),
+    )
+    with pytest.raises(RuntimeError, match="process interrupted"):
+        service.transition_to("atomic-transition", "officer_review", form_config=workflow_config())
+    marker = pending_audit_state(repository.get_by_id("atomic-transition"))
+    assert marker["audit_complete"] is True
+    assert len(storage.direct_files) == 1
+    audit_repository.fail = True
+    original_resume(
+        repository.get_by_id("atomic-transition"), workflow_config(),
+        {**marker["continuation"], "_audit_operation_id": marker["operation_id"]},
+    )
+    assert not pending_audit_state(repository.get_by_id("atomic-transition"))
+
+
 def test_resolves_next_step_with_decision():
     service = WorkflowService()
 

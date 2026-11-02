@@ -205,7 +205,9 @@ class WorkflowService:
             raise WorkflowTransitionError("Nie udało się zapisać przejścia workflow.")
         submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
-    def run_automatic_steps(self, submission: dict, form_config: dict) -> None:
+    def run_automatic_steps(
+        self, submission: dict, form_config: dict, *, replaces_audit_operation_id: str = "",
+    ) -> None:
         if (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
             return
         public_id = submission["submission_id"]
@@ -214,6 +216,7 @@ class WorkflowService:
         self._driving.add(public_id)
         try:
             visited = set()
+            handoff_id = replaces_audit_operation_id
             while True:
                 current = self.get_current_step(submission, form_config)
                 step = self._find_step(form_config, current) or {}
@@ -231,7 +234,11 @@ class WorkflowService:
                     if not self.document_service.document_workflow.start(submission, form_config):
                         return
                     target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
-                    self._enter_configured_step(submission, form_config, target)
+                    self._enter_configured_step(
+                        submission, form_config, target,
+                        replaces_audit_operation_id=handoff_id,
+                    )
+                    handoff_id = ""
                     continue
                 if kind in {"decision", "final", "user_action", "officer_action"} or step.get("final"):
                     return
@@ -258,7 +265,11 @@ class WorkflowService:
                 target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
                 if not target:
                     return
-                self._enter_configured_step(submission, form_config, target)
+                self._enter_configured_step(
+                    submission, form_config, target,
+                    replaces_audit_operation_id=handoff_id,
+                )
+                handoff_id = ""
         finally:
             self._driving.discard(public_id)
 
@@ -437,10 +448,10 @@ class WorkflowService:
             )
             try:
                 self.audit_log_service.write_pending(marker)
-                if not self.submission_repository.clear_required_audit(
+                if not self.submission_repository.mark_required_audit_complete(
                     submission_id, str(marker.get("operation_id") or "")
                 ):
-                    raise RuntimeError("Nie udało się usunąć markera obowiązkowego audytu.")
+                    raise RuntimeError("Nie udało się potwierdzić obowiązkowego audytu.")
             except Exception as exc:
                 logger.exception(
                     "workflow_required_audit_pending submission_id=%s error_type=%s",
@@ -450,14 +461,11 @@ class WorkflowService:
                 raise WorkflowTransitionError(
                     "Przejście zapisano, ale obowiązkowy audyt oczekuje na ponowienie."
                 ) from exc
-            self._run_side_effects(
-                requested_side_effects,
-                submission_id=submission_id,
-                submission=submission,
-                target_step=target_step,
-                metadata=metadata or {},
+            self.resume_audited_transition(
+                self.submission_repository.get_by_id(submission_id),
+                old_definition,
+                {**marker["continuation"], "_audit_operation_id": marker["operation_id"]},
             )
-            self._transition_sla(submission_id, old_step, target_step)
             return True
 
         side_effects = self._run_side_effects(
@@ -939,24 +947,36 @@ class WorkflowService:
             db.commit()
 
     def resume_audited_transition(self, submission: dict, form_config: dict, continuation: dict) -> None:
-        if pending_audit_state(submission):
+        marker = pending_audit_state(submission)
+        operation_id = str(continuation.get("_audit_operation_id") or "")
+        if marker and not (
+            marker.get("audit_complete") and str(marker.get("operation_id") or "") == operation_id
+        ):
             raise WorkflowTransitionError(
                 "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
             )
         submission_id = str(submission.get("submission_id") or "")
         previous_step = str(continuation.get("previous_step") or "")
         new_step = str(continuation.get("new_step") or "")
-        self._run_side_effects(
+        results = self._run_side_effects(
             continuation.get("requested_side_effects") or [],
             submission_id=submission_id,
             submission=submission,
             target_step=new_step,
             metadata={"reason": "required_audit_retry"},
         )
+        if any(item.get("status") == "failed" for item in results.values()):
+            raise WorkflowTransitionError("Efekt uboczny workflow wymaga ponowienia.")
         self._transition_sla(submission_id, previous_step, new_step)
         refreshed = self.submission_repository.get_by_id(submission_id) if self.submission_repository else None
         if refreshed:
-            self.run_automatic_steps(refreshed, form_config)
+            self.run_automatic_steps(
+                refreshed, form_config, replaces_audit_operation_id=operation_id,
+            )
+        if marker:
+            current = pending_audit_state(self.submission_repository.get_by_id(submission_id) or {})
+            if str(current.get("operation_id") or "") == operation_id:
+                self.submission_repository.clear_required_audit(submission_id, operation_id)
 
     def _run_side_effects(
         self,

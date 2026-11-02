@@ -894,11 +894,7 @@ def submission_audit_retry(form_id: int, submission_pk: int):
         audit = current_app.extensions["services"].audit_log_service
         continuation = dict(marker.get("continuation") or {})
         continuation["_audit_operation_id"] = str(marker.get("operation_id") or "")
-        durable_continuation = continuation.get("kind") in {
-            "training_agreement_signed_upload",
-            "composite_training_agreement_signed_upload",
-            "composite_office_agreement_signed_upload",
-        }
+        durable_continuation = bool(continuation.get("kind"))
         try:
             if not marker.get("audit_complete"):
                 audit.write_pending(marker)
@@ -920,14 +916,19 @@ def submission_audit_retry(form_id: int, submission_pk: int):
         continuation_failed = False
         if continuation.get("kind") == "returned_for_correction" and continuation.get("send_email"):
             try:
-                current_app.extensions["services"].mail_dispatch_service.dispatch_returned_for_correction(
+                mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_returned_for_correction(
                     submission.submission_id,
                     reason=str(continuation.get("reason") or ""),
                     message_to_user=str(continuation.get("message_to_user") or ""),
                     cleared=bool(continuation.get("cleared")),
                     recipient=str(continuation.get("recipient") or ""),
+                    operation_id=str(marker.get("operation_id") or ""),
                 )
+                already_recorded = mail_result.error_message == "Wiadomość została już trwale zarejestrowana."
+                if continuation.get("recipient") and mail_result.status not in {"sent", "queued"} and not already_recorded:
+                    continuation_failed = True
             except Exception as exc:
+                continuation_failed = True
                 current_app.logger.exception(
                     "required_audit_continuation_mail_failed submission_id=%s error=%s",
                     submission.submission_id,
@@ -939,11 +940,13 @@ def submission_audit_retry(form_id: int, submission_pk: int):
                 submission.submission_id,
                 "rejected",
             )
-            if result.status not in {"sent", "queued"}:
+            if result.status not in {"sent", "queued", "skipped"}:
+                continuation_failed = True
                 flash("Audyt zapisano, ale wiadomość e-mail nie została wysłana.", "warning")
         elif continuation.get("kind") == "office_signed_agreement" and continuation.get("send_notification"):
             decision = db.get(SubmissionDecision, int(continuation.get("decision_id") or 0))
             if decision is None or decision.submission_id != submission.id:
+                continuation_failed = True
                 flash("Audyt zapisano, ale nie znaleziono decyzji wymaganej do wysyłki.", "warning")
             else:
                 result = type("OfficeMailResult", (), {
@@ -982,6 +985,7 @@ def submission_audit_retry(form_id: int, submission_pk: int):
                 _resume_audited_workflow_continuation(db, form, submission, continuation)
             except Exception as exc:
                 db.rollback()
+                continuation_failed = True
                 current_app.logger.exception(
                     "required_audit_workflow_continuation_failed submission_id=%s error=%s",
                     submission.submission_id,
@@ -994,8 +998,7 @@ def submission_audit_retry(form_id: int, submission_pk: int):
         if durable_continuation and continuation_failed:
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         if durable_continuation and not continuation_failed:
-            audit.clear_pending(submission, str(marker.get("operation_id") or ""))
-            db.commit()
+            _finish_required_audit_continuation(db, submission, marker)
         flash("Obowiązkowy audyt został zapisany; blokada operacji została usunięta.", "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
@@ -1546,6 +1549,7 @@ def submission_reject_final(submission_id: str):
             )
             if mail_result.status not in {"sent", "queued"}:
                 flash("Proces zakończono, ale powiadomienie e-mail nie zostało wysłane.", "warning")
+        _finish_required_audit_continuation(db, submission, audit_marker)
         flash("Proces został zakończony jako odrzucony.", "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
@@ -1604,7 +1608,10 @@ def _complete_required_audit(db, submission, marker: dict) -> bool:
     try:
         audit = current_app.extensions["services"].audit_log_service
         audit.write_pending(marker)
-        audit.clear_pending(submission, str(marker.get("operation_id") or ""))
+        if (marker.get("continuation") or {}).get("kind"):
+            audit.mark_audit_complete(submission, str(marker.get("operation_id") or ""))
+        else:
+            audit.clear_pending(submission, str(marker.get("operation_id") or ""))
         db.commit()
         return True
     except Exception as exc:
@@ -1615,6 +1622,16 @@ def _complete_required_audit(db, submission, marker: dict) -> bool:
         )
         db.rollback()
         return False
+
+
+def _finish_required_audit_continuation(db, submission, marker: dict) -> None:
+    db.refresh(submission)
+    current = pending_audit_state(submission)
+    if current and str(current.get("operation_id") or "") == str(marker.get("operation_id") or ""):
+        current_app.extensions["services"].audit_log_service.clear_pending(
+            submission, str(marker.get("operation_id") or "")
+        )
+        db.commit()
 
 
 def _resume_audited_workflow_continuation(db, form, submission, continuation: dict) -> None:
@@ -1653,7 +1670,10 @@ def _resume_audited_workflow_continuation(db, form, submission, continuation: di
         db.commit()
         row = services.submission_repository.get_by_id(submission.submission_id)
         if row:
-            services.workflow_service.run_automatic_steps(row, definition)
+            services.workflow_service.run_automatic_steps(
+                row, definition,
+                replaces_audit_operation_id=str(continuation.get("_audit_operation_id") or ""),
+            )
         return
 
     if kind != "officer_decision":
@@ -1661,7 +1681,10 @@ def _resume_audited_workflow_continuation(db, form, submission, continuation: di
     if continuation.get("explicit_workflow"):
         row = services.submission_repository.get_by_id(submission.submission_id)
         if row:
-            services.workflow_service.run_automatic_steps(row, definition)
+            services.workflow_service.run_automatic_steps(
+                row, definition,
+                replaces_audit_operation_id=str(continuation.get("_audit_operation_id") or ""),
+            )
             db.refresh(submission)
         source_step = str(continuation.get("source_step") or "")
         source_config = next(
@@ -1812,6 +1835,7 @@ def submission_return_for_correction(submission_id: str):
                         message_to_user=message_to_user,
                         cleared=result.cleared,
                         recipient=result.recipient_email,
+                        operation_id=str(audit_marker.get("operation_id") or ""),
                     )
                     mail_status = mail_result.status
                 except Exception as exc:
@@ -1821,6 +1845,9 @@ def submission_return_for_correction(submission_id: str):
                         submission.submission_id,
                         exc.__class__.__name__,
                     )
+
+        if mail_status in {"not_requested", "skipped_no_recipient", "sent", "queued"}:
+            _finish_required_audit_continuation(db, submission, audit_marker)
 
         if request.is_json:
             return {
@@ -2247,8 +2274,8 @@ def _notify_beneficiary_agreement_decision(
     at_most_once_key=f"office-agreement-mail:{decision_record.id}",
 )
 
-    decision_record.email_sent = mail_result.sent
-    decision_record.email_log_id = getattr(mail_result.log, "id", None)
+    decision_record.email_sent = bool(decision_record.email_sent or mail_result.sent)
+    decision_record.email_log_id = getattr(mail_result.log, "id", None) or decision_record.email_log_id
 
     if confirmed and mail_result.sent:
         submission.office_agreement_signed_email_sent = "Tak"
@@ -2448,8 +2475,13 @@ def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key:
             definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
             row = services.submission_repository.get_by_id(submission.submission_id)
             if row:
-                services.workflow_service.run_automatic_steps(row, definition)
+                services.workflow_service.run_automatic_steps(
+                    row, definition,
+                    replaces_audit_operation_id=str((audit_marker or {}).get("operation_id") or ""),
+                )
                 db.refresh(submission)
+            if audit_marker:
+                _finish_required_audit_continuation(db, submission, audit_marker)
             flash("Zapisano decyzję dla elementu grupy.", "success")
         except DecisionDefinitionError as exc:
             db.rollback()
@@ -2579,6 +2611,8 @@ def check_office_signed_agreement(form_id: int, submission_pk: int):
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
         if request.form.get("send_notification") == "on":
             _notify_beneficiary_agreement_decision(db, form, submission, result)
+        if audit_marker:
+            _finish_required_audit_continuation(db, submission, audit_marker)
         flash(result.message, "success")
         return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
 
@@ -2641,6 +2675,10 @@ def check_office_signed_agreements_bulk(form_id: int):
         if request.form.get("send_notification") == "on":
             for submission, result in notifications:
                 _notify_beneficiary_agreement_decision(db, form, submission, result)
+        for submission, result in notifications:
+            marker = pending_audit_state(submission)
+            if marker.get("audit_complete"):
+                _finish_required_audit_continuation(db, submission, marker)
     flash(
         f"Sprawdzono zgłoszenia: {checked_submissions}; umowy: {checked_agreements}; "
         f"znalezione: {found}; brakujące: {missing}; już zatwierdzone: {already}; błędy: {len(errors)}.",
@@ -3092,7 +3130,10 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
         try:
             row = workflow_service.submission_repository.get_by_id(public_submission_id)
             if row:
-                workflow_service.run_automatic_steps(row, historical_definition)
+                workflow_service.run_automatic_steps(
+                    row, historical_definition,
+                    replaces_audit_operation_id=str(audit_marker.get("operation_id") or ""),
+                )
                 db.refresh(submission)
         except (WorkflowTransitionError, ValueError, SQLAlchemyError) as exc:
             if isinstance(exc, SQLAlchemyError):
@@ -3108,7 +3149,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     mail_result = None
     mail_warning = False
-    if workflow_config.get("flow_mode") == "explicit" or accepted_after_correction:
+    if not automatic_warning and (workflow_config.get("flow_mode") == "explicit" or accepted_after_correction):
         try:
             if workflow_config.get("flow_mode") == "explicit":
                 mail_result = current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_decision_event(
@@ -3135,6 +3176,9 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 extra={"event": "officer_decision_mail_failed", "operation": "officer_decision_mail",
                        "exception_type": type(exc).__name__, **log_context},
             )
+
+    if not automatic_warning and not mail_warning:
+        _finish_required_audit_continuation(db, submission, audit_marker)
 
     return {
         "decision": decision,

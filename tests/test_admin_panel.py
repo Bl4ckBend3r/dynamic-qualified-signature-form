@@ -4567,6 +4567,28 @@ def test_officer_decision_commits_with_audit_pending_and_retries_without_duplica
         assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission_pk).count() == 1
 
     monkeypatch.setattr(audit_repository, "append", original_append)
+    from routes.admin import submissions as admin_submissions
+    original_resume = admin_submissions._resume_audited_workflow_continuation
+    monkeypatch.setattr(
+        admin_submissions,
+        "_resume_audited_workflow_continuation",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("interrupted before continuation")),
+    )
+    retried = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert retried.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert saved.data_json["_audit_pending"]["audit_complete"] is True
+    monkeypatch.setattr(admin_submissions, "_resume_audited_workflow_continuation", original_resume)
+    monkeypatch.setattr(
+        audit_repository,
+        "append",
+        lambda _entry: (_ for _ in ()).throw(AssertionError("audit was written twice")),
+    )
     retried = admin_client.post(
         f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
         data={"csrf_token": admin_csrf(admin_client)},

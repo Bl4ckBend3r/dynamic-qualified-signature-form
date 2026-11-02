@@ -158,6 +158,7 @@ class MailDispatchService:
             to_email=recipient, event_type=template_type, sent_by_id=actor_id, extra_context=context,
             recipient_source=config.get("recipient_source"),
             event_id=f"item_decision:{decision.id}" if item_event else f"submission_decision:{decision_id}" if decision_id else "",
+            at_most_once_key=f"item_decision:{decision.id}" if item_event else f"submission_decision:{decision_id}" if decision_id else "",
             record_uuid=decision.item_id if item_event else "", group_key=decision.group_key if item_event else "",
             participant_snapshot=participant if item_event else None, item_decision_id=decision.id if item_event else None)
         if item_event and result.log:
@@ -1317,6 +1318,7 @@ class MailDispatchService:
         message_to_user: str,
         cleared: bool,
         recipient: str = "",
+        operation_id: str = "",
     ) -> MailDispatchResult:
         return self._dispatch_special_submission_event(
             submission_id,
@@ -1353,6 +1355,7 @@ class MailDispatchService:
             },
             recipient=recipient,
             include_correction_url=True,
+            operation_id=operation_id,
         )
 
     def _dispatch_special_submission_event(

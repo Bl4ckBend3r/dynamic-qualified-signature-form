@@ -269,6 +269,15 @@ class DocumentService:
             while filename in existing_names:
                 filename = append_filename_sequence(base_filename, sequence)
                 sequence += 1
+        else:
+            filename = build_available_storage_filename(
+                storage_service=self.document_storage_service,
+                storage=self.storage,
+                slug=slug,
+                filename=filename,
+                document_type=self._storage_document_type(document_id),
+                signed=False,
+            )
         # The render view combines fields; the persisted form definition stays unchanged.
         render_fields = ([*(form_config.get("fields") or []),
             *({**field, "document_usage": {**(field.get("document_usage") or {}), document_id: True}}

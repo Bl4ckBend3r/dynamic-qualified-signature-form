@@ -357,7 +357,7 @@ class DeclarationFlowService:
                 refreshed_submission,
                 form_config,
                 DocumentType.DECLARATION,
-                context_extra={**updates, "selected_trainings": [], "selected_trainings_normalized": []},
+                context_extra=updates,
                 force=True,
             )
         return DeclarationFlowResult(

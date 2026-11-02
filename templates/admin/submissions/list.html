@@ -22,6 +22,42 @@
     <details class="admin-filter-more" {% if advanced_filter_active %}open{% endif %} data-advanced-filters>
         <summary aria-expanded="{{ 'true' if advanced_filter_active else 'false' }}" aria-controls="submission-additional-filters">Więcej filtrów</summary>
         <div id="submission-additional-filters" class="admin-submission-filters__additional">
+            
+<label>
+  <span>ID zgłoszenia</span>
+  <input name="submission_id"
+         value="{{ filters.get('submission_id', '') }}"
+         placeholder="Wpisz ID">
+</label>
+
+<label>
+  <span>Imię i nazwisko</span>
+  <input name="full_name"
+         value="{{ filters.get('full_name', '') }}"
+         placeholder="Wpisz imię lub nazwisko">
+</label>
+
+<label>
+  <span>E-mail</span>
+  <input name="email"
+         value="{{ filters.get('email', '') }}"
+         placeholder="Adres e-mail">
+</label>
+
+<label>
+  <span>Telefon</span>
+  <input name="telefon"
+         value="{{ filters.get('telefon', '') }}"
+         placeholder="Numer telefonu">
+</label>
+
+<label>
+  <span>Etap workflow</span>
+  <input name="workflow_stage"
+         value="{{ filters.get('workflow_stage', '') }}"
+         placeholder="Wpisz etap">
+</label>
+
             <label><span>Pole formularza</span><select name="field"><option value="">Pole do filtrowania</option>{% for field_name, field_label in filter_fields %}<option value="{{ field_name }}" {% if filters.get('field') == field_name %}selected{% endif %}>{{ field_label }}</option>{% endfor %}</select></label>
             <label><span>Operator</span><select name="operator">{% for value, label in [("contains", "zawiera"), ("equals", "równa się"), ("not_contains", "nie zawiera"), ("not_equals", "różne od"), ("empty", "puste"), ("not_empty", "niepuste"), ("date_range", "od–do dla dat")] %}<option value="{{ value }}" {% if filters.get('operator', 'contains') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
             <label><span>Wartość od</span><input name="value" value="{{ filters.get('value', '') }}"></label>
@@ -108,20 +144,7 @@
                     <th scope="col" class="col-decision">Decyzja</th>
                     <th scope="col" class="actions-column col-actions">Akcje</th>
                 </tr>
-                <tr class="admin-column-filters">
-                    {% if can_select_rows %}<th></th>{% endif %}
-                    <th><a class="admin-sort-link" href="{{ sort_urls.submission_id }}" aria-label="Sortuj po ID">↕</a><input form="submission-column-filters" name="submission_id" value="{{ filters.get('submission_id', '') }}" aria-label="Filtruj po ID"></th>
-                    <th><a class="admin-sort-link" href="{{ sort_urls.full_name }}" aria-label="Sortuj po imieniu i nazwisku">↕</a><input form="submission-column-filters" name="full_name" value="{{ filters.get('full_name', '') }}" aria-label="Filtruj po imieniu i nazwisku"></th>
-                    <th><div class="admin-contact-filters"><input form="submission-column-filters" name="email" value="{{ filters.get('email', '') }}" aria-label="Filtruj po e-mailu" placeholder="E-mail"><input form="submission-column-filters" name="telefon" value="{{ filters.get('telefon', '') }}" aria-label="Filtruj po telefonie" placeholder="Telefon"></div></th>
-                    <th><div class="admin-date-filter"><input form="submission-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Data od"><input form="submission-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Data do"></div></th>
-                    <th></th>
-                    <th><select form="submission-column-filters" name="assignee"><option value="">Każdy</option><option value="me" {% if filters.get('assignee') == 'me' %}selected{% endif %}>Ja</option><option value="unassigned" {% if filters.get('assignee') == 'unassigned' %}selected{% endif %}>Brak</option>{% for user in assignment_users %}<option value="{{ user.id }}" {% if filters.get('assignee') == user.id|string %}selected{% endif %}>{{ user.email }}</option>{% endfor %}</select></th>
-                    <th><select form="submission-column-filters" name="priority"><option value="">Każdy</option>{% for priority in priorities %}<option value="{{ priority }}" {% if filters.get('priority') == priority %}selected{% endif %}>{{ priority_labels[priority] }}</option>{% endfor %}</select></th>
-                    <th><select form="submission-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></th>
-                    <th><input form="submission-column-filters" name="workflow_stage" value="{{ filters.get('workflow_stage', '') }}" aria-label="Filtruj po etapie workflow"></th>
-                    <th></th>
-                    <th class="actions-column"><button class="admin-button-secondary compact" type="submit" form="submission-column-filters">Filtruj</button></th>
-                </tr>
+
             </thead>
             <tbody>{% for submission in submissions %}
                 {% set decisions = decision_options_by_submission.get(submission.id, []) %}

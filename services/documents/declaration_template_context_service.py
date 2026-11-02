@@ -8,7 +8,7 @@ from services.documents.agreement_template_context_service import (
     build_agreement_template_context,
 )
 from services.qualification_condition_service import BOOLEAN_FIELD_TYPES, normalize_yes_no_value
-
+from services.training_service import parse_training_snapshots
 
 _EXCLUDED_CATEGORIES = {"Umowa", "Szkolenie", "Wszystkie szkolenia"}
 _DECLARATION_VARIABLES = (
@@ -329,13 +329,16 @@ def build_declaration_render_context(
     result["participant_address"] = result["participant_address_inline"]
     source = _flatten_values(result)
     generated_date = result.get("generated_date") or date.today().strftime("%d.%m.%Y")
+    selected_trainings = parse_training_snapshots(
+        source.get("selected_trainings")
+    )
     result.update({
         "generated_date": generated_date,
         "declaration_date": result.get("declaration_date") or generated_date,
         "declaration_filename": str(result.get("declaration_filename") or ""),
         "document_type": "declaration",
-        "selected_trainings": [],
-        "selected_trainings_normalized": [],
+        "selected_trainings": selected_trainings,
+        "selected_trainings_normalized": selected_trainings,
     })
     applicant_ids = dict(source.get("_applicant_record_ids") or {})
     default_applicant_id = str(source.get("_applicant_record_id") or "")

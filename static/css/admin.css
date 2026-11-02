@@ -7250,7 +7250,7 @@ body.agreement-builder-window {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   max-width: 1200px;
   margin: 0 auto;
-  gap: 16px;
+  gap: 20px;
 }
 
 .diagnostics-grid > .diagnostics-card {
@@ -7280,5 +7280,78 @@ body.agreement-builder-window {
 @media (max-width: 700px) {
   .diagnostics-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+
+/* Czytelne filtry zgłoszeń formularza */
+
+#submission-advanced-filters
+.admin-submission-filters__primary {
+  display: grid;
+  grid-template-columns:
+    minmax(240px, 1.6fr)
+    minmax(200px, 1fr)
+    repeat(2, minmax(165px, 0.8fr))
+    auto;
+  gap: 14px;
+  align-items: end;
+}
+
+#submission-advanced-filters label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+#submission-advanced-filters
+:is(input, select) {
+  min-width: 0;
+  min-height: 44px;
+  font-size: 0.95rem;
+}
+
+#submission-advanced-filters
+.admin-submission-filters__additional {
+  grid-template-columns:
+    repeat(3, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+#submission-advanced-filters
+.admin-filter-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-self: end;
+}
+
+@media (max-width: 1200px) {
+  #submission-advanced-filters
+  .admin-submission-filters__primary,
+  #submission-advanced-filters
+  .admin-submission-filters__additional {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #submission-advanced-filters
+  .admin-filter-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 680px) {
+  #submission-advanced-filters
+  .admin-submission-filters__primary,
+  #submission-advanced-filters
+  .admin-submission-filters__additional {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #submission-advanced-filters
+  .admin-filter-actions {
+    grid-column: auto;
+    flex-wrap: wrap;
   }
 }

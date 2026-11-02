@@ -12,12 +12,15 @@ from form_loader import FIELD_STAGE_INITIAL, extract_submission_data, form_defin
 from services.form_submission_mapper import FORM_FIELD_MAP, FORM_SUBMISSION_COLUMNS, STATUS_DEFAULTS, build_submission_from_form, validate_required_submission_fields
 from uuid import uuid4
 from services.admin_form_service import normalize_admin_form_definition
-from services.form_option_service import option_label_for_value
 from services.training_service import format_admin_value, parse_training_snapshots
 from services.workflow_service import current_workflow_step, workflow_status_label
 from services.status_catalog import WORKFLOW_STATUS_LABELS
 from services.file_metadata import resolve_pdf_storage_path
-
+from services.form_option_service import (
+    option_label_for_value,
+    option_value,
+)
+from services.qualification_condition_service import normalize_yes_no_value
 
 logger = logging.getLogger(__name__)
 
@@ -572,6 +575,86 @@ def build_submission_detail_sections(
     form_config = normalize_admin_form_definition(form_config if form_config is not None else form.definition_json or {})
     labels = build_field_labels(form_config)
     options_by_field = build_field_options(form_config)
+    
+    checkbox_fields = {}
+    grouped_checkboxes = set()
+
+    field_groups = [form_config.get("fields") or []]
+
+    documents = form_config.get("documents") or []
+    if isinstance(documents, dict):
+        documents = documents.values()
+
+    for document in documents:
+        if isinstance(document, dict):
+            field_groups.append(document.get("fields") or [])
+
+    for fields in field_groups:
+        section_checkboxes = []
+
+        def finish_section():
+            if len(section_checkboxes) > 1:
+                grouped_checkboxes.update(section_checkboxes)
+            section_checkboxes.clear()
+
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+
+            if field.get("type") == "section":
+                finish_section()
+                continue
+
+            if field.get("type") != "checkbox":
+                continue
+
+            if field.get("consent") is True:
+                continue
+
+            name = str(field.get("name") or "").strip()
+            if not name:
+                continue
+
+            checkbox_fields[name] = field
+            section_checkboxes.append(name)
+
+            if len(field.get("options") or []) > 1:
+                grouped_checkboxes.add(name)
+
+        finish_section()
+
+    def display_submission_field(name, value):
+        field = checkbox_fields.get(name)
+
+        if name not in grouped_checkboxes or not field:
+            return format_field_display_value(
+                options_by_field.get(name), value
+            )
+
+        options = field.get("options") or []
+
+        if len(options) > 1:
+            selected = (
+                value if isinstance(value, (list, tuple, set))
+                else [value] if value not in (None, "")
+                else []
+            )
+            return " | ".join(
+                option_label_for_value(options, item)
+                for item in selected
+                if str(item).strip()
+            )
+
+        checked = normalize_yes_no_value(value) is True
+
+        if not checked and len(options) == 1:
+            checked = (
+                str(value or "").strip()
+                == option_value(options[0])
+            )
+
+        return "✓" if checked else ""
+
     classified_fields = {
         str(field.get("name") or field.get("key") or "")
         for field in form_config.get("fields", []) if isinstance(field, dict)
@@ -592,11 +675,19 @@ def build_submission_detail_sections(
                 display_value = "Dane ukryte — brak uprawnienia"
             elif field_name == "created_at":
                 display_value = format_business_datetime(value, "%d.%m.%Y %H:%M", timezone_name=timezone_name)
+            
             else:
-                display_value = format_field_display_value(
-                    options_by_field.get(field_name),
-                    value,
+                display_value = display_submission_field(
+                    field_name, value
                 )
+
+                if (
+                    field_name in grouped_checkboxes
+                    and not display_value
+                ):
+                    used_fields.add(field_name)
+                    continue
+
             items.append({"label": labels.get(field_name, DEFAULT_LABELS.get(field_name, field_name)), "value": display_value})
             used_fields.add(field_name)
         if items:
@@ -609,11 +700,12 @@ def build_submission_detail_sections(
         display_value = (
             "Dane ukryte — brak uprawnienia"
             if not include_sensitive and key in sensitive_fields
-            else format_field_display_value(
-                options_by_field.get(key),
-                value,
-            )
+            else display_submission_field(key, value)
         )
+        if (
+            include_sensitive or key not in sensitive_fields
+        ) and key in grouped_checkboxes and not display_value:
+            continue
         dynamic_items.append({"label": labels.get(key, key), "value": display_value})
         used_fields.add(key)
     if dynamic_items:

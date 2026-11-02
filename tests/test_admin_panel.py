@@ -10351,13 +10351,26 @@ def test_docx_delete_storage_failure_retries_idempotently(admin_app, admin_clien
         assert workflow["_docx_delete_pending"] == [path]
     assert storage.direct_files[path] == b"old template"
 
-    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
-    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert "Ponów sprzątanie DOCX" in admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    new_path = f"output/delete_retry/templates/{kind}/{kind}-template-new.docx"
+    storage.direct_files[new_path] = b"new template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        definition = dict(form.definition_json)
+        workflow = dict(definition["workflow"])
+        workflow[metadata_key] = {"storage_path": new_path}
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+    retry_url = f"/admin/forms/{form_id}/docx-template/cleanup-retry"
+    assert admin_client.post(retry_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(retry_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         workflow = db.get(Form, form_id).definition_json["workflow"]
-        assert metadata_key not in workflow
+        assert workflow[metadata_key]["storage_path"] == new_path
         assert "_docx_delete_pending" not in workflow
     assert path not in storage.direct_files
+    assert storage.direct_files[new_path] == b"new template"
     assert calls == [path, path]
 
 
@@ -10382,8 +10395,20 @@ def test_docx_delete_recovers_after_commit_before_storage_cleanup(admin_app, adm
         assert "contract_docx_template" not in workflow
         assert workflow["_docx_delete_pending"] == [path]
     assert storage.direct_files[path] == b"old template"
-    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    import app as app_module
+
+    class RestartConfig(AdminTestConfig):
+        DATABASE_URL = admin_app.config["DATABASE_URL"]
+        TEMP_DIR = admin_app.config["TEMP_DIR"]
+
+    restarted_app = app_module.create_app(config_object=RestartConfig, storage_override=storage)
+    restarted_client = restarted_app.test_client()
+    login(restarted_client)
+    retry_url = f"/admin/forms/{form_id}/docx-template/cleanup-retry"
+    assert restarted_client.post(retry_url, data={"csrf_token": admin_csrf(restarted_client)}).status_code == 302
     assert path not in storage.direct_files
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert "_docx_delete_pending" not in db.get(Form, form_id).definition_json["workflow"]
 
 
 def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_client):
@@ -10400,12 +10425,40 @@ def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_c
     login(admin_client)
     url = f"/admin/forms/{form_id}/agreement-template/docx/delete"
     assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
-    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(f"/admin/forms/{form_id}/docx-template/cleanup-retry",
+                             data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
     assert storage.direct_files[path] == b"old template"
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         workflow = db.get(Form, form_id).definition_json["workflow"]
         assert "contract_docx_template" not in workflow
         assert workflow["_docx_delete_pending"] == [path]
+
+
+def test_docx_cleanup_retry_preserves_file_referenced_by_form_version(admin_app, admin_client):
+    create_user(admin_app)
+    path = "output/delete_version/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_version", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"_docx_delete_pending": [path]},
+    })
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormVersion(
+            form_id=form_id, version_major=1, version_minor=0, version_label="1.0", status="published",
+            definition_json={"workflow": {"contract_docx_template": {"storage_path": path}}},
+        ))
+        db.commit()
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"versioned template"
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/docx-template/cleanup-retry",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert response.status_code == 302
+    assert storage.direct_files[path] == b"versioned template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Form, form_id).definition_json["workflow"]["_docx_delete_pending"] == [path]
 
 
 def test_agreement_docx_upload_also_prepares_editable_builder_draft(admin_app, admin_client):

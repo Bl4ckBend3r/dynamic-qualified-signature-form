@@ -882,6 +882,7 @@ def form_edit(form_id: int):
         active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
         required_permission = "can_edit_workflow" if active_tab in {"workflow", "instructions"} else "can_edit_form"
         form = ensure_form_access(db, form_id, permission=required_permission)
+        form.docx_cleanup_allowed = can_manage_form(db, g.admin_user, form.id)
         version_service = current_app.extensions["services"].form_version_service
         requested_version_id = _requested_editor_version_id()
         editable_version = version_service.editable_draft(
@@ -1463,6 +1464,17 @@ def _cleanup_deleted_docx_templates(db, form: Form) -> bool:
         ):
             current_app.logger.error("Nieprawidłowa ścieżka usuwanego szablonu DOCX formularza %s.", form.id)
             return False
+        definitions = [form.definition_json or {}]
+        definitions.extend(db.execute(select(FormVersion.definition_json).where(
+            FormVersion.form_id == form.id,
+        )).scalars().all())
+        if any(
+            str(((((definition or {}).get("workflow") or {}).get(key) or {}).get("storage_path")) or "") in paths
+            for definition in definitions
+            for key in ("contract_docx_template", "declaration_docx_template")
+        ):
+            current_app.logger.warning("Szablon DOCX nadal jest wskazywany przez wersję formularza %s.", form.id)
+            return False
         # Legacy submissions can still be rendering a template loaded before the DB commit.
         if db.scalar(select(func.count(FormSubmission.id)).where(
             FormSubmission.form_slug == form.slug, FormSubmission.form_version_id.is_(None),
@@ -1486,6 +1498,20 @@ def _cleanup_deleted_docx_templates(db, form: Form) -> bool:
         db.rollback()
         current_app.logger.warning("Nie udało się dokończyć usuwania szablonu DOCX formularza %s.", form.id, exc_info=True)
         return False
+
+
+@bp.post("/forms/<int:form_id>/docx-template/cleanup-retry")
+@login_required
+def docx_template_cleanup_retry(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        cleanup_ok = _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Zakończono sprzątanie usuniętych szablonów DOCX."
+            if cleanup_ok else "Pliki DOCX pozostają oczekujące na bezpieczne usunięcie.",
+            "success" if cleanup_ok else "warning",
+        )
+        return redirect(_form_editor_url(form.id, tab="agreement"))
 
 
 @bp.post("/forms/<int:form_id>/declaration-template/docx/delete")

@@ -192,21 +192,29 @@
 }
 .training-filter-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--admin-space-4);
-  margin-bottom: var(--admin-space-5);
-  padding: var(--admin-space-4);
-  border-radius: 10px;
-  background: var(--admin-surface-soft, #f8f9fb);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface-muted);
 }
 .training-attendance-form {
-  grid-template-columns: 2fr 1.2fr 1fr 1fr auto;
-  align-items: end;
-  margin-bottom: var(--admin-space-5);
-  padding: var(--admin-space-4);
-  border: 1px solid var(--admin-border, #d9dce3);
-  border-radius: 10px;
-  background: var(--admin-surface-soft, #f8f9fb);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1.25fr)
+                           repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding: 20px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-muted);
+}
+
+.training-attendance-form .training-form-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
 }
 .training-edit-form label:not(.training-check),
 .training-message-form label:not(.training-check),
@@ -328,9 +336,13 @@
   align-items: center;
   gap: var(--admin-space-3);
 }
+
 .training-filter-actions {
+  grid-column: 1 / -1;
   align-self: end;
+  justify-content: flex-end;
 }
+
 .training-readonly-state,
 .training-empty-state {
   padding: var(--admin-space-4);
@@ -379,7 +391,13 @@
   line-height: 1.45;
 }
 .training-participants-table .admin-badge {
-  white-space: nowrap;
+  display: inline-flex;
+  max-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  text-align: left;
+  padding: 6px 10px;
 }
 .admin-table .training-cancel-form {
   display: grid;
@@ -512,4 +530,8 @@
     grid-template-columns: 1fr;
   }
 }
-
+@media (max-width: 480px) {
+    .training-kpi-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

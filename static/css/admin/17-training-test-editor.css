@@ -1,0 +1,625 @@
+/* ==========================================
+   TESTY PRE / POST — PANEL ZARZĄDZANIA
+   ========================================== */
+
+/* Układ główny */
+
+.training-detail-page #knowledge-tests
+.training-test-overview {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 20px;
+    min-width: 0;
+}
+
+/* Karty PRE, POST i porównanie */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__card,
+.training-detail-page #knowledge-tests
+.training-test-overview__comparison {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+    padding: 24px;
+    box-sizing: border-box;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: none;
+    font-family: system-ui, "Segoe UI", sans-serif;
+}
+
+/* Nagłówki i opisy */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__eyebrow {
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__header h3,
+.training-detail-page #knowledge-tests
+.training-test-overview__comparison h3 {
+    margin: 0;
+    color: var(--color-heading);
+    font: 750 21px/1.3 system-ui, sans-serif;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__name,
+.training-detail-page #knowledge-tests
+.training-test-overview__empty,
+.training-detail-page #knowledge-tests
+.training-test-overview__comparison-header p {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+/* Status testu */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 29px;
+    box-sizing: border-box;
+    padding: 5px 11px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status--draft {
+    border-color: var(--color-warning);
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status--active {
+    border-color: var(--color-success);
+    background: var(--color-success-bg);
+    color: var(--color-success);
+}
+
+/* Statystyki */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    min-width: 0;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__metrics--comparison {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__metric {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    padding: 17px;
+    border: 1px solid var(--color-border);
+    border-radius: 11px;
+    background: var(--color-surface-raised);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__metric strong {
+    color: var(--color-text);
+    font: 750 25px/1.2 system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__metric span {
+    color: var(--color-text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* Przyciski i linki akcji */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    max-width: 100%;
+    padding: 10px 15px;
+    box-sizing: border-box;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font: 700 13px/1.4 system-ui, sans-serif;
+    text-decoration: none;
+    text-align: center;
+    white-space: normal;
+    cursor: pointer;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__button:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__button--primary {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-primary-contrast);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__button--primary:hover {
+    background: var(--color-primary-hover);
+}
+
+/* Zarządzanie publikacją */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__settings {
+    display: grid;
+    gap: 14px;
+    padding-top: 18px;
+    border-top: 1px solid var(--color-border);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__settings h4 {
+    margin: 0;
+    color: var(--color-heading);
+    font: 700 15px/1.4 system-ui, sans-serif;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+    min-width: 0;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status-form label {
+    display: grid;
+    flex: 1 1 170px;
+    gap: 8px;
+    min-width: 0;
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__status-form select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 10px 13px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-input-bg);
+    color: var(--color-text);
+    font: 600 14px system-ui, sans-serif;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__settings > form {
+    margin: 0;
+}
+
+/* Eksport danych */
+
+.training-detail-page #knowledge-tests
+.training-test-overview__downloads {
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__downloads summary {
+    width: fit-content;
+    color: var(--color-link);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.training-detail-page #knowledge-tests
+.training-test-overview__downloads
+.training-test-overview__actions {
+    margin-top: 14px;
+}
+
+/* Obsługa klawiatury */
+
+.training-detail-page #knowledge-tests
+:is(
+    .training-test-overview__button,
+    .training-test-overview__status-form select,
+    .training-test-overview__downloads summary
+):focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 3px;
+}
+
+/* Responsywność */
+
+@media (max-width: 1000px) {
+    .training-detail-page #knowledge-tests
+    .training-test-overview__grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .training-detail-page #knowledge-tests
+    .training-test-overview__card,
+    .training-detail-page #knowledge-tests
+    .training-test-overview__comparison {
+        padding: 16px;
+    }
+
+    .training-detail-page #knowledge-tests
+    .training-test-overview__metrics--comparison {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+
+/* Główny formularz testu */
+
+.training-test-editor {
+    display: grid;
+    gap: 24px;
+    min-width: 0;
+    color: var(--color-text);
+    font-family:
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        sans-serif;
+}
+
+/* Informacje o teście */
+
+.training-test-editor .training-survey-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    padding: 22px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface-muted);
+}
+
+.training-test-editor
+.training-survey-meta > label:has([name="name"]),
+.training-test-editor
+.training-survey-meta > .training-field-wide {
+    grid-column: 1 / -1;
+}
+
+/* Sekcja pytań */
+
+.training-test-editor .training-question-fieldset {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+    padding: 22px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface);
+}
+
+.training-test-editor
+.training-question-fieldset legend {
+    padding: 0 8px;
+    color: var(--color-heading);
+    font: 700 19px/1.4 system-ui, sans-serif;
+}
+
+/* Licznik pytań */
+
+.training-test-editor__summary {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.training-test-editor .training-question-list {
+    display: grid;
+    gap: 18px;
+}
+
+/* Karta pojedynczego pytania */
+
+.training-test-editor .training-question-card {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 18px;
+    min-width: 0;
+    padding: 24px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface-raised);
+    box-shadow: none;
+}
+
+/* Nagłówek pytania */
+
+.training-test-editor
+.training-question-card__heading {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    grid-column: 1 / -1;
+    margin: 0;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.training-test-editor
+.training-question-card__heading h3 {
+    margin: 0;
+    color: var(--color-heading);
+    font: 700 18px/1.4 system-ui, sans-serif;
+}
+
+/* Pola zajmujące pełną szerokość */
+
+.training-test-editor
+.training-question-card > label:has([name="question_text"]),
+.training-test-editor
+.training-question-card > .training-field-wide,
+.training-test-editor
+.training-question-card > .training-test-editor__advanced,
+.training-test-editor
+.training-question-card > .training-test-editor__choices,
+.training-test-editor
+.training-question-card > .training-test-editor__boolean {
+    grid-column: 1 / -1;
+}
+
+/* Etykiety */
+
+.training-test-editor label:not(.training-check) {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    color: var(--color-text);
+    font-weight: 650;
+}
+
+.training-test-editor label > span {
+    color: var(--color-text);
+    font: 700 14px/1.45 system-ui, sans-serif;
+}
+
+/* Pola formularza */
+
+.training-test-editor
+:is(input:not([type="checkbox"]), select, textarea) {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    min-height: 46px;
+    padding: 10px 13px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-input-bg);
+    color: var(--color-text);
+    font: 500 15px/1.5 system-ui, sans-serif;
+}
+
+.training-test-editor textarea {
+    resize: vertical;
+}
+
+.training-test-editor
+:is(input, select, textarea, button):focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+/* Teksty pomocy */
+
+.training-test-editor__help {
+    display: block;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.55;
+}
+
+/* Edytor odpowiedzi */
+
+.training-test-editor__choices {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+}
+
+.training-test-editor__choice-heading {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.training-test-editor__choice-heading span {
+    color: var(--color-text-muted);
+    font-weight: 400;
+}
+
+.training-test-editor__choices [data-choice-items] {
+    display: grid;
+    gap: 10px;
+}
+
+/* Pojedyncza odpowiedź */
+
+.training-test-editor__choice {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.training-test-editor__choice input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--color-secondary);
+}
+
+.training-test-editor__choice > button {
+    min-height: 42px;
+}
+
+/* Ustawienia zaawansowane */
+
+.training-test-editor__advanced {
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-soft);
+}
+
+.training-test-editor__advanced summary {
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--color-text);
+}
+
+.training-test-editor__advanced > label {
+    margin-top: 16px;
+}
+
+/* Usuwanie pytania */
+
+.training-test-editor [data-remove-question] {
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-danger);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-danger);
+    font: 700 13px/1.3 system-ui, sans-serif;
+    cursor: pointer;
+}
+
+.training-test-editor
+[data-remove-question]:hover {
+    border-color: var(--color-danger);
+    background: var(--color-danger-bg);
+}
+
+/* Dodawanie pytania */
+
+.training-test-editor [data-add-question] {
+    justify-self: start;
+    min-height: 46px;
+    padding: 10px 18px;
+}
+
+/* Zapis testu */
+
+.training-test-editor .training-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 18px 0 0;
+    border-top: 1px solid var(--color-border);
+}
+
+/* Ukrywanie pól zależnych od typu pytania */
+
+.training-test-editor [hidden],
+.training-test-editor label[hidden] {
+    display: none !important;
+}
+
+/* Responsywność */
+
+@media (max-width: 760px) {
+    .training-test-editor .training-survey-meta,
+    .training-test-editor .training-question-card {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .training-test-editor .training-question-card,
+    .training-test-editor .training-survey-meta,
+    .training-test-editor .training-question-fieldset {
+        padding: 16px;
+    }
+
+    .training-test-editor__choice {
+        grid-template-columns: 24px minmax(0, 1fr);
+    }
+
+    .training-test-editor__choice > button {
+        grid-column: 2;
+        justify-self: start;
+    }
+
+    .training-test-editor
+    .training-form-actions > button {
+        width: 100%;
+    }
+}

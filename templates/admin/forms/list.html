@@ -34,17 +34,7 @@
                 <th class="column-secondary">{{ sortable('Utworzono', 'created_at') }}</th>
                 <th class="actions-column">Akcje</th>
             </tr>
-            <tr class="admin-column-filters">
-                <th><input form="form-column-filters" name="name" value="{{ filters.get('name', '') }}" aria-label="Filtruj po nazwie"></th>
-                <th><input form="form-column-filters" name="slug" value="{{ filters.get('slug', '') }}" aria-label="Filtruj po slugu"></th>
-                <th class="column-secondary"></th>
-                <th><select form="form-column-filters" name="status" aria-label="Filtruj po statusie"><option value="">Wszystkie</option><option value="active" {% if filters.get('status') == 'active' %}selected{% endif %}>Aktywne</option><option value="inactive" {% if filters.get('status') == 'inactive' %}selected{% endif %}>Nieaktywne</option></select></th>
-                <th class="column-secondary"><select form="form-column-filters" name="public" aria-label="Filtruj publiczne"><option value="">Wszystkie</option><option value="yes" {% if filters.get('public') == 'yes' %}selected{% endif %}>Tak</option><option value="no" {% if filters.get('public') == 'no' %}selected{% endif %}>Nie</option></select></th>
-                <th class="column-secondary"><input form="form-column-filters" name="label" value="{{ filters.get('label', '') }}" aria-label="Filtruj po etykiecie"></th>
-                <th class="column-secondary"></th>
-                <th class="column-secondary"><div class="admin-date-filter"><input form="form-column-filters" type="date" name="date_from" value="{{ filters.get('date_from', '') }}" aria-label="Utworzone od"><input form="form-column-filters" type="date" name="date_to" value="{{ filters.get('date_to', '') }}" aria-label="Utworzone do"></div></th>
-                <th class="actions-column"><button class="admin-button-secondary compact" type="submit" form="form-column-filters">Filtruj</button></th>
-            </tr>
+
         </thead>
         <tbody>
         {% for form in forms %}

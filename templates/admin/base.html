@@ -12,12 +12,12 @@
 
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='css/admin.css', v='20261102-1') }}"
+      href="{{ url_for('static', filename='css/admin.css') }}"
     />
 
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='css/trainings-cards.css', v='3') }}"
+      href="{{ url_for('static', filename='css/trainings-cards.css') }}"
     />
     <link
       rel="icon"
@@ -29,7 +29,6 @@
       href="{{ url_for('static', filename='images/favicon.ico') }}?v=2"
       type="image/x-icon"
     />
-
   </head>
   <body class="admin-body" data-app-base-path="{{ app_base_path|e }}">
     <div class="admin-layout">
@@ -541,5 +540,9 @@
         };
       })();
     </script>
+    <script
+      src="{{ url_for('static', filename='js/admin-training-test-editor.js', v='1') }}"
+      defer
+    ></script>
   </body>
 </html>

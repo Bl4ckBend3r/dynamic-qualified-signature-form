@@ -1,110 +1,132 @@
-/* Szkolenia: details — reguły bazowe z połączonymi powtórzeniami selektorów. */
+/* Panel szczegolow szkolenia. Nie zmienia wygladu zamknietych kart. */
 
-.training-card-grid .training-details {
+.training-card-grid .training-row > .training-details {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
-    border-top: 1px solid #303b49;
-}
-
-.training-card-grid .training-details[hidden] {
-    display: none;
-}
-
-.training-card__extra-stats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-    margin: 0 0 24px;
-}
-
-.training-card__extra-stats > div {
-    padding: 14px;
-    background: #202936;
-    border-radius: 9px;
-}
-
-.training-card__extra-stats dt {
-    font-size: 11px;
-    color: #a9bbce;
-    text-transform: uppercase;
-}
-
-.training-card__extra-stats dd {
-    margin: 7px 0 0;
-    font-size: 17px;
-    font-weight: 700;
-    color: #f5f8fc;
-}
-
-.training-card-grid .training-row > .training-details {
-    padding: 28px;
-    background: #111923;
+    padding: clamp(20px, 3vw, 36px);
     border-top: 1px solid #36465b;
+    background: #111923;
+    color: #eef4fc;
 }
 
-.training-card-grid .training-row > .training-details[hidden] {
-    display: none;
+.training-card-grid .training-row > .training-details[hidden],
+.training-card-grid .training-details [hidden] {
+    display: none !important;
+}
+
+/* Tresc formularza jest wezsza niz cala rozwinieta karta. */
+.training-card-grid .training-details > * {
+    width: 100%;
+    max-width: 1080px;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .training-card-grid .training-details .training-card__extra-stats {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
-    margin: 0 0 30px;
+    gap: 14px;
+    margin-top: 0;
+    margin-bottom: 28px;
+    padding: 0;
 }
 
 .training-card-grid .training-details .training-card__extra-stats > div {
-    padding: 20px;
+    min-width: 0;
+    padding: 18px 20px;
     border: 1px solid #37485e;
     border-radius: 12px;
-    background: #1d2937;
+    background: #202c3b;
 }
 
 .training-card-grid .training-details .training-card__extra-stats dt {
-    font-size: 12px;
+    margin: 0;
+    color: #c6d6e7;
+    font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    color: #b4c5d8;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
 }
 
 .training-card-grid .training-details .training-card__extra-stats dd {
     margin: 10px 0 0;
+    color: #ffffff;
     font-size: 27px;
     font-weight: 750;
-    color: #ffffff;
+    line-height: 1.15;
 }
 
 .training-card-grid .training-details .training-details-heading {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     flex-wrap: wrap;
-    gap: 20px;
-    padding-bottom: 22px;
-    margin-bottom: 26px;
-    border-bottom: 1px solid #334256;
+    gap: 18px;
+    padding: 0 0 20px;
+    margin-top: 0;
+    margin-bottom: 22px;
+    border-bottom: 1px solid #3c4e64;
 }
 
 .training-card-grid .training-details .training-details-heading h2 {
-    margin: 0 0 6px;
-    font-size: 22px;
-    color: #ffffff;
+    margin: 0 0 5px;
+    color: #f4f8fd;
+    font-family: Inter, "Segoe UI", Arial, sans-serif;
+    font-size: 23px;
+    font-weight: 750;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
 }
 
 .training-card-grid .training-details .training-details-heading p {
     margin: 0;
-    font-size: 12px;
-    color: #aebfd2;
+    color: #b9cada;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
 }
 
-.training-card-grid .training-details textarea {
-    min-height: 95px;
-    line-height: 1.6;
-    resize: vertical;
+.training-card-grid .training-details .training-section-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
 }
 
-.training-card-grid .training-details [hidden] {
-    display: none !important;
+.training-card-grid .training-details .training-section-actions > button {
+    min-height: 44px;
+    min-width: 90px;
+    padding: 9px 16px;
+    font-size: 14px;
+}
+
+.training-card-grid .training-details .training-section-actions__active {
+    min-height: 44px;
+    color: #e1eaf4;
+    font-size: 14px;
+}
+
+/* Komunikat o polach obowiazkowych nie powinien dominowac formularza. */
+.training-card-grid .training-details .admin-required-note {
+    margin: 0 0 4px;
+    padding: 12px 15px;
+    border: 1px solid #354b62;
+    border-left: 3px solid #67b2ed;
+    border-radius: 8px;
+    background: #1b2a3b;
+    color: #d9e6f4;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.training-card-grid .training-details .admin-required-note .required-marker {
+    color: #ff8888;
+}
+
+.training-card-grid .training-details .training-readonly-state {
+    font-size: 15px;
+    line-height: 1.65;
 }

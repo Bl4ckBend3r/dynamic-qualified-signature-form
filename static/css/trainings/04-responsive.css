@@ -1,39 +1,60 @@
-/* Media queries są zebrane po regułach bazowych. */
+/* Breakpointy w jednym miejscu — od najszerszego do najwezszego. */
+
 @media (max-width: 1000px) {
     .training-list.training-card-grid {
         grid-template-columns: 1fr;
     }
-    .training-card-grid .training-details
-    .training-date-list {
+
+    .training-card-grid .training-details .training-date-list {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .training-card-grid .training-details .training-edit-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .training-card-grid .training-details .training-edit-grid > label:first-child,
+    .training-card-grid .training-details .training-edit-grid > .training-field-wide,
+    .training-card-grid .training-details .training-edit-grid
+        > label:has(> textarea[name="training_item_admin_comment"]),
+    .training-card-grid .training-details .training-edit-grid
+        > label:has(> textarea[name="training_item_low_seats_comment"]) {
+        grid-column: 1 / -1;
     }
 }
 
 @media (max-width: 650px) {
     .training-card-grid .training-row > .training-details {
-        padding: 16px;
+        padding: 18px;
     }
-    .training-card-grid .training-details
-    .training-edit-grid,
-    .training-card-grid .training-details
-    .training-date-grid,
-    .training-card-grid .training-details
-    .training-card__extra-stats {
+
+    .training-card-grid .training-details .training-card__extra-stats {
+        gap: 8px;
+    }
+
+    .training-card-grid .training-details .training-card__extra-stats > div {
+        padding: 12px;
+    }
+
+    .training-card-grid .training-details .training-card__extra-stats dt {
+        font-size: 11px;
+    }
+
+    .training-card-grid .training-details .training-card__extra-stats dd {
+        font-size: 22px;
+    }
+
+    .training-card-grid .training-details .training-details-heading {
+        align-items: flex-start;
+    }
+
+    .training-card-grid .training-details .training-date-grid {
         grid-template-columns: 1fr;
     }
-    .training-card-grid .training-details
-    .training-edit-grid > label:first-child,
-    .training-card-grid .training-details
-    .training-field-wide {
-        grid-column: 1;
-    }
-    .training-card-grid .training-card__title {
-        font-size: 18px;
-    }
-    .training-card-grid .training-details .training-edit-grid
-    > label:has(> textarea[name="training_item_admin_comment"]),
-    .training-card-grid .training-details .training-edit-grid
-    > label:has(> textarea[name="training_item_low_seats_comment"]) {
+
+    .training-card-grid .training-details .training-date-grid > .training-field-wide {
         grid-column: 1 / -1;
     }
 }
@@ -42,17 +63,46 @@
     .training-card-grid .training-card__summary {
         padding: 16px;
     }
+
     .training-card-grid .training-card__facts {
         gap: 8px;
     }
+
     .training-card-grid .training-card__fact {
         padding: 10px;
     }
+
     .training-card-grid .training-card__actions {
         gap: 8px;
     }
-    .training-card-grid .training-card__extra-stats {
+
+    .training-card-grid .training-details .training-card__extra-stats {
         grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .training-card-grid .training-details .training-card__extra-stats > div {
+        padding: 14px 16px;
+    }
+
+    .training-card-grid .training-details .training-dates-editor {
+        padding: 16px;
+    }
+
+    .training-card-grid .training-details .training-date-card {
+        padding: 14px;
+    }
+
+    .training-card-grid .training-details .training-section-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .training-card-grid .training-details .training-details-heading h2 {
+        font-size: 21px;
+    }
+
+    .training-card-grid .training-card__title {
+        font-size: 18px;
     }
 }
-

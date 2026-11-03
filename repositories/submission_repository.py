@@ -393,7 +393,10 @@ class PostgresSubmissionRepository(SubmissionRepository):
             session.commit()
         return True
 
-    def claim_document_operation(self, submission_id: str, step_id: str, token: str) -> bool:
+    def claim_document_operation(
+        self, submission_id: str, step_id: str, token: str, *,
+        replaces_audit_operation_id: str = "",
+    ) -> bool:
         """A durable lease serializes document operations across workers without holding PDF I/O locks."""
         import time
         from sqlalchemy import select, update, or_
@@ -407,11 +410,21 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 .where(FormSubmission.submission_id == submission_id)
                 .with_for_update()
             ).scalar_one_or_none()
-            if (
-                not model
-                or pending_audit_state(model)
-                or (model.workflow_step or model.workflow_stage) != step_id
-            ):
+            if not model or (model.workflow_step or model.workflow_stage) != step_id:
+                return False
+            marker = pending_audit_state(model)
+            continuation = marker.get("continuation") if marker else None
+            allowed_handoff = bool(
+                replaces_audit_operation_id
+                and marker.get("audit_complete") is True
+                and str(marker.get("operation_id") or "") == replaces_audit_operation_id
+                and isinstance(continuation, dict)
+                and continuation.get("kind") == "workflow_transition"
+                and continuation.get("new_step") == step_id
+            )
+            if marker and not allowed_handoff:
+                return False
+            if replaces_audit_operation_id and not marker:
                 return False
             states = dict(model.document_states or {})
             prior = states.get("document_operation", "")

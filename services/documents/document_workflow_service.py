@@ -707,11 +707,12 @@ class DocumentWorkflowService:
 
         return row, step, document
 
-    def _claim(self, row, step):
+    def _claim(self, row, step, *, replaces_audit_operation_id=""):
         if not hasattr(self.repository, "claim_document_operation"):
             raise ValueError("Złożone etapy dokumentowe wymagają trwałej bazy metadanych.")
         token = uuid4().hex
-        if not self.repository.claim_document_operation(row["submission_id"], step["id"], token):
+        claim_args = {"replaces_audit_operation_id": replaces_audit_operation_id} if replaces_audit_operation_id else {}
+        if not self.repository.claim_document_operation(row["submission_id"], step["id"], token, **claim_args):
             raise ValueError("Dokument jest już przetwarzany. Odśwież status za chwilę.")
         return token
 
@@ -1095,9 +1096,9 @@ class DocumentWorkflowService:
         item.pop("regenerate", None)
         return records
 
-    def _start_group(self, row, step, definition):
+    def _start_group(self, row, step, definition, *, replaces_audit_operation_id=""):
         documents = step_documents(definition, step)
-        token = self._claim(row, step)
+        token = self._claim(row, step, replaces_audit_operation_id=replaces_audit_operation_id)
         context_token = self.documents._document_operation_token.set(token)
         try:
             row = self.repository.get_by_id(row["submission_id"])
@@ -2187,7 +2188,7 @@ class DocumentWorkflowService:
             storage=self.documents.storage, slug=row["form_slug"], filename=filename,
             metadata=file, submission_id=row["submission_id"], strict_metadata=True)
 
-    def start(self, submission, definition):
+    def start(self, submission, definition, *, replaces_audit_operation_id=""):
         row, step, _ = self._current(
             submission,
             definition,
@@ -2197,6 +2198,7 @@ class DocumentWorkflowService:
             row,
             step,
             definition,
+            replaces_audit_operation_id=replaces_audit_operation_id,
         )
 
     def _complete(self, row, step, state, token):

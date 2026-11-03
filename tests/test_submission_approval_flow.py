@@ -114,6 +114,79 @@ def post_officer_decision(app, client, form_id, pk, *, decision="pzytywna"):
     })
 
 
+@pytest.mark.parametrize(
+    "decision,required_answer,upgrade_pending,expected_saved",
+    [("pzytywna", "", False, False), ("rejected", "", True, True),
+     ("pzytywna", "Uzupełniono", False, True)],
+)
+def test_officer_decision_requires_only_due_mandatory_data_for_positive(
+    admin_app, admin_client, decision, required_answer, upgrade_pending, expected_saved,
+):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        definition["fields"].extend([
+            {"name": "required_answer", "label": "Wymagane", "type": "text", "required": True,
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]},
+            {"name": "optional_answer", "label": "Opcjonalne", "type": "text", "required": False,
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": False}]},
+            {"name": "disclosure", "label": "Odpowiedź", "type": "select", "required": True,
+             "options": [{"value": "odmowa", "label": "Odmowa podania informacji"},
+                         {"value": "tak", "label": "Tak"}],
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]},
+        ])
+        definition["workflow"]["steps"].append(
+            {"id": "end_rejected", "stage_type": "final", "status": "OFFICER_REJECTED", "final": True}
+        )
+        definition["workflow"]["decision_types"].append(
+            {"code": "rejected", "label": "Odrzucono", "semantic_category": "negative",
+             "step_id": "officer_review", "target_step": "end_rejected", "scope": "submission",
+             "reason_required": False}
+        )
+        version.definition_json = definition
+        submission.data_json = {
+            "required_answer": required_answer, "disclosure": "odmowa",
+            **({"_form_version_upgrade": {"missing_fields": ["required_answer"]}} if upgrade_pending else {}),
+        }
+        db.commit()
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk, decision=decision).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        decisions = db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
+        assert bool(decisions) is expected_saved
+        assert (submission.workflow_step != "officer_review") is expected_saved
+        assert (submission.officer_decision == decision) is expected_saved
+
+
+def test_direct_workflow_decision_cannot_bypass_required_data(admin_app):
+    from services.workflow_service import WorkflowTransitionError
+
+    form_id, pk, public_id = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        definition["fields"].append({
+            "name": "required_answer", "label": "Wymagane", "type": "text", "required": True,
+            "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}],
+        })
+        version.definition_json = definition
+        db.commit()
+    with pytest.raises(WorkflowTransitionError, match="wymagane dane"):
+        admin_app.extensions["services"].workflow_service.transition_to(
+            public_id, "declaration", metadata={"officer_decision": "pzytywna"},
+        )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "officer_review"
+        assert db.scalar(select(SubmissionWorkflowEvent.id).where(
+            SubmissionWorkflowEvent.submission_id == pk
+        )) is None
+
+
 def test_officer_decision_commits_transition_and_audit_once(admin_app, admin_client):
     create_user(admin_app)
     form_id, pk, _ = officer_decision_fixture(admin_app)

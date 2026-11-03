@@ -1,6 +1,8 @@
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 from uuid import uuid4
 import json
@@ -1235,6 +1237,112 @@ def test_document_operation_lease_can_be_reclaimed_after_expiry(composite_env):
     assert states['document_operation_until'] == '0'
 
 
+def test_document_claim_requires_matching_completed_workflow_audit(composite_env):
+    env = composite_env()
+    env.enter()
+    operation_id = str(uuid4())
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        submission.data_json = {**(submission.data_json or {}), '_audit_pending': {
+            'operation_id': operation_id,
+            'audit_complete': False,
+            'continuation': {'kind': 'workflow_transition', 'new_step': 'paper'},
+        }}
+        db.commit()
+
+    claim = env.repo.claim_document_operation
+    assert not claim(env.public_id, 'paper', 'ordinary')
+    assert not claim(env.public_id, 'paper', 'early', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = dict(submission.data_json['_audit_pending'])
+        marker['audit_complete'] = True
+        submission.data_json = {**submission.data_json, '_audit_pending': marker}
+        db.commit()
+
+    assert not claim(env.public_id, 'paper', 'wrong', replaces_audit_operation_id=str(uuid4()))
+    assert not claim(env.public_id, 'paper', 'missing')
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = deepcopy(submission.data_json['_audit_pending'])
+        marker['continuation']['kind'] = 'unrelated_operation'
+        submission.data_json = {**submission.data_json, '_audit_pending': marker}
+        db.commit()
+    assert not claim(env.public_id, 'paper', 'unrelated', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = deepcopy(submission.data_json['_audit_pending'])
+        marker['continuation'] = {'kind': 'workflow_transition', 'new_step': 'other'}
+        submission.data_json = {**submission.data_json, '_audit_pending': marker}
+        db.commit()
+    assert not claim(env.public_id, 'paper', 'wrong-step', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        marker = deepcopy(submission.data_json['_audit_pending'])
+        marker['continuation']['new_step'] = 'paper'
+        submission.data_json = {**submission.data_json, '_audit_pending': marker}
+        db.commit()
+    assert claim(env.public_id, 'paper', 'first', replaces_audit_operation_id=operation_id)
+    assert not claim(env.public_id, 'paper', 'parallel', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        states = dict(submission.document_states or {})
+        states['document_operation_until'] = '0'
+        submission.document_states = states
+        db.commit()
+    assert claim(env.public_id, 'paper', 'recovered', replaces_audit_operation_id=operation_id)
+    env.repo.release_document_operation(env.public_id, 'first')
+    states = env.row()['document_states']
+    states = json.loads(states) if isinstance(states, str) else states
+    assert states['document_operation'] == 'recovered'
+    env.repo.release_document_operation(env.public_id, 'recovered')
+    assert env.repo.clear_required_audit(env.public_id, operation_id)
+    assert not claim(env.public_id, 'paper', 'stale', replaces_audit_operation_id=operation_id)
+    assert claim(env.public_id, 'paper', 'ordinary-after-audit')
+    env.repo.release_document_operation(env.public_id, 'ordinary-after-audit')
+
+
+def test_document_audit_handoff_serializes_concurrent_retry(composite_env):
+    env = composite_env()
+    env.enter()
+    operation_id = str(uuid4())
+    with env.repo.session_factory() as db:
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id
+        )).scalar_one()
+        submission.data_json = {**(submission.data_json or {}), '_audit_pending': {
+            'operation_id': operation_id,
+            'audit_complete': True,
+            'continuation': {'kind': 'workflow_transition', 'new_step': 'paper'},
+        }}
+        db.commit()
+    barrier = Barrier(2)
+
+    def attempt(token):
+        barrier.wait()
+        return env.repo.claim_document_operation(
+            env.public_id, 'paper', token, replaces_audit_operation_id=operation_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(attempt, ('a', 'b')))
+    assert outcomes.count(True) == 1
+    winner = 'a' if outcomes[0] else 'b'
+    env.repo.release_document_operation(env.public_id, winner)
+
+
 @pytest.mark.parametrize('outcome', ['INVALID', 'INDETERMINATE', 'UNSIGNED'])
 def test_composite_transition_requires_verified_signature(composite_env, outcome):
     env = composite_env()
@@ -1875,7 +1983,12 @@ def test_composite_recovery_reuses_generated_file_and_verified_signature(composi
     with pytest.raises(RuntimeError):
         env.enter()
     monkeypatch.setattr(env.repo, 'save_document_step', save)
-    env.services.workflow_service.run_automatic_steps(env.row(), env.definition)
+    marker = env.row()['data_json']['_audit_pending']
+    assert marker['audit_complete'] is True
+    env.services.workflow_service.resume_audited_transition(
+        env.row(), env.definition,
+        {**marker['continuation'], '_audit_operation_id': marker['operation_id']},
+    )
     assert len(env.generated) == 1 and env.state()['generated_filename']
     complete = env.document._complete
     def interrupted_completion(*args):

@@ -128,6 +128,24 @@ class WorkflowService:
         self._driving = set()
 
     @staticmethod
+    def _decision_requires_complete_data(submission, decision_code: str) -> bool:
+        has_upgrade = bool((submission.data_json or {}).get("_form_version_upgrade"))
+        code = str(decision_code or "").strip()
+        if not code:
+            return has_upgrade
+        from services.decision_definition_service import DecisionDefinitionError, DecisionDefinitionService
+
+        try:
+            category = str(DecisionDefinitionService().resolve(
+                submission, code, scope="submission",
+            ).get("semantic_category") or "neutral")
+        except DecisionDefinitionError as exc:
+            raise WorkflowTransitionError(str(exc)) from exc
+        if category in {"negative", "correction"}:
+            return False
+        return (category == "positive" and bool(submission.form_version_id)) or has_upgrade
+
+    @staticmethod
     def _is_decision_step(step: dict) -> bool:
         from services.workflow_config_service import DOCUMENTS_STAGE_TYPE
         if step.get("stage_type") == "decision" or step.get("type") == "decision":
@@ -231,7 +249,8 @@ class WorkflowService:
                     if current in visited:
                         raise WorkflowTransitionError("Pętla dokumentowa wymaga działania użytkownika lub urzędnika.")
                     visited.add(current)
-                    if not self.document_service.document_workflow.start(submission, form_config):
+                    start_args = {"replaces_audit_operation_id": handoff_id} if handoff_id else {}
+                    if not self.document_service.document_workflow.start(submission, form_config, **start_args):
                         return
                     target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
                     self._enter_configured_step(
@@ -349,7 +368,9 @@ class WorkflowService:
             from services.form_version_service import FormVersionError, FormVersionService
             with self.submission_repository.session_factory() as db:
                 model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one()
-                if (model.data_json or {}).get("_form_version_upgrade"):
+                if self._decision_requires_complete_data(
+                    model, str((metadata or {}).get("officer_decision") or ""),
+                ):
                     try:
                         FormVersionService().require_submission_data_complete(db, model)
                     except FormVersionError as exc:
@@ -547,7 +568,7 @@ class WorkflowService:
         old_status = getattr(submission, "process_status", None)
         if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
-        if db is not None and (submission.data_json or {}).get("_form_version_upgrade"):
+        if db is not None and self._decision_requires_complete_data(submission, decision_code):
             from services.form_version_service import FormVersionError, FormVersionService
             try:
                 FormVersionService().require_submission_data_complete(db, submission)

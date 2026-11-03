@@ -464,7 +464,7 @@ def test_officer_decision_automatic_error_is_reported_after_commit(admin_app, ad
     form_id, pk, _ = officer_decision_fixture(admin_app)
     login(admin_client)
     workflow = admin_app.extensions["services"].workflow_service
-    monkeypatch.setattr(workflow, "run_automatic_steps", lambda *_: (_ for _ in ()).throw(WorkflowTransitionError("Test")))
+    monkeypatch.setattr(workflow, "run_automatic_steps", lambda *_, **__: (_ for _ in ()).throw(WorkflowTransitionError("Test")))
     assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
     with admin_client.session_transaction() as session:
         assert any("automatyczny etap workflow" in message for _, message in session.get("_flashes", []))
@@ -523,6 +523,7 @@ def test_submission_enters_versioned_decision_before_declaration(admin_app):
         services.workflow_service.transition_submission(
             submission, "DECLARATION_READY", target_step="ready_document",
             decision_code="approved", actor="officer", reason="officer_decision",
+            audit_operation_key=f"officer-decision:{submission.id}:approved",
         )
         db.commit()
         assert submission.workflow_step == submission.workflow_stage == "ready_document"
@@ -704,7 +705,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
         data={"csrf_token": csrf, "access_token": token,
               "signed_declaration_pdf": (BytesIO(b"%PDF-1.4\n"), "signed.pdf")},
     )
-    assert early_upload.status_code == 302
+    assert early_upload.status_code == 409
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
     training_url = f"/submissions/{public_id}/trainings?token={token}"

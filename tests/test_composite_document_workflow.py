@@ -134,7 +134,7 @@ def test_document_qualification_waits_for_saved_data_and_uses_submission_version
         db.commit()
     sent = []
     monkeypatch.setattr(env.services.mail_dispatch_service, "dispatch_auto_rejected_by_condition",
-                        lambda public_id, evaluation: sent.append(public_id))
+                        lambda public_id, evaluation, **kwargs: sent.append(public_id))
 
     # No document data yet: recheck uses the submission version and skips both conditions.
     before = env.services.submission_service.reevaluate_qualification(env.public_id, {"fields": []})

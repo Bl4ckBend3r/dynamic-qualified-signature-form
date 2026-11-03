@@ -1054,6 +1054,12 @@ def test_declaration_flow_saves_additional_fields_and_legacy_status():
 
 
 def test_declaration_flow_generates_pdf_without_training_selection():
+    from services.documents.declaration_template_context_service import build_declaration_render_context
+    current = [{"id": "current", "name": "Aktualne szkolenie", "price": 100}]
+    rendered = build_declaration_render_context({"selected_trainings": current})
+    assert [item["id"] for item in rendered["selected_trainings"]] == ["current"]
+    assert rendered["selected_trainings"][0]["name"] == "Aktualne szkolenie"
+    assert rendered["selected_trainings_normalized"] == rendered["selected_trainings"]
     repository = DummyRepository(metadata=None)
     document_service = FakeDocumentService()
     submission = {
@@ -1110,8 +1116,9 @@ def test_declaration_flow_generates_pdf_without_training_selection():
 
     assert result.success is True
     context_extra = document_service.generated_documents[0][1]["context_extra"]
-    assert context_extra["selected_trainings"] == []
-    assert context_extra["selected_trainings_normalized"] == []
+    # Generating a declaration must not erase the current training snapshot.
+    assert "selected_trainings" not in context_extra
+    assert "selected_trainings_normalized" not in context_extra
     assert repository.updated[0][1].get("selected_trainings") is None
 
 
@@ -1131,7 +1138,7 @@ def test_legacy_declaration_qualification_runs_after_save_and_preserves_history(
         record_workflow_event=lambda submission_id, event: events.append(event) or True,
     )
     submission_service = SubmissionService(repository, mail_dispatch_service=SimpleNamespace(
-        dispatch_auto_rejected_by_condition=lambda submission_id, evaluation: sent.append(submission_id)))
+        dispatch_auto_rejected_by_condition=lambda submission_id, evaluation, **kwargs: sent.append(submission_id)))
     document_service = FakeDocumentService()
     document = {"id": "declaration", "enabled": True, "fields": [
         {"name": "adult", "type": "radio", "options": ["Tak", "Nie"], "required": True},

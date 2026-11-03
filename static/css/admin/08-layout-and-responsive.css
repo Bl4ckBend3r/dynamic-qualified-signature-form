@@ -1,0 +1,282 @@
+/* Shared spacing and responsive layout for admin-only surfaces. */
+.admin-heading,
+.admin-page-title,
+.admin-section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--admin-space-4);
+}
+
+.admin-heading {
+  margin-bottom: var(--admin-space-5);
+}
+
+.admin-heading h1,
+.admin-heading p,
+.admin-section-heading h2 {
+  margin-top: 0;
+}
+
+.admin-heading p,
+.admin-section-heading p {
+  margin-bottom: 0;
+}
+
+.admin-container
+  > :is(
+    .admin-alert,
+    .admin-card,
+    .admin-empty-state,
+    .admin-form,
+    .admin-form-card,
+    .admin-workflow-grid,
+    .admin-bulk-actions
+  ) {
+  margin-bottom: var(--admin-space-5);
+}
+
+.admin-card + .admin-card,
+.admin-form-section + .admin-form-section,
+.admin-section + .admin-section {
+  margin-top: var(--admin-space-5);
+}
+
+.admin-card > :is(h2, h3),
+.admin-form-section > :is(h2, h3) {
+  margin-bottom: var(--admin-space-4);
+}
+
+.admin-card > .admin-table-wrap {
+  margin-right: calc(-1 * var(--admin-space-5));
+  margin-left: calc(-1 * var(--admin-space-5));
+  width: calc(100% + (2 * var(--admin-space-5)));
+  max-width: none;
+}
+
+.admin-button-group,
+.card-actions,
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--admin-space-3);
+}
+
+.admin-table td:last-child .admin-actions {
+  flex-wrap: nowrap;
+}
+
+.admin-modal {
+  max-height: calc(100dvh - (2 * var(--admin-space-4)));
+}
+
+.admin-modal__surface {
+  max-height: calc(100dvh - (2 * var(--admin-space-4)));
+}
+
+.admin-modal__header {
+  padding: var(--admin-space-5) var(--admin-space-6) var(--admin-space-4);
+}
+
+.admin-modal__body {
+  gap: var(--admin-space-4);
+  padding: var(--admin-space-5) var(--admin-space-6);
+}
+
+.admin-modal__footer {
+  gap: var(--admin-space-3);
+  padding: var(--admin-space-4) var(--admin-space-6);
+}
+
+.admin-form-tab-panel {
+  padding-top: var(--admin-space-2);
+}
+
+@media (max-width: 1024px) {
+  .admin-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-header-inner,
+  .admin-container {
+    width: min(100% - (2 * var(--admin-space-4)), 1240px);
+  }
+
+  .admin-card {
+    padding: var(--admin-space-4);
+  }
+
+  .admin-card > .admin-table-wrap {
+    margin-right: calc(-1 * var(--admin-space-4));
+    margin-left: calc(-1 * var(--admin-space-4));
+    width: calc(100% + (2 * var(--admin-space-4)));
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-main {
+    padding: var(--admin-space-5) 0 var(--admin-space-6);
+  }
+
+  .admin-form-grid,
+  .admin-check-grid,
+  .admin-logo-picker,
+  .admin-workflow-summary,
+  .admin-body .form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-heading,
+  .admin-page-title,
+  .admin-section-heading,
+  .admin-bulk-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-form-wide {
+    grid-column: auto;
+  }
+
+  .admin-form-tab-save,
+  .workflow-save-actions {
+    position: static;
+  }
+
+  .admin-actions,
+  .admin-button-group,
+  .card-actions,
+  .modal-actions {
+    align-items: stretch;
+    min-width: 0;
+  }
+
+  .admin-table {
+    min-width: 680px;
+  }
+
+  .admin-nav {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    overflow-x: visible;
+    padding-bottom: var(--admin-space-2);
+  }
+
+  .admin-nav a {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-header-inner,
+  .admin-container {
+    width: calc(100% - (2 * var(--admin-space-3)));
+  }
+
+  .admin-stats-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-card,
+  .admin-form-card,
+  .admin-form-section {
+    padding: var(--admin-space-4);
+  }
+
+  .admin-form-actions,
+  .admin-modal__footer,
+  .admin-actions,
+  .admin-button-group,
+  .card-actions,
+  .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-form-actions > :is(button, a),
+  .admin-modal__footer > :is(button, a),
+  .admin-actions > :is(button, a, form),
+  .admin-actions > form > button,
+  .admin-button-group > :is(button, a),
+  .card-actions > :is(button, a),
+  .modal-actions > :is(button, a) {
+    width: 100%;
+  }
+
+  .admin-modal__footer > button {
+    flex: 0 0 auto;
+    min-height: 44px;
+  }
+
+  .admin-modal {
+    width: calc(100vw - (2 * var(--admin-space-3)));
+    max-width: calc(100vw - (2 * var(--admin-space-3)));
+    max-height: calc(100dvh - (2 * var(--admin-space-3)));
+  }
+
+  .admin-modal__surface {
+    max-height: calc(100dvh - (2 * var(--admin-space-3)));
+  }
+
+  .admin-modal__header,
+  .admin-modal__body,
+  .admin-modal__footer {
+    padding-right: var(--admin-space-4);
+    padding-left: var(--admin-space-4);
+  }
+
+  .admin-table {
+    min-width: 620px;
+  }
+
+  .admin-table--responsive {
+    min-width: 0;
+    font-size: 0.82rem;
+  }
+  .admin-table--responsive .column-secondary {
+    display: none;
+  }
+  .admin-table--responsive th,
+  .admin-table--responsive td {
+    padding: 9px 7px;
+  }
+  .admin-table--responsive .actions-column {
+    min-width: 92px;
+  }
+  .admin-table .admin-column-filters th {
+    top: 38px;
+  }
+  .admin-column-filters input,
+  .admin-column-filters select {
+    min-width: 64px;
+    padding: 6px;
+  }
+}
+
+@media (max-width: 360px) {
+  .admin-header-inner,
+  .admin-container {
+    width: calc(100% - (2 * var(--admin-space-2)));
+  }
+
+  .admin-card,
+  .admin-form-card,
+  .admin-form-section {
+    padding: var(--admin-space-3);
+  }
+}
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+

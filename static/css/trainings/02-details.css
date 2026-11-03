@@ -1,0 +1,110 @@
+/* Szkolenia: details — reguły bazowe z połączonymi powtórzeniami selektorów. */
+
+.training-card-grid .training-details {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    border-top: 1px solid #303b49;
+}
+
+.training-card-grid .training-details[hidden] {
+    display: none;
+}
+
+.training-card__extra-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0 0 24px;
+}
+
+.training-card__extra-stats > div {
+    padding: 14px;
+    background: #202936;
+    border-radius: 9px;
+}
+
+.training-card__extra-stats dt {
+    font-size: 11px;
+    color: #a9bbce;
+    text-transform: uppercase;
+}
+
+.training-card__extra-stats dd {
+    margin: 7px 0 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #f5f8fc;
+}
+
+.training-card-grid .training-row > .training-details {
+    padding: 28px;
+    background: #111923;
+    border-top: 1px solid #36465b;
+}
+
+.training-card-grid .training-row > .training-details[hidden] {
+    display: none;
+}
+
+.training-card-grid .training-details .training-card__extra-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin: 0 0 30px;
+}
+
+.training-card-grid .training-details .training-card__extra-stats > div {
+    padding: 20px;
+    border: 1px solid #37485e;
+    border-radius: 12px;
+    background: #1d2937;
+}
+
+.training-card-grid .training-details .training-card__extra-stats dt {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #b4c5d8;
+    text-transform: uppercase;
+}
+
+.training-card-grid .training-details .training-card__extra-stats dd {
+    margin: 10px 0 0;
+    font-size: 27px;
+    font-weight: 750;
+    color: #ffffff;
+}
+
+.training-card-grid .training-details .training-details-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+    padding-bottom: 22px;
+    margin-bottom: 26px;
+    border-bottom: 1px solid #334256;
+}
+
+.training-card-grid .training-details .training-details-heading h2 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    color: #ffffff;
+}
+
+.training-card-grid .training-details .training-details-heading p {
+    margin: 0;
+    font-size: 12px;
+    color: #aebfd2;
+}
+
+.training-card-grid .training-details textarea {
+    min-height: 95px;
+    line-height: 1.6;
+    resize: vertical;
+}
+
+.training-card-grid .training-details [hidden] {
+    display: none !important;
+}

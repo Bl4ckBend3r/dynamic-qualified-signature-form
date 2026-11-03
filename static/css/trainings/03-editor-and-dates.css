@@ -1,0 +1,121 @@
+/* Szkolenia: editor — reguły bazowe z połączonymi powtórzeniami selektorów. */
+
+.training-card-grid .training-details .training-edit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 22px;
+    align-items: start;
+}
+
+.training-card-grid .training-details .training-edit-grid > label:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 9px;
+}
+
+.training-card-grid .training-details .training-edit-grid > label:first-child {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-details .training-edit-grid > .training-field-wide {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-details .training-edit-grid label > span, .training-card-grid .training-details .training-date-grid label > span {
+    color: #d0dceb;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.training-card-grid .training-details .training-edit-grid :is(input, select, textarea), .training-card-grid .training-details .training-date-grid :is(input, select, textarea) {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    min-height: 44px;
+    border-radius: 9px;
+    font-size: 14px;
+}
+
+.training-card-grid .training-details .training-dates-editor {
+    margin-top: 34px;
+    padding-top: 28px;
+    border-top: 1px solid #334256;
+}
+
+.training-card-grid .training-details .training-date-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    align-items: start;
+}
+
+.training-card-grid .training-details .training-date-card {
+    min-width: 0;
+    padding: 22px;
+    background: #1b2634;
+    border: 1px solid #37485e;
+    border-radius: 13px;
+}
+
+.training-card-grid .training-details .training-date-card__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #354357;
+}
+
+.training-card-grid .training-details .training-date-card__heading h4 {
+    margin: 0;
+    font-size: 17px;
+    color: #ffffff;
+}
+
+.training-card-grid .training-details .training-date-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.training-card-grid .training-details .training-date-grid > label:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 8px;
+}
+
+.training-card-grid .training-details .training-date-grid > .training-field-wide {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-edit-grid > label:has(> textarea[name="training_item_description"]) {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-edit-grid textarea[name="training_item_description"] {
+    height: 90px;
+    min-height: 90px;
+}
+
+.training-card-grid .training-details .training-edit-grid > label:has(> textarea[name="training_item_admin_comment"]), .training-card-grid .training-details .training-edit-grid > label:has(> textarea[name="training_item_low_seats_comment"]) {
+    grid-column: span 1;
+}
+
+.training-card-grid .training-edit-grid textarea[name="training_item_admin_comment"], .training-card-grid .training-edit-grid textarea[name="training_item_low_seats_comment"] {
+    height: 110px;
+    min-height: 110px;
+}
+
+.training-card-grid .training-edit-grid > label:has(> input[name="training_item_change_reason"]) {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-details .training-edit-grid :is(input, select, textarea) {
+    font-weight: 500;
+    line-height: 1.5;
+}

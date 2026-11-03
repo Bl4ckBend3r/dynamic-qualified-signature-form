@@ -1,0 +1,204 @@
+/* Szkolenia: cards — reguły bazowe z połączonymi powtórzeniami selektorów. */
+
+.training-list.training-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    align-items: start;
+    margin-top: 24px;
+}
+
+.training-card-grid .training-row {
+    display: flex;
+    flex-direction: column;
+    width: auto;
+    min-width: 0;
+    margin: 0;
+    box-sizing: border-box;
+    border: 1px solid #303b49;
+    border-radius: 14px;
+    background: #171d26;
+    overflow: hidden;
+    transition: border-color .2s, box-shadow .2s;
+}
+
+.training-card-grid .training-row:hover {
+    border-color: #56677e;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+}
+
+.training-card__summary {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px;
+    min-width: 0;
+}
+
+.training-card__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.training-card__availability {
+    font-size: 12px;
+    color: #a9bbce;
+}
+
+.training-card-grid .training-card__title {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 20px;
+    line-height: 1.4;
+    font-weight: 700;
+    color: #f5f8fc;
+    overflow-wrap: anywhere;
+    letter-spacing: -0.02em;
+}
+
+.training-card__facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.training-card__fact {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 7px;
+    padding: 14px;
+    border-radius: 9px;
+    background: #202936;
+}
+
+.training-card__fact-label {
+    font-size: 11px;
+    color: #a9bbce;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+
+.training-card__fact strong {
+    color: #f5f8fc;
+    font-size: 15px;
+}
+
+.training-card__occupancy {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.training-card__occupancy-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: #a9bbce;
+    font-size: 12px;
+}
+
+.training-card-grid progress.training-card__progress {
+    display: block;
+    width: 100%;
+    height: 8px;
+    margin: 0;
+    border: 0;
+    border-radius: 99px;
+    overflow: hidden;
+    appearance: none;
+    -webkit-appearance: none;
+    background: #303b49;
+    accent-color: #28a745;
+}
+
+.training-card__progress::-webkit-progress-bar {
+    background: #303b49;
+    border-radius: 99px;
+}
+
+.training-card__progress::-webkit-progress-value {
+    background: #28a745;
+    border-radius: 99px;
+}
+
+.training-card__progress::-moz-progress-bar {
+    background: #28a745;
+    border-radius: 99px;
+}
+
+.training-card-grid .training-card__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: auto;
+    width: 100%;
+}
+
+.training-card-grid .training-card__actions > .training-card__details-button, .training-card-grid .training-card__actions > .training-card__manage {
+    display: inline-flex;
+    width: 100%;
+    min-width: 0;
+    height: 48px;
+    min-height: 48px;
+    margin: 0;
+    padding: 0 14px;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-align: center;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.training-card__chevron {
+    display: inline-block;
+    transition: transform .2s;
+}
+
+.training-card-grid .training-row.is-open .training-card__chevron {
+    transform: rotate(180deg);
+}
+
+.training-card-grid .training-row.is-open {
+    grid-column: 1 / -1;
+}
+
+.training-card-grid .training-card__summary {
+    gap: 18px;
+    padding: 24px;
+}
+
+.training-card-grid .training-card__facts {
+    gap: 14px;
+}
+
+.training-card-grid .training-card__fact {
+    background: #202a37;
+    border: 1px solid #334256;
+    border-radius: 11px;
+    padding: 16px;
+}
+
+.training-card-grid .training-card__fact-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #aebfd2;
+}
+
+.training-card-grid .training-card__fact strong {
+    font-size: 17px;
+    font-weight: 700;
+    color: #ffffff;
+}

@@ -1,0 +1,58 @@
+/* Media queries są zebrane po regułach bazowych. */
+@media (max-width: 1000px) {
+    .training-list.training-card-grid {
+        grid-template-columns: 1fr;
+    }
+    .training-card-grid .training-details
+    .training-date-list {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 650px) {
+    .training-card-grid .training-row > .training-details {
+        padding: 16px;
+    }
+    .training-card-grid .training-details
+    .training-edit-grid,
+    .training-card-grid .training-details
+    .training-date-grid,
+    .training-card-grid .training-details
+    .training-card__extra-stats {
+        grid-template-columns: 1fr;
+    }
+    .training-card-grid .training-details
+    .training-edit-grid > label:first-child,
+    .training-card-grid .training-details
+    .training-field-wide {
+        grid-column: 1;
+    }
+    .training-card-grid .training-card__title {
+        font-size: 18px;
+    }
+    .training-card-grid .training-details .training-edit-grid
+    > label:has(> textarea[name="training_item_admin_comment"]),
+    .training-card-grid .training-details .training-edit-grid
+    > label:has(> textarea[name="training_item_low_seats_comment"]) {
+        grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 520px) {
+    .training-card-grid .training-card__summary {
+        padding: 16px;
+    }
+    .training-card-grid .training-card__facts {
+        gap: 8px;
+    }
+    .training-card-grid .training-card__fact {
+        padding: 10px;
+    }
+    .training-card-grid .training-card__actions {
+        gap: 8px;
+    }
+    .training-card-grid .training-card__extra-stats {
+        grid-template-columns: 1fr;
+    }
+}
+

@@ -847,6 +847,9 @@ def submission_detail(form_id: int, submission_pk: int):
                             training[key] = ""
         return render_template(
             "admin/submissions/detail.html",
+            conditional_missing=(services.form_version_service.submission_data_errors(
+                submission, submission_form_config, db=db) if submission.form_version_id and can_view_sensitive_data else {}),
+            conditional_steps=(submission_form_config.get("workflow") or {}).get("steps") or [],
             form=form,
             submission=submission,
             detail_view=detail_view,
@@ -2374,7 +2377,9 @@ def submission_decision_update(form_id: int, submission_pk: int):
         if not checklist_service.can_make_decision(db, g.admin_user, form):
             abort(403)
         try:
-            result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""))
+            result = save_officer_decision(db, form, submission, request.form.get("officer_decision", ""), request.form.get("officer_decision_reason", ""),
+                conditional_deadline=request.form.get("conditional_deadline", "") if request.form.get("conditional_approval") == "1" else "",
+                conditional_requested=request.form.get("conditional_approval") == "1")
         except (WorkflowTransitionError, DecisionDefinitionError) as exc:
             db.rollback()
             current_app.logger.warning(
@@ -2941,7 +2946,8 @@ def _decision_error_frames(exc: Exception) -> str:
     )
 
 
-def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False) -> dict:
+def save_officer_decision(db, form, submission, decision_value: str, reason_value: str, *, skip_unchanged: bool = False,
+                          conditional_deadline: str = "", conditional_requested: bool = False) -> dict:
     if submission.form_version_id and submission.form_version is None:
         raise WorkflowTransitionError("Brak wersji workflow przypisanej do zgłoszenia.")
     historical_definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
@@ -3092,6 +3098,18 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
 
     decision_at = datetime.now(timezone.utc)
     submission.updated_at = decision_at
+    condition = None
+    if conditional_requested:
+        from services.submission_decision_service import ConditionalApproval
+        from services.form_version_service import FormVersionError
+        if category != "positive":
+            raise WorkflowTransitionError("Warunkowo można zatwierdzić wyłącznie decyzję pozytywną.")
+        try:
+            condition = ConditionalApproval.begin(db, submission, deadline=conditional_deadline,
+                reason=reason_value, actor_id=g.admin_user.id, target_step=target_step)
+        except FormVersionError as exc:
+            raise WorkflowTransitionError(str(exc)) from exc
+        submission.officer_decision_reason = reason_value.strip()
     try:
         workflow_service.transition_submission(
             submission,
@@ -3112,6 +3130,11 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 "actor_id": g.admin_user.id,
             },
         )
+        if condition:
+            staged = pending_audit_state(submission)
+            for entry in staged.get("events") or [staged["event"]]:
+                entry["metadata"] = {**entry.get("metadata", {}), "conditional_approval": condition}
+            submission.data_json = {**dict(submission.data_json or {}), "_audit_pending": staged}
         db.add(
             SubmissionDecision(
                 submission_id=submission.id,

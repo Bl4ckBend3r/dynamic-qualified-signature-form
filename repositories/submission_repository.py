@@ -317,6 +317,21 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 current_step = str(submission.workflow_step or submission.workflow_stage or "")
                 if current_step != str(expected_step):
                     return False
+            from services.submission_decision_service import ConditionalApproval
+            from services.decision_definition_service import DecisionDefinitionService
+            negative = bool(event.get("decision_code") and DecisionDefinitionService().resolve(
+                submission, event["decision_code"], scope="submission",
+            ).get("semantic_category") == "negative") if ConditionalApproval.active(submission) else False
+            closed_condition = None if negative else ConditionalApproval.check(
+                session, submission, target_step=updates.get("workflow_step"), settle=True)
+            if not negative and ConditionalApproval.active(submission):
+                from services.workflow_state_service import final_outcome_for_status, FinalOutcome
+                from services.form_version_service import FormVersionError
+                if final_outcome_for_status(updates.get("process_status")) != FinalOutcome.ACTIVE:
+                    raise FormVersionError("Przed zakończeniem sprawy uzupełnij wymagane dane.")
+            if closed_condition:
+                for entry in marker.get("events") or [marker["event"]]:
+                    entry["metadata"] = {**entry.get("metadata", {}), "conditional_approval_resolved": closed_condition}
             for key, value in values.items():
                 setattr(submission, key, value)
             submission.data_json = {
@@ -412,6 +427,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             ).scalar_one_or_none()
             if not model or (model.workflow_step or model.workflow_stage) != step_id:
                 return False
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(model):
+                return False
             marker = pending_audit_state(model)
             continuation = marker.get("continuation") if marker else None
             allowed_handoff = bool(
@@ -464,6 +482,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 .with_for_update()
             ).scalar_one_or_none()
             if model is None or pending_audit_state(model):
+                return False
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(model):
                 return False
             states = dict(model.document_states or {})
             if (

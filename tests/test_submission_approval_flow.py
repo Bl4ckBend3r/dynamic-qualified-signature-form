@@ -116,7 +116,7 @@ def post_officer_decision(app, client, form_id, pk, *, decision="pzytywna"):
 
 @pytest.mark.parametrize(
     "decision,required_answer,upgrade_pending,expected_saved",
-    [("pzytywna", "", False, False), ("rejected", "", True, True),
+    [("pzytywna", "", False, False), ("pzytywna", "", True, False), ("rejected", "", True, True),
      ("pzytywna", "Uzupełniono", False, True)],
 )
 def test_officer_decision_requires_only_due_mandatory_data_for_positive(
@@ -149,7 +149,7 @@ def test_officer_decision_requires_only_due_mandatory_data_for_positive(
         version.definition_json = definition
         submission.data_json = {
             "required_answer": required_answer, "disclosure": "odmowa",
-            **({"_form_version_upgrade": {"missing_fields": ["required_answer"]}} if upgrade_pending else {}),
+            **({"_form_version_upgrade": {"old_version_id": version.id, "missing_fields": ["required_answer"]}} if upgrade_pending else {}),
         }
         db.commit()
     login(admin_client)
@@ -185,6 +185,131 @@ def test_direct_workflow_decision_cannot_bypass_required_data(admin_app):
         assert db.scalar(select(SubmissionWorkflowEvent.id).where(
             SubmissionWorkflowEvent.submission_id == pk
         )) is None
+
+
+def conditional_fixture(app, *, field_type="text", value=""):
+    form_id, pk, public_id = officer_decision_fixture(app)
+    with create_session_factory(app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        definition = deepcopy(submission.form_version.definition_json)
+        definition["fields"].append({"name": "required_answer", "label": "Wymagane", "type": field_type,
+            "required": True, "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]})
+        definition["workflow"]["steps"].insert(1, {"id": "supplement", "stage_type": "user_action",
+            "status": "WAITING_FOR_ADDITIONAL_FIELDS", "next": "declaration"})
+        definition["workflow"]["decision_types"][0]["target_step"] = "supplement"
+        submission.form_version.definition_json = definition
+        submission.data_json = {"required_answer": value,
+            "_form_version_upgrade": {"old_version_id": submission.form_version_id}}
+        db.commit()
+    return form_id, pk, public_id
+
+
+@pytest.mark.parametrize("trusted,szafir,label", [(True, False, "Profil Zaufany"),
+    (False, True, "Szafir / KIR"), (False, False, "Inny lub nierozpoznany")])
+def test_result_signature_labels(admin_app, trusted, szafir, label):
+    from flask import render_template
+    with admin_app.test_request_context():
+        html = render_template("result.html", result={"submission_id": "preview",
+            "signature": {"mode": "optional"}, "verification": {
+                "is_trusted_profile_signature": trusted, "is_szafir_signature": szafir}})
+    section = html.split("Rodzaj podpisu</span>", 1)[1].split("</div>", 1)[0]
+    assert label in section
+
+
+def post_conditional(client, form_id, pk, **overrides):
+    html = client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    return client.post(f"/admin/forms/{form_id}/submissions/{pk}/decision", data={
+        "csrf_token": csrf, "officer_decision": "pzytywna", "conditional_approval": "1",
+        "conditional_deadline": "declaration", "officer_decision_reason": "Uzupełnienie przed dokumentami",
+        **overrides,
+    })
+
+
+def test_conditional_approval_retry_and_completion(admin_app, admin_client, monkeypatch):
+    from services.workflow_service import WorkflowTransitionError
+    create_user(admin_app)
+    form_id, pk, public_id = conditional_fixture(admin_app)
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{pk}")
+    assert detail.status_code == 200
+    assert "Warunkowe zatwierdzenie" in detail.get_data(as_text=True)
+    assert "required_answer" in detail.get_data(as_text=True)
+    audit = admin_app.extensions["services"].audit_log_service
+    original_write = audit.write_pending
+    monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
+    assert post_conditional(admin_client, form_id, pk).status_code == 302
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = db.get(FormSubmission, pk)
+        condition = row.data_json["_conditional_approval"]
+        assert condition["missing_fields"] == ["required_answer"]
+        assert condition["actor_id"] and condition["created_at"]
+        assert row.workflow_step == "supplement"
+        assert row.data_json["_audit_pending"]
+        operation_id = condition["operation_id"]
+    monkeypatch.setattr(audit, "write_pending", original_write)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    for _ in range(2):
+        assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/retry-audit",
+                                 data={"csrf_token": csrf}).status_code == 302
+    with factory() as db:
+        assert len(db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()) == 1
+    with pytest.raises(WorkflowTransitionError, match="uzupełnij"):
+        admin_app.extensions["services"].workflow_service.transition_to(public_id, "declaration")
+    assert not admin_app.extensions["services"].submission_repository.claim_submission_document_operation(
+        public_id, "signature", "test-lease")
+    action = f"/form/officer-decision-test/update/{public_id}?token=participant-test-token"
+    html = admin_client.get(action).get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
+    response = admin_client.post(action, data={"csrf_token": csrf, "required_answer": "Dane"})
+    assert response.status_code == 302
+    with factory() as db:
+        condition = db.get(FormSubmission, pk).data_json["_conditional_approval"]
+        assert condition["status"] == "completed" and condition["operation_id"] == operation_id
+        assert len(db.get(FormSubmission, pk).data_json["_conditional_approval_history"]) == 1
+        assert db.get(FormSubmission, pk).data_json["_audit_pending"]
+    monkeypatch.setattr(audit, "write_pending", original_write)
+    with admin_client.session_transaction() as session:
+        admin_csrf = session["admin_csrf_token"]
+    for _ in range(2):
+        assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/retry-audit",
+            data={"csrf_token": admin_csrf}).status_code == 302
+    with factory() as db:
+        row = db.get(FormSubmission, pk)
+        assert not row.data_json.get("_audit_pending")
+        assert len(row.data_json["_conditional_approval_history"]) == 1
+
+
+def test_conditional_approval_requires_decision_permission(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id, pk, _ = conditional_fixture(admin_app)
+    login(admin_client)
+    monkeypatch.setattr(admin_app.extensions["services"].verification_checklist_service,
+        "can_make_decision", lambda *args: False)
+    assert post_conditional(admin_client, form_id, pk).status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert "_conditional_approval" not in db.get(FormSubmission, pk).data_json
+
+
+@pytest.mark.parametrize("field_type,value,overrides", [
+    ("checkbox", "", {}), ("email", "invalid", {}),
+    ("text", "", {"officer_decision_reason": ""}),
+    ("text", "", {"conditional_deadline": "completed"}),
+    ("text", "", {"csrf_token": "invalid"}),
+])
+def test_conditional_approval_rejects_invalid_request(admin_app, admin_client, field_type, value, overrides):
+    create_user(admin_app)
+    form_id, pk, _ = conditional_fixture(admin_app, field_type=field_type, value=value)
+    login(admin_client)
+    post_conditional(admin_client, form_id, pk, **overrides)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        row = db.get(FormSubmission, pk)
+        assert row.workflow_step == "officer_review"
+        assert "_conditional_approval" not in row.data_json
+        assert not db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
 
 
 def test_officer_decision_commits_transition_and_audit_once(admin_app, admin_client):

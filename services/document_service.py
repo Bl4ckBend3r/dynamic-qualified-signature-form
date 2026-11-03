@@ -177,8 +177,12 @@ class DocumentService:
             record = db.execute(select(FormSubmission).where(
                 FormSubmission.submission_id == self._submission_id(submission)
             )).scalar_one()
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(record):
+                from services.form_version_service import FormVersionError
+                raise FormVersionError("Przed przygotowaniem dokumentów uzupełnij i rozlicz warunkową decyzję.")
             if (record.data_json or {}).get("_form_version_upgrade"):
-                FormVersionService().require_submission_data_complete(db, record)
+                FormVersionService().require_submission_data_complete(db, record, allow_conditional=False)
 
     def generate_document(
         self,
@@ -190,7 +194,8 @@ class DocumentService:
         version_gap: bool = False,
     ) -> dict:
         gap = self._version_gap_entry(submission, form_config, document_id) if version_gap else None
-        if not version_gap:
+        from services.submission_decision_service import ConditionalApproval
+        if not version_gap or ConditionalApproval.active(self._row(submission)):
             self._require_version_completion(submission)
             self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
@@ -584,6 +589,7 @@ class DocumentService:
     ) -> dict:
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Nie wybrano podpisanego pliku PDF.")
+        self._require_version_completion(submission)
         self.require_workflow_document_action(submission, document_id, "await_signature")
         row = self._row(submission)
         previous_status = str(row.get("process_status") or "")

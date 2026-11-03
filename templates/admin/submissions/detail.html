@@ -10,7 +10,19 @@
                             {% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}
                         </select>
                     </label>
-                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                    {% if conditional_missing %}
+                    <fieldset><legend>Warunkowe zatwierdzenie</legend>
+                        <p>Braki lub błędy wymagające uzupełnienia:</p>
+                        <ul>{% for field, error in conditional_missing.items() %}<li>{{ field }}: {{ error }}</li>{% endfor %}</ul>
+                        <label><input type="checkbox" name="conditional_approval" value="1"> Zatwierdź warunkowo wybraną decyzję pozytywną</label>
+                        <label><span>Uzupełnienie przed wejściem w etap</span>
+                            <select name="conditional_deadline"><option value="">Wybierz etap</option>
+                            {% for step in conditional_steps %}<option value="{{ step.id }}">{{ step.admin_label or step.id }}</option>{% endfor %}</select>
+                        </label>
+                        <p>Wymagane checkboxy i błędy poprawności nie podlegają odroczeniu. Dane należy uzupełnić przed etapem dokumentowym.</p>
+                    </fieldset>
+                    {% endif %}
+                    <label><span>Uzasadnienie decyzji (obowiązkowe przy zatwierdzeniu warunkowym)</span>
                         <textarea name="officer_decision_reason" rows="3"></textarea>
                     </label>
                     <button class="admin-button" type="submit">Zapisz decyzję</button>
@@ -35,6 +47,8 @@
         <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>
         {% endfor %}
         {% if version_upgrade_state.get('missing_fields') or version_upgrade_state.get('invalid_training_ids') %}<p class="admin-alert admin-alert-warning">Zgłoszenie wymaga uzupełnienia danych przez uczestnika.</p>{% endif %}
+        {% set condition = (submission.data_json or {}).get('_conditional_approval', {}) %}
+        {% if condition %}<p class="admin-alert admin-alert-warning">Zatwierdzenie warunkowe: {{ 'rozliczone' if condition.status == 'completed' else 'oczekuje na uzupełnienie' }}. Etap graniczny: {{ condition.deadline_step }}.</p>{% endif %}
         <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>
         {% for section in workflow_view.sections %}{% if section.is_current %}<a href="#workflow-step-{{ loop.index }}">Przejdź do aktualnego etapu</a>{% endif %}{% endfor %}</div>
     </div>

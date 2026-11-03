@@ -228,6 +228,9 @@ class WorkflowService:
     ) -> None:
         if (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
             return
+        from services.submission_decision_service import ConditionalApproval
+        if ConditionalApproval.active(submission):
+            return
         public_id = submission["submission_id"]
         if public_id in self._driving:
             return
@@ -368,6 +371,16 @@ class WorkflowService:
             from services.form_version_service import FormVersionError, FormVersionService
             with self.submission_repository.session_factory() as db:
                 model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one()
+                from services.submission_decision_service import ConditionalApproval
+                from services.decision_definition_service import DecisionDefinitionService
+                code = str((metadata or {}).get("officer_decision") or "")
+                if ConditionalApproval.active(model):
+                    negative = bool(code and DecisionDefinitionService().resolve(model, code, scope="submission").get("semantic_category") == "negative")
+                    if not negative:
+                        try:
+                            ConditionalApproval.check(db, model, target_step=target_step)
+                        except FormVersionError as exc:
+                            raise WorkflowTransitionError(str(exc)) from exc
                 if self._decision_requires_complete_data(
                     model, str((metadata or {}).get("officer_decision") or ""),
                 ):
@@ -566,6 +579,21 @@ class WorkflowService:
                 "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
             )
         old_status = getattr(submission, "process_status", None)
+        from services.submission_decision_service import ConditionalApproval
+        from services.form_version_service import FormVersionError
+        condition_closed = None
+        if db is not None and ConditionalApproval.active(submission):
+            try:
+                from services.decision_definition_service import DecisionDefinitionService
+                negative = bool(decision_code and DecisionDefinitionService().resolve(
+                    submission, decision_code, scope="submission",
+                ).get("semantic_category") == "negative")
+                if not negative:
+                    condition_closed = ConditionalApproval.check(db, submission, target_step=target_step, settle=True)
+                    if ConditionalApproval.active(submission) and final_outcome_for_status(target_status) != FinalOutcome.ACTIVE:
+                        raise FormVersionError("Przed zakończeniem sprawy uzupełnij wymagane dane.")
+            except FormVersionError as exc:
+                raise WorkflowTransitionError(str(exc)) from exc
         if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
         if db is not None and self._decision_requires_complete_data(submission, decision_code):
@@ -638,7 +666,8 @@ class WorkflowService:
                 old_value=old_status,
                 new_value=target_status,
                 actor=actor,
-                metadata={"reason": reason, "validated": transition_allowed},
+                metadata={"reason": reason, "validated": transition_allowed,
+                          "conditional_approval_resolved": condition_closed},
                 required_permission=audit_permission,
                 continuation=audit_continuation,
                 operation_key=audit_operation_key,

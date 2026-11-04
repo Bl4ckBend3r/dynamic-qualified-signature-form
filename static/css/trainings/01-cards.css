@@ -15,15 +15,15 @@
     min-width: 0;
     margin: 0;
     box-sizing: border-box;
-    border: 1px solid #303b49;
+    border: 1px solid var(--color-border);
     border-radius: 14px;
-    background: #171d26;
+    background: var(--color-surface);
     overflow: hidden;
     transition: border-color .2s, box-shadow .2s;
 }
 
 .training-card-grid .training-row:hover {
-    border-color: #56677e;
+    border-color: var(--color-border-strong);
     box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
 }
 
@@ -45,7 +45,7 @@
 
 .training-card__availability {
     font-size: 12px;
-    color: #a9bbce;
+    color: var(--color-text-muted);
 }
 
 .training-card-grid .training-card__title {
@@ -54,7 +54,7 @@
     font-size: 20px;
     line-height: 1.4;
     font-weight: 700;
-    color: #f5f8fc;
+    color: var(--color-heading);
     overflow-wrap: anywhere;
     letter-spacing: -0.02em;
 }
@@ -72,18 +72,18 @@
     gap: 7px;
     padding: 14px;
     border-radius: 9px;
-    background: #202936;
+    background: var(--color-surface-raised);
 }
 
 .training-card__fact-label {
     font-size: 11px;
-    color: #a9bbce;
+    color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: .05em;
 }
 
 .training-card__fact strong {
-    color: #f5f8fc;
+    color: var(--color-text);
     font-size: 15px;
 }
 
@@ -97,7 +97,7 @@
     display: flex;
     justify-content: space-between;
     gap: 8px;
-    color: #a9bbce;
+    color: var(--color-text-muted);
     font-size: 12px;
 }
 
@@ -111,22 +111,22 @@
     overflow: hidden;
     appearance: none;
     -webkit-appearance: none;
-    background: #303b49;
-    accent-color: #28a745;
+    background: var(--color-border);
+    accent-color: var(--color-success);
 }
 
 .training-card__progress::-webkit-progress-bar {
-    background: #303b49;
+    background: var(--color-border);
     border-radius: 99px;
 }
 
 .training-card__progress::-webkit-progress-value {
-    background: #28a745;
+    background: var(--color-success);
     border-radius: 99px;
 }
 
 .training-card__progress::-moz-progress-bar {
-    background: #28a745;
+    background: var(--color-success);
     border-radius: 99px;
 }
 
@@ -184,8 +184,8 @@
 }
 
 .training-card-grid .training-card__fact {
-    background: #202a37;
-    border: 1px solid #334256;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
     border-radius: 11px;
     padding: 16px;
 }
@@ -194,11 +194,11 @@
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.06em;
-    color: #aebfd2;
+    color: var(--color-text-muted);
 }
 
 .training-card-grid .training-card__fact strong {
     font-size: 17px;
     font-weight: 700;
-    color: #ffffff;
+    color: var(--color-heading);
 }

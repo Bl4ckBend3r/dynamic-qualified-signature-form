@@ -61,7 +61,7 @@
     width: 100%;
     padding-top: 0.4rem;
     padding-left: 0;
-    border-top: 1px solid #d8deea;
+    border-top: 1px solid var(--color-border);
     border-left: 0;
   }
 }
@@ -72,19 +72,19 @@
 }
 
 .admin-internal-note {
-  border: 1px solid var(--admin-border, #d8dee8);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 0.65rem;
   padding: 1rem;
-  background: var(--admin-surface, #fff);
+  background: var(--admin-surface, var(--color-surface));
 }
 
 .admin-internal-note--important {
-  border-color: #d7b867;
-  background: #fffaf0;
+  border-color: var(--color-warning);
+  background: var(--color-surface-muted);
 }
 
 .admin-internal-note--archived {
-  background: #f7f8fa;
+  background: var(--color-surface-muted);
 }
 
 .admin-internal-note__header {
@@ -95,8 +95,8 @@
 }
 
 .admin-internal-note__important {
-  background: #f1dfaa;
-  color: #5b4612;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 .admin-internal-note__content,
@@ -310,11 +310,11 @@
 }
 .workflow-stage-summary dt {
   font-size: 0.78rem;
-  color: var(--admin-muted, #626975);
+  color: var(--admin-muted, var(--color-text-muted));
 }
 .workflow-stage-summary dd {
   margin: 0.2rem 0 0;
-  color: var(--color-text, #24375b);
+  color: var(--color-text, var(--color-text));
   overflow-wrap: anywhere;
 }
 .workflow-stage-advanced {
@@ -336,19 +336,19 @@
 }
 .workflow-field-error {
   display: block;
-  color: #9f272f;
+  color: var(--color-danger);
   margin-top: 0.3rem;
 }
 .workflow-stage-card [aria-invalid="true"] {
-  border-color: #b42318;
+  border-color: var(--color-danger);
 }
 .workflow-status-badge[data-stage-validity="invalid"] {
-  background: #fff4dc;
-  color: #785000;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 .workflow-status-badge[data-stage-validity="valid"] {
-  background: #eef6f0;
-  color: #376246;
+  background: var(--color-success-bg);
+  color: var(--color-success);
 }
 .workflow-stage-decision-option code {
   display: block;
@@ -367,8 +367,8 @@
 }
 .workflow-preview-errors {
   border: 0;
-  background: #fff9ed;
-  color: #76521d;
+  background: var(--color-danger-bg);
+  color: var(--color-warning);
 }
 .workflow-stage-card [hidden] {
   display: none !important;
@@ -383,12 +383,12 @@
   min-height: 36px;
 }
 .workflow-stage-decision-editor {
-  border-top: 1px solid var(--admin-border, #d8dee8);
+  border-top: 1px solid var(--admin-border, var(--color-border));
   padding-top: 1rem;
 }
 .workflow-stage-decision-option {
   padding: 0.7rem 0.9rem;
-  border: 1px solid var(--admin-border, #d8dee8);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 8px;
   margin-top: 0.5rem;
 }
@@ -413,7 +413,7 @@
   display: inline;
 }
 .workflow-document-editor {
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
   padding-top: 1rem;
 }
 .workflow-document-editor details {

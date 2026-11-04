@@ -196,7 +196,7 @@
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--color-surface);
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.2);
 }
 .admin-action-menu[hidden] {
@@ -225,7 +225,7 @@
   outline: 2px solid var(--navy);
 }
 .admin-action-menu .is-danger {
-  color: #a11;
+  color: var(--color-danger);
 }
 .admin-filter-summary {
   display: flex;
@@ -289,8 +289,8 @@
   border-radius: 10px;
 }
 .workflow-diagram-mode.is-manual {
-  background: #fff1d6;
-  color: #7a4b00;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 .workflow-diagram__viewport {
   display: flex;
@@ -321,91 +321,91 @@
 }
 .workflow-diagram__edge {
   fill: none;
-  stroke: #7b8493;
+  stroke: var(--color-border-strong);
   stroke-width: 2;
 }
 .workflow-diagram__edge.is-positive {
-  stroke: #27814d;
+  stroke: var(--color-success);
 }
 .workflow-diagram__edge.is-negative {
-  stroke: #b42318;
+  stroke: var(--color-danger);
 }
 .workflow-diagram__edge.is-decision {
-  stroke: #7a4b00;
+  stroke: var(--color-border-strong);
 }
 .workflow-diagram__arrow {
-  fill: #697386;
+  fill: var(--color-text);
 }
 .workflow-diagram__edge-label {
-  fill: #475467;
+  fill: var(--color-text);
   font-size: 12px;
   font-weight: 700;
   text-anchor: middle;
   paint-order: stroke;
-  stroke: #fff;
+  stroke: var(--color-surface);
   stroke-width: 4px;
 }
 .workflow-diagram__node {
-  fill: #fff;
-  stroke: #98a2b3;
+  fill: var(--color-surface);
+  stroke: var(--color-border-strong);
   stroke-width: 2;
 }
 .workflow-diagram__node.is-user-action {
-  fill: #eef7ff;
-  stroke: #2878b5;
+  fill: var(--color-info-bg);
+  stroke: var(--color-info);
 }
 .workflow-diagram__node.is-officer-action {
-  fill: #fff8e7;
-  stroke: #a36b00;
+  fill: var(--color-warning-bg);
+  stroke: var(--color-warning);
 }
 .workflow-diagram__node.is-document {
-  fill: #f3efff;
-  stroke: #6941c6;
+  fill: var(--color-info-bg);
+  stroke: var(--color-info);
 }
 .workflow-diagram__node.is-final {
-  fill: #eaf8ef;
-  stroke: #27814d;
+  fill: var(--color-success-bg);
+  stroke: var(--color-success);
   stroke-width: 3;
 }
 .workflow-diagram__node.is-rejected {
-  fill: #fff0ee;
-  stroke: #b42318;
+  fill: var(--color-danger-bg);
+  stroke: var(--color-danger);
 }
 .workflow-diagram__node.has-error {
-  stroke: #b42318;
+  stroke: var(--color-danger);
   stroke-dasharray: 6 4;
 }
 .workflow-diagram__node-group.has-error {
   cursor: pointer;
 }
 .workflow-diagram__decision {
-  fill: #fff8e7;
-  stroke: #a36b00;
+  fill: var(--color-warning-bg);
+  stroke: var(--color-warning);
   stroke-width: 2;
 }
 .workflow-diagram__decision.has-error {
-  stroke: #b42318;
+  stroke: var(--color-danger);
   stroke-width: 3;
   stroke-dasharray: 6 4;
 }
 .workflow-diagram__label {
-  fill: #182230;
+  fill: var(--color-text);
   font-size: 15px;
   font-weight: 750;
 }
 .workflow-diagram__number,
 .workflow-diagram__status {
-  fill: #667085;
+  fill: var(--color-text-muted);
   font-size: 11px;
 }
 .workflow-diagram__decision-label {
-  fill: #533800;
+  fill: var(--color-warning);
   font-size: 11px;
   font-weight: 750;
   text-anchor: middle;
 }
 .workflow-diagram__decision-type {
-  fill: #7a5a1e;
+  fill: var(--color-warning);
   font-size: 9px;
   letter-spacing: 0.05em;
   text-anchor: middle;
@@ -442,35 +442,35 @@
   gap: 0.35rem;
   min-height: 92px;
   padding: 0.8rem;
-  border: 2px solid #c7cdd6;
+  border: 2px solid var(--color-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--color-surface);
 }
 .submission-workflow-node.is-active {
-  border-color: #245fa6;
+  border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(36, 95, 166, 0.14);
-  background: #eef6ff;
+  background: var(--color-surface-muted);
 }
 .submission-workflow-node.is-final {
   border-radius: 28px;
-  border-color: #27814d;
-  background: #eaf8ef;
+  border-color: var(--color-success);
+  background: var(--color-success-bg);
 }
 .submission-workflow-node.is-rejected {
-  border-color: #b42318;
-  background: #fff0ee;
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
 }
 .submission-workflow-node small {
-  color: #667085;
+  color: var(--color-text-muted);
 }
 .submission-workflow-node span {
-  color: #245fa6;
+  color: var(--color-text);
   font-size: 0.82rem;
   font-weight: 750;
 }
 .submission-workflow-map__arrow {
   align-self: center;
-  color: #667085;
+  color: var(--color-text);
   font-size: 1.4rem;
   font-weight: 800;
 }
@@ -490,7 +490,7 @@
 .workflow-inactive-instruction,
 .instruction-preview-stage {
   padding: 1rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
   background: var(--admin-surface);
   color: var(--admin-text);
@@ -501,7 +501,7 @@
   gap: 0.85rem;
 }
 .workflow-linked-instruction.is-focused {
-  border-color: var(--admin-primary, #24375b);
+  border-color: var(--admin-primary, var(--color-heading));
   box-shadow: 0 0 0 3px rgba(36, 55, 91, 0.13);
 }
 .workflow-linked-instruction label {
@@ -520,7 +520,7 @@
 .workflow-inactive-instructions {
   margin-top: 1.25rem;
   padding: 1rem;
-  border: 1px solid #e6b85c;
+  border: 1px solid var(--color-warning);
   border-radius: 12px;
   background: var(--bg);
 }
@@ -541,8 +541,8 @@
   font-weight: 750;
 }
 .workflow-warning-badge {
-  color: #7a4b00;
-  background: #ffedbf;
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 .instruction-preview-stage + .instruction-preview-stage {
   margin-top: 0.75rem;
@@ -560,25 +560,25 @@
   gap: 0.3rem;
   margin: 0.25rem 0 0.4rem;
   padding: 0.35rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 8px 8px 0 0;
-  background: #f7f8fa;
+  background: var(--color-surface-muted);
 }
 
 .instruction-format-button {
   min-height: 32px;
   padding: 0.25rem 0.55rem;
-  border: 1px solid #c8ced8;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  color: #24375b;
-  background: #fff;
+  color: var(--color-text);
+  background: var(--color-surface);
   cursor: pointer;
 }
 
 .instruction-format-button:hover,
 .instruction-format-button:focus-visible {
-  border-color: #24375b;
-  background: #eef2f8;
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
 }
 
 .mail-footer-example {
@@ -636,7 +636,7 @@
 .site-footer-admin-preview {
   overflow: hidden;
   border-radius: 8px;
-  box-shadow: 0 0 0 1px var(--admin-border, #d9dce3);
+  box-shadow: 0 0 0 1px var(--admin-border, var(--color-border));
 }
 
 .site-footer-admin-preview .site-footer {
@@ -670,7 +670,7 @@
   padding: 0;
 }
 .admin-training-card.has-error {
-  border-color: #b42318;
+  border-color: var(--color-danger);
   box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.12);
 }
 
@@ -683,7 +683,7 @@
   padding: 1rem;
   cursor: pointer;
   list-style: none;
-  background: #f8fafc;
+  background: var(--color-surface-muted);
 }
 
 .admin-training-summary::-webkit-details-marker {
@@ -711,7 +711,7 @@
   white-space: nowrap;
 }
 .admin-training-number {
-  color: #667085;
+  color: var(--color-text);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -723,27 +723,27 @@
   gap: 0.4rem 0.7rem;
 }
 .admin-training-summary__facts {
-  color: #475467;
+  color: var(--color-text);
   font-size: 0.88rem;
 }
 .training-badge.is-active {
-  color: #176b3a;
-  background: #ddf6e7;
+  color: var(--color-success);
+  background: var(--color-success-bg);
 }
 .training-badge.is-inactive {
-  color: #5f6672;
-  background: #e9ecf1;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
 }
 .training-badge.is-warning {
-  color: #7a4b00;
-  background: #ffedbf;
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 .training-badge.is-error {
-  color: #8f1d14;
-  background: #fee4e2;
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
 }
 .admin-training-card__body {
   padding: 1rem;
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
 }
 

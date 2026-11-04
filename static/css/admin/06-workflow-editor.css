@@ -21,7 +21,7 @@
 
 .workflow-stage-number,
 .workflow-help {
-  color: var(--admin-muted, #626975);
+  color: var(--admin-muted, var(--color-text-muted));
   font-size: 0.85rem;
 }
 
@@ -47,15 +47,15 @@
   display: inline-flex;
   padding: 0.28rem 0.55rem;
   border-radius: 999px;
-  background: #e8eefb;
-  color: #284b82;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
   font-size: 0.78rem;
   font-weight: 700;
 }
 
 .workflow-stage-options {
   padding-top: 0.75rem;
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
 }
 
 .workflow-notification-row {
@@ -86,7 +86,7 @@
 }
 
 .workflow-json-error {
-  color: #a32020;
+  color: var(--color-danger);
   font-weight: 700;
 }
 
@@ -95,7 +95,7 @@
   bottom: 0.75rem;
   z-index: 4;
   padding: 0.8rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 8px 24px rgba(25, 32, 45, 0.12);
@@ -130,24 +130,24 @@
   gap: 10px;
   padding: 16px;
   margin: 16px 0;
-  border: 1px solid #d9dde5;
+  border: 1px solid var(--color-border);
   border-radius: 10px;
-  background: #f8f9fb;
+  background: var(--color-surface-muted);
 }
 
 .admin-variable {
   margin: 3px;
   padding: 5px 8px;
-  border: 1px solid #c8ced9;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-surface);
   cursor: pointer;
 }
 
 .admin-variable:hover,
 .admin-variable:focus-visible {
-  border-color: #8c6b2f;
-  background: #fffaf0;
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
 }
 
 .admin-required-note {
@@ -155,8 +155,8 @@
   padding: 9px 12px;
   border-left: 3px solid var(--danger);
   border-radius: 6px;
-  background: #fff8f7;
-  color: #5f4b49;
+  background: var(--color-info-bg);
+  color: var(--color-text);
   font-size: 0.9rem;
 }
 

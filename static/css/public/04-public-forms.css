@@ -22,7 +22,7 @@
     margin-top: 12px;
     font-size: 0.85rem;
     line-height: 1.45;
-    color: #555;
+    color: var(--color-text);
 }
 
 .form-footnote sup {
@@ -78,7 +78,7 @@
 .form-tile:hover {
     transform: translateY(-4px);
     box-shadow: 0 18px 40px rgba(29, 46, 91, 0.12);
-    border-color: #d8cab4;
+    border-color: var(--color-border-strong);
 }
 
 .form-tile__action {

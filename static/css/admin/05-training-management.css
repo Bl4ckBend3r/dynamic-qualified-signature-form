@@ -17,9 +17,9 @@
 .training-create-panel {
   margin-bottom: var(--admin-space-5);
   padding: var(--admin-space-5);
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
-  background: #fff;
+  background: var(--color-surface);
   box-shadow: var(--admin-shadow-sm, 0 4px 14px rgba(20, 35, 60, 0.06));
 }
 .training-list,
@@ -32,13 +32,13 @@
 .training-section {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: var(--admin-radius, 12px);
-  background: var(--admin-surface, #fff);
+  background: var(--admin-surface, var(--color-surface));
   box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, 0.07));
 }
 .training-row.is-open {
-  border-color: #aeb9ca;
+  border-color: var(--color-border);
   box-shadow: 0 8px 24px rgba(29, 46, 91, 0.09);
 }
 .training-row__header {
@@ -96,13 +96,13 @@
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   margin: 0;
-  border-top: 1px solid var(--admin-border, #d9dce3);
-  background: var(--admin-surface-soft, #f8f9fb);
+  border-top: 1px solid var(--admin-border, var(--color-border));
+  background: var(--admin-surface-soft, var(--color-surface-muted));
 }
 .training-row__metrics > div {
   min-width: 0;
   padding: 0.8rem var(--admin-space-4);
-  border-right: 1px solid var(--admin-border, #d9dce3);
+  border-right: 1px solid var(--admin-border, var(--color-border));
 }
 .training-row__metrics > div:last-child {
   border-right: 0;
@@ -122,7 +122,7 @@
 }
 .training-details {
   padding: var(--admin-space-5);
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
 }
 .training-details[hidden] {
   display: none !important;
@@ -244,10 +244,10 @@
   min-width: 0;
   max-width: 100%;
   padding: 0.7rem 0.75rem;
-  border: 1px solid var(--admin-border, #cfd5df);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 8px;
   color: var(--text);
-  background: #fff;
+  background: var(--color-input-bg);
   font: inherit;
 }
 .training-edit-form textarea,
@@ -288,9 +288,9 @@
   gap: var(--admin-space-4);
   margin: 0;
   padding: var(--admin-space-5);
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 10px;
-  background: var(--admin-surface-soft, #f8f9fb);
+  background: var(--admin-surface-soft, var(--color-surface-muted));
 }
 .training-question-fieldset legend {
   padding: 0 0.4rem;
@@ -307,9 +307,9 @@
 .training-question-card,
 .training-subcard {
   padding: var(--admin-space-4);
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 10px;
-  background: #fff;
+  background: var(--color-surface);
 }
 .training-date-card__heading,
 .training-question-card__heading,
@@ -348,7 +348,7 @@
   padding: var(--admin-space-4);
   border-radius: 8px;
   color: var(--muted);
-  background: var(--admin-surface-soft, #f8f9fb);
+  background: var(--admin-surface-soft, var(--color-surface-muted));
   line-height: 1.55;
 }
 .training-kpi-grid {
@@ -362,9 +362,9 @@
   min-height: 104px;
   align-content: center;
   padding: var(--admin-space-4) var(--admin-space-5);
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: var(--admin-radius, 12px);
-  background: #fff;
+  background: var(--color-surface);
   box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, 0.07));
 }
 .training-kpi strong {
@@ -378,7 +378,7 @@
   font-weight: 750;
 }
 .training-participants-table {
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 10px;
 }
 .training-participants-table .admin-table {
@@ -450,7 +450,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .training-row__metrics > div:nth-child(3n) {
-    border-right: 1px solid var(--admin-border, #d9dce3);
+    border-right: 1px solid var(--admin-border, var(--color-border));
   }
   .training-row__metrics > div:nth-child(2n) {
     border-right: 0;

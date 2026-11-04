@@ -74,7 +74,7 @@
 .admin-instruction-preview {
   margin-top: 18px;
   padding: 18px;
-  border: 1px solid #d8dee9;
+  border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--bg);
 }
@@ -85,7 +85,7 @@
 
 .admin-instruction-preview__text {
   padding: 10px 12px;
-  border-left: 3px solid #b38d45;
+  border-left: 3px solid var(--color-warning);
   background: #fff;
   white-space: pre-wrap;
 }
@@ -97,9 +97,9 @@
 
 .admin-instruction-preview__steps .is-current {
   padding: 5px 8px;
-  border: 2px solid #b38d45;
+  border: 2px solid var(--color-warning);
   border-radius: 6px;
-  background: #fffaf0;
+  background: var(--color-warning-bg);
 }
 
 .admin-instruction-stages {
@@ -110,9 +110,9 @@
 
 .admin-instruction-stage {
   padding: 16px;
-  border: 1px solid #d8dee9;
+  border: 1px solid var(--color-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .admin-instruction-stage__heading,
@@ -181,7 +181,7 @@
   padding: 0.55rem;
   padding-bottom: calc(var(--admin-space-2) + 6px);
   overflow-x: auto;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 14px;
   background: var(--color-surface);
   box-shadow: 0 6px 20px var(--shadow-color);
@@ -208,7 +208,7 @@
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: var(--admin-muted, #596170);
+  color: var(--admin-muted, var(--color-text-muted));
   font: inherit;
   font-size: 0.9rem;
   font-weight: 700;
@@ -218,8 +218,8 @@
 }
 
 .admin-form-tab:hover {
-  background: #f0f3f8;
-  color: #24344d;
+  background: var(--color-surface-hover);
+  color: var(--color-text);
 }
 
 .admin-form-tab.is-active,
@@ -269,7 +269,7 @@
   z-index: 10;
   margin-top: 1.25rem;
   padding: 0.8rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
   background: var(--admin-surface-raised);
   box-shadow: 0 8px 24px rgba(25, 32, 45, 0.12);
@@ -279,10 +279,10 @@
 .admin-form-header-preview {
   margin-top: 1rem;
   padding: 1.25rem;
-  border: 1px dashed var(--admin-border, #cfd4dd);
+  border: 1px dashed var(--admin-border, var(--color-border));
   border-radius: 12px;
   text-align: center;
-  background: #fafbfc;
+  background: var(--color-surface-muted);
 }
 
 .admin-form-header-preview__label {
@@ -396,29 +396,29 @@ button.btn-primary {
 .workflow-instruction-preview {
   min-width: 0;
   padding: 1rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
-  background: var(--admin-surface-soft, #f8f9fb);
+  background: var(--admin-surface-soft, var(--color-surface-muted));
 }
 
 .workflow-stage-card {
   padding: 0.85rem 1rem;
-  background: var(--admin-surface, #fff);
+  background: var(--admin-surface, var(--color-surface));
   box-shadow: var(--admin-shadow-sm, 0 1px 3px rgba(16, 24, 40, 0.07));
 }
 
 .workflow-stage-summary {
   margin: 0.45rem 0 0;
-  color: var(--admin-muted, #626975);
+  color: var(--admin-muted, var(--color-text-muted));
   font-size: 0.88rem;
 }
 
 .workflow-stage-editor {
   margin-top: 0.85rem;
   padding: 0.85rem;
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
   border-radius: 0 0 var(--admin-radius, 10px) var(--admin-radius, 10px);
-  background: var(--admin-surface-soft, #f8f9fb);
+  background: var(--admin-surface-soft, var(--color-surface-muted));
 }
 
 .workflow-preview-list {
@@ -437,20 +437,20 @@ button.btn-primary {
   position: absolute;
   left: -1.45rem;
   bottom: -0.95rem;
-  color: var(--admin-primary, #24375b);
+  color: var(--admin-primary, var(--color-heading));
   font-weight: 800;
 }
 
 .workflow-preview-step article {
   padding: 1rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
   background: var(--admin-surface);
   color: var(--admin-text);
 }
 
 .workflow-preview-step.has-error article {
-  border-color: #b42318;
+  border-color: var(--color-danger);
   box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.1);
 }
 
@@ -470,26 +470,26 @@ button.btn-primary {
 }
 .workflow-preview-transition {
   font-weight: 750;
-  color: var(--admin-primary, #24375b);
+  color: var(--admin-primary, var(--color-heading));
 }
 .workflow-preview-next {
   margin-top: 0.65rem;
   padding: 0.75rem;
-  border-left: 3px solid #b38d45;
+  border-left: 3px solid var(--color-warning);
   background: var(--admin-surface);
   color: var(--admin-text);
 }
 .workflow-preview-error,
 .workflow-preview-errors {
-  color: #8f1d14;
+  color: var(--color-danger);
   font-weight: 700;
 }
 .workflow-preview-errors {
   margin-bottom: 1rem;
   padding: 0.8rem 1rem;
-  border: 1px solid #f1aaa3;
+  border: 1px solid var(--color-danger);
   border-radius: 10px;
-  background: #fff4f2;
+  background: var(--color-danger-bg);
 }
 .workflow-preview-errors p {
   margin: 0.2rem 0;
@@ -504,9 +504,9 @@ button.btn-primary {
   overflow: auto;
   max-height: min(55vh, 520px);
   padding: 1rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
-  background: linear-gradient(#fff, #fafbfc);
+  background: linear-gradient(var(--color-surface), var(--color-surface-muted));
   overscroll-behavior: contain;
 }
 .workflow-diagram-toolbar {
@@ -523,8 +523,8 @@ button.btn-primary {
   margin-right: auto;
   padding: 0.42rem 0.7rem;
   border-radius: 999px;
-  background: #eef2f7;
-  color: #344054;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
   font-size: 0.82rem;
   font-weight: 800;
   position: sticky;

@@ -188,7 +188,7 @@
   padding: 12px 8px;
   border: 0;
   background: var(--navy);
-  color: #fff;
+  color: var(--color-primary-contrast);
   font: inherit;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -220,7 +220,7 @@
 .admin-field-warning {
   display: block;
   margin-top: 6px;
-  color: #8a5600;
+  color: var(--color-warning);
   font-size: 0.84rem;
   font-weight: 700;
 }
@@ -231,7 +231,7 @@
   width: fit-content;
   padding: 5px 9px;
   border-radius: 999px;
-  background: #e8f7ee;
+  background: var(--color-success-bg);
   color: var(--success);
   font-size: 0.8rem;
   font-weight: 800;
@@ -252,14 +252,14 @@
 }
 
 .mail-preview-error.is-warning {
-  border-color: #e4bd76;
-  background: #fff8e8;
-  color: #795000;
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 .mail-preview-error {
-  border: 1px solid #efb4b4;
-  background: #fdecec;
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg);
   color: var(--danger);
 }
 
@@ -373,7 +373,7 @@
   gap: 12px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #d9dde5;
+  border-top: 1px solid var(--color-border);
 }
 
 .workflow-stage-decisions h4,
@@ -396,8 +396,8 @@
 
 .workflow-stage-decisions .workflow-option-card {
   padding: 0.85rem;
-  background: #f8fbff;
-  border-color: #cbd8e8;
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
 }
 
 .workflow-decision-summary__transitions {
@@ -418,15 +418,15 @@
 .workflow-decision-summary__flags span {
   padding: 0.22rem 0.5rem;
   border-radius: 999px;
-  color: #344054;
-  background: #e8eef6;
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted);
   font-size: 0.78rem;
   font-weight: 700;
 }
 
 .workflow-decision-summary__inactive {
   margin: 0.25rem 0 0.65rem;
-  color: var(--admin-muted, #626975);
+  color: var(--admin-muted, var(--color-text-muted));
 }
 
 .workflow-decision-actions {
@@ -438,15 +438,15 @@
   gap: 0.75rem;
   margin-top: 0.85rem;
   padding-top: 0.85rem;
-  border-top: 1px solid var(--admin-border, #d9dce3);
+  border-top: 1px solid var(--admin-border, var(--color-border));
 }
 
 .workflow-inactive-decisions {
   margin-top: 0.75rem;
   padding: 0.85rem 1rem;
-  border: 1px solid var(--admin-border, #d9dce3);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 12px;
-  background: var(--admin-surface-soft, #f8f9fb);
+  background: var(--admin-surface-soft, var(--color-surface-muted));
 }
 
 .workflow-inactive-decisions > summary {

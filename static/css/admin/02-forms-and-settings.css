@@ -33,17 +33,17 @@
 }
 
 .admin-badge-success {
-  background: #e8f7ee;
+  background: var(--color-success-bg);
   color: var(--success);
 }
 
 .admin-badge-danger {
-  background: #fdecec;
+  background: var(--color-danger-bg);
   color: var(--danger);
 }
 
 .admin-badge-muted {
-  background: #eef0f4;
+  background: var(--color-surface-muted);
   color: var(--muted);
 }
 
@@ -94,7 +94,7 @@
 }
 
 .admin-workflow-section--current {
-  border-left: 4px solid var(--admin-accent, #1d2e5b);
+  border-left: 4px solid var(--admin-accent, var(--color-primary));
 }
 
 .admin-workflow-summary {
@@ -607,7 +607,7 @@
   gap: 12px;
   align-items: end;
   padding: 14px;
-  border: 1px solid var(--admin-border, #d9dee8);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 8px;
 }
 
@@ -710,7 +710,7 @@ body.admin-modal-open {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-alt, #f7f8fb);
+  background: var(--surface-alt, var(--color-surface-muted));
 }
 
 .admin-modal__check input {
@@ -831,7 +831,7 @@ body.admin-modal-open {
   grid-template-columns: repeat(4, minmax(135px, 1fr));
   gap: 12px;
   border-left: 3px solid var(--gold);
-  background: #fff;
+  background: var(--color-surface);
   padding: 14px;
 }
 

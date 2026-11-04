@@ -205,29 +205,29 @@
 }
 
 .training-option.is-unavailable {
-    color: #6d7280;
+    color: var(--color-input-disabled-text);
 }
 
 .training-availability {
     display: block;
     margin-top: 4px;
-    color: #4b5563;
+    color: var(--color-text);
     font-weight: 700;
 }
 
 .training-no-seats {
-    color: #a33a3a;
+    color: var(--color-danger);
     font-weight: 800;
 }
 
 .training-low-seats-comment {
-    color: #7a5a12;
+    color: var(--color-warning);
 }
 
 .training-description,
 .training-empty {
     margin: 0;
-    color: #4b5563;
+    color: var(--color-text);
     line-height: 1.5;
 }
 
@@ -238,17 +238,17 @@
 
 .training-dates-toggle {
     width: fit-content;
-    border: 1px solid #c7ccd8;
+    border: 1px solid var(--color-border);
     border-radius: 6px;
-    background: #fff;
-    color: #27324a;
+    background: var(--color-surface);
+    color: var(--color-text);
     padding: 7px 10px;
     font-weight: 800;
     cursor: pointer;
 }
 
 .training-dates-panel {
-    border-left: 3px solid #b38d45;
+    border-left: 3px solid var(--color-warning);
     padding-left: 12px;
 }
 
@@ -261,5 +261,5 @@
 
 .training-dates-list li span {
     display: block;
-    color: #4b5563;
+    color: var(--color-text);
 }

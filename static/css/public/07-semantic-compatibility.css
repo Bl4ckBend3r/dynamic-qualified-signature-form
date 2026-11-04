@@ -72,7 +72,7 @@
 .form-review-panel {
   margin-top: 1.5rem;
   padding: 1.5rem;
-  border: 1px solid #d7dce2;
+  border: 1px solid var(--color-border);
   border-radius: 0.75rem;
 }
 

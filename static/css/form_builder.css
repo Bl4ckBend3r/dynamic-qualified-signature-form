@@ -495,13 +495,13 @@
   box-sizing: border-box;
   margin: 1rem 0;
   padding: 0.75rem;
-  border: 1px solid var(--admin-border, #d7dde5);
+  border: 1px solid var(--admin-border, var(--color-border));
   border-radius: 0.5rem;
 }
 
 .form-builder__availability > p {
   margin: 0 0 0.75rem;
-  color: var(--admin-muted, #5f6b7a);
+  color: var(--admin-muted, var(--color-text-muted));
   font-size: 0.875rem;
 }
 
@@ -511,7 +511,7 @@
   gap: 0.625rem;
   min-width: 0;
   padding: 0.75rem 0;
-  border-top: 1px solid var(--admin-border, #e5e7eb);
+  border-top: 1px solid var(--admin-border, var(--color-border));
 }
 
 .form-builder__availability-stage {

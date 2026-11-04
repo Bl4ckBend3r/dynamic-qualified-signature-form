@@ -45,13 +45,13 @@
 
 .attendance-confirmation__icon--success {
     border-color: rgba(31, 122, 77, 0.28);
-    background: #e8f7ee;
+    background: var(--color-success-bg);
     color: var(--success);
 }
 
 .attendance-confirmation__icon--error {
     border-color: rgba(180, 35, 24, 0.24);
-    background: #fdecec;
+    background: var(--color-danger-bg);
     color: var(--danger);
 }
 
@@ -117,14 +117,14 @@
 
 .attendance-confirmation__status--success {
     border-color: rgba(31, 122, 77, 0.24);
-    background: #e8f7ee;
-    color: #195f3d;
+    background: var(--color-success-bg);
+    color: var(--color-success);
 }
 
 .attendance-confirmation__status--error {
     border-color: rgba(180, 35, 24, 0.22);
-    background: #fdecec;
-    color: #8f1d1d;
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
 }
 /* SIGN DOCUMENTS */
 

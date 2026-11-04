@@ -325,7 +325,7 @@
 
   padding: 14px 18px;
 
-  border-bottom: 1px solid #e7dfd4;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .admin-condition-toggle {
@@ -413,7 +413,7 @@
   padding: 1rem;
   min-height: 90px;
   box-sizing: border-box;
-  border: 1px solid #d8d8d8;
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -425,7 +425,7 @@
   height: 18px;
   min-width: 18px;
   margin: 0.45rem 0 0;
-  accent-color: #24345d;
+  accent-color: var(--color-primary);
 }
 
 .admin-access-option span {
@@ -435,7 +435,7 @@
 }
 
 .admin-access-option strong {
-  color: #24345d;
+  color: var(--color-heading);
   line-height: 1.2;
 }
 
@@ -477,7 +477,7 @@
   display: block;
   width: 100%;
   margin-top: 0.75rem;
-  border: 1px solid #b8b8b8;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   box-sizing: border-box;
 }
@@ -490,7 +490,7 @@
   box-sizing: border-box;
   padding: 0.6rem 0.75rem;
   cursor: pointer;
-  color: #24345d;
+  color: var(--color-text);
   font-weight: 600;
   list-style: none;
 }
@@ -554,7 +554,7 @@
   margin: 0;
   box-sizing: border-box;
   border: 0;
-  border-top: 1px solid #d9d9d9;
+  border-top: 1px solid var(--color-border);
   border-radius: 0;
 }
 .admin-condition-cancel input {
@@ -593,8 +593,8 @@
 }
 
 .admin-button-danger:hover {
-  color: #fff;
-  background: #8f1d14;
+  color: var(--color-primary-contrast);
+  background: var(--color-danger);
 }
 
 

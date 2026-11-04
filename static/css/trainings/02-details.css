@@ -1,0 +1,132 @@
+/* Panel szczegolow szkolenia. Nie zmienia wygladu zamknietych kart. */
+
+.training-card-grid .training-row > .training-details {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: clamp(20px, 3vw, 36px);
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+}
+
+.training-card-grid .training-row > .training-details[hidden],
+.training-card-grid .training-details [hidden] {
+    display: none !important;
+}
+
+/* Tresc formularza jest wezsza niz cala rozwinieta karta. */
+.training-card-grid .training-details > * {
+    width: 100%;
+    max-width: 1080px;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.training-card-grid .training-details .training-card__extra-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 0;
+    margin-bottom: 28px;
+    padding: 0;
+}
+
+.training-card-grid .training-details .training-card__extra-stats > div {
+    min-width: 0;
+    padding: 18px 20px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-raised);
+}
+
+.training-card-grid .training-details .training-card__extra-stats dt {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.training-card-grid .training-details .training-card__extra-stats dd {
+    margin: 10px 0 0;
+    color: var(--color-text);
+    font-size: 27px;
+    font-weight: 750;
+    line-height: 1.15;
+}
+
+.training-card-grid .training-details .training-details-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 18px;
+    padding: 0 0 20px;
+    margin-top: 0;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.training-card-grid .training-details .training-details-heading h2 {
+    margin: 0 0 5px;
+    color: var(--color-heading);
+    font-family: Inter, "Segoe UI", Arial, sans-serif;
+    font-size: 23px;
+    font-weight: 750;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+}
+
+.training-card-grid .training-details .training-details-heading p {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.training-card-grid .training-details .training-section-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.training-card-grid .training-details .training-section-actions > button {
+    min-height: 44px;
+    min-width: 90px;
+    padding: 9px 16px;
+    font-size: 14px;
+}
+
+.training-card-grid .training-details .training-section-actions__active {
+    min-height: 44px;
+    color: var(--color-text);
+    font-size: 14px;
+}
+
+/* Komunikat o polach obowiazkowych nie powinien dominowac formularza. */
+.training-card-grid .training-details .admin-required-note {
+    margin: 0 0 4px;
+    padding: 12px 15px;
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-info);
+    border-radius: 8px;
+    background: var(--color-info-bg);
+    color: var(--color-text);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.training-card-grid .training-details .admin-required-note .required-marker {
+    color: var(--color-danger);
+}
+
+.training-card-grid .training-details .training-readonly-state {
+    font-size: 15px;
+    line-height: 1.65;
+}

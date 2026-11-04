@@ -593,6 +593,65 @@ class FormVersionService:
         # treści dokumentu i nie może wymuszać ponownego podpisania.
         return not old_allowed.issubset(new_allowed)
 
+    def missing_fields_form_definition(
+        self,
+        submission: FormSubmission,
+        definition: Mapping,
+        field_names,
+        *,
+        step: str | None = None,
+    ) -> dict:
+        base = self.completion_form_definition(
+            submission,
+            definition,
+            step=step,
+        )
+
+        required_names = {
+            str(name or "").strip()
+            for name in field_names
+            if str(name or "").strip()
+        }
+
+        fields = []
+        current_section = None
+        section_added = False
+
+        for raw in base.get("fields") or []:
+            if not isinstance(raw, dict):
+                continue
+
+            if raw.get("type") == "section":
+                current_section = dict(raw)
+                section_added = False
+                continue
+
+            name = str(raw.get("name") or "").strip()
+
+            if name not in required_names:
+                continue
+
+            if current_section is not None and not section_added:
+                fields.append(current_section)
+                section_added = True
+
+            field = dict(raw)
+
+            # Pole zostało już wskazane przez backend jako wymagające
+            # uzupełnienia, dlatego musi być widoczne niezależnie od
+            # pól sterujących, których nie pokazujemy w tym widoku.
+            field["required"] = True
+            field["readonly"] = False
+            field.pop("required_if", None)
+            field.pop("visible_if", None)
+
+            fields.append(field)
+
+        return {
+            **base,
+            "fields": fields,
+        }
+
     def completion_form_definition(self, submission: FormSubmission, definition: Mapping, *, step: str | None = None) -> dict:
         """Use fields available now or at an earlier stage, keeping new sections."""
         from form_loader import normalize_form_definition
@@ -758,25 +817,136 @@ class FormVersionService:
                     submission.agreement_filename = ""
         return invalidated
 
-    def refresh_submission_completion(self, db, submission: FormSubmission) -> dict:
+    def refresh_submission_completion(
+        self,
+        db,
+        submission: FormSubmission,
+    ) -> dict:
         version = self.resolve_for_submission(db, submission)
         if version is None:
-            raise FormVersionError("Zgłoszenie nie ma poprawnej wersji formularza.")
-        errors = self.submission_data_errors(submission, version.definition_json or {}, db=db)
-        invalid_training = self.invalid_training_selections(db, submission, version.definition_json or {})
+            raise FormVersionError(
+                "Zgłoszenie nie ma poprawnej wersji formularza."
+            )
+
+        definition = version.definition_json or {}
         data = dict(submission.data_json or {})
         marker = dict(data.get("_form_version_upgrade") or {})
+
+        errors = self.submission_data_errors(
+            submission,
+            definition,
+            db=db,
+        )
+
+        if marker:
+            old_version_id = marker.get("old_version_id")
+            old_version = (
+                db.get(FormVersion, old_version_id)
+                if old_version_id
+                else None
+            )
+
+            if old_version is not None:
+                diff = self.simple_diff(
+                    old_version.definition_json or {},
+                    definition,
+                )
+                changed_field_names = {
+                    *diff.get("added_fields", []),
+                    *diff.get("changed_fields", []),
+                }
+            else:
+                changed_field_names = {
+                    str(field.get("name") or "")
+                    for field in definition.get("fields") or []
+                    if isinstance(field, dict) and field.get("name")
+                }
+
+            from form_loader import evaluate_visible_if
+
+            validation_definition = self.completion_form_definition(
+                submission,
+                definition,
+            )
+            values = self.submission_values(
+                submission,
+                validation_definition,
+            )
+
+            required_changed_fields = set()
+
+            for field in validation_definition.get("fields") or []:
+                if not isinstance(field, dict):
+                    continue
+
+                field_name = str(field.get("name") or "").strip()
+
+                if not field_name:
+                    continue
+
+                if field_name not in changed_field_names:
+                    continue
+
+                if field.get("type") in {"section", "static_text"}:
+                    continue
+
+                visible_if = field.get("visible_if")
+                if visible_if and not evaluate_visible_if(
+                    visible_if,
+                    values,
+                ):
+                    continue
+
+                required_if = field.get("required_if")
+
+                required_now = bool(field.get("required")) or bool(
+                    required_if
+                    and evaluate_visible_if(required_if, values)
+                )
+
+                if required_now:
+                    required_changed_fields.add(field_name)
+
+            errors = {
+                field_name: message
+                for field_name, message in errors.items()
+                if field_name in required_changed_fields
+            }
+
+        invalid_training = self.invalid_training_selections(
+            db,
+            submission,
+            definition,
+        )
+
         if marker:
             marker["missing_fields"] = sorted(errors)
             marker["invalid_training_ids"] = invalid_training
-            marker["missing_documents"] = [item for item in marker.get("missing_documents") or []
-                if not self._version_document_present(db, submission, item)]
+            marker["missing_documents"] = [
+                item
+                for item in marker.get("missing_documents") or []
+                if not self._version_document_present(
+                    db,
+                    submission,
+                    item,
+                )
+            ]
+
             data["_form_version_upgrade"] = marker
             submission.data_json = data
-        return {"errors": errors, "invalid_training_ids": invalid_training,
-                "missing_documents": marker.get("missing_documents", []),
-                "complete": not errors and not invalid_training and not marker.get("missing_documents")}
 
+        missing_documents = marker.get("missing_documents", [])
+
+        return {
+            "errors": errors,
+            "invalid_training_ids": invalid_training,
+            "missing_documents": missing_documents,
+            "complete": (
+                not errors
+                and not invalid_training
+                and not missing_documents
+            ),
+        }
     @staticmethod
     def _version_document_present(db, submission, item):
         definition_id = str(item.get("document_id") or "")

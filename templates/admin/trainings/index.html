@@ -1,6 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}Szkolenia — {{ form.name }}{% endblock %}
 {% block content %}
+
 {% macro selection_group_editor(current_group='') %}
     <label>
         <span>Powiązane szkolenia</span>
@@ -17,24 +18,36 @@
         <input name="training_item_selection_group_new" data-selection-group-new>
     </label>
 {% endmacro %}
+
 <div class="admin-page-title training-page-title">
     <div>
         <p class="admin-eyebrow">Operacje · {{ form.name }}</p>
         <h1>Szkolenia</h1>
-        <p class="admin-help">Kliknij nazwę szkolenia, aby rozwinąć wersjonowane szczegóły. Przycisk „Zarządzaj” otwiera uczestników, obecność, ankiety i historię.</p>
+        <p class="admin-help">Przeglądaj szkolenia i terminy. Wybierz „Szczegóły”, aby edytować szkolenie, lub „Zarządzaj”, aby obsługiwać uczestników, obecność, ankiety i historię.</p>
     </div>
     <div class="training-page-actions">
-        {% if can_edit_catalog %}<button class="admin-button" type="button" aria-expanded="{{ 'true' if open_create else 'false' }}" aria-controls="training-create-panel" data-training-create-toggle>+ Dodaj szkolenie</button>{% endif %}
+        {% if can_edit_catalog %}
+            <button class="admin-button" type="button"
+                    aria-expanded="{{ 'true' if open_create else 'false' }}"
+                    aria-controls="training-create-panel"
+                    data-training-create-toggle>+ Dodaj szkolenie</button>
+        {% endif %}
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
     </div>
 </div>
 
 {% if can_edit_catalog %}
-<section class="training-create-panel" id="training-create-panel" {% if not open_create %}hidden{% endif %} data-training-create-panel>
+<section class="training-create-panel" id="training-create-panel"
+         {% if not open_create %}hidden{% endif %} data-training-create-panel>
     <div class="training-section-heading">
-        <div><h2>Nowe szkolenie</h2><p>Szkolenie otrzyma stały identyfikator techniczny niezależny od nazwy i kolejności.</p></div>
+        <div>
+            <h2>Nowe szkolenie</h2>
+            <p>Szkolenie otrzyma stały identyfikator techniczny niezależny od nazwy i kolejności.</p>
+        </div>
     </div>
-    <form class="training-edit-form" method="post" action="{{ url_for('admin.training_catalog_create_inline', form_id=form.id) }}" data-training-create-form>
+    <form class="training-edit-form" method="post"
+          action="{{ url_for('admin.training_catalog_create_inline', form_id=form.id) }}"
+          data-training-create-form>
         <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
         <input type="hidden" name="training_item_id" value="">
         <input type="hidden" name="training_active_present" value="1">
@@ -52,7 +65,10 @@
         </div>
         <section class="training-dates-editor" aria-labelledby="training-create-dates-title">
             <div class="training-section-heading">
-                <div><h3 id="training-create-dates-title">Terminy</h3><p>Nowe szkolenie może nie mieć terminu albo mieć ich kilka.</p></div>
+                <div>
+                    <h3 id="training-create-dates-title">Terminy</h3>
+                    <p>Nowe szkolenie może nie mieć terminu albo mieć ich kilka.</p>
+                </div>
                 <button class="admin-button-secondary compact" type="button" data-add-inline-training-date>+ Dodaj termin</button>
             </div>
             <div class="training-date-list" data-inline-training-dates></div>
@@ -66,41 +82,88 @@
 {% endif %}
 
 {% if trainings %}
-<div class="training-list" data-training-accordion>
+<div class="training-list training-card-grid" data-training-accordion>
     {% for training in trainings %}
         {% set panel_id = 'training-panel-' ~ loop.index %}
         {% set is_open = open_training_id == training.id %}
         {% set can_edit_training = can_edit_catalog and training.in_catalog and not training.get('archived') %}
         {% set edit_form_id = 'training-edit-form-' ~ loop.index %}
         {% set delete_form_id = 'training-delete-form-' ~ loop.index %}
-        <article class="training-row{% if is_open %} is-open{% endif %}" id="training-{{ training.id }}" data-training-row>
-            <div class="training-row__header">
-                <button class="training-row__toggle" type="button" aria-expanded="{{ 'true' if is_open else 'false' }}" aria-controls="{{ panel_id }}" data-training-toggle>
-                    <span class="training-row__identity">
-                        <strong>{{ training.name }}</strong>
-                        <span>{{ training.date or 'Brak terminu' }} · {{ training.active_count }}{% if training.capacity not in [none, ''] %}/{{ training.capacity }}{% endif %} uczestników · {% if training.available_seats is not none %}{{ training.available_seats }} wolnych miejsc{% else %}bez limitu miejsc{% endif %}</span>
+
+        <article class="training-row{% if is_open %} is-open{% endif %}"
+                 id="training-{{ training.id }}" data-training-row>
+            <div class="training-card__summary">
+                <div class="training-card__top">
+                    <span class="admin-badge {{ 'admin-badge-success' if training.status == 'active' else 'admin-badge-muted' }}">
+                        {{ {'active': 'Aktywne', 'inactive': 'Nieaktywne', 'archived': 'Archiwalne'}.get(training.status, training.status) }}
                     </span>
-                    <span class="training-row__chevron" aria-hidden="true">⌄</span>
-                </button>
-                <span class="admin-badge {{ 'admin-badge-success' if training.status == 'active' else 'admin-badge-muted' }}">{{ {'active':'Aktywne','inactive':'Nieaktywne','archived':'Archiwalne'}.get(training.status, training.status) }}</span>
-                <a class="admin-button-secondary compact training-row__manage" href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}">Zarządzaj</a>
+                    <span class="training-card__availability">
+                        {% if training.available_seats is not none %}
+                            {{ training.available_seats }} wolnych miejsc
+                        {% else %}
+                            Bez limitu miejsc
+                        {% endif %}
+                    </span>
+                </div>
+
+                <h2 class="training-card__title">{{ training.name }}</h2>
+
+                <div class="training-card__facts">
+                    <div class="training-card__fact">
+                        <span class="training-card__fact-label">Termin</span>
+                        <strong>{{ training.date or 'Nie ustalono' }}</strong>
+                    </div>
+                    <div class="training-card__fact">
+                        <span class="training-card__fact-label">Uczestnicy</span>
+                        <strong>{{ training.active_count }}{% if training.capacity not in [none, ''] %} / {{ training.capacity }}{% endif %}</strong>
+                    </div>
+                </div>
+
+                {% if training.capacity not in [none, ''] and training.capacity|int > 0 %}
+                <div class="training-card__occupancy">
+                    <div class="training-card__occupancy-label">
+                        <span>Zajętość miejsc</span>
+                        <span>{{ training.active_count }} / {{ training.capacity }}</span>
+                    </div>
+                    <progress class="training-card__progress"
+                              value="{{ training.active_count }}"
+                              max="{{ training.capacity }}"
+                              aria-label="Zajętość miejsc"></progress>
+                </div>
+                {% endif %}
+
+                <div class="training-card__actions">
+                    <button class="admin-button-secondary compact training-card__details-button"
+                            type="button"
+                            aria-expanded="{{ 'true' if is_open else 'false' }}"
+                            aria-controls="{{ panel_id }}" data-training-toggle>
+                        Szczegóły <span class="training-card__chevron" aria-hidden="true">⌄</span>
+                    </button>
+                    <a class="admin-button compact training-card__manage"
+                       href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}">Zarządzaj</a>
+                </div>
             </div>
 
-            <dl class="training-row__metrics" aria-label="Podsumowanie szkolenia">
-                <div><dt>Termin</dt><dd>{{ training.date or '—' }}</dd></div>
-                <div><dt>Uczestnicy</dt><dd>{{ training.active_count }}{% if training.capacity not in [none, ''] %} / {{ training.capacity }}{% endif %}</dd></div>
-                <div><dt>Anulowani</dt><dd>{{ training.cancelled_count }}</dd></div>
-                <div><dt>Obecność</dt><dd>{{ training.present_count }}</dd></div>
-                <div><dt>Umowy</dt><dd>{{ training.signed_agreement_count }}</dd></div>
-                <div><dt>Miejsca</dt><dd>{{ training.available_seats if training.available_seats is not none else '—' }}</dd></div>
-            </dl>
+            <div class="training-details" id="{{ panel_id }}" data-training-panel
+                 {% if not is_open %}hidden{% endif %}>
+                <dl class="training-card__extra-stats" aria-label="Dodatkowe statystyki szkolenia">
+                    <div><dt>Anulowani</dt><dd>{{ training.cancelled_count }}</dd></div>
+                    <div><dt>Obecność</dt><dd>{{ training.present_count }}</dd></div>
+                    <div><dt>Umowy</dt><dd>{{ training.signed_agreement_count }}</dd></div>
+                </dl>
 
-            <div class="training-details" id="{{ panel_id }}" data-training-panel {% if not is_open %}hidden{% endif %}>
                 <div class="training-section-heading training-details-heading">
-                    <div class="training-section-heading__content"><h2>Szczegóły szkolenia</h2><p>ID: <code>{{ training.id }}</code>{% if training.get('version') %} · wersja {{ training.version }}{% endif %}</p></div>
+                    <div class="training-section-heading__content">
+                        <h2>Szczegóły szkolenia</h2>
+                        <p>ID: <code>{{ training.id }}</code>{% if training.get('version') %} · wersja {{ training.version }}{% endif %}</p>
+                    </div>
                     {% if can_edit_training %}
                     <div class="training-section-actions">
-                        <label class="training-check training-section-actions__active"><input type="checkbox" name="training_item_active" value="0" form="{{ edit_form_id }}" {% if training.get('active', true) %}checked{% endif %}><span>Aktywne</span></label>
+                        <label class="training-check training-section-actions__active">
+                            <input type="checkbox" name="training_item_active" value="0"
+                                   form="{{ edit_form_id }}" {% if training.get('active', true) %}checked{% endif %}>
+                            <span>Aktywne</span>
+                        </label>
                         <button class="admin-button" type="submit" form="{{ edit_form_id }}">Zapisz</button>
                         <button class="admin-button-danger" type="submit" form="{{ delete_form_id }}">Usuń</button>
                     </div>
@@ -108,15 +171,18 @@
                 </div>
 
                 {% if can_edit_training %}
-                <form class="training-edit-form" id="{{ edit_form_id }}" method="post" action="{{ url_for('admin.training_catalog_update_inline', form_id=form.id, training_id=training.id) }}" data-training-edit-form>
+                <form class="training-edit-form" id="{{ edit_form_id }}" method="post"
+                      action="{{ url_for('admin.training_catalog_update_inline', form_id=form.id, training_id=training.id) }}"
+                      data-training-edit-form>
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                     <input type="hidden" name="training_item_id" value="{{ training.id }}">
                     <input type="hidden" name="training_active_present" value="1">
+
                     <div class="training-edit-grid">
-                        <label><span>Nazwa szkolenia </span><input name="training_item_name" value="{{ training.name }}" required></label>
+                        <label><span>Nazwa szkolenia</span><input name="training_item_name" value="{{ training.name }}" required></label>
                         <label><span>Cena / koszt</span><input type="number" name="training_item_price" value="{{ training.price }}" min="0" step="0.01" required></label>
-                        <label><span>Waluta </span><input name="training_item_currency" value="{{ training.currency or 'PLN' }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
-                        <label><span>Liczba miejsc </span><input type="number" name="training_item_capacity" value="{{ training.capacity if training.capacity is not none else '' }}" min="0" step="1" required></label>
+                        <label><span>Waluta</span><input name="training_item_currency" value="{{ training.currency or 'PLN' }}" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required></label>
+                        <label><span>Liczba miejsc</span><input type="number" name="training_item_capacity" value="{{ training.capacity if training.capacity is not none else '' }}" min="0" step="1" required></label>
                         <label><span>Kolejność</span><input type="number" name="training_item_sort_order" value="{{ training.sort_order or loop.index }}" min="0" step="1"></label>
                         {{ selection_group_editor(training.selection_group or '') }}
                         <label class="training-field-wide"><span>Opis</span><textarea name="training_item_description" rows="4">{{ training.description or '' }}</textarea></label>
@@ -127,16 +193,22 @@
 
                     <section class="training-dates-editor" aria-labelledby="training-dates-title-{{ loop.index }}">
                         <div class="training-section-heading">
-                            <div><h3 id="training-dates-title-{{ loop.index }}">Terminy</h3><p>Każdy termin może mieć osobną lokalizację i opis.</p></div>
+                            <div>
+                                <h3 id="training-dates-title-{{ loop.index }}">Terminy</h3>
+                                <p>Każdy termin może mieć osobną lokalizację i opis.</p>
+                            </div>
                             <button class="admin-button-secondary compact" type="button" data-add-inline-training-date>+ Dodaj termin</button>
                         </div>
                         <div class="training-date-list" data-inline-training-dates>
                             {% for date in training.dates or [] %}
                             <div class="training-date-card" data-inline-training-date>
-                                <div class="training-date-card__heading"><h4>Termin <span data-inline-date-number>{{ loop.index }}</span></h4><button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button></div>
+                                <div class="training-date-card__heading">
+                                    <h4>Termin <span data-inline-date-number>{{ loop.index }}</span></h4>
+                                    <button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button>
+                                </div>
                                 <input type="hidden" name="training_date_training_index" value="0">
                                 <div class="training-date-grid">
-                                    <label><span>Data rozpoczęcia </span><input type="date" name="training_date_start_date" value="{{ date.start_date or '' }}" required></label>
+                                    <label><span>Data rozpoczęcia</span><input type="date" name="training_date_start_date" value="{{ date.start_date or '' }}" required></label>
                                     <label><span>Data zakończenia</span><input type="date" name="training_date_end_date" value="{{ date.end_date or '' }}"></label>
                                     <label><span>Godzina rozpoczęcia</span><input type="time" name="training_date_start_time" value="{{ date.start_time or '' }}"></label>
                                     <label><span>Godzina zakończenia</span><input type="time" name="training_date_end_time" value="{{ date.end_time or '' }}"></label>
@@ -152,26 +224,47 @@
                         <button class="admin-button-secondary" type="reset" data-training-cancel>Anuluj</button>
                     </div>
                 </form>
-                <form id="{{ delete_form_id }}" method="post" action="{{ url_for('admin.training_catalog_delete_inline', form_id=form.id, training_id=training.id) }}"
+                <form id="{{ delete_form_id }}" method="post"
+                      action="{{ url_for('admin.training_catalog_delete_inline', form_id=form.id, training_id=training.id) }}"
                       data-admin-confirm-message="Czy na pewno chcesz usunąć szkolenie „{{ training.name }}”? Jeżeli szkolenie było już używane w zgłoszeniach, zostanie zarchiwizowane zamiast trwale usunięte.">
                     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
                 </form>
                 {% else %}
                 <div class="training-readonly-state">
-                    <p>{% if training.get('archived') or not training.in_catalog %}To szkolenie jest historyczne i pozostaje tylko do odczytu.{% else %}Edycja wymaga uprawnienia <code>can_edit_form</code>.{% endif %}</p>
+                    <p>
+                        {% if training.get('archived') or not training.in_catalog %}
+                            To szkolenie jest historyczne i pozostaje tylko do odczytu.
+                        {% else %}
+                            Edycja wymaga uprawnienia <code>can_edit_form</code>.
+                        {% endif %}
+                    </p>
                     {% if training.description %}<p><strong>Opis:</strong> {{ training.description }}</p>{% endif %}
-                    {% if training.dates %}<ul>{% for date in training.dates %}<li>{{ date.start_date }}{% if date.start_time %}, {{ date.start_time }}{% endif %}{% if date.end_time %}–{{ date.end_time }}{% endif %}{% if date.location %} · {{ date.location }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+                    {% if training.dates %}
+                    <ul>
+                        {% for date in training.dates %}
+                        <li>{{ date.start_date }}{% if date.start_time %}, {{ date.start_time }}{% endif %}{% if date.end_time %}–{{ date.end_time }}{% endif %}{% if date.location %} · {{ date.location }}{% endif %}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
                 </div>
                 {% endif %}
             </div>
         </article>
     {% endfor %}
 </div>
-{% else %}<div class="admin-empty-state"><h2>Brak szkoleń</h2><p>Formularz nie ma katalogu ani historycznych zapisów szkoleniowych.</p></div>{% endif %}
+{% else %}
+<div class="admin-empty-state">
+    <h2>Brak szkoleń</h2>
+    <p>Formularz nie ma katalogu ani historycznych zapisów szkoleniowych.</p>
+</div>
+{% endif %}
 
 <template data-inline-training-date-template>
     <div class="training-date-card" data-inline-training-date>
-        <div class="training-date-card__heading"><h4>Termin <span data-inline-date-number></span></h4><button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button></div>
+        <div class="training-date-card__heading">
+            <h4>Termin <span data-inline-date-number></span></h4>
+            <button class="admin-link-button admin-link-danger" type="button" data-remove-inline-training-date>Usuń termin</button>
+        </div>
         <input type="hidden" name="training_date_training_index" value="0">
         <div class="training-date-grid">
             <label><span>Data rozpoczęcia</span><input type="date" name="training_date_start_date" required></label>
@@ -186,10 +279,10 @@
 
 <script>
 (() => {
-    const accordion = document.querySelector("[data-training-accordion]");
     const dateTemplate = document.querySelector("[data-inline-training-date-template]");
     const createPanel = document.querySelector("[data-training-create-panel]");
     const createToggle = document.querySelector("[data-training-create-toggle]");
+
     const syncSelectionGroupEditor = (choice) => {
         const form = choice.closest("form");
         const newField = form?.querySelector("[data-selection-group-new-field]");
@@ -201,6 +294,7 @@
             if (!creatingGroup) newInput.value = "";
         }
     };
+
     document.querySelectorAll("[data-selection-group-choice]").forEach((choice) => {
         syncSelectionGroupEditor(choice);
         choice.addEventListener("change", () => syncSelectionGroupEditor(choice));
@@ -208,6 +302,7 @@
             window.setTimeout(() => syncSelectionGroupEditor(choice), 0);
         });
     });
+
     const setExpanded = (row, expanded) => {
         const toggle = row?.querySelector("[data-training-toggle]");
         const panel = row?.querySelector("[data-training-panel]");
@@ -216,16 +311,21 @@
         panel.hidden = !expanded;
         row.classList.toggle("is-open", expanded);
     };
-    const renumberDates = (form) => form?.querySelectorAll("[data-inline-training-date]").forEach((card, index) => {
-        const number = card.querySelector("[data-inline-date-number]");
-        if (number) number.textContent = String(index + 1);
-    });
+
+    const renumberDates = (form) => {
+        form?.querySelectorAll("[data-inline-training-date]").forEach((card, index) => {
+            const number = card.querySelector("[data-inline-date-number]");
+            if (number) number.textContent = String(index + 1);
+        });
+    };
+
     createToggle?.addEventListener("click", () => {
         const expanded = createToggle.getAttribute("aria-expanded") !== "true";
         createToggle.setAttribute("aria-expanded", String(expanded));
         if (createPanel) createPanel.hidden = !expanded;
         if (expanded) createPanel?.querySelector('input[name="training_item_name"]')?.focus();
     });
+
     document.addEventListener("click", (event) => {
         const toggle = event.target.closest("[data-training-toggle]");
         if (toggle) {
@@ -233,6 +333,7 @@
             setExpanded(row, toggle.getAttribute("aria-expanded") !== "true");
             return;
         }
+
         const addDate = event.target.closest("[data-add-inline-training-date]");
         if (addDate && dateTemplate) {
             const form = addDate.closest("form");
@@ -240,6 +341,7 @@
             renumberDates(form);
             return;
         }
+
         const removeDate = event.target.closest("[data-remove-inline-training-date]");
         if (removeDate) {
             const form = removeDate.closest("form");
@@ -247,8 +349,10 @@
             renumberDates(form);
             return;
         }
+
         const cancel = event.target.closest("[data-training-cancel]");
         if (cancel) setExpanded(cancel.closest("[data-training-row]"), false);
+
         const cancelCreate = event.target.closest("[data-training-create-cancel]");
         if (cancelCreate) {
             cancelCreate.closest("form")?.reset();

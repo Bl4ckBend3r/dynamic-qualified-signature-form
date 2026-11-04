@@ -1,0 +1,105 @@
+
+/* ==========================================
+   ADMIN — ZARZĄDZANIE SZKOLENIEM / ZAKŁADKI
+   ========================================== */
+
+.training-detail-page .training-detail-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    margin: 0 0 24px;
+    padding: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface);
+}
+
+/* Pojedyncza zakładka */
+
+.training-detail-page .training-detail-nav > [data-training-tab] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 1 auto;
+    min-height: 46px;
+    padding: 11px 18px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-decoration: none;
+    text-align: center;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color .15s ease,
+                border-color .15s ease;
+}
+
+/* Najechanie kursorem */
+
+.training-detail-page .training-detail-nav
+> [data-training-tab]:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+}
+
+/* Aktywna zakładka */
+
+.training-detail-page .training-detail-nav
+> [data-training-tab][aria-selected="true"] {
+    background: var(--color-primary);
+    color: var(--color-primary-contrast);
+    border-color: var(--color-primary);
+    font-weight: 800;
+}
+
+/* Obsługa klawiatury */
+
+.training-detail-page .training-detail-nav
+> [data-training-tab]:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 3px;
+}
+
+/* Ukrywanie nieaktywnych paneli */
+
+.training-detail-page[data-training-tabs-ready="true"]
+> .training-section[hidden] {
+    display: none !important;
+}
+
+/* Widoczny panel */
+
+.training-detail-page[data-training-tabs-ready="true"]
+> .training-section:not([hidden]) {
+    min-width: 0;
+    margin-top: 0;
+}
+
+/* Telefony i mniejsze tablety */
+
+@media (max-width: 760px) {
+    .training-detail-page .training-detail-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        padding: 8px;
+        gap: 6px;
+        scrollbar-width: thin;
+    }
+
+    .training-detail-page .training-detail-nav
+    > [data-training-tab] {
+        flex: 0 0 auto;
+        min-height: 44px;
+        padding: 10px 14px;
+        font-size: 13px;
+    }
+}

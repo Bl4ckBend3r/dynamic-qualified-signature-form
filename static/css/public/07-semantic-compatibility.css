@@ -1,0 +1,97 @@
+/* Semantic theme compatibility for older public components. */
+.public-ui :is(input, select, textarea, option) {
+    background-color: var(--color-input-bg);
+    color: var(--color-text);
+}
+
+.public-ui :is(input, select, textarea):disabled {
+    background-color: var(--color-input-disabled-bg);
+    color: var(--color-input-disabled-text);
+}
+
+.public-ui input:-webkit-autofill,
+.public-ui textarea:-webkit-autofill,
+.public-ui select:-webkit-autofill {
+    -webkit-text-fill-color: var(--color-text);
+    box-shadow: 0 0 0 1000px var(--color-input-bg) inset;
+    caret-color: var(--color-text);
+}
+
+.public-ui :is(.attachment-dropzone, .training-dates-toggle) {
+    border-color: var(--color-border);
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+}
+
+.public-ui .attachment-dropzone.is-dragging {
+    border-color: var(--color-focus);
+    background: var(--color-surface-hover);
+}
+
+.public-ui .attachment-file-list li {
+    background: var(--color-surface-muted);
+}
+
+.public-ui :is(.draft-autosave-status, .training-description, .training-empty, .training-dates-list li span) {
+    color: var(--color-text-muted);
+}
+
+.public-ui .draft-resend-panel {
+    border-color: var(--color-border);
+}
+
+[data-theme="dark"] .public-ui :is(.flash-success, .status-success, .training-status--available) {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+}
+
+[data-theme="dark"] .public-ui :is(.flash-warning, .status-warning, .training-status--limited) {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
+[data-theme="dark"] .public-ui :is(.flash-error, .status-error, .validation-error) {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+
+[data-theme="dark"] .public-ui :is(.flash-info, .status-info) {
+    background: var(--color-info-bg);
+    color: var(--color-info);
+}
+
+@media (max-width: 640px) {
+    .theme-toggle {
+        flex: 0 0 auto;
+    }
+
+    .site-nav {
+        align-items: center;
+    }
+}
+.form-review-panel {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
+
+.dynamic-form[hidden],
+.form-review-panel[hidden] {
+  display: none;
+}
+
+.form-review-list {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr);
+  gap: 0.75rem 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.form-review-list dt { font-weight: 700; }
+.form-review-list dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+@media (max-width: 600px) {
+  .form-review-list { grid-template-columns: 1fr; gap: 0.25rem; }
+  .form-review-list dd { margin-bottom: 0.75rem; }
+}

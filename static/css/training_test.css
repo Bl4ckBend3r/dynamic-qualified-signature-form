@@ -30,7 +30,7 @@
 .training-test-question__open-label { font-size: .92rem; font-weight: 700; }
 .training-test-question--error { border-color: var(--danger); }
 .training-test-question__error { margin: 12px 0 0; color: var(--danger); font-size: .9rem; font-weight: 700; }
-.training-test__validation { margin-bottom: 18px; padding: 14px 16px; border: 1px solid rgba(180, 35, 24, .24); border-radius: 12px; background: #fdecec; color: #8f1d1d; font-weight: 700; }
+.training-test__validation { margin-bottom: 18px; padding: 14px 16px; border: 1px solid rgba(180, 35, 24, .24); border-radius: 12px; background: var(--color-danger-bg); color: var(--color-danger); font-weight: 700; }
 .training-test__actions { display: flex; justify-content: flex-end; padding-top: 24px; }
 .training-test__actions .btn-primary { min-width: 190px; }
 .training-test__score { display: inline-flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 14px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-alt); }

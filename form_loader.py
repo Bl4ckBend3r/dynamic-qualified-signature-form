@@ -1222,9 +1222,25 @@ def build_submission_view(
         if not evaluate_visible_if(field.get("visible_if"), submission_data):
             continue
 
+        value = submission_data.get(field_name, "")
+
+        if field_type == "checkbox":
+            if isinstance(value, list):
+                selected_values = [str(item).strip() for item in value if str(item).strip()]
+                if not selected_values:
+                    continue
+                display_value = ", ".join(selected_values)
+            else:
+                normalized = str(value or "").strip().lower()
+                if normalized not in {"tak", "true", "1", "on", "x"}:
+                    continue
+                display_value = ""
+        else:
+            display_value = format_value_for_pdf(field_type, value)
+
         current_section["items"].append({
             "label": field.get("label", field_name),
-            "value": format_value_for_pdf(field_type, submission_data.get(field_name, "")),
+            "value": display_value,
         })
 
     if current_section["items"]:
@@ -1245,7 +1261,7 @@ def format_value_for_pdf(field_type: str, value: str) -> str:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value) if value else "Brak danych"
     if field_type == "checkbox":
-        return "Tak" if value == "Tak" else "Nie"
+        return ""
     return format_admin_value(value)
 
 

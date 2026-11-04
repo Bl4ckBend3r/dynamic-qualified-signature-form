@@ -706,6 +706,14 @@ def render_platform_mail_html(
         str(mail_layout.get("footer_html") or ""), context, escape_html=True))
     footer_html = "\n".join(part for part in [layout_footer, footer_html] if part)
     platform_name = html.escape(str(mail_layout.get("platform_name") or ""))
+    platform_name_section = (
+        f'<tr><td class="platform-name" '
+        f'style="padding:0 24px 12px;text-align:center;'
+        f'color:{mail_layout["primary_color"]};font-size:16px;font-weight:700;">'
+        f'{platform_name}</td></tr>'
+        if platform_name
+        else ""
+    )
     logo_position = str(mail_layout.get("logo_position") or "none")
     if logo_position not in {"none", "header", "before_content", "after_content"}:
         logo_position = "none"
@@ -802,6 +810,7 @@ def render_platform_mail_html(
 <tr><td align="center" style="padding:24px 0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="platform-mail-card" style="width:100%;max-width:600px;border-collapse:collapse;background:{mail_layout["card_background"]};">
     {header_logo_section}
+    {platform_name_section}
 <tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;"><h1 style="margin:0;color:{mail_layout["primary_color"]};font-size:30px;font-weight:700;line-height:1.3;">{html.escape(title)}</h1></td></tr>
 <tr><td style="padding:0 24px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">

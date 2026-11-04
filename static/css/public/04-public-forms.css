@@ -1,0 +1,276 @@
+/* FORMS SHOWCASE */
+
+.card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.form-header-image {
+    width: 100%;
+}
+
+.form-header-image img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    object-fit: cover;
+    border-radius: 12px;
+}
+.form-footnote {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--color-text);
+}
+
+.form-footnote sup {
+    font-weight: 700;
+}
+
+.forms-showcase {
+    margin-top: 24px;
+    margin-bottom: 40px;
+}
+
+.forms-showcase__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 16px;
+    margin-bottom: 22px;
+}
+
+.forms-showcase__header h2 {
+    margin: 0 0 6px;
+    font-size: 2.2rem;
+    color: var(--navy);
+    font-family: "Playfair Display", Georgia, serif;
+}
+
+.forms-showcase__header p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+.forms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    gap: 24px;
+}
+
+.form-tile {
+    position: relative;
+    display: flex;
+    min-height: 300px;
+    border-radius: 20px;
+    overflow: hidden;
+    text-decoration: none;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.form-tile:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 18px 40px rgba(29, 46, 91, 0.12);
+    border-color: var(--color-border-strong);
+}
+
+.form-tile__action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: flex-start;
+    min-height: 44px;
+    max-width: 100%;
+    margin-top: auto;
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: var(--color-primary);
+    color: var(--color-primary-contrast);
+    font-size: 1rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.form-tile__content {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding: 28px;
+    gap: 0;
+}
+
+.form-tile__content h3 {
+    margin: 0 0 24px;
+    max-width: 28ch;
+    font-size: 1.6rem;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    letter-spacing: -0.02em;
+    color: var(--navy);
+    font-family: "Playfair Display", Georgia, serif;
+}
+
+.form-tile__eyebrow {
+    display: inline-flex;
+    width: fit-content;
+    margin-bottom: 14px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--border);
+}
+
+.project-label {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    border-radius: 999px;
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+    border: 1px solid var(--border);
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0;
+}
+
+.form-project-label {
+    margin-bottom: 6px;
+}
+
+.form-tile__logo-area {
+    display: flex;
+    align-items: center;
+    min-height: 56px;
+    margin-bottom: 16px;
+}
+
+.form-tile__logo-area .form-tile__logo {
+    display: block;
+    width: auto;
+    max-width: min(100%, 100vw);
+    max-height: 56px;
+    object-fit: contain;
+    margin: 0;
+}
+
+.form-tile__logo + .form-tile__eyebrow {
+    margin-top: 2px;
+}
+
+.form-tile__eyebrow + h3 {
+    margin-top: 4px;
+}
+
+.form-logo-row {
+    display: flex;
+    align-items: center;
+    text-align: left;
+}
+
+.form-logo-row--left {
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.form-logo-row--center {
+    justify-content: center;
+    text-align: center;
+}
+
+.form-logo-row--right {
+    justify-content: flex-end;
+    text-align: right;
+}
+
+.form-logo {
+    display: block;
+    height: 84px;
+    width: auto;
+    max-width: 100%;
+    object-fit: contain;
+}
+
+.form-tile__plus {
+    position: absolute;
+    top: 10px;
+    right: 18px;
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 0.1;
+    border: 1px solid var(--border);
+}
+
+.field-description {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color:var(--color-text);
+}
+
+.form-tile__arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 15px;
+    width: 52px;
+    height: 52px;
+    border-radius: 999px;
+    border: 2px solid var(--gold);
+    color: var(--gold-dark);
+    font-size: 28px;
+    line-height: 1;
+}
+
+.form-tile--featured,
+.form-tile--accent,
+.form-tile--light {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.form-tile--featured {
+    min-height: 190px;
+}
+
+.form-tile--featured .form-tile__content,
+.form-tile--accent .form-tile__content,
+.form-tile--light .form-tile__content {
+    justify-content: center;
+    align-items: flex-start;
+}
+
+.form-tile--featured .form-tile__content h3,
+.form-tile--accent .form-tile__content h3,
+.form-tile--light .form-tile__content h3 {
+    font-size: 1.95rem;
+    max-width: none;
+}
+
+.form-tile--light .form-tile__plus {
+    background: var(--surface-alt);
+    color: var(--gold-dark);
+}
+

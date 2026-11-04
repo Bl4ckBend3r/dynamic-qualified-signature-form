@@ -126,8 +126,8 @@
 
 
 .training-summary__item.is-locked {
-    border-color: #cbd2dc;
-    background: #f4f6f8;
+    border-color: var(--color-border);
+    background: var(--color-surface-muted);
 }
 
 .training-card-list {

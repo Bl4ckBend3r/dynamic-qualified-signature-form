@@ -1,0 +1,200 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Centrum diagnostyczne{% endblock %}
+
+{% block content %}
+<div class="diagnostics-page">
+
+  <div class="admin-page-title">
+    <div>
+      <p class="admin-eyebrow">
+        Super administrator
+      </p>
+
+      <h1>Centrum diagnostyczne</h1>
+
+      <p class="diagnostics-description">
+        Diagnostyka działania aplikacji i usług
+        technicznych.
+      </p>
+    </div>
+  </div>
+
+  <div class="diagnostics-grid">
+
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header">
+        <div>
+          <span class="diagnostics-card-label">
+            LOGI
+          </span>
+
+          <h2>Logi aplikacji</h2>
+        </div>
+
+        {% if runtime_logs_available %}
+          <span class="diagnostics-status diagnostics-status--ok">
+            OK
+          </span>
+        {% else %}
+          <span class="diagnostics-status diagnostics-status--error">
+            NIEDOSTĘPNE
+          </span>
+        {% endif %}
+      </div>
+
+      <p>
+        Konsolowy podgląd logów procesu aplikacji
+        z filtrowaniem, wyszukiwaniem i zakresem czasu.
+      </p>
+
+      <dl class="diagnostics-details">
+        <div>
+          <dt>Wpisy w buforze</dt>
+          <dd>{{ runtime_logs_count }}</dd>
+        </div>
+      </dl>
+
+      <a
+        class="admin-button"
+        href="{{ url_for('admin.runtime_logs') }}"
+      >
+        Otwórz logi
+      </a>
+    </section>
+
+
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header">
+        <div>
+          <span class="diagnostics-card-label">
+            STORAGE
+          </span>
+
+          <h2>Storage / Nextcloud</h2>
+        </div>
+
+        {% if storage_type %}
+          <span class="diagnostics-status diagnostics-status--ok">
+            SKONFIGUROWANE
+          </span>
+        {% else %}
+          <span class="diagnostics-status diagnostics-status--error">
+            BRAK
+          </span>
+        {% endif %}
+      </div>
+
+      <p>
+        Stan adaptera storage, failover oraz plików
+        zgłoszeń przechowywanych w Nextcloud.
+      </p>
+
+      <dl class="diagnostics-details">
+        <div>
+          <dt>Adapter</dt>
+          <dd>{{ storage_type or "-" }}</dd>
+        </div>
+
+        <div>
+          <dt>Failover</dt>
+          <dd>
+            {{ "Tak" if storage_failover_enabled else "Nie" }}
+          </dd>
+        </div>
+
+        {% if storage_primary_type %}
+          <div>
+            <dt>Primary</dt>
+            <dd>{{ storage_primary_type }}</dd>
+          </div>
+        {% endif %}
+      </dl>
+
+      <a
+        class="admin-button"
+        href="{{ url_for('admin.storage_diagnostics') }}"
+      >
+        Diagnostyka storage
+      </a>
+    </section>
+
+
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header">
+        <div>
+          <span class="diagnostics-card-label">
+            PODPISY
+          </span>
+
+          <h2>Podpisy i certyfikaty</h2>
+        </div>
+
+        {% if signature_status.get("ok") %}
+          <span class="diagnostics-status diagnostics-status--ok">
+            OK
+          </span>
+        {% else %}
+          <span class="diagnostics-status diagnostics-status--error">
+            BŁĄD
+          </span>
+        {% endif %}
+      </div>
+
+      <p>
+        Konfiguracja trust store, certyfikatów
+        pośrednich i weryfikacji podpisów.
+      </p>
+
+      <dl class="diagnostics-details">
+        {% if signature_status.get("ok") %}
+          <div>
+            <dt>Root CA</dt>
+            <dd>
+              {{
+                signature_status.get(
+                  "trust_roots_loaded_count",
+                  0
+                )
+              }}
+            </dd>
+          </div>
+
+          <div>
+            <dt>Intermediate CA</dt>
+            <dd>
+              {{
+                signature_status.get(
+                  "intermediate_certs_loaded_count",
+                  0
+                )
+              }}
+            </dd>
+          </div>
+        {% else %}
+          <div>
+            <dt>Reason code</dt>
+            <dd>
+              {{
+                signature_status.get(
+                  "reason_code",
+                  "UNKNOWN"
+                )
+              }}
+            </dd>
+          </div>
+        {% endif %}
+      </dl>
+
+      <a
+        class="admin-button"
+        href="{{ url_for('admin.signature_diagnostics') }}"
+      >
+        Diagnostyka podpisów
+      </a>
+    </section>
+
+  </div>
+
+</div>
+{% endblock %}

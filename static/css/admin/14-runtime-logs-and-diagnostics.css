@@ -1,0 +1,435 @@
+/* Runtime logs panel */
+
+.runtime-logs-description {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+}
+
+.runtime-logs-panel {
+  margin-bottom: 18px;
+  padding: 22px;
+}
+
+.runtime-logs-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.runtime-logs-panel-header h2 {
+  margin: 0 0 4px;
+}
+
+.runtime-logs-panel-header p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.runtime-logs-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-log-preset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.runtime-log-preset:hover {
+  background: var(--color-surface-muted);
+}
+
+.runtime-log-preset.is-active {
+  border-color: var(--color-info);
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.runtime-logs-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+
+.runtime-logs-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.runtime-logs-filters label > span {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.runtime-logs-filters input,
+.runtime-logs-filters select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+}
+
+.runtime-filter-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.runtime-console {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-muted);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.runtime-console-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    "Courier New",
+    monospace;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.runtime-console-output {
+  max-height: 680px;
+  overflow: auto;
+  padding: 12px 0;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    "Courier New",
+    monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.runtime-console-line {
+  min-width: max-content;
+  padding: 2px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.runtime-console-line:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.runtime-console-line--debug {
+  color: var(--color-text);
+}
+
+.runtime-console-line--info {
+  color: var(--color-text);
+}
+
+.runtime-console-line--warning {
+  color: var(--color-warning);
+}
+
+.runtime-console-line--error {
+  color: var(--color-danger);
+}
+
+.runtime-console-line--critical {
+  background: rgba(255, 70, 70, 0.08);
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.runtime-console-empty {
+  padding: 30px 14px;
+  color: var(--color-text);
+  text-align: center;
+}
+
+@media (max-width: 1050px) {
+  .runtime-logs-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .runtime-logs-panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .runtime-logs-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-filter-actions {
+    grid-column: auto;
+    width: 100%;
+  }
+
+  .runtime-filter-actions > * {
+    flex: 1;
+  }
+
+  .runtime-console-output {
+    max-height: 560px;
+    font-size: 0.75rem;
+  }
+}
+
+/* Diagnostics center */
+
+.diagnostics-description {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+}
+
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+
+.diagnostics-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  padding: 22px;
+}
+
+.diagnostics-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.diagnostics-card-header h2 {
+  margin: 5px 0 0;
+}
+
+.diagnostics-card-label {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.diagnostics-card > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.55;
+}
+
+.diagnostics-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.diagnostics-status--ok {
+  background: var(--color-success-bg);
+  color: var(--success);
+}
+
+.diagnostics-status--error {
+  background: var(--color-danger-bg);
+  color: var(--danger);
+}
+
+.diagnostics-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.diagnostics-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.diagnostics-details dt {
+  color: var(--color-text-muted);
+}
+
+.diagnostics-details dd {
+  margin: 0;
+  text-align: right;
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-card > .admin-button {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+@media (max-width: 1050px) {
+  .diagnostics-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .diagnostics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Poprawki ukladu kafelkow diagnostycznych */
+
+.diagnostics-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 1200px;
+  margin: 0 auto;
+  gap: 20px;
+}
+
+.diagnostics-grid > .diagnostics-card {
+  margin-top: 0;
+}
+
+.diagnostics-card {
+  gap: 12px;
+  padding: 18px;
+}
+
+.diagnostics-card-header h2 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+.diagnostics-details > div {
+  padding: 6px 0;
+}
+
+@media (max-width: 1100px) {
+  .diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .diagnostics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+
+/* Czytelne filtry zgłoszeń formularza */
+
+#submission-advanced-filters
+.admin-submission-filters__primary {
+  display: grid;
+  grid-template-columns:
+    minmax(240px, 1.6fr)
+    minmax(200px, 1fr)
+    repeat(2, minmax(165px, 0.8fr))
+    auto;
+  gap: 14px;
+  align-items: end;
+}
+
+#submission-advanced-filters label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+#submission-advanced-filters
+:is(input, select) {
+  min-width: 0;
+  min-height: 44px;
+  font-size: 0.95rem;
+}
+
+#submission-advanced-filters
+.admin-submission-filters__additional {
+  grid-template-columns:
+    repeat(3, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+#submission-advanced-filters
+.admin-filter-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-self: end;
+}
+
+@media (max-width: 1200px) {
+  #submission-advanced-filters
+  .admin-submission-filters__primary,
+  #submission-advanced-filters
+  .admin-submission-filters__additional {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #submission-advanced-filters
+  .admin-filter-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 680px) {
+  #submission-advanced-filters
+  .admin-submission-filters__primary,
+  #submission-advanced-filters
+  .admin-submission-filters__additional {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #submission-advanced-filters
+  .admin-filter-actions {
+    grid-column: auto;
+    flex-wrap: wrap;
+  }
+}

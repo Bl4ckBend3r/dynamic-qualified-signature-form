@@ -623,7 +623,9 @@ def upload_signed_declaration(slug: str, submission_id: str):
 @bp.route("/declaration/<slug>/<submission_id>", methods=["GET", "POST"])
 def declaration_form(slug: str, submission_id: str):
     services = get_services()
-    access = require_participant_submission_access(submission_id, slug=slug)
+    # The POST supplies the declaration fields that are still missing at this step.
+    # DeclarationFlowService validates the combined stored and submitted values.
+    access = require_participant_submission_access(submission_id, slug=slug, allow_incomplete=True)
     if request.method == "POST":
         require_public_csrf()
     submission = access.submission

@@ -38,6 +38,22 @@ def make_submission(app, definition, *, step=None):
     return form_id, row, people
 
 
+def complete_loty_submission(services, row, people):
+    complete_data = {
+        **row['data_json'],
+        'miejscowosc': 'Gorzów Wielkopolski',
+        'data_wniosku': '2026-09-01',
+        'rodzaj_biletu': 'odpłatnych',
+        'dane_do_faktury': 'Urząd Miasta, ul. Testowa 1',
+        'cel_podrozy_uzasadnienie': 'Udział w szkoleniu',
+        'podrozni': [
+            {**person, 'stanowisko_departament_wydzial': 'Wydział szkoleń'}
+            for person in people
+        ],
+    }
+    assert services.submission_repository.update(row['submission_id'], {'data_json': complete_data})
+
+
 def officer_decision_fixture(app, *, stage="officer_review"):
     definition = {
         "title": "Decyzja urzędnika",
@@ -70,7 +86,8 @@ def officer_decision_fixture(app, *, stage="officer_review"):
                  "stage_type": "decision", "decision_scope": "submission",
                  "status": "WAITING_FOR_OFFICER_DECISION"},
                 {"id": "declaration", "admin_label": "Deklaracja gotowa",
-                 "stage_type": "document", "status": "DECLARATION_READY",
+                 "stage_type": "user_action", "document_id": "declaration",
+                 "action": "generate_document", "status": "DECLARATION_READY",
                  "next_action": "Uzupełnij i wygeneruj deklarację", "next": "declaration_signature"},
                 {"id": "declaration_signature", "admin_label": "Podpisz deklarację",
                  "stage_type": "document", "document_id": "declaration",
@@ -648,6 +665,11 @@ def test_declaration_step_hides_officer_decisions_even_with_stale_stage(admin_ap
 @pytest.mark.parametrize("stale_stage", [False, True])
 @pytest.mark.parametrize("legacy_signature", [False, True])
 def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_client, monkeypatch, stale_stage, legacy_signature):
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **_kwargs: b"%PDF-1.4\n% declaration test\n",
+    )
     create_user(admin_app)
     form_id, pk, public_id = officer_decision_fixture(admin_app)
     login(admin_client)
@@ -743,7 +765,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     )
     assert signature_status.status_code == 200
     assert signature_status.json["can_download_declaration"] is True
-    assert signature_status.json["can_upload_signed_declaration"] is True
+    assert signature_status.json["can_upload_signed_declaration"] is not legacy_signature
     assert signature_status.json["declaration_stage_completed"] is False
     assert '<a href="https://example.com/podpis" target="_blank" rel="noopener noreferrer">Profil Zaufany</a>' in signature_status.json["instruction"]["current_stage_description"]
     assert "javascript:" not in signature_status.json["instruction"]["current_stage_description"]
@@ -752,7 +774,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert signature_page.status_code == 200
     signature_html = signature_page.get_data(as_text=True)
     assert "Pobierz deklarację PDF" in signature_html
-    assert 'name="signed_declaration_pdf"' in signature_html
+    assert ('name="signed_declaration_pdf"' in signature_html) is not legacy_signature
     assert "Wypełnij deklarację" not in signature_html
     assert "Wybierz lub zmień szkolenia" not in signature_html
     assert '<a href="https://example.com/podpis" target="_blank" rel="noopener noreferrer">Profil Zaufany</a>' in signature_html
@@ -762,7 +784,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert download_match is not None
     download_url = unescape(download_match.group(1))
     downloaded = admin_client.get(download_url)
-    assert downloaded.status_code == 200
+    assert downloaded.status_code == 200, download_url
     assert downloaded.data.startswith(b"%PDF")
     assert admin_client.get(download_url.replace(f"token={token}", "token=wrong-token")).status_code == 404
 
@@ -805,11 +827,46 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert uploaded.status_code == 302
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         submission = db.get(FormSubmission, pk)
+        if legacy_signature:
+            # An explicit published stage without an action cannot authorize upload.
+            assert submission.declaration_signature_valid == ""
+            assert submission.workflow_step == "declaration_signature"
+            assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
+            return
         assert submission.declaration_signature_valid == "Tak"
         assert submission.workflow_step == "completed"
         signed_file = db.query(SubmissionFile).filter_by(submission_id=pk, signed=True,
                                                           document_id="declaration").one()
         assert signed_file.signature_status == "valid"
+
+
+def test_declaration_post_rejects_missing_data_due_before_document(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, public_id = officer_decision_fixture(admin_app)
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{pk}").get_data(as_text=True)
+    csrf = detail.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/decision", data={
+        "csrf_token": csrf, "officer_decision": "pzytywna",
+    }).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = db.get(FormVersion, submission.form_version_id)
+        definition = deepcopy(version.definition_json)
+        definition["fields"].append({
+            "name": "missing_prior_data", "label": "Wymagane wcześniej", "type": "text", "required": True,
+            "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}],
+        })
+        version.definition_json = definition
+        db.commit()
+    response = admin_client.post(
+        f"/declaration/officer-decision-test/{public_id}?token=participant-test-token",
+        data={"csrf_token": csrf, "declaration_note": "Uwagi", "participant_statement": "Potwierdzam"},
+    )
+    assert response.status_code == 200
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).declaration_generated == ""
+        assert db.query(SubmissionFile).filter_by(submission_id=pk, document_id="declaration").count() == 0
 
 
 @pytest.mark.parametrize(('decision', 'target'), [('accepted', 'declaration_generation'), ('rejected', 'end_rejected'), ('conditionally_accepted', 'declaration_generation')])
@@ -822,6 +879,8 @@ def test_submission_waits_for_approval_then_follows_configured_decision(admin_ap
     form_id, row, people = make_submission(admin_app, definition)
     services = admin_app.extensions['services']
     public_id = row['submission_id']
+    if decision != 'rejected':
+        complete_loty_submission(services, row, people)
     assert row['workflow_step'] == 'initial_acceptance'
     assert not services.workflow_service.can_execute_step(row, definition, 'declaration_generation')
     assert services.workflow_service.resolve_next_step(definition, 'initial_acceptance') is None
@@ -836,6 +895,9 @@ def test_submission_waits_for_approval_then_follows_configured_decision(admin_ap
     with factory() as db:
         submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == public_id)).scalar_one()
         pk = submission.id
+        if decision != 'rejected':
+            missing = services.form_version_service.submission_data_errors(submission, definition, db=db)
+            assert not missing, sorted(missing)
         assert services.decision_definition_service.repeatable_groups(submission)[0]['decisions'] == []
         with pytest.raises(DecisionDefinitionError):
             services.decision_definition_service.decide_item(db, submission, group_key='podrozni', item_id=people[0]['record_uuid'], decision_code='accepted', comment='', actor=SimpleNamespace(id=None))
@@ -1019,12 +1081,17 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     create_user(admin_app)
     definition = load_form_definition('examples/forms/loty.json')
     workflow = explicit_workflow()
-    workflow['steps'][1]['decision_email'] = {'enabled': True, 'template_type': 'configured_decision'}
+    workflow['send_email_notifications'] = True
+    workflow['email_notifications'] = [{
+        'id': 'application_accepted', 'enabled': True, 'automatic': True,
+        'template_type': 'configured_decision',
+    }]
     workflow['steps'].insert(2, {'id': 'office_action', 'admin_label': 'Weryfikacja dokumentu', 'user_label': 'Dokument jest sprawdzany', 'stage_type': 'officer_action', 'status': 'OFFICER_REVIEW', 'next': 'completed'})
-    workflow['decision_types'][0]['target_step'] = 'office_action'
+    workflow['decision_types'][0].update(code='accepted', semantic_category='positive', target_step='office_action')
     definition['workflow'] = workflow
-    form_id, row, _ = make_submission(admin_app, definition)
+    form_id, row, people = make_submission(admin_app, definition)
     services = admin_app.extensions['services']
+    complete_loty_submission(services, row, people)
     pk = services.submission_repository.get_by_id(row['submission_id'])['id']
     deliveries = []
     monkeypatch.setattr(services.mail_dispatch_service, 'select_template', lambda *args: SimpleNamespace(id=1))
@@ -1033,7 +1100,7 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     detail = f'/admin/forms/{form_id}/submissions/{pk}'
     html = admin_client.get(detail).get_data(as_text=True)
     csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
-    result = admin_client.post(detail + '/decision', data={'csrf_token': csrf, 'officer_decision': 'a'})
+    result = admin_client.post(detail + '/decision', data={'csrf_token': csrf, 'officer_decision': 'accepted'})
     assert result.status_code == 302
     assert services.submission_repository.get_by_id(row['submission_id'])['workflow_stage'] == 'office_action'
     assert len(deliveries) == 1

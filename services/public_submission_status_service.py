@@ -406,6 +406,9 @@ def _workflow_context(
         ),
         None,
     )
+    if configured_step and workflow.get("flow_mode") == "explicit":
+        # Match WorkflowService's normalized action gate for published snapshots.
+        configured_step = {**configured_step, "explicit_stage": True}
     status_code = str(
         (configured_step or {}).get("status")
         or (configured_step or {}).get("status_code")

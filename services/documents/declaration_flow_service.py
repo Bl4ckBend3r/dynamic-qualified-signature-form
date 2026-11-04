@@ -230,6 +230,9 @@ class DeclarationFlowService:
                 (item for item in workflow.get("steps") or [] if item.get("id") == step and item.get("active", True)),
                 None,
             )
+            if (configured_step and configured_step.get("document_id") == DocumentType.DECLARATION
+                    and configured_step.get("action") == "generate_document"):
+                return False
             # Document fields belong to the declaration form. A separate user action
             # is the only explicit workflow step served by the additional-fields form.
             if (not configured_step or configured_step.get("stage_type") != "user_action"
@@ -308,6 +311,37 @@ class DeclarationFlowService:
                 declaration_definition=declaration_definition,
                 error_code="validation_error",
             )
+
+        # Validate all fields due through this step, including earlier required
+        # fields and attachments. The declaration form itself covers only its
+        # editable fields, so its validation alone is not an authorization gate.
+        session_factory = getattr(submission_repository, "session_factory", None)
+        if session_factory:
+            from sqlalchemy import select
+            from models import FormSubmission
+            from services.form_version_service import FormVersionService
+
+            with session_factory() as db:
+                record = db.execute(select(FormSubmission).where(
+                    FormSubmission.submission_id == submission_id,
+                )).scalar_one()
+                version_service = FormVersionService()
+                version = version_service.resolve_for_submission(db, record)
+                due_errors = version_service.submission_data_errors(
+                    record,
+                    version.definition_json or {},
+                    db=db,
+                    values={**version_service.submission_values(record, version.definition_json or {}), **declaration_data},
+                )
+            if due_errors:
+                return DeclarationFlowResult(
+                    success=False,
+                    message="Uzupełnij wszystkie wymagane dane przed wygenerowaniem deklaracji.",
+                    errors=due_errors,
+                    values=values,
+                    declaration_definition=declaration_definition,
+                    error_code="incomplete_submission",
+                )
 
         if compliance_service is not None:
             try:

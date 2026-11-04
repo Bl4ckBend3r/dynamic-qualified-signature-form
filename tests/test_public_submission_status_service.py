@@ -328,7 +328,8 @@ def test_explicit_declaration_availability_uses_current_step_and_versioned_docum
         "documents": [{"id": "declaration", "enabled": document_enabled}],
         "workflow": {"flow_mode": "explicit", "steps": [
             {"id": "officer_review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
-            {"id": "declaration", "stage_type": "document", "status": "DECLARATION_READY",
+            {"id": "declaration", "stage_type": "user_action", "document_id": "declaration",
+             "action": "generate_document", "status": "DECLARATION_READY",
              "next_action": "Uzupełnij i wygeneruj deklarację"},
         ]},
     }

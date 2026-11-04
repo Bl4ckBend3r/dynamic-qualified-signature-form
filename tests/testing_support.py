@@ -35,9 +35,11 @@ class InMemoryStorage:
         self.direct_files[path] = content.encode("utf-8")
 
     def read_bytes(self, path):
-        if path not in self.direct_files:
-            raise FileNotFoundError(path)
-        return self.direct_files[path]
+        if path in self.direct_files:
+            return self.direct_files[path]
+        if path in self.saved_pdfs:
+            return self.saved_pdfs[path]
+        raise FileNotFoundError(path)
 
     def delete(self, path, missing_ok=False):
         if path in self.direct_files:
@@ -61,10 +63,22 @@ class InMemoryStorage:
         return path in self.direct_files or path in self.saved_pdfs
 
     def save_pdf(self, slug, filename, pdf_bytes, **kwargs):
-        self.saved_pdfs[f"output/{slug}/pdf/{filename}"] = pdf_bytes
+        path = self.pdf_storage_path(slug, filename, **kwargs)
+        self.saved_pdfs[path] = pdf_bytes
+
+    def pdf_storage_path(self, slug, filename, document_type=None, signed=None):
+        from services.document_naming_service import resolve_pdf_storage_path
+        return resolve_pdf_storage_path(
+            output_dir=self.output_dir, slug=slug, filename=filename,
+            document_type=document_type, signed=signed,
+        )
 
     def get_pdf_bytes(self, slug, filename):
-        return self.saved_pdfs[f"output/{slug}/pdf/{filename}"]
+        matches = [content for path, content in self.saved_pdfs.items()
+                   if path.startswith(f"{self.output_dir}/{slug}/pdf/") and path.endswith(f"/{filename}")]
+        if len(matches) != 1:
+            raise FileNotFoundError(filename)
+        return matches[0]
 
     def get_file_bytes(self, path):
         if path.endswith(f"/{self.csv_filename}"):

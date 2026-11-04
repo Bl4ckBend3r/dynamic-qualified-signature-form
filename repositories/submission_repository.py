@@ -69,6 +69,28 @@ class SubmissionRepository:
     def record_workflow_event(self, submission_id: str, event: dict) -> bool:
         return False
 
+    def record_workflow_event_once(
+        self,
+        submission_id: str,
+        event: dict,
+        *,
+        idempotency_key: str,
+    ) -> bool:
+        for existing in self.list_workflow_events(submission_id):
+            side_effects = existing.get("side_effects") or {}
+            if isinstance(side_effects, dict) and str(side_effects.get("idempotency_key") or "") == idempotency_key:
+                return True
+        return self.record_workflow_event(
+            submission_id,
+            {
+                **event,
+                "side_effects": {
+                    **dict(event.get("side_effects") or {}),
+                    "idempotency_key": idempotency_key,
+                },
+            },
+        )
+
     def record_decision(self, submission_id: str, decision: dict) -> bool:
         return False
 
@@ -243,14 +265,184 @@ class PostgresSubmissionRepository(SubmissionRepository):
         )
         return True
 
-    def claim_document_operation(self, submission_id: str, step_id: str, token: str) -> bool:
+    def apply_workflow_transition_with_audit(
+        self,
+        submission_id: str,
+        updates: dict,
+        event: dict,
+        marker: dict,
+        *,
+        expected_step: str | None = None,
+        replaces_audit_operation_id: str = "",
+    ) -> bool:
+        """Commit workflow state, its DB event and the required-audit marker atomically."""
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionWorkflowEvent
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        wanted = str(submission_id or "").strip()
+        if not wanted:
+            return False
+        mapped, meta = build_submission_from_form(updates, include_metadata=True)
+        saved_columns = {
+            item.rsplit("->", 1)[1]
+            for item in meta["saved_fields"]
+            if "->" in item
+        }
+        values = {
+            key: mapped[key]
+            for key in saved_columns
+            if key in mapped and key in FORM_SUBMISSION_COLUMNS and key not in {"id", "data_json"}
+        }
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            prior_marker = dict((submission.data_json or {}).get(AUDIT_PENDING_KEY) or {})
+            can_replace_marker = bool(
+                prior_marker.get("audit_complete")
+                and str(prior_marker.get("operation_id") or "")
+                == str(replaces_audit_operation_id or "")
+            )
+            if prior_marker and not can_replace_marker:
+                raise AuditPendingError(
+                    "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
+                )
+            if expected_step is not None:
+                current_step = str(submission.workflow_step or submission.workflow_stage or "")
+                if current_step != str(expected_step):
+                    return False
+            from services.submission_decision_service import ConditionalApproval
+            from services.decision_definition_service import DecisionDefinitionService
+            negative = bool(event.get("decision_code") and DecisionDefinitionService().resolve(
+                submission, event["decision_code"], scope="submission",
+            ).get("semantic_category") == "negative") if ConditionalApproval.active(submission) else False
+            closed_condition = None if negative else ConditionalApproval.check(
+                session, submission, target_step=updates.get("workflow_step"), settle=True)
+            if not negative and ConditionalApproval.active(submission):
+                from services.workflow_state_service import final_outcome_for_status, FinalOutcome
+                from services.form_version_service import FormVersionError
+                if final_outcome_for_status(updates.get("process_status")) != FinalOutcome.ACTIVE:
+                    raise FormVersionError("Przed zakończeniem sprawy uzupełnij wymagane dane.")
+            if closed_condition:
+                for entry in marker.get("events") or [marker["event"]]:
+                    entry["metadata"] = {**entry.get("metadata", {}), "conditional_approval_resolved": closed_condition}
+            for key, value in values.items():
+                setattr(submission, key, value)
+            submission.data_json = {
+                **dict(submission.data_json or {}),
+                AUDIT_PENDING_KEY: dict(marker),
+            }
+            session.add(
+                SubmissionWorkflowEvent(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    previous_status=str(event.get("previous_status") or ""),
+                    new_status=str(event.get("new_status") or ""),
+                    previous_step=str(event.get("previous_step") or ""),
+                    new_step=str(event.get("new_step") or ""),
+                    actor_id=event.get("actor_id"),
+                    actor_email=str(event.get("actor_email") or ""),
+                    actor_role=str(event.get("actor_role") or "system"),
+                    reason=str(event.get("reason") or ""),
+                    decision_code=str(event.get("decision_code") or ""),
+                    user_message=str(event.get("user_message") or ""),
+                    side_effects=dict(event.get("side_effects") or {}),
+                    source=str(event.get("source") or "workflow_transition_to"),
+                )
+            )
+            session.commit()
+        return True
+
+    def clear_required_audit(self, submission_id: str, operation_id: str) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        wanted = str(submission_id or "").strip()
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            data = dict(submission.data_json or {})
+            marker = data.get(AUDIT_PENDING_KEY) or {}
+            if not marker:
+                return True
+            if str(marker.get("operation_id") or "") != str(operation_id or ""):
+                raise AuditPendingError("Marker audytu zmienił się podczas operacji.")
+            data.pop(AUDIT_PENDING_KEY, None)
+            submission.data_json = data
+            session.commit()
+        return True
+
+    def mark_required_audit_complete(self, submission_id: str, operation_id: str) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import AUDIT_PENDING_KEY, AuditPendingError
+
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == str(submission_id or "").strip())
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            data = dict(submission.data_json or {})
+            marker = dict(data.get(AUDIT_PENDING_KEY) or {})
+            if str(marker.get("operation_id") or "") != str(operation_id or ""):
+                raise AuditPendingError("Marker audytu zmienił się podczas operacji.")
+            marker["audit_complete"] = True
+            data[AUDIT_PENDING_KEY] = marker
+            submission.data_json = data
+            session.commit()
+        return True
+
+    def claim_document_operation(
+        self, submission_id: str, step_id: str, token: str, *,
+        replaces_audit_operation_id: str = "",
+    ) -> bool:
         """A durable lease serializes document operations across workers without holding PDF I/O locks."""
         import time
         from sqlalchemy import select, update, or_
         from models import FormSubmission
+        from services.audit_log_service import pending_audit_state
         with self.session_factory() as db:
-            model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == submission_id)).scalar_one_or_none()
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            model = db.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == submission_id)
+                .with_for_update()
+            ).scalar_one_or_none()
             if not model or (model.workflow_step or model.workflow_stage) != step_id:
+                return False
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(model):
+                return False
+            marker = pending_audit_state(model)
+            continuation = marker.get("continuation") if marker else None
+            allowed_handoff = bool(
+                replaces_audit_operation_id
+                and marker.get("audit_complete") is True
+                and str(marker.get("operation_id") or "") == replaces_audit_operation_id
+                and isinstance(continuation, dict)
+                and continuation.get("kind") == "workflow_transition"
+                and continuation.get("new_step") == step_id
+            )
+            if marker and not allowed_handoff:
+                return False
+            if replaces_audit_operation_id and not marker:
                 return False
             states = dict(model.document_states or {})
             prior = states.get("document_operation", "")
@@ -266,6 +458,48 @@ class PostgresSubmissionRepository(SubmissionRepository):
             ).values(document_states=states).execution_options(synchronize_session=False))
             db.commit()
             return result.rowcount == 1
+
+    def claim_submission_document_operation(
+        self,
+        submission_id: str,
+        operation_key: str,
+        token: str,
+        *,
+        lease_seconds: int = 900,
+    ) -> bool:
+        """Serialize a document operation that is not tied to one workflow step."""
+        import time
+        from sqlalchemy import select
+        from models import FormSubmission
+        from services.audit_log_service import pending_audit_state
+
+        with self.session_factory() as db:
+            if db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            model = db.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == submission_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if model is None or pending_audit_state(model):
+                return False
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(model):
+                return False
+            states = dict(model.document_states or {})
+            if (
+                states.get("document_operation")
+                and float(states.get("document_operation_until") or 0) > time.time()
+            ):
+                return False
+            states.update(
+                document_operation=token,
+                document_operation_key=str(operation_key or ""),
+                document_operation_until=str(time.time() + max(1, int(lease_seconds))),
+            )
+            model.document_states = states
+            db.commit()
+            return True
 
     def update_if_workflow_step(self, submission_id, expected_step, updates):
         """Compare-and-set protects action completion from two concurrent callers."""
@@ -317,7 +551,11 @@ class PostgresSubmissionRepository(SubmissionRepository):
             if not model:
                 return
             states = dict(model.document_states or {})
-            states.update(document_operation="", document_operation_until="0")
+            states.update(
+                document_operation="",
+                document_operation_key="",
+                document_operation_until="0",
+            )
             db.execute(update(FormSubmission).where(FormSubmission.id == model.id,
                 FormSubmission.document_states["document_operation"].as_string() == token,
             ).values(document_states=states).execution_options(synchronize_session=False))
@@ -477,7 +715,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def get_file_metadata(self, submission_id: str, filename: str, signed: bool | None = None) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_filename = Path(filename).name
@@ -488,7 +726,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 query = (
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.filename == wanted_filename)
                 )
                 if signed is not None:
@@ -501,7 +741,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def list_submission_files(self, submission_id: str) -> list[dict]:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         if not wanted_submission_id:
@@ -510,7 +750,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 rows = session.execute(
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .order_by(SubmissionFile.created_at.asc(), SubmissionFile.id.asc())
                 ).scalars().all()
                 return [self._row_to_dict(row) for row in rows]
@@ -527,7 +769,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         training_key: str = "",
     ) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_document_type = str(document_type or "").strip()
@@ -537,7 +779,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 query = (
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.document_type == wanted_document_type)
                 )
                 if filename:
@@ -552,7 +796,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
     def get_document_by_type(self, submission_id: str, document_type: str) -> dict | None:
         from sqlalchemy import select
-        from models import SubmissionFile
+        from models import FormSubmission, SubmissionFile
 
         wanted_submission_id = str(submission_id or "").strip()
         wanted_document_type = str(document_type or "").strip()
@@ -563,7 +807,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
             try:
                 file_row = session.execute(
                     select(SubmissionFile)
+                    .join(FormSubmission, FormSubmission.id == SubmissionFile.submission_id)
                     .where(SubmissionFile.public_submission_id == wanted_submission_id)
+                    .where(FormSubmission.deleted_at.is_(None))
                     .where(SubmissionFile.document_type == wanted_document_type)
                     .order_by(SubmissionFile.created_at.desc())
                 ).scalars().first()
@@ -577,7 +823,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import SubmissionWorkflowEvent
 
         wanted_submission_id = str(submission_id or "").strip()
-        if not wanted_submission_id:
+        if not wanted_submission_id or self.get_by_id(wanted_submission_id) is None:
             return []
         with self.session_factory() as session:
             rows = session.execute(
@@ -596,7 +842,7 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from models import SubmissionDecision
 
         wanted_submission_id = str(submission_id or "").strip()
-        if not wanted_submission_id:
+        if not wanted_submission_id or self.get_by_id(wanted_submission_id) is None:
             return []
         with self.session_factory() as session:
             rows = session.execute(
@@ -641,6 +887,64 @@ class PostgresSubmissionRepository(SubmissionRepository):
             )
             session.commit()
         logger.info("Zapisano event workflow dla zgloszenia %s w PostgreSQL.", wanted)
+        return True
+
+    def record_workflow_event_once(
+        self,
+        submission_id: str,
+        event: dict,
+        *,
+        idempotency_key: str,
+    ) -> bool:
+        from sqlalchemy import select
+        from models import FormSubmission, SubmissionWorkflowEvent
+
+        wanted = str(submission_id or "").strip()
+        key = str(idempotency_key or "").strip()
+        if not wanted or not key:
+            return False
+        with self.session_factory() as session:
+            submission = session.execute(
+                select(FormSubmission)
+                .where(FormSubmission.submission_id == wanted)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if submission is None:
+                return False
+            candidates = session.execute(
+                select(SubmissionWorkflowEvent).where(
+                    SubmissionWorkflowEvent.submission_id == submission.id,
+                    SubmissionWorkflowEvent.source == str(event.get("source") or "system"),
+                )
+            ).scalars().all()
+            if any(
+                str((candidate.side_effects or {}).get("idempotency_key") or "") == key
+                for candidate in candidates
+            ):
+                session.commit()
+                return True
+            side_effects = {
+                **dict(event.get("side_effects") or {}),
+                "idempotency_key": key,
+            }
+            session.add(SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status=str(event.get("previous_status") or ""),
+                new_status=str(event.get("new_status") or ""),
+                previous_step=str(event.get("previous_step") or ""),
+                new_step=str(event.get("new_step") or ""),
+                actor_id=event.get("actor_id"),
+                actor_email=str(event.get("actor_email") or ""),
+                actor_role=str(event.get("actor_role") or "system"),
+                reason=str(event.get("reason") or ""),
+                decision_code=str(event.get("decision_code") or ""),
+                user_message=str(event.get("user_message") or ""),
+                side_effects=side_effects,
+                source=str(event.get("source") or "system"),
+            ))
+            session.commit()
         return True
 
     def record_decision(self, submission_id: str, decision: dict) -> bool:

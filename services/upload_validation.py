@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import PurePath
 
+from lxml import etree
+
 
 PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
 DOCUMENT_MIME_TYPES = {
@@ -199,8 +201,48 @@ def _detect_binary_logo_mime(content: bytes) -> str:
 
 
 def _validate_svg_logo(content: bytes) -> None:
-    text = content[:200_000].decode("utf-8", errors="ignore").lower()
-    if "<svg" not in text:
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)
+    try:
+        root = etree.fromstring(content, parser=parser)
+    except etree.XMLSyntaxError as exc:
+        raise UploadValidationError("Plik SVG nie jest poprawnym dokumentem XML.") from exc
+    if root.getroottree().docinfo.doctype:
+        raise UploadValidationError("Plik SVG nie moze zawierac deklaracji DTD.")
+    if root.getroottree().xpath("//processing-instruction()"):
+        raise UploadValidationError("Plik SVG nie moze zawierac instrukcji przetwarzania XML.")
+    if etree.QName(root).localname.lower() != "svg":
         raise UploadValidationError("Plik SVG nie zawiera elementu svg.")
-    if "<script" in text or "javascript:" in text or re.search(r"\son[a-z]+\s*=", text):
-        raise UploadValidationError("Plik SVG zawiera niedozwolony kod.")
+
+    forbidden_elements = {"script", "foreignobject", "iframe", "object", "embed", "set"}
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+        name = etree.QName(element).localname.lower()
+        if (
+            name in forbidden_elements
+            or name.startswith("animate")
+            or etree.QName(element).namespace not in (None, "http://www.w3.org/2000/svg")
+        ):
+            raise UploadValidationError("Plik SVG zawiera niedozwolony element.")
+        for key, value in element.attrib.items():
+            attribute = etree.QName(key).localname.lower()
+            lower_value = value.strip().lower()
+            if attribute.startswith("on") or attribute in {"src", "srcdoc", "data", "formaction", "base"}:
+                raise UploadValidationError("Plik SVG zawiera niedozwolony atrybut.")
+            if attribute == "href" and not lower_value.startswith("#"):
+                raise UploadValidationError("Plik SVG zawiera zewnetrzne odwolywanie.")
+            if "javascript:" in lower_value or "@import" in lower_value or _has_external_svg_url(value):
+                raise UploadValidationError("Plik SVG zawiera niedozwolony kod.")
+        if name == "style" and element.text and (
+            "@import" in element.text.lower()
+            or "javascript:" in element.text.lower()
+            or _has_external_svg_url(element.text)
+        ):
+            raise UploadValidationError("Plik SVG zawiera niedozwolony kod.")
+
+
+def _has_external_svg_url(value: str) -> bool:
+    return any(
+        not match.group(1).strip(" \t\r\n\"'").startswith("#")
+        for match in re.finditer(r"url\s*\(([^)]*)\)", value, flags=re.IGNORECASE)
+    )

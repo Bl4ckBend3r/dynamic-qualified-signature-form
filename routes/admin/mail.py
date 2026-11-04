@@ -8,6 +8,7 @@ from flask import abort, current_app, flash, g, jsonify, redirect, render_templa
 from sqlalchemy import or_, select
 
 from models import Form, FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
+from services.audit_log_service import AuditPendingError
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_template_service import (
     MAIL_LAYOUT,
@@ -82,6 +83,11 @@ def submission_mail(form_id: int, submission_pk: int):
             .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
         if request.method == "POST":
+            try:
+                current_app.extensions["services"].audit_log_service.require_no_pending(submission)
+            except AuditPendingError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
             result = send_admin_mail(db, form, submission, templates, footers)
             db.commit()
             flash(*mail_flash(result))
@@ -156,6 +162,12 @@ def submissions_mail_selected(form_id: int):
         summary = {"sent": 0, "failed": 0, "skipped": 0}
         skipped_ids = []
         for submission in submissions:
+            try:
+                current_app.extensions["services"].audit_log_service.require_no_pending(submission)
+            except AuditPendingError:
+                summary["skipped"] += 1
+                skipped_ids.append(submission.submission_id)
+                continue
             result = send_selected_submission_mail(
                 db,
                 form,

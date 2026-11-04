@@ -82,6 +82,192 @@ def test_blocked_qualification_status_cannot_follow_regular_workflow_edge(status
     assert repository.events == []
 
 
+def test_pending_required_audit_blocks_workflow_transition():
+    repository = FakeRepository()
+    repository.rows["abc"]["data_json"] = {
+        "_audit_pending": {
+            "operation_id": "operation-1",
+            "event": {"event_type": "RETURNED_FOR_CORRECTION"},
+        }
+    }
+    service = WorkflowService(repository)
+
+    with pytest.raises(WorkflowTransitionError, match="oczekuje na zapis"):
+        service.transition_to("abc", "officer_review")
+
+    assert repository.rows["abc"]["workflow_step"] == "submission"
+    assert repository.events == []
+
+
+def _atomic_workflow_env(tmp_path):
+    from database import create_session_factory
+    from models import Base, FormSubmission
+    from repositories.audit_log_repository import StorageAuditLogRepository
+    from repositories.submission_repository import PostgresSubmissionRepository
+    from services.audit_log_service import AuditLogService
+    from sqlalchemy import create_engine
+    from testing_support import InMemoryStorage
+
+    database_url = f"sqlite:///{tmp_path / 'workflow-atomic.db'}"
+    engine = create_engine(database_url, future=True)
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(database_url)
+    repository = PostgresSubmissionRepository(database_url, session_factory=session_factory)
+    with session_factory() as db:
+        db.add(
+            FormSubmission(
+                submission_id="atomic-transition",
+                form_slug="test",
+                form_name="Test",
+                process_status="FORM_SUBMITTED",
+                workflow_step="submission",
+                workflow_stage="submission",
+                data_json={},
+            )
+        )
+        db.commit()
+
+    storage = InMemoryStorage({})
+    persistent_audit = StorageAuditLogRepository(storage)
+
+    class ToggleAuditRepository:
+        fail = False
+
+        def append(self, entry):
+            if self.fail:
+                raise OSError("Nextcloud unavailable")
+            persistent_audit.append(entry)
+
+    audit_repository = ToggleAuditRepository()
+    service = WorkflowService(repository, AuditLogService(audit_repository))
+    return service, repository, session_factory, audit_repository, storage
+
+
+def test_transition_to_commits_state_event_and_pending_marker_before_failed_audit(tmp_path):
+    from models import FormSubmission, SubmissionWorkflowEvent
+
+    service, _, session_factory, audit_repository, _ = _atomic_workflow_env(tmp_path)
+    audit_repository.fail = True
+
+    with pytest.raises(WorkflowTransitionError, match="audyt oczekuje"):
+        service.transition_to("atomic-transition", "officer_review", form_config=workflow_config())
+
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="atomic-transition").one()
+        marker = submission.data_json["_audit_pending"]
+        assert submission.workflow_step == "officer_review"
+        assert marker["event"]["event_type"] == "WORKFLOW_STATUS_CHANGED"
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission.id).count() == 1
+
+
+def test_transition_to_rolls_back_state_and_marker_when_workflow_event_flush_fails(tmp_path):
+    from models import FormSubmission, SubmissionWorkflowEvent
+    from sqlalchemy import event
+
+    service, _, session_factory, _, _ = _atomic_workflow_env(tmp_path)
+
+    def fail_workflow_event(session, flush_context, instances):
+        if any(isinstance(item, SubmissionWorkflowEvent) for item in session.new):
+            raise RuntimeError("workflow event write failed")
+
+    event.listen(session_factory.class_, "before_flush", fail_workflow_event)
+    try:
+        with pytest.raises(RuntimeError, match="workflow event write failed"):
+            service.transition_to("atomic-transition", "officer_review", form_config=workflow_config())
+    finally:
+        event.remove(session_factory.class_, "before_flush", fail_workflow_event)
+
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="atomic-transition").one()
+        assert submission.workflow_step == "submission"
+        assert "_audit_pending" not in (submission.data_json or {})
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission.id).count() == 0
+
+
+def test_transition_to_audit_retry_clears_marker_without_duplicate_business_event(tmp_path):
+    from models import FormSubmission, SubmissionWorkflowEvent
+    from services.audit_log_service import pending_audit_state
+
+    service, repository, session_factory, audit_repository, storage = _atomic_workflow_env(tmp_path)
+    audit_repository.fail = True
+    with pytest.raises(WorkflowTransitionError):
+        service.transition_to("atomic-transition", "officer_review", form_config=workflow_config())
+
+    row = repository.get_by_id("atomic-transition")
+    marker = pending_audit_state(row)
+    audit_repository.fail = False
+    service.audit_log_service.write_pending(marker)
+    assert repository.clear_required_audit("atomic-transition", marker["operation_id"])
+    service.resume_audited_transition(
+        repository.get_by_id("atomic-transition"),
+        workflow_config(),
+        marker["continuation"],
+    )
+
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="atomic-transition").one()
+        assert "_audit_pending" not in (submission.data_json or {})
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission.id).count() == 1
+    assert list(storage.direct_files) == [
+        f"output/test/audit/events/{marker['event']['event_id']}.jsonl"
+    ]
+
+
+def test_audited_transition_retains_marker_during_failed_effect_and_retries_once(tmp_path):
+    from models import FormSubmission, SubmissionWorkflowEvent
+    from services.audit_log_service import pending_audit_state
+
+    service, repository, session_factory, audit_repository, storage = _atomic_workflow_env(tmp_path)
+    calls = []
+
+    def effect(**kwargs):
+        calls.append(kwargs["submission_id"])
+        if len(calls) == 1:
+            raise RuntimeError("temporary effect failure")
+
+    service.side_effect_handlers["test_effect"] = effect
+    with pytest.raises(WorkflowTransitionError, match="efekt|Efekt"):
+        service.transition_to(
+            "atomic-transition", "officer_review", form_config=workflow_config(),
+            metadata={"side_effects": ["test_effect"]},
+        )
+    marker = pending_audit_state(repository.get_by_id("atomic-transition"))
+    assert marker["audit_complete"] is True
+    audit_repository.fail = True  # Resume must not write to Nextcloud again.
+    service.resume_audited_transition(
+        repository.get_by_id("atomic-transition"), workflow_config(),
+        {**marker["continuation"], "_audit_operation_id": marker["operation_id"]},
+    )
+    with session_factory() as db:
+        submission = db.query(FormSubmission).filter_by(submission_id="atomic-transition").one()
+        assert "_audit_pending" not in (submission.data_json or {})
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission.id).count() == 1
+    assert calls == ["atomic-transition", "atomic-transition"]
+    assert len(storage.direct_files) == 1
+
+
+def test_audited_transition_survives_crash_before_continuation(tmp_path, monkeypatch):
+    from services.audit_log_service import pending_audit_state
+
+    service, repository, _, audit_repository, storage = _atomic_workflow_env(tmp_path)
+    original_resume = service.resume_audited_transition
+    monkeypatch.setattr(
+        service, "resume_audited_transition",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("process interrupted")),
+    )
+    with pytest.raises(RuntimeError, match="process interrupted"):
+        service.transition_to("atomic-transition", "officer_review", form_config=workflow_config())
+    marker = pending_audit_state(repository.get_by_id("atomic-transition"))
+    assert marker["audit_complete"] is True
+    assert len(storage.direct_files) == 1
+    audit_repository.fail = True
+    original_resume(
+        repository.get_by_id("atomic-transition"), workflow_config(),
+        {**marker["continuation"], "_audit_operation_id": marker["operation_id"]},
+    )
+    assert not pending_audit_state(repository.get_by_id("atomic-transition"))
+
+
 def test_resolves_next_step_with_decision():
     service = WorkflowService()
 
@@ -115,6 +301,13 @@ def test_transition_updates_repository():
     assert repository.rows["abc"]["workflow_step"] == "officer_review"
     assert repository.events[0][1]["new_step"] == "officer_review"
     assert repository.events[0][1]["actor_role"] == "system"
+
+
+def test_archived_submission_cannot_transition_workflow():
+    submission = FakeSubmission()
+    submission.deleted_at = "archived"
+    with pytest.raises(WorkflowTransitionError, match="archiwalne"):
+        WorkflowService().transition_submission(submission, "WAITING_FOR_REVIEW")
 
 
 def test_transition_submission_validates_when_strict():

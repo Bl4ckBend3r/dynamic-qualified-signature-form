@@ -365,6 +365,28 @@ class NextcloudStorage:
 
         return sorted(set(files))
 
+    def list_children(self, path: str) -> list[tuple[str, bool]]:
+        """Read-only immediate WebDAV children as (name, is_directory)."""
+        parent = str(path or "").strip("/")
+        response = self._request("PROPFIND", parent, headers={"Depth": "1"})
+        if response.status_code == 404:
+            return []
+        self._check_status(response, (207,), f"Cannot list directory '{parent}'")
+        root = ET.fromstring(response.text)
+        namespace = {"d": "DAV:"}
+        children = []
+        for item in root.findall("d:response", namespace):
+            href = item.findtext("d:href", default="", namespaces=namespace)
+            relative = self._extract_relative_path_from_href(href).strip("/")
+            if not relative or str(Path(relative).parent).replace("\\", "/") != parent:
+                continue
+            name = relative.rsplit("/", 1)[-1]
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                continue
+            is_dir = item.find(".//d:resourcetype/d:collection", namespace) is not None
+            children.append((name, is_dir))
+        return sorted(set(children))
+
     def read_form_json(self, filename: str) -> dict:
         response = self._request("GET", f"{self.forms_dir}/{filename}")
         self._check_status(response, (200,), f"Cannot read form '{filename}'")

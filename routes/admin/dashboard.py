@@ -30,7 +30,7 @@ def dashboard():
         view_form_ids = current_app.extensions["services"].permission_service.form_ids_with_permission(
             db, user, "can_view_submissions"
         )
-        submissions_query = select(func.count(FormSubmission.id))
+        submissions_query = select(func.count(FormSubmission.id)).where(FormSubmission.deleted_at.is_(None))
         if user.role != ROLE_SUPER_ADMIN:
             slugs = accessible_form_slugs(db, view_form_ids)
             submissions_query = submissions_query.where(FormSubmission.form_slug.in_(slugs or [""]))
@@ -43,7 +43,7 @@ def dashboard():
         now = datetime.now(timezone.utc)
         local_now = now.astimezone(ZoneInfo(current_app.config.get("APP_TIMEZONE", "Europe/Warsaw")))
         tomorrow = (local_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-        sla_scope = [SubmissionStepDeadline.status == "active"]
+        sla_scope = [SubmissionStepDeadline.status == "active", FormSubmission.deleted_at.is_(None)]
         if user.role != ROLE_SUPER_ADMIN:
             sla_scope.append(FormSubmission.form_slug.in_(slugs or [""]))
         sla_values = db.execute(
@@ -56,14 +56,17 @@ def dashboard():
         ).one()
         sla_queues = dict(zip(("overdue", "today", "within_24h", "within_48h"), (int(value or 0) for value in sla_values)))
         pending_query = select(func.count(FormSubmission.id)).where(
-            FormSubmission.process_status.in_(["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION"])
+            FormSubmission.process_status.in_(["FORM_SUBMITTED", "WAITING_FOR_OFFICER_DECISION"]),
+            FormSubmission.deleted_at.is_(None),
         )
         if user.role != ROLE_SUPER_ADMIN:
             slugs = accessible_form_slugs(db, view_form_ids)
             pending_query = pending_query.where(FormSubmission.form_slug.in_(slugs or [""]))
         pending_count = db.execute(pending_query).scalar() or 0
         try:
-            documents_query = select(func.count(SubmissionFile.id))
+            documents_query = select(func.count(SubmissionFile.id)).join(
+                FormSubmission, FormSubmission.id == SubmissionFile.submission_id
+            ).where(FormSubmission.deleted_at.is_(None))
             if user.role != ROLE_SUPER_ADMIN:
                 documents_query = documents_query.where(SubmissionFile.form_slug.in_(slugs or [""]))
             documents_count = db.execute(documents_query).scalar() or 0

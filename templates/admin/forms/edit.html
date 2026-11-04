@@ -24,6 +24,12 @@
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="active_tab" value="{{ active_tab }}" data-active-tab-input>
     {% if form.editable_version_id %}<input type="hidden" name="form_version_id" value="{{ form.editable_version_id }}">{% endif %}
+    {% if form.docx_cleanup_allowed and (form.workflow_editor_definition.get('workflow') or {}).get('_docx_delete_pending') %}
+    <div class="admin-alert admin-alert-info">
+        <span>Usunięty szablon DOCX oczekuje na bezpieczne sprzątnięcie pliku.</span>
+        <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.docx_template_cleanup_retry', form_id=form.id) }}" formmethod="post" formnovalidate>Ponów sprzątanie DOCX</button>
+    </div>
+    {% endif %}
     <section
     class="admin-form-tab-panel"
     id="form-tab-basic"

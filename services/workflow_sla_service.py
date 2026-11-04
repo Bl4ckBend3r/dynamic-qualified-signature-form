@@ -112,6 +112,8 @@ class WorkflowSlaService:
         form_config: dict | None = None,
         now: datetime | None = None,
     ) -> SubmissionStepDeadline | None:
+        if submission.deleted_at is not None:
+            return None
         if str(previous_step or "") == str(new_step or ""):
             return None
         now = _utc(now or datetime.now(timezone.utc))
@@ -135,7 +137,7 @@ class WorkflowSlaService:
         now: datetime | None = None,
     ) -> SubmissionStepDeadline | None:
         step_key = str(step_key or "").strip()
-        if not step_key or submission.form_version_id is None:
+        if not step_key or submission.form_version_id is None or submission.deleted_at is not None:
             return None
         existing = db.execute(
             select(SubmissionStepDeadline).where(
@@ -190,13 +192,16 @@ class WorkflowSlaService:
     def process_due(self, db, *, now: datetime | None = None) -> dict[str, int]:
         now = _utc(now or datetime.now(timezone.utc))
         rows = db.execute(
-            select(SubmissionStepDeadline).where(
+            select(SubmissionStepDeadline).join(FormSubmission).where(
                 SubmissionStepDeadline.status == "active",
                 SubmissionStepDeadline.due_at <= now + timedelta(days=366),
+                FormSubmission.deleted_at.is_(None),
             ).order_by(SubmissionStepDeadline.due_at, SubmissionStepDeadline.id)
         ).scalars().all()
         result = {"examined": len(rows), "claimed": 0, "sent": 0, "skipped": 0, "failed": 0}
         for deadline in rows:
+            if deadline.submission is None or deadline.submission.deleted_at is not None:
+                continue
             for schedule in self._schedules(deadline):
                 if _utc(schedule["scheduled_for"]) > now:
                     continue
@@ -226,7 +231,7 @@ class WorkflowSlaService:
     def _dispatch(self, db, deadline_id: int, notification_id: int, *, now: datetime) -> str:
         deadline = db.get(SubmissionStepDeadline, deadline_id)
         notification = db.get(SubmissionDeadlineNotification, notification_id)
-        if deadline is None or notification is None or deadline.status != "active":
+        if deadline is None or notification is None or deadline.status != "active" or deadline.submission is None or deadline.submission.deleted_at is not None:
             if notification is not None:
                 notification.status = "skipped"
                 notification.error_message = "Etap został zakończony lub anulowany."

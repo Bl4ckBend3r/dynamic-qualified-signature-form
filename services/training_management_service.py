@@ -262,6 +262,10 @@ class TrainingManagementService:
         record = db.execute(select(TrainingAttendanceRecord).where(TrainingAttendanceRecord.token_hash == _token_hash(str(token or "")))).scalar_one_or_none()
         if record is None or not _not_expired(record.token_expires_at):
             return None
+        participant = db.get(SubmissionTraining, record.submission_training_id)
+        submission = db.get(FormSubmission, participant.submission_id) if participant is not None else None
+        if submission is None or submission.deleted_at is not None:
+            return None
         session = db.get(TrainingAttendanceSession, record.session_id)
         if session is None or session.status != "active":
             return None
@@ -290,6 +294,10 @@ class TrainingManagementService:
         ).scalar_one_or_none()
         if record is None:
             raise TrainingManagementError("Nie znaleziono rekordu obecności.")
+        participant = db.get(SubmissionTraining, participant_id)
+        submission = db.get(FormSubmission, participant.submission_id) if participant is not None else None
+        if submission is None or submission.deleted_at is not None:
+            raise TrainingManagementError("Nie znaleziono aktywnego zgłoszenia.")
         attendance_session = db.get(TrainingAttendanceSession, session_id)
         previous = record.status
         record.status = status
@@ -445,6 +453,9 @@ class TrainingManagementService:
             return None
         participant = db.get(SubmissionTraining, invitation.submission_training_id)
         if participant is None or participant.training_id != survey.training_id or participant.status not in ACTIVE_STATUSES:
+            return None
+        submission = db.get(FormSubmission, participant.submission_id)
+        if submission is None or submission.deleted_at is not None:
             return None
         if survey.survey_type == "post_test" and survey.post_requires_attendance and not self._participant_is_present(db, participant.id):
             return None

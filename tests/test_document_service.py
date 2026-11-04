@@ -1,9 +1,11 @@
 import json
+from types import SimpleNamespace
 
 import pytest
-from flask import render_template_string
+from flask import Flask, render_template_string
 
 from services.document_service import DocumentService, normalize_selected_items
+from services.document_naming_service import resolve_pdf_storage_path
 
 
 def test_document_context_exposes_selected_trainings_list():
@@ -22,6 +24,63 @@ def test_document_context_exposes_selected_trainings_list():
 
     assert [training["name"] for training in context["selected_trainings"]] == ["Excel", "Angielski"]
     assert context["selected_trainings_total"] == 2100
+
+
+def test_forced_declaration_generation_preserves_existing_pdf_bytes(monkeypatch):
+    class PdfStorage:
+        output_dir = "output"
+
+        def __init__(self):
+            self.files = {}
+
+        def pdf_storage_path(self, slug, filename, document_type=None, signed=None):
+            return resolve_pdf_storage_path(
+                output_dir=self.output_dir, slug=slug, filename=filename,
+                document_type=document_type, signed=signed,
+            )
+
+        def exists(self, path):
+            return path in self.files
+
+        def save_pdf(self, slug, filename, pdf_bytes, document_type=None, signed=None):
+            self.files[self.pdf_storage_path(slug, filename, document_type, signed)] = pdf_bytes
+
+        def get_pdf_bytes(self, slug, filename):
+            return self.files[self.pdf_storage_path(slug, filename, "declaration", False)]
+
+        def read_bytes(self, path):
+            return self.files[path]
+
+        def delete(self, path, missing_ok=False):
+            self.files.pop(path, None)
+
+    storage = PdfStorage()
+    old_path = storage.pdf_storage_path("form", "notice.pdf", "declaration", False)
+    storage.files[old_path] = b"old PDF"
+    recorded = []
+    service = DocumentService(
+        storage=storage,
+        pdf_render_service=SimpleNamespace(render_document_pdf_bytes=lambda **kwargs: b"new PDF"),
+        submission_document_service=SimpleNamespace(record_generated_document=lambda **kwargs: recorded.append(kwargs) or True),
+    )
+    monkeypatch.setattr(service, "get_document_by_id", lambda *args: {"id": "declaration", "enabled": True, "fields": []})
+    monkeypatch.setattr(service, "build_filename_for_document", lambda *args: "notice.pdf")
+    monkeypatch.setattr(service, "resolve_document_template", lambda *args: "<p>Declaration</p>")
+    monkeypatch.setattr(service, "resolve_pdf_image_url", lambda *args: None)
+    monkeypatch.setattr("services.document_service.build_document_pdf_context", lambda **kwargs: {})
+    monkeypatch.setattr("services.document_service.build_declaration_render_context", lambda context, **kwargs: context)
+    submission = {"submission_id": "SUB1", "form_slug": "form", "row": {
+        "submission_id": "SUB1", "form_slug": "form", "data_json": {},
+        "declaration_generated": "Tak", "declaration_filename": "notice.pdf",
+    }}
+
+    with Flask(__name__).app_context():
+        generated = service.generate_document(submission, {"fields": []}, "declaration", force=True)
+
+    assert generated["filename"] == "notice-2.pdf"
+    assert storage.files[old_path] == b"old PDF"
+    assert storage.files[recorded[0]["storage_path"]] == b"new PDF"
+    assert recorded[0]["storage_path"] != old_path
 
 
 @pytest.mark.parametrize(

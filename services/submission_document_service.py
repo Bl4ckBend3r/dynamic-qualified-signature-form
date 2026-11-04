@@ -98,6 +98,68 @@ class SubmissionDocumentService:
         db.add(record)
         return record
 
+    def add_document_metadata_to_session(
+        self,
+        db,
+        submission,
+        *,
+        filename: str,
+        file_bytes: bytes,
+        document_id: str,
+        document_type: str,
+        original_filename: str,
+        storage_path: str,
+        workflow_step_at_upload: str,
+        training_key: str,
+        agreement_number: str,
+        mime_type: str,
+        signed: bool,
+        status: str,
+        signature_status: str,
+        signature_validation_result: Mapping[str, Any],
+        uploaded_by_source: str,
+    ):
+        """Stage an idempotent SubmissionFile upsert in the caller's transaction."""
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        clean_filename = Path(filename).name
+        record = db.execute(
+            select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.filename == clean_filename,
+                SubmissionFile.document_id == str(document_id or ""),
+                SubmissionFile.signed == bool(signed),
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            record = SubmissionFile(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                filename=clean_filename,
+                storage_path=str(storage_path or ""),
+            )
+            db.add(record)
+        record.document_id = str(document_id or "")
+        record.document_type = str(document_type or "")
+        record.storage_path = str(storage_path or "")
+        record.mime_type = str(mime_type or "application/pdf")
+        record.size_bytes = len(file_bytes)
+        record.checksum_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        record.signed = bool(signed)
+        record.status = str(status or "uploaded")
+        record.original_filename = Path(original_filename).name if original_filename else ""
+        record.signature_status = str(signature_status or "")
+        record.signature_validation_result = dict(signature_validation_result or {})
+        record.agreement_number = str(agreement_number or "")
+        record.training_key = str(training_key or "")
+        record.workflow_step_at_upload = str(workflow_step_at_upload or "")
+        record.uploaded_by_source = str(uploaded_by_source or "")
+        record.signed_at = datetime.now(timezone.utc) if signed else None
+        db.flush()
+        return record
+
     def record_signed_document(
         self,
         *,
@@ -117,6 +179,7 @@ class SubmissionDocumentService:
         workflow_step_at_upload: str = "",
         storage=None,
         uploaded_by_source: str = "",
+        dispatch_notification: bool = True,
     ) -> bool:
         return self.record_document_metadata(
             submission_id=submission_id,
@@ -137,6 +200,7 @@ class SubmissionDocumentService:
             status=SIGNED_STATUS,
             storage=storage,
             uploaded_by_source=uploaded_by_source,
+            dispatch_notification=dispatch_notification,
         )
 
     def record_document_metadata(
@@ -162,6 +226,7 @@ class SubmissionDocumentService:
         workflow_step_at_upload: str = "",
         storage=None,
         uploaded_by_source: str = "",
+        dispatch_notification: bool = True,
     ) -> bool:
         try:
             recorded = record_submission_file(
@@ -195,7 +260,7 @@ class SubmissionDocumentService:
                 exc_info=True,
             )
             return False
-        if (recorded and uploaded_by_source == "participant" and file_bytes is not None
+        if (dispatch_notification and recorded and uploaded_by_source == "participant" and file_bytes is not None
                 and status in {"uploaded", "signed"} and has_app_context()):
             try:
                 current_app.extensions["services"].mail_dispatch_service.dispatch_document_received_notification(
@@ -218,6 +283,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def list_documents(self, submission_id: str) -> list[dict]:
@@ -227,6 +294,8 @@ class SubmissionDocumentService:
             return self.submission_repository.list_submission_files(submission_id)
         except Exception:
             self.logger.warning("Nie udalo sie odczytac metadanych dokumentow dla %s.", submission_id, exc_info=True)
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return []
 
     def get_document_file(
@@ -253,6 +322,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def sync_from_legacy_fields(self, submission: Mapping[str, Any]) -> list[dict]:

@@ -13,6 +13,7 @@ from services.process_service import (
     is_declaration_required,
     is_declaration_signature_valid,
     is_yes,
+    has_pending_pdf_generation,
 )
 from services.status_catalog import WORKFLOW_STATUS_LABELS, get_status_label
 from services.workflow_config_service import (
@@ -102,7 +103,12 @@ def build_public_submission_status(
 ) -> dict[str, Any]:
     state = build_process_state(row)
     workflow_context = _workflow_context(row, form_config=form_config, current_step=current_step)
-    status = _status_for_workflow_context(workflow_context) or state.status
+    pdf_generation_failed = has_pending_pdf_generation(row)
+    status = (
+        ProcessStatus.PDF_GENERATION_FAILED
+        if pdf_generation_failed
+        else (_status_for_workflow_context(workflow_context) or state.status)
+    )
     decision = get_officer_decision(row)
     rejected = status in REJECTED_STATUSES or decision == OfficerDecision.REJECTED
     correction = status in CORRECTION_STATUSES
@@ -179,15 +185,21 @@ def build_public_submission_status(
         declaration_generated=is_yes(row.get("declaration_generated")),
         agreement_generated=is_yes(row.get("agreement_generated")),
     )
-    if explicit_flow and configured_step:
+    if explicit_flow and configured_step and not pdf_generation_failed:
         step_status = str(configured_step.get("status") or "")
         headline = str(configured_step.get("user_label") or WORKFLOW_STATUS_LABELS.get(step_status) or headline).strip()
-    elif configured_step.get("user_label") and configured_step.get("type") == "manual_decision":
+    elif not pdf_generation_failed and configured_step.get("user_label") and configured_step.get("type") == "manual_decision":
         headline = str(configured_step["user_label"]).strip()
-    description = str(configured_step.get("description") or description).strip()
-    next_action = str(configured_step.get("next_action") or next_action).strip()
+    if not pdf_generation_failed:
+        description = str(configured_step.get("description") or description).strip()
+        next_action = str(configured_step.get("next_action") or next_action).strip()
 
-    can_download_declaration = bool(row.get("declaration_filename")) and accepted and not declaration_completed
+    can_download_declaration = (
+        not pdf_generation_failed
+        and bool(row.get("declaration_filename"))
+        and accepted
+        and not declaration_completed
+    )
     can_upload_signed_declaration = (
         can_download_declaration
         and not rejected
@@ -195,6 +207,8 @@ def build_public_submission_status(
         and not is_declaration_signature_valid(row)
     )
     can_download_agreement = (
+        not pdf_generation_failed
+        and
         bool(row.get("agreement_filename") or row.get("training_agreements"))
         and not blocked
         and not rejected
@@ -217,7 +231,7 @@ def build_public_submission_status(
     )
 
     can_generate_agreement = bool(state.can_generate_agreement and accepted and not rejected and not correction and not blocked)
-    if explicit_flow:
+    if explicit_flow and not pdf_generation_failed:
         if active_documents and uses_document_group(form_config or {}, configured_step):
             items = (document_step_state(row, str(configured_step.get("id") or "")).get("documents") or {})
             declaration_item = items.get("declaration") or {}
@@ -257,7 +271,7 @@ def build_public_submission_status(
 
     blocking_reason = state.block_reason if blocked else ""
     from services.documents.document_workflow_service import is_document_step, document_step_status
-    composite = is_document_step(configured_step)
+    composite = not pdf_generation_failed and is_document_step(configured_step)
     if composite:
         document_status = document_step_status(row, configured_step)
         headline, description, variant = document_status["title"], document_status["message"], document_status["variant"]
@@ -267,6 +281,9 @@ def build_public_submission_status(
             can_upload_signed_declaration = can_upload_signed_agreement = False
         blocked = False
         blocking_reason = ""
+    if pdf_generation_failed:
+        can_fill_declaration = can_generate_agreement = can_download_declaration = can_download_agreement = False
+        can_upload_signed_declaration = can_upload_signed_agreement = False
     from services.instruction_html_service import sanitize_workflow_instruction_html
 
     description = sanitize_workflow_instruction_html(description)
@@ -288,8 +305,16 @@ def build_public_submission_status(
         "status": current_status,
         "composite_document": composite,
         "current_workflow_step": current_status["step"],
-        "effective_process_status": state.status.value,
-        "process_status_label": get_status_label(state.status.value),
+        "effective_process_status": (
+            ProcessStatus.PDF_GENERATION_FAILED.value
+            if pdf_generation_failed
+            else state.status.value
+        ),
+        "process_status_label": get_status_label(
+            ProcessStatus.PDF_GENERATION_FAILED.value
+            if pdf_generation_failed
+            else state.status.value
+        ),
         "application_status": application_status,
         "declaration_status": declaration_status,
         "agreement_status": agreement_status,
@@ -314,6 +339,8 @@ def build_public_submission_status(
 
 
 def _application_status(status: ProcessStatus, decision: OfficerDecision) -> str:
+    if status == ProcessStatus.PDF_GENERATION_FAILED:
+        return "Zgłoszenie zapisane — dokument oczekuje na przygotowanie"
     if status == ProcessStatus.AUTO_REJECTED:
         return "Wniosek odrzucony automatycznie"
     if decision == OfficerDecision.REJECTED or status in REJECTED_STATUSES:
@@ -379,6 +406,9 @@ def _workflow_context(
         ),
         None,
     )
+    if configured_step and workflow.get("flow_mode") == "explicit":
+        # Match WorkflowService's normalized action gate for published snapshots.
+        configured_step = {**configured_step, "explicit_stage": True}
     status_code = str(
         (configured_step or {}).get("status")
         or (configured_step or {}).get("status_code")
@@ -399,6 +429,13 @@ def _status_for_workflow_context(context: Mapping[str, Any]) -> ProcessStatus | 
 
 
 def _primary_message(**state) -> tuple[str, str, str, str]:
+    if state["status"] == ProcessStatus.PDF_GENERATION_FAILED:
+        return (
+            "Zgłoszenie zostało zapisane",
+            "Dokument PDF nie jest jeszcze dostępny. Administrator może bezpiecznie ponowić jego przygotowanie.",
+            "Nie wysyłaj formularza ponownie. Poczekaj na przygotowanie dokumentu.",
+            "warning",
+        )
     if state["rejected"]:
         return (
             "Wniosek został odrzucony",

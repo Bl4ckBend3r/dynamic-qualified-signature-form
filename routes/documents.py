@@ -12,6 +12,7 @@ import unicodedata
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
@@ -20,9 +21,10 @@ from database import create_session_factory
 from form_loader import values_for_rerender
 from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
+from services.audit_log_service import AuditPendingError
 from services.submission_training_service import TrainingSelectionError
 from services.submission_document_service import SubmissionDocumentType
-from services.process_service import build_process_state
+from services.process_service import ProcessStatus, build_process_state, has_pending_pdf_generation
 from services.public_submission_status_service import build_public_submission_status
 from services.training_agreement_service import get_training_selection_field
 from services.training_availability_service import TrainingAvailabilityService
@@ -148,45 +150,123 @@ def form_config_with_training_adapter(form_config: dict) -> tuple[dict, dict]:
     )
 
 
-def _lock_submission_training(submission_id: str, agreement_id: str) -> bool:
+def _claim_training_agreement_upload(submission_id: str, agreement_id: str) -> str:
+    if not current_app.config.get("DATABASE_URL"):
+        return ""
+    repository = get_services().submission_repository
+    token = str(uuid4())
+    claimed = repository.claim_submission_document_operation(
+        submission_id,
+        f"training-agreement-upload:{agreement_id}",
+        token,
+    )
+    if not claimed:
+        raise AuditPendingError(
+            "Dokument jest już przetwarzany albo zgłoszenie oczekuje na zapis obowiązkowego audytu."
+        )
+    return token
+
+
+def _release_training_agreement_upload(submission_id: str, token: str) -> None:
+    if token:
+        get_services().submission_repository.release_document_operation(submission_id, token)
+
+
+def _lock_submission_training(
+    submission_id: str,
+    agreement_id: str,
+    upload_result: dict,
+    operation_token: str,
+) -> dict | None:
     database_url = current_app.config.get("DATABASE_URL")
     if not database_url:
-        return True
+        return None
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
-        submission = db.execute(
+        candidate = db.execute(
             select(FormSubmission).where(FormSubmission.submission_id == submission_id)
         ).scalar_one_or_none()
-        agreement_file_id = db.execute(
-            select(SubmissionFile.id)
+        if not candidate:
+            return None
+        db.execute(select(Form).where(Form.slug == candidate.form_slug).with_for_update()).scalar_one_or_none()
+        submission = db.execute(
+            select(FormSubmission)
+            .where(FormSubmission.id == candidate.id)
+            .with_for_update()
+        ).scalar_one()
+        agreement_file = db.execute(
+            select(SubmissionFile)
             .where(
                 SubmissionFile.public_submission_id == submission_id,
                 SubmissionFile.training_key == agreement_id,
                 SubmissionFile.signed.is_(True),
+                SubmissionFile.filename == str(upload_result.get("signed_filename") or ""),
             )
             .order_by(SubmissionFile.id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if not submission:
-            return False
+        if agreement_file is None:
+            raise RuntimeError("Nie znaleziono metadanych podpisanej umowy.")
         try:
-            locked = get_services().submission_training_service.lock_for_agreement(
+            marker = get_services().submission_training_service.lock_for_agreement_with_required_audit(
                 db,
                 submission,
                 agreement_id,
-                agreement_file_id=agreement_file_id,
+                agreement_file=agreement_file,
+                verification=dict(upload_result.get("verification") or {}),
+                submission_updates=dict(upload_result.get("updates") or {}),
+                operation_token=operation_token,
+                audit_log_service=get_services().audit_log_service,
             )
             db.commit()
-            return locked
+            return marker
         except TrainingSelectionError:
             db.rollback()
-            if agreement_file_id:
-                rejected_file = db.get(SubmissionFile, agreement_file_id)
+            if agreement_file.id:
+                rejected_file = db.get(SubmissionFile, agreement_file.id)
                 if rejected_file:
                     rejected_file.status = "rejected_no_capacity"
                     rejected_file.signed = False
                     db.commit()
             raise
+
+
+def _complete_training_agreement_audit(submission_id: str, marker: dict) -> None:
+    services = get_services()
+    try:
+        services.audit_log_service.write_pending(marker)
+        if not services.submission_repository.mark_required_audit_complete(
+            submission_id,
+            str(marker.get("operation_id") or ""),
+        ):
+            raise RuntimeError("Nie znaleziono zgłoszenia podczas zwalniania markera audytu.")
+    except Exception as exc:
+        logger.error(
+            "training_agreement_required_audit_failed submission_id=%s error_type=%s",
+            submission_id,
+            type(exc).__name__,
+        )
+        raise AuditPendingError(
+            "Umowa została przyjęta i miejsce zablokowane, ale obowiązkowy audyt oczekuje na ponowienie przez administratora."
+        ) from exc
+    try:
+        continuation = dict(marker.get("continuation") or {})
+        continuation["_audit_operation_id"] = str(marker.get("operation_id") or "")
+        services.document_service.resume_training_agreement_upload(submission_id, continuation)
+        if not services.submission_repository.clear_required_audit(
+            submission_id,
+            str(marker.get("operation_id") or ""),
+        ):
+            raise RuntimeError("Nie znaleziono zgłoszenia podczas kończenia kontynuacji audytu.")
+    except Exception as exc:
+        logger.exception(
+            "training_agreement_post_audit_continuation_failed submission_id=%s error_type=%s",
+            submission_id,
+            type(exc).__name__,
+        )
+        raise AuditPendingError(
+            "Obowiązkowy audyt zapisano, ale dalszy workflow lub powiadomienie wymaga interwencji administratora."
+        ) from exc
 
 
 def _training_agreement_upload_state(submission_id: str, agreement_id: str) -> tuple[str, bool]:
@@ -543,7 +623,9 @@ def upload_signed_declaration(slug: str, submission_id: str):
 @bp.route("/declaration/<slug>/<submission_id>", methods=["GET", "POST"])
 def declaration_form(slug: str, submission_id: str):
     services = get_services()
-    access = require_participant_submission_access(submission_id, slug=slug)
+    # The POST supplies the declaration fields that are still missing at this step.
+    # DeclarationFlowService validates the combined stored and submitted values.
+    access = require_participant_submission_access(submission_id, slug=slug, allow_incomplete=True)
     if request.method == "POST":
         require_public_csrf()
     submission = access.submission
@@ -687,7 +769,9 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
     require_public_csrf()
     submission = access.submission
 
+    operation_token = ""
     try:
+        operation_token = _claim_training_agreement_upload(submission_id, agreement_id)
         result = services.document_signing_service.upload_signed_document(
             submission=submission,
             document_id=DocumentType.TRAINING_AGREEMENT,
@@ -699,14 +783,24 @@ def upload_signed_training_agreement(slug: str, submission_id: str, agreement_id
         elif not result["is_valid"]:
             flash("Podpis umowy nie jest dopuszczalnym podpisem.", "error")
         else:
-            if not _lock_submission_training(submission_id, agreement_id):
-                raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+            marker = _lock_submission_training(
+                submission_id,
+                agreement_id,
+                result,
+                operation_token,
+            )
+            if marker:
+                _complete_training_agreement_audit(submission_id, marker)
             flash("Podpisana umowa została wgrana. Szkolenie i miejsce zostały zablokowane.", "success")
+    except AuditPendingError as exc:
+        flash(str(exc), "warning")
     except ValueError as exc:
         flash(str(exc), "error")
     except Exception as exc:
         logger.exception("Błąd uploadu podpisanej umowy: %s", exc)
         flash("Wystąpił błąd podczas wgrywania lub weryfikacji umowy.", "error")
+    finally:
+        _release_training_agreement_upload(submission_id, operation_token)
 
     return redirect(documents_to_sign_url(submission_id))
 
@@ -773,7 +867,10 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             continue
         assigned_ids.add(agreement_id)
         normalized_status, normalized_uploaded = _training_agreement_upload_state(submission_id, agreement_id)
-        if normalized_uploaded or agreement.get("signature_valid") or str(agreement.get("signed_filename") or "").strip():
+        if normalized_uploaded or (
+            not current_app.config.get("DATABASE_URL")
+            and (agreement.get("signature_valid") or str(agreement.get("signed_filename") or "").strip())
+        ):
             item["message"] = "Podpisany plik dla tej umowy został już wgrany."
             results.append(item)
             continue
@@ -789,7 +886,9 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             item["message"] = "Ta umowa nie oczekuje na podpisany plik."
             results.append(item)
             continue
+        operation_token = ""
         try:
+            operation_token = _claim_training_agreement_upload(submission_id, agreement_id)
             verification = services.document_signing_service.upload_signed_document(
                 submission=submission,
                 document_id=DocumentType.TRAINING_AGREEMENT,
@@ -801,10 +900,18 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
             elif not verification["is_valid"]:
                 item["message"] = "Podpis umowy nie jest dopuszczalnym podpisem."
             else:
-                if not _lock_submission_training(submission_id, agreement_id):
-                    raise ValueError("Nie znaleziono szkolenia przypisanego do tej umowy.")
+                marker = _lock_submission_training(
+                    submission_id,
+                    agreement_id,
+                    verification,
+                    operation_token,
+                )
+                if marker:
+                    _complete_training_agreement_audit(submission_id, marker)
                 item.update(status="uploaded", message="Wgrano, zweryfikowano i zablokowano szkolenie.")
                 uploaded_ids.add(agreement_id)
+        except AuditPendingError as exc:
+            item.update(status="audit_pending", message=str(exc))
         except ValueError as exc:
             item["message"] = str(exc)
         except Exception:
@@ -815,6 +922,8 @@ def upload_signed_training_agreements(slug: str, submission_id: str):
                 filename,
             )
             item["message"] = "Wystąpił błąd podczas wgrywania lub weryfikacji."
+        finally:
+            _release_training_agreement_upload(submission_id, operation_token)
         results.append(item)
 
     uploaded_count = sum(item["status"] == "uploaded" for item in results)
@@ -905,8 +1014,13 @@ def show_result(slug: str, submission_id: str):
     submission = access.submission
 
     row = submission.get("row") or submission
-    pdf_filename = row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
-    signed_pdf_filename = row.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
+    processing_pending = has_pending_pdf_generation(row)
+    pdf_filename = "" if processing_pending else (
+        row.get("pdf_filename") or services.submission_service.build_pdf_filename(slug, submission_id)
+    )
+    signed_pdf_filename = "" if processing_pending else (
+        row.get("signed_pdf_filename") or services.submission_service.build_signed_pdf_filename(slug, submission_id)
+    )
 
     verification = None
     signed_exists = bool(signed_pdf_filename)
@@ -938,7 +1052,12 @@ def show_result(slug: str, submission_id: str):
         "signed_pdf_filename": signed_pdf_filename if signed_exists else "",
         "signed_pdf_url": None,
         "upload_url": "",
-        "can_continue": True,
+        "can_continue": not processing_pending,
+        "processing_pending": processing_pending,
+        "qualification_message": (
+            "Zgłoszenie zostało zapisane. Dokument PDF oczekuje na bezpieczne ponowienie przygotowania."
+            if processing_pending else ""
+        ),
         # The result page is read-only and must not reflect a stored participant
         # credential into HTML, links, hidden fields or browser storage.
         "participant_credential": "",
@@ -1489,12 +1608,20 @@ def download_pdf(slug: str, filename: str):
             (metadata or {}).get("storage_path", ""),
             True,
         )
-        services.audit_log_service.log_event(
-            "DOCUMENT_DOWNLOADED",
-            submission.get("submission_id", ""),
-            slug,
-            metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
-        )
+        try:
+            services.audit_log_service.log_event(
+                "DOCUMENT_DOWNLOADED",
+                submission.get("submission_id", ""),
+                slug,
+                metadata={"filename": clean_filename, "signed": bool((metadata or {}).get("signed", False))},
+            )
+        except Exception as exc:
+            logger.error(
+                "document_download_audit_failed submission_id=%s error_type=%s",
+                submission.get("submission_id", ""),
+                type(exc).__name__,
+            )
+            abort(503, description="Nie można teraz zarejestrować pobrania dokumentu.")
         raw_training_agreements = submission.get("training_agreements")
         if isinstance(raw_training_agreements, str):
             try:
@@ -1523,18 +1650,26 @@ def download_pdf(slug: str, filename: str):
                 agreement_key,
                 clean_filename,
             ):
-                services.audit_log_service.log_event(
-                    "agreement_downloaded_by_beneficiary",
-                    submission.get("submission_id", ""),
-                    slug,
-                    metadata={
-                        "filename": clean_filename,
-                        "training_key": agreement_key,
-                    },
-                )
+                try:
+                    services.audit_log_service.log_event(
+                        "agreement_downloaded_by_beneficiary",
+                        submission.get("submission_id", ""),
+                        slug,
+                        metadata={
+                            "filename": clean_filename,
+                            "training_key": agreement_key,
+                        },
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "agreement_download_audit_failed submission_id=%s error_type=%s",
+                        submission.get("submission_id", ""),
+                        type(exc).__name__,
+                    )
+                    abort(503, description="Nie można teraz zarejestrować pobrania umowy.")
     except HTTPException:
         raise
-    except Exception:
+    except (FileNotFoundError, ValueError):
         logger.warning(
             "Document download failed slug=%s filename=%s.",
             slug,
@@ -1542,6 +1677,14 @@ def download_pdf(slug: str, filename: str):
             exc_info=True,
         )
         abort(404)
+    except Exception as exc:
+        logger.error(
+            "document_download_dependency_failed slug=%s filename=%s error_type=%s",
+            slug,
+            Path(filename).name,
+            type(exc).__name__,
+        )
+        abort(503, description="Dokument jest chwilowo niedostępny.")
 
     return send_file(
         BytesIO(download.pdf_bytes),
@@ -1593,12 +1736,20 @@ def download_signed_pdf(slug: str, filename: str):
             (metadata or {}).get("storage_path", ""),
             True,
         )
-        services.audit_log_service.log_event(
-            "DOCUMENT_DOWNLOADED",
-            submission.get("submission_id", ""),
-            slug,
-            metadata={"filename": clean_filename, "signed": True},
-        )
+        try:
+            services.audit_log_service.log_event(
+                "DOCUMENT_DOWNLOADED",
+                submission.get("submission_id", ""),
+                slug,
+                metadata={"filename": clean_filename, "signed": True},
+            )
+        except Exception as exc:
+            logger.error(
+                "signed_document_download_audit_failed submission_id=%s error_type=%s",
+                submission.get("submission_id", ""),
+                type(exc).__name__,
+            )
+            abort(503, description="Nie można teraz zarejestrować pobrania dokumentu.")
         return send_file(
             BytesIO(download.pdf_bytes),
             mimetype=download.mimetype,
@@ -1607,7 +1758,7 @@ def download_signed_pdf(slug: str, filename: str):
         )
     except HTTPException:
         raise
-    except Exception:
+    except (FileNotFoundError, ValueError):
         logger.warning(
             "Signed document download failed slug=%s filename=%s.",
             slug,
@@ -1615,3 +1766,11 @@ def download_signed_pdf(slug: str, filename: str):
             exc_info=True,
         )
         abort(404)
+    except Exception as exc:
+        logger.error(
+            "signed_document_download_dependency_failed slug=%s filename=%s error_type=%s",
+            slug,
+            Path(filename).name,
+            type(exc).__name__,
+        )
+        abort(503, description="Dokument jest chwilowo niedostępny.")

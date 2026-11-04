@@ -38,6 +38,22 @@ def make_submission(app, definition, *, step=None):
     return form_id, row, people
 
 
+def complete_loty_submission(services, row, people):
+    complete_data = {
+        **row['data_json'],
+        'miejscowosc': 'Gorzów Wielkopolski',
+        'data_wniosku': '2026-09-01',
+        'rodzaj_biletu': 'odpłatnych',
+        'dane_do_faktury': 'Urząd Miasta, ul. Testowa 1',
+        'cel_podrozy_uzasadnienie': 'Udział w szkoleniu',
+        'podrozni': [
+            {**person, 'stanowisko_departament_wydzial': 'Wydział szkoleń'}
+            for person in people
+        ],
+    }
+    assert services.submission_repository.update(row['submission_id'], {'data_json': complete_data})
+
+
 def officer_decision_fixture(app, *, stage="officer_review"):
     definition = {
         "title": "Decyzja urzędnika",
@@ -70,7 +86,8 @@ def officer_decision_fixture(app, *, stage="officer_review"):
                  "stage_type": "decision", "decision_scope": "submission",
                  "status": "WAITING_FOR_OFFICER_DECISION"},
                 {"id": "declaration", "admin_label": "Deklaracja gotowa",
-                 "stage_type": "document", "status": "DECLARATION_READY",
+                 "stage_type": "user_action", "document_id": "declaration",
+                 "action": "generate_document", "status": "DECLARATION_READY",
                  "next_action": "Uzupełnij i wygeneruj deklarację", "next": "declaration_signature"},
                 {"id": "declaration_signature", "admin_label": "Podpisz deklarację",
                  "stage_type": "document", "document_id": "declaration",
@@ -112,6 +129,204 @@ def post_officer_decision(app, client, form_id, pk, *, decision="pzytywna"):
         "csrf_token": csrf, "submission_row_ids": [str(pk)],
         f"officer_decision_{pk}": decision,
     })
+
+
+@pytest.mark.parametrize(
+    "decision,required_answer,upgrade_pending,expected_saved",
+    [("pzytywna", "", False, False), ("pzytywna", "", True, False), ("rejected", "", True, True),
+     ("pzytywna", "Uzupełniono", False, True)],
+)
+def test_officer_decision_requires_only_due_mandatory_data_for_positive(
+    admin_app, admin_client, decision, required_answer, upgrade_pending, expected_saved,
+):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        definition["fields"].extend([
+            {"name": "required_answer", "label": "Wymagane", "type": "text", "required": True,
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]},
+            {"name": "optional_answer", "label": "Opcjonalne", "type": "text", "required": False,
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": False}]},
+            {"name": "disclosure", "label": "Odpowiedź", "type": "select", "required": True,
+             "options": [{"value": "odmowa", "label": "Odmowa podania informacji"},
+                         {"value": "tak", "label": "Tak"}],
+             "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]},
+        ])
+        definition["workflow"]["steps"].append(
+            {"id": "end_rejected", "stage_type": "final", "status": "OFFICER_REJECTED", "final": True}
+        )
+        definition["workflow"]["decision_types"].append(
+            {"code": "rejected", "label": "Odrzucono", "semantic_category": "negative",
+             "step_id": "officer_review", "target_step": "end_rejected", "scope": "submission",
+             "reason_required": False}
+        )
+        version.definition_json = definition
+        submission.data_json = {
+            "required_answer": required_answer, "disclosure": "odmowa",
+            **({"_form_version_upgrade": {"old_version_id": version.id, "missing_fields": ["required_answer"]}} if upgrade_pending else {}),
+        }
+        db.commit()
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk, decision=decision).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        decisions = db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
+        assert bool(decisions) is expected_saved
+        assert (submission.workflow_step != "officer_review") is expected_saved
+        assert (submission.officer_decision == decision) is expected_saved
+
+
+def test_direct_workflow_decision_cannot_bypass_required_data(admin_app):
+    from services.workflow_service import WorkflowTransitionError
+
+    form_id, pk, public_id = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        definition["fields"].append({
+            "name": "required_answer", "label": "Wymagane", "type": "text", "required": True,
+            "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}],
+        })
+        version.definition_json = definition
+        db.commit()
+    with pytest.raises(WorkflowTransitionError, match="wymagane dane"):
+        admin_app.extensions["services"].workflow_service.transition_to(
+            public_id, "declaration", metadata={"officer_decision": "pzytywna"},
+        )
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).workflow_step == "officer_review"
+        assert db.scalar(select(SubmissionWorkflowEvent.id).where(
+            SubmissionWorkflowEvent.submission_id == pk
+        )) is None
+
+
+def conditional_fixture(app, *, field_type="text", value=""):
+    form_id, pk, public_id = officer_decision_fixture(app)
+    with create_session_factory(app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        definition = deepcopy(submission.form_version.definition_json)
+        definition["fields"].append({"name": "required_answer", "label": "Wymagane", "type": field_type,
+            "required": True, "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}]})
+        definition["workflow"]["steps"].insert(1, {"id": "supplement", "stage_type": "user_action",
+            "status": "WAITING_FOR_ADDITIONAL_FIELDS", "next": "declaration"})
+        definition["workflow"]["decision_types"][0]["target_step"] = "supplement"
+        submission.form_version.definition_json = definition
+        submission.data_json = {"required_answer": value,
+            "_form_version_upgrade": {"old_version_id": submission.form_version_id}}
+        db.commit()
+    return form_id, pk, public_id
+
+
+@pytest.mark.parametrize("trusted,szafir,label", [(True, False, "Profil Zaufany"),
+    (False, True, "Szafir / KIR"), (False, False, "Inny lub nierozpoznany")])
+def test_result_signature_labels(admin_app, trusted, szafir, label):
+    from flask import render_template
+    with admin_app.test_request_context():
+        html = render_template("result.html", result={"submission_id": "preview",
+            "signature": {"mode": "optional"}, "verification": {
+                "is_trusted_profile_signature": trusted, "is_szafir_signature": szafir}})
+    section = html.split("Rodzaj podpisu</span>", 1)[1].split("</div>", 1)[0]
+    assert label in section
+
+
+def post_conditional(client, form_id, pk, **overrides):
+    html = client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    return client.post(f"/admin/forms/{form_id}/submissions/{pk}/decision", data={
+        "csrf_token": csrf, "officer_decision": "pzytywna", "conditional_approval": "1",
+        "conditional_deadline": "declaration", "officer_decision_reason": "Uzupełnienie przed dokumentami",
+        **overrides,
+    })
+
+
+def test_conditional_approval_retry_and_completion(admin_app, admin_client, monkeypatch):
+    from services.workflow_service import WorkflowTransitionError
+    create_user(admin_app)
+    form_id, pk, public_id = conditional_fixture(admin_app)
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{pk}")
+    assert detail.status_code == 200
+    assert "Warunkowe zatwierdzenie" in detail.get_data(as_text=True)
+    assert "required_answer" in detail.get_data(as_text=True)
+    audit = admin_app.extensions["services"].audit_log_service
+    original_write = audit.write_pending
+    monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
+    assert post_conditional(admin_client, form_id, pk).status_code == 302
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = db.get(FormSubmission, pk)
+        condition = row.data_json["_conditional_approval"]
+        assert condition["missing_fields"] == ["required_answer"]
+        assert condition["actor_id"] and condition["created_at"]
+        assert row.workflow_step == "supplement"
+        assert row.data_json["_audit_pending"]
+        operation_id = condition["operation_id"]
+    monkeypatch.setattr(audit, "write_pending", original_write)
+    html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    for _ in range(2):
+        assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/retry-audit",
+                                 data={"csrf_token": csrf}).status_code == 302
+    with factory() as db:
+        assert len(db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()) == 1
+    with pytest.raises(WorkflowTransitionError, match="uzupełnij"):
+        admin_app.extensions["services"].workflow_service.transition_to(public_id, "declaration")
+    assert not admin_app.extensions["services"].submission_repository.claim_submission_document_operation(
+        public_id, "signature", "test-lease")
+    action = f"/form/officer-decision-test/update/{public_id}?token=participant-test-token"
+    html = admin_client.get(action).get_data(as_text=True)
+    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
+    response = admin_client.post(action, data={"csrf_token": csrf, "required_answer": "Dane"})
+    assert response.status_code == 302
+    with factory() as db:
+        condition = db.get(FormSubmission, pk).data_json["_conditional_approval"]
+        assert condition["status"] == "completed" and condition["operation_id"] == operation_id
+        assert len(db.get(FormSubmission, pk).data_json["_conditional_approval_history"]) == 1
+        assert db.get(FormSubmission, pk).data_json["_audit_pending"]
+    monkeypatch.setattr(audit, "write_pending", original_write)
+    with admin_client.session_transaction() as session:
+        admin_csrf = session["admin_csrf_token"]
+    for _ in range(2):
+        assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/retry-audit",
+            data={"csrf_token": admin_csrf}).status_code == 302
+    with factory() as db:
+        row = db.get(FormSubmission, pk)
+        assert not row.data_json.get("_audit_pending")
+        assert len(row.data_json["_conditional_approval_history"]) == 1
+
+
+def test_conditional_approval_requires_decision_permission(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id, pk, _ = conditional_fixture(admin_app)
+    login(admin_client)
+    monkeypatch.setattr(admin_app.extensions["services"].verification_checklist_service,
+        "can_make_decision", lambda *args: False)
+    assert post_conditional(admin_client, form_id, pk).status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert "_conditional_approval" not in db.get(FormSubmission, pk).data_json
+
+
+@pytest.mark.parametrize("field_type,value,overrides", [
+    ("checkbox", "", {}), ("email", "invalid", {}),
+    ("text", "", {"officer_decision_reason": ""}),
+    ("text", "", {"conditional_deadline": "completed"}),
+    ("text", "", {"csrf_token": "invalid"}),
+])
+def test_conditional_approval_rejects_invalid_request(admin_app, admin_client, field_type, value, overrides):
+    create_user(admin_app)
+    form_id, pk, _ = conditional_fixture(admin_app, field_type=field_type, value=value)
+    login(admin_client)
+    post_conditional(admin_client, form_id, pk, **overrides)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        row = db.get(FormSubmission, pk)
+        assert row.workflow_step == "officer_review"
+        assert "_conditional_approval" not in row.data_json
+        assert not db.scalars(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk)).all()
 
 
 def test_officer_decision_commits_transition_and_audit_once(admin_app, admin_client):
@@ -266,7 +481,7 @@ def test_officer_decision_automatic_error_is_reported_after_commit(admin_app, ad
     form_id, pk, _ = officer_decision_fixture(admin_app)
     login(admin_client)
     workflow = admin_app.extensions["services"].workflow_service
-    monkeypatch.setattr(workflow, "run_automatic_steps", lambda *_: (_ for _ in ()).throw(WorkflowTransitionError("Test")))
+    monkeypatch.setattr(workflow, "run_automatic_steps", lambda *_, **__: (_ for _ in ()).throw(WorkflowTransitionError("Test")))
     assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
     with admin_client.session_transaction() as session:
         assert any("automatyczny etap workflow" in message for _, message in session.get("_flashes", []))
@@ -325,6 +540,7 @@ def test_submission_enters_versioned_decision_before_declaration(admin_app):
         services.workflow_service.transition_submission(
             submission, "DECLARATION_READY", target_step="ready_document",
             decision_code="approved", actor="officer", reason="officer_decision",
+            audit_operation_key=f"officer-decision:{submission.id}:approved",
         )
         db.commit()
         assert submission.workflow_step == submission.workflow_stage == "ready_document"
@@ -449,6 +665,11 @@ def test_declaration_step_hides_officer_decisions_even_with_stale_stage(admin_ap
 @pytest.mark.parametrize("stale_stage", [False, True])
 @pytest.mark.parametrize("legacy_signature", [False, True])
 def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_client, monkeypatch, stale_stage, legacy_signature):
+    monkeypatch.setattr(
+        admin_app.extensions["services"].document_service.pdf_render_service,
+        "render_document_pdf_bytes",
+        lambda **_kwargs: b"%PDF-1.4\n% declaration test\n",
+    )
     create_user(admin_app)
     form_id, pk, public_id = officer_decision_fixture(admin_app)
     login(admin_client)
@@ -506,7 +727,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
         data={"csrf_token": csrf, "access_token": token,
               "signed_declaration_pdf": (BytesIO(b"%PDF-1.4\n"), "signed.pdf")},
     )
-    assert early_upload.status_code == 302
+    assert early_upload.status_code == 409
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
     training_url = f"/submissions/{public_id}/trainings?token={token}"
@@ -544,7 +765,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     )
     assert signature_status.status_code == 200
     assert signature_status.json["can_download_declaration"] is True
-    assert signature_status.json["can_upload_signed_declaration"] is True
+    assert signature_status.json["can_upload_signed_declaration"] is not legacy_signature
     assert signature_status.json["declaration_stage_completed"] is False
     assert '<a href="https://example.com/podpis" target="_blank" rel="noopener noreferrer">Profil Zaufany</a>' in signature_status.json["instruction"]["current_stage_description"]
     assert "javascript:" not in signature_status.json["instruction"]["current_stage_description"]
@@ -553,7 +774,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert signature_page.status_code == 200
     signature_html = signature_page.get_data(as_text=True)
     assert "Pobierz deklarację PDF" in signature_html
-    assert 'name="signed_declaration_pdf"' in signature_html
+    assert ('name="signed_declaration_pdf"' in signature_html) is not legacy_signature
     assert "Wypełnij deklarację" not in signature_html
     assert "Wybierz lub zmień szkolenia" not in signature_html
     assert '<a href="https://example.com/podpis" target="_blank" rel="noopener noreferrer">Profil Zaufany</a>' in signature_html
@@ -563,7 +784,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert download_match is not None
     download_url = unescape(download_match.group(1))
     downloaded = admin_client.get(download_url)
-    assert downloaded.status_code == 200
+    assert downloaded.status_code == 200, download_url
     assert downloaded.data.startswith(b"%PDF")
     assert admin_client.get(download_url.replace(f"token={token}", "token=wrong-token")).status_code == 404
 
@@ -606,11 +827,46 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
     assert uploaded.status_code == 302
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         submission = db.get(FormSubmission, pk)
+        if legacy_signature:
+            # An explicit published stage without an action cannot authorize upload.
+            assert submission.declaration_signature_valid == ""
+            assert submission.workflow_step == "declaration_signature"
+            assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
+            return
         assert submission.declaration_signature_valid == "Tak"
         assert submission.workflow_step == "completed"
         signed_file = db.query(SubmissionFile).filter_by(submission_id=pk, signed=True,
                                                           document_id="declaration").one()
         assert signed_file.signature_status == "valid"
+
+
+def test_declaration_post_rejects_missing_data_due_before_document(admin_app, admin_client):
+    create_user(admin_app)
+    form_id, pk, public_id = officer_decision_fixture(admin_app)
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{pk}").get_data(as_text=True)
+    csrf = detail.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert admin_client.post(f"/admin/forms/{form_id}/submissions/{pk}/decision", data={
+        "csrf_token": csrf, "officer_decision": "pzytywna",
+    }).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        version = db.get(FormVersion, submission.form_version_id)
+        definition = deepcopy(version.definition_json)
+        definition["fields"].append({
+            "name": "missing_prior_data", "label": "Wymagane wcześniej", "type": "text", "required": True,
+            "availability": [{"step": "officer_review", "visible": True, "editable": True, "required": True}],
+        })
+        version.definition_json = definition
+        db.commit()
+    response = admin_client.post(
+        f"/declaration/officer-decision-test/{public_id}?token=participant-test-token",
+        data={"csrf_token": csrf, "declaration_note": "Uwagi", "participant_statement": "Potwierdzam"},
+    )
+    assert response.status_code == 200
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(FormSubmission, pk).declaration_generated == ""
+        assert db.query(SubmissionFile).filter_by(submission_id=pk, document_id="declaration").count() == 0
 
 
 @pytest.mark.parametrize(('decision', 'target'), [('accepted', 'declaration_generation'), ('rejected', 'end_rejected'), ('conditionally_accepted', 'declaration_generation')])
@@ -623,6 +879,8 @@ def test_submission_waits_for_approval_then_follows_configured_decision(admin_ap
     form_id, row, people = make_submission(admin_app, definition)
     services = admin_app.extensions['services']
     public_id = row['submission_id']
+    if decision != 'rejected':
+        complete_loty_submission(services, row, people)
     assert row['workflow_step'] == 'initial_acceptance'
     assert not services.workflow_service.can_execute_step(row, definition, 'declaration_generation')
     assert services.workflow_service.resolve_next_step(definition, 'initial_acceptance') is None
@@ -637,6 +895,9 @@ def test_submission_waits_for_approval_then_follows_configured_decision(admin_ap
     with factory() as db:
         submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == public_id)).scalar_one()
         pk = submission.id
+        if decision != 'rejected':
+            missing = services.form_version_service.submission_data_errors(submission, definition, db=db)
+            assert not missing, sorted(missing)
         assert services.decision_definition_service.repeatable_groups(submission)[0]['decisions'] == []
         with pytest.raises(DecisionDefinitionError):
             services.decision_definition_service.decide_item(db, submission, group_key='podrozni', item_id=people[0]['record_uuid'], decision_code='accepted', comment='', actor=SimpleNamespace(id=None))
@@ -820,12 +1081,17 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     create_user(admin_app)
     definition = load_form_definition('examples/forms/loty.json')
     workflow = explicit_workflow()
-    workflow['steps'][1]['decision_email'] = {'enabled': True, 'template_type': 'configured_decision'}
+    workflow['send_email_notifications'] = True
+    workflow['email_notifications'] = [{
+        'id': 'application_accepted', 'enabled': True, 'automatic': True,
+        'template_type': 'configured_decision',
+    }]
     workflow['steps'].insert(2, {'id': 'office_action', 'admin_label': 'Weryfikacja dokumentu', 'user_label': 'Dokument jest sprawdzany', 'stage_type': 'officer_action', 'status': 'OFFICER_REVIEW', 'next': 'completed'})
-    workflow['decision_types'][0]['target_step'] = 'office_action'
+    workflow['decision_types'][0].update(code='accepted', semantic_category='positive', target_step='office_action')
     definition['workflow'] = workflow
-    form_id, row, _ = make_submission(admin_app, definition)
+    form_id, row, people = make_submission(admin_app, definition)
     services = admin_app.extensions['services']
+    complete_loty_submission(services, row, people)
     pk = services.submission_repository.get_by_id(row['submission_id'])['id']
     deliveries = []
     monkeypatch.setattr(services.mail_dispatch_service, 'select_template', lambda *args: SimpleNamespace(id=1))
@@ -834,7 +1100,7 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     detail = f'/admin/forms/{form_id}/submissions/{pk}'
     html = admin_client.get(detail).get_data(as_text=True)
     csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
-    result = admin_client.post(detail + '/decision', data={'csrf_token': csrf, 'officer_decision': 'a'})
+    result = admin_client.post(detail + '/decision', data={'csrf_token': csrf, 'officer_decision': 'accepted'})
     assert result.status_code == 302
     assert services.submission_repository.get_by_id(row['submission_id'])['workflow_stage'] == 'office_action'
     assert len(deliveries) == 1

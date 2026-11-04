@@ -959,8 +959,17 @@ class FormVersionService:
             query = query.where(SubmissionFile.signed.is_(True))
         return db.execute(query.limit(1)).scalar_one_or_none() is not None
 
-    def require_submission_data_complete(self, db, submission: FormSubmission) -> None:
-        if not self.refresh_submission_completion(db, submission)["complete"]:
+    def require_submission_data_complete(self, db, submission: FormSubmission, *, allow_conditional: bool = True) -> None:
+        from services.submission_decision_service import ConditionalApproval
+        if allow_conditional and ConditionalApproval.active(submission):
+            ConditionalApproval.check(db, submission)
+            return
+        state = self.refresh_submission_completion(db, submission)
+        version = self.resolve_for_submission(db, submission)
+        # A UI may restrict upgrade errors to changed fields. Authorization must
+        # still validate every due field, including pre-existing missing values.
+        errors = self.submission_data_errors(submission, version.definition_json or {}, db=db)
+        if errors or not state["complete"]:
             raise FormVersionError("Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane.")
 
     def archive(self, db, version: FormVersion) -> None:

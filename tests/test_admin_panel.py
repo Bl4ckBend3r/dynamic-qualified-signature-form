@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -1120,6 +1120,110 @@ def test_admin_submission_edit_requires_scoped_edit_and_sensitive_permissions(ad
     }).status_code == 403
 
 
+def test_admin_can_retry_failed_submission_pdf(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, definition_json={"title": "PDF retry", "fields": []})
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="pdf-retry-admin",
+            form_slug="sample_form",
+            process_status="PDF_GENERATION_FAILED",
+            workflow_step="submission",
+            workflow_stage="submission",
+            data_json={"_pdf_generation_retry": {"pdf_filename": "sample_form-pdf-retry-admin.pdf"}},
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+    monkeypatch.setattr(
+        admin_app.extensions["services"].submission_service, "_render_form_pdf_bytes",
+        lambda *_args, **_kwargs: b"%PDF-1.4\nadmin retry",
+    )
+    monkeypatch.setattr(
+        admin_app.extensions["services"].mail_dispatch_service,
+        "dispatch_submission_received",
+        lambda *_args, **_kwargs: None,
+    )
+    login(admin_client)
+
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}")
+    assert detail.status_code == 200
+    assert "Ponów generowanie PDF" in detail.get_data(as_text=True)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-pdf",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert response.status_code == 302
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        files = db.execute(select(SubmissionFile).where(
+            SubmissionFile.submission_id == submission_pk,
+            SubmissionFile.document_type == "form_pdf",
+        )).scalars().all()
+        assert saved.process_status == "FORM_SUBMITTED"
+        assert saved.pdf_filename == "sample_form-pdf-retry-admin.pdf"
+        assert "_pdf_generation_retry" not in saved.data_json
+        assert len(files) == 1 and files[0].filename == saved.pdf_filename
+
+    repeated = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-pdf",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    assert repeated.status_code == 302
+    with factory() as db:
+        repeated_files = db.execute(select(SubmissionFile).where(
+            SubmissionFile.submission_id == submission_pk,
+            SubmissionFile.document_type == "form_pdf",
+        )).scalars().all()
+        assert len(repeated_files) == 1
+
+
+def test_pdf_continuation_workflow_event_is_recorded_once_per_operation(admin_app):
+    create_form(admin_app, slug="pdf-event-once")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="pdf-event-once-1",
+            form_slug="pdf-event-once",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+
+    repository = admin_app.extensions["services"].submission_repository
+    event = {
+        "previous_status": "RETURNED_FOR_CORRECTION",
+        "new_status": "FORM_SUBMITTED",
+        "previous_step": "returned_for_correction",
+        "new_step": "submission",
+        "actor_role": "participant",
+        "reason": "correction_resubmitted",
+        "source": "correction_resubmitted",
+    }
+    key = "pdf-continuation:operation-1:correction_resubmitted"
+
+    assert repository.record_workflow_event_once(
+        "pdf-event-once-1", event, idempotency_key=key,
+    )
+    assert repository.record_workflow_event_once(
+        "pdf-event-once-1", event, idempotency_key=key,
+    )
+
+    with factory() as db:
+        rows = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission_pk,
+            SubmissionWorkflowEvent.source == "correction_resubmitted",
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].side_effects["idempotency_key"] == key
+
+
 def test_admin_submission_edit_requires_confirmation_for_qualification_change(admin_app, admin_client, monkeypatch):
     create_user(admin_app)
     form_id = create_form(admin_app, definition_json={
@@ -2031,6 +2135,168 @@ def test_return_for_correction_endpoint_clears_state_and_sends_email(admin_app, 
         event = db.query(SubmissionWorkflowEvent).filter_by(source="returned_for_correction").one()
         assert event.previous_status == "AGREEMENT_WAITING_FOR_SIGNATURE"
         assert event.new_status == "RETURNED_FOR_CORRECTION"
+
+
+def test_return_for_correction_commits_audit_pending_and_retries_without_repeating_business_action(
+    admin_app, admin_client, monkeypatch,
+):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="rollback_form", name="Rollback Form")
+    submission_pk, submission_id = create_rollback_submission(admin_app)
+    login(admin_client)
+    audit_repository = admin_app.extensions["services"].audit_log_service.repository
+    original_append = audit_repository.append
+    deliveries = []
+
+    monkeypatch.setattr(
+        audit_repository,
+        "append",
+        lambda _entry: (_ for _ in ()).throw(OSError("nextcloud unavailable")),
+    )
+    monkeypatch.setattr(
+        admin_app.extensions["services"].mail_dispatch_service,
+        "dispatch_returned_for_correction",
+        lambda public_id, **kwargs: deliveries.append((public_id, kwargs)) or SimpleNamespace(
+            status="sent", error_message="",
+        ),
+    )
+
+    response = admin_client.post(
+        f"/admin/submissions/{submission_id}/return-for-correction",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "reason": "Wymagana poprawa",
+            "message_to_user": "Uzupełnij dane.",
+            "send_email": "on",
+        },
+    )
+
+    assert response.status_code == 302
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        marker = saved.data_json["_audit_pending"]
+        operation_id = marker["operation_id"]
+        assert saved.process_status == "RETURNED_FOR_CORRECTION"
+        assert marker["event"]["event_type"] == "RETURNED_FOR_CORRECTION"
+        assert deliveries == []
+        assert db.query(SubmissionWorkflowEvent).filter_by(source="returned_for_correction").count() == 1
+
+    monkeypatch.setattr(audit_repository, "append", original_append)
+    retried = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert retried.status_code == 302
+    assert len(deliveries) == 1
+    with factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert "_audit_pending" not in (saved.data_json or {})
+        assert db.query(SubmissionWorkflowEvent).filter_by(source="returned_for_correction").count() == 1
+    event_id = marker["event"]["event_id"]
+    assert event_id
+    assert operation_id
+
+
+def test_required_audit_retry_finishes_second_training_agreement_event_without_repeating_continuation(
+    admin_app, admin_client, monkeypatch,
+):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="training_audit_retry", name="Training audit retry")
+    services = admin_app.extensions["services"]
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="training-audit-retry",
+            form_slug="training_audit_retry",
+            form_name="Training audit retry",
+        )
+        db.add(submission)
+        db.flush()
+        marker = services.audit_log_service.stage_pending_events(
+            submission,
+            submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            operation_key="training-agreement-upload:file-17:agreement-1",
+            required_permission="can_manage_documents",
+            continuation={
+                "kind": "training_agreement_signed_upload",
+                "document_id": "training_agreement",
+                "filename": "agreement-signed.pdf",
+                "checksum_sha256": "abc123",
+            },
+            events=[
+                {"event_type": "SIGNED_DOCUMENT_UPLOADED", "metadata": {"filename": "agreement-signed.pdf"}},
+                {"event_type": "SIGNATURE_VERIFIED", "metadata": {"result": "VALID_SIGNATURE"}},
+            ],
+        )
+        db.commit()
+        submission_pk = submission.id
+
+    original_append = services.audit_log_service.repository.append
+    append_calls = []
+    failed = False
+
+    def fail_second_once(entry):
+        nonlocal failed
+        append_calls.append(entry["event_id"])
+        if len(append_calls) == 2 and not failed:
+            failed = True
+            raise OSError("Nextcloud unavailable before second audit")
+        return original_append(entry)
+
+    continuations = []
+
+    def fail_first_continuation(submission_id, continuation):
+        continuations.append((submission_id, continuation))
+        if len(continuations) == 1:
+            raise RuntimeError("Process stopped before continuation")
+
+    monkeypatch.setattr(services.audit_log_service.repository, "append", fail_second_once)
+    monkeypatch.setattr(
+        services.document_service,
+        "resume_training_agreement_upload",
+        fail_first_continuation,
+    )
+    login(admin_client)
+
+    first = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert first.status_code == 302
+    assert continuations == []
+    with factory() as db:
+        assert "_audit_pending" in (db.get(FormSubmission, submission_pk).data_json or {})
+
+    second = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert second.status_code == 302
+    assert [item["event_type"] for item in marker["events"]] == [
+        "SIGNED_DOCUMENT_UPLOADED",
+        "SIGNATURE_VERIFIED",
+    ]
+    assert len(continuations) == 1
+    with factory() as db:
+        pending = (db.get(FormSubmission, submission_pk).data_json or {})["_audit_pending"]
+        assert pending["audit_complete"] is True
+
+    audit_calls_after_completion = len(append_calls)
+    third = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert third.status_code == 302
+    assert len(continuations) == 2
+    assert len(append_calls) == audit_calls_after_completion
+    with factory() as db:
+        assert "_audit_pending" not in (db.get(FormSubmission, submission_pk).data_json or {})
 
 
 def test_return_for_correction_requires_reason_and_is_forbidden_for_form_manager(admin_app, admin_client):
@@ -3762,6 +4028,30 @@ def test_super_admin_manages_import_instruction_and_download_is_protected(admin_
         assert db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one_or_none() is None
 
 
+def test_html_import_instruction_is_downloaded_as_attachment(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    page = admin_client.get("/admin/site/documents").get_data(as_text=True)
+    token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.post(
+        "/admin/site/documents",
+        data={
+            "csrf_token": token,
+            "document_type": "form_import_instruction",
+            "document_file": (io.BytesIO(b"<script>alert(1)</script>"), "instruction.html", "text/html"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        document_id = db.query(ServiceDocument).filter_by(document_type="form_import_instruction").one().id
+
+    download = admin_client.get(f"/admin/site/documents/{document_id}/file")
+    assert download.status_code == 200
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+    assert download.headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_workflow_can_be_edited_after_json_import(admin_app, admin_client):
     create_user(admin_app)
     definition = {
@@ -4230,6 +4520,87 @@ def test_officer_decision_visible_and_quick_update(admin_app, admin_client):
     assert "Decyzja urzednika" in html
     assert "Zaakceptowano" in html
     assert f'name="officer_decision_{submission_pk}"' not in html
+
+
+def test_officer_decision_commits_with_audit_pending_and_retries_without_duplicate(
+    admin_app, admin_client, monkeypatch,
+):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="decision_audit_pending", name="Decision audit")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="decision-audit-pending",
+            form_slug="decision_audit_pending",
+            form_name="Decision audit",
+            email="a@example.com",
+            process_status="FORM_SUBMITTED",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+
+    audit_repository = admin_app.extensions["services"].audit_log_service.repository
+    original_append = audit_repository.append
+    monkeypatch.setattr(
+        audit_repository,
+        "append",
+        lambda entry: (_ for _ in ()).throw(OSError("Nextcloud unavailable")),
+    )
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/decision",
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "officer_decision": "accepted",
+            "officer_decision_reason": "",
+        },
+    )
+
+    assert response.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        marker = saved.data_json["_audit_pending"]
+        operation_id = marker["operation_id"]
+        assert saved.officer_decision == "accepted"
+        assert db.query(SubmissionDecision).filter_by(submission_id=submission_pk).count() == 1
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission_pk).count() == 1
+
+    monkeypatch.setattr(audit_repository, "append", original_append)
+    from routes.admin import submissions as admin_submissions
+    original_resume = admin_submissions._resume_audited_workflow_continuation
+    monkeypatch.setattr(
+        admin_submissions,
+        "_resume_audited_workflow_continuation",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("interrupted before continuation")),
+    )
+    retried = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert retried.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert saved.data_json["_audit_pending"]["audit_complete"] is True
+    monkeypatch.setattr(admin_submissions, "_resume_audited_workflow_continuation", original_resume)
+    monkeypatch.setattr(
+        audit_repository,
+        "append",
+        lambda _entry: (_ for _ in ()).throw(AssertionError("audit was written twice")),
+    )
+    retried = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert retried.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert "_audit_pending" not in (saved.data_json or {})
+        assert db.query(SubmissionDecision).filter_by(submission_id=submission_pk).count() == 1
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission_pk).count() == 1
+    assert operation_id
 
 
 def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_client):
@@ -5086,6 +5457,48 @@ def test_send_bulk_mail_to_selected_submissions_uses_matching_template(admin_app
         ).scalar_one_or_none() is None
 
 
+def test_pending_required_audit_blocks_manual_and_bulk_mail(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="audit_pending_mail", name="Audit pending")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="audit-pending-mail",
+            form_slug="audit_pending_mail",
+            form_name="Audit pending",
+            email="jan@example.com",
+            data_json={"_audit_pending": {"operation_id": "op-mail"}},
+        )
+        db.add(submission)
+        db.add(MailTemplate(form_id=form_id, name="Info", subject="Test", html_body="<p>Test</p>"))
+        db.commit()
+        submission_pk = submission.id
+
+    sent = []
+    admin_app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    detail = admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail")
+    detail_token = detail.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    manual = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
+        data={"csrf_token": detail_token, "to_email": "jan@example.com"},
+    )
+    list_html = admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    list_token = list_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    bulk = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/mail-selected",
+        data={"csrf_token": list_token, "submission_ids": ["audit-pending-mail"]},
+        follow_redirects=True,
+    )
+
+    assert manual.status_code == 302
+    assert "pominięte 1" in bulk.get_data(as_text=True)
+    assert sent == []
+    with session_factory() as db:
+        assert db.query(EmailLog).count() == 0
+
+
 def test_bulk_mail_opens_composer_with_preview_variables_and_missing_addresses(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="bulk_composer", name="Bulk composer")
@@ -5848,6 +6261,33 @@ def test_super_admin_can_toggle_logo_and_fetch_asset(admin_app, admin_client):
     assert admin_client.get(f"/admin/logos/{logo_id}/asset").status_code == 200
 
 
+def test_svg_logo_assets_are_sandboxed(admin_app, admin_client):
+    create_user(admin_app)
+    login(admin_client)
+    logo_path = Path(admin_app.config["TEMP_DIR"]) / "logo.svg"
+    logo_path.parent.mkdir(parents=True, exist_ok=True)
+    logo_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        logo = Logo(
+            name="SVG",
+            filename="logo.svg",
+            storage_path=str(logo_path),
+            mime_type="image/svg+xml",
+            size_bytes=logo_path.stat().st_size,
+            checksum_sha256="abc",
+            active=True,
+        )
+        db.add(logo)
+        db.commit()
+        logo_id = logo.id
+
+    for path in (f"/admin/logos/{logo_id}/asset", f"/assets/logos/{logo_id}/logo.svg"):
+        response = admin_client.get(path)
+        assert response.status_code == 200
+        assert response.headers["Content-Security-Policy"].startswith("sandbox")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_regular_admin_cannot_toggle_logo(admin_app, admin_client):
     create_user(admin_app, role="admin")
     logo_path = Path(admin_app.config["TEMP_DIR"]) / "logo.png"
@@ -6601,10 +7041,10 @@ def test_submission_delete_button_is_hidden_until_selection(admin_app, admin_cli
 
     assert "Zgłoszenia formularza" in html
     assert re.search(r'<button\b(?=[^>]*data-delete-button)(?=[^>]*disabled)[^>]*>', html, re.S)
-    assert "Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć." in html
+    assert "Czy na pewno chcesz przenieść zaznaczone zgłoszenia do archiwum?" in html
 
 
-def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
+def test_bulk_delete_archives_submission_and_preserves_related_rows(admin_app, admin_client):
     user_id = create_user(admin_app)
     form_id = create_form(admin_app, slug="delete_rows", name="Delete Rows", user_id=user_id)
     session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
@@ -6612,7 +7052,7 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
         submission = FormSubmission(submission_id="abc", form_slug="delete_rows", form_name="Delete Rows")
         db.add(submission)
         db.flush()
-        db.add(SubmissionFile(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", filename="a.pdf", storage_path="x"))
+        db.add(SubmissionFile(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", filename="a.pdf", storage_path="x", document_type="form_pdf"))
         db.add(SubmissionDecision(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", decision="accepted"))
         db.add(SubmissionWorkflowEvent(submission_id=submission.id, public_submission_id="abc", form_slug="delete_rows", new_status="FORM_SUBMITTED"))
         db.add(EmailLog(submission_id=submission.id, public_submission_id="abc", status="sent"))
@@ -6622,6 +7062,21 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
     with admin_client.session_transaction() as session:
         token = session["admin_csrf_token"]
 
+    with admin_app.app_context():
+        repository = admin_app.extensions["services"].submission_repository
+        assert len(repository.list_submission_files("abc")) == 1
+        assert repository.get_file_metadata("abc", "a.pdf") is not None
+        assert repository.get_submission_file_for_document("abc", document_type="form_pdf") is not None
+        assert repository.get_document_by_type("abc", "form_pdf") is not None
+        assert len(repository.list_workflow_events("abc")) == 1
+        assert len(repository.list_submission_decisions("abc")) == 1
+
+    rejected = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"submission_pk_ids": str(submission_pk)},
+    )
+    assert rejected.status_code == 400
+
     response = admin_client.post(
         f"/admin/forms/{form_id}/submissions/delete-selected",
         data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
@@ -6629,11 +7084,60 @@ def test_bulk_delete_removes_submission_related_rows(admin_app, admin_client):
 
     assert response.status_code == 302
     with session_factory() as db:
-        assert db.query(FormSubmission).count() == 0
-        assert db.query(SubmissionFile).count() == 0
-        assert db.query(SubmissionDecision).count() == 0
-        assert db.query(SubmissionWorkflowEvent).count() == 0
-        assert db.query(EmailLog).count() == 0
+        assert db.get(FormSubmission, submission_pk) is None
+        archived = db.execute(
+            select(FormSubmission).where(FormSubmission.id == submission_pk)
+            .execution_options(include_deleted_submissions=True)
+        ).scalar_one()
+        assert archived.deleted_at is not None
+        assert archived.deleted_by_user_id == user_id
+        original_deleted_at = archived.deleted_at
+        assert db.query(SubmissionFile).count() == 1
+        assert db.query(SubmissionDecision).count() == 1
+        assert db.query(SubmissionWorkflowEvent).count() == 1
+        assert db.query(EmailLog).count() == 1
+
+    with admin_app.app_context():
+        repository = admin_app.extensions["services"].submission_repository
+        assert repository.get_by_id("abc") is None
+        assert repository.list_submission_files("abc") == []
+        assert repository.get_file_metadata("abc", "a.pdf") is None
+        assert repository.get_submission_file_for_document("abc", document_type="form_pdf") is None
+        assert repository.get_document_by_type("abc", "form_pdf") is None
+        assert repository.list_workflow_events("abc") == []
+        assert repository.list_submission_decisions("abc") == []
+        with session_factory() as db:
+            result = admin_app.extensions["services"].mail_dispatch_service.dispatch_to_submission(
+                db=db, form=db.get(Form, form_id),
+                submission=SimpleNamespace(id=submission_pk, deleted_at=None),
+            )
+            assert result.status == "skipped"
+            assert db.query(EmailLog).count() == 1
+
+    assert "abc" not in admin_client.get(f"/admin/forms/{form_id}/submissions").get_data(as_text=True)
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}").status_code == 404
+    assert "abc" in admin_client.get("/admin/submissions/archive").get_data(as_text=True)
+    archive_url = f"/admin/forms/{form_id}/submissions/archive/{submission_pk}"
+    archive_html = admin_client.get(archive_url).get_data(as_text=True)
+    assert "a.pdf" in archive_html and "Dane zgłoszenia" in archive_html
+    assert admin_client.post(archive_url, data={"csrf_token": token}).status_code == 405
+    form_delete = admin_client.post(f"/admin/forms/{form_id}/delete", data={"csrf_token": token})
+    assert form_delete.status_code == 302
+    with session_factory() as db:
+        assert db.get(Form, form_id) is not None
+
+    retry = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/delete-selected",
+        data={"csrf_token": token, "submission_pk_ids": str(submission_pk)},
+    )
+    assert retry.status_code == 302
+    with session_factory() as db:
+        archived = db.execute(
+            select(FormSubmission).where(FormSubmission.id == submission_pk)
+            .execution_options(include_deleted_submissions=True)
+        ).scalar_one()
+        assert archived.deleted_at == original_deleted_at
+        assert archived.deleted_by_user_id == user_id
 
 
 def test_regular_admin_cannot_delete_submission_without_form_permission(admin_app, admin_client):
@@ -6654,6 +7158,12 @@ def test_regular_admin_cannot_delete_submission_without_form_permission(admin_ap
     )
 
     assert response.status_code == 403
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, submission_pk)
+        submission.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+    assert admin_client.get(f"/admin/forms/{form_id}/submissions/archive/{submission_pk}").status_code == 403
+    assert "abc" not in admin_client.get("/admin/submissions/archive").get_data(as_text=True)
 
 
 def test_form_regulation_upload_and_public_link(admin_app, admin_client):
@@ -7531,6 +8041,134 @@ def _create_submission_waiting_for_agreement_review(admin_app, form_slug: str, s
         )
         db.commit()
         return submission.id
+
+
+def test_office_signed_detection_commits_audit_pending_and_retries_without_duplicate(
+    admin_app, admin_client, monkeypatch,
+):
+    from datetime import datetime, timezone
+
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="office_audit_pending", name="Office audit")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        submission = FormSubmission(
+            submission_id="office-audit-pending",
+            form_slug="office_audit_pending",
+            form_name="Office audit",
+            email="beneficiary@example.com",
+            process_status="AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE",
+            workflow_step="agreement",
+        )
+        db.add(submission)
+        db.commit()
+        submission_pk = submission.id
+
+    def fake_check(db, form, submission, **kwargs):
+        now = datetime.now(timezone.utc)
+        previous_status = submission.process_status
+        submission.process_status = "AGREEMENT_SIGNED_BY_OFFICE"
+        decision = SubmissionDecision(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            decision="office_agreement_found",
+            previous_status=previous_status,
+            target_status=submission.process_status,
+            decided_at=now,
+        )
+        db.add(decision)
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            previous_status=previous_status,
+            new_status=submission.process_status,
+            previous_step="agreement",
+            new_step="AGREEMENT_SIGNED_BY_OFFICE",
+            source="agreement_signed_by_office",
+        ))
+        db.add(SubmissionFile(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            document_id="training_agreement",
+            document_type="agreement_signed_by_office",
+            filename="office.pdf",
+            original_filename="office.pdf",
+            storage_path="output/office_audit_pending/pdf/umowy/podpisane_przez_urzad/office.pdf",
+            mime_type="application/pdf",
+            training_key="training-1",
+            signed=True,
+            status="signed",
+        ))
+        db.flush()
+        return SimpleNamespace(
+            found=True,
+            folder="output/office_audit_pending/pdf/umowy/podpisane_przez_urzad",
+            expected_filenames=("office.pdf",),
+            message="Znaleziono: 1.",
+            decision_record=decision,
+            decision_status="AGREEMENT_SIGNED_BY_OFFICE",
+            final_status="AGREEMENT_SIGNED_BY_OFFICE",
+            checked_count=1,
+            found_count=1,
+            missing_filenames=(),
+            already_confirmed=(),
+            errors=(),
+            training_ids=("training-1",),
+        )
+
+    services = admin_app.extensions["services"]
+    services.storage.direct_files[
+        "output/office_audit_pending/pdf/umowy/podpisane_przez_urzad/office.pdf"
+    ] = b"%PDF-1.7 office"
+    deliveries = []
+    monkeypatch.setattr(
+        services.mail_dispatch_service,
+        "dispatch_to_submission",
+        lambda **kwargs: (
+            deliveries.append(kwargs)
+            or SimpleNamespace(sent=True, log=SimpleNamespace(id=77), error_message="")
+        ),
+    )
+    monkeypatch.setattr(services.office_signed_agreement_service, "check", fake_check)
+    original_append = services.audit_log_service.repository.append
+    monkeypatch.setattr(
+        services.audit_log_service.repository,
+        "append",
+        lambda entry: (_ for _ in ()).throw(OSError("Nextcloud unavailable")),
+    )
+    login(admin_client)
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/check-office-signed-agreement",
+        data={"csrf_token": admin_csrf(admin_client), "send_notification": "on"},
+    )
+
+    assert response.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        marker = saved.data_json["_audit_pending"]
+        assert saved.process_status == "AGREEMENT_SIGNED_BY_OFFICE"
+        assert marker["event"]["event_type"] == "OFFICE_SIGNED_AGREEMENT_REGISTERED"
+        assert db.query(SubmissionDecision).filter_by(submission_id=submission_pk).count() == 1
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission_pk).count() == 1
+        assert deliveries == []
+
+    monkeypatch.setattr(services.audit_log_service.repository, "append", original_append)
+    retried = admin_client.post(
+        f"/admin/forms/{form_id}/submissions/{submission_pk}/retry-audit",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert retried.status_code == 302
+    with session_factory() as db:
+        saved = db.get(FormSubmission, submission_pk)
+        assert "_audit_pending" not in (saved.data_json or {})
+        assert db.query(SubmissionDecision).filter_by(submission_id=submission_pk).count() == 1
+        assert db.query(SubmissionWorkflowEvent).filter_by(submission_id=submission_pk).count() == 1
+    assert len(deliveries) == 1
+    assert deliveries[0]["at_most_once_key"].startswith("office-agreement-mail:")
 
 
 def test_admin_shows_application_decision_only_during_review_and_agreement_decision_after_upload(admin_app, admin_client):
@@ -9718,6 +10356,183 @@ def test_agreement_builder_launcher_uses_reusable_popup_and_reports_blocker(admi
         assert error.is_visible()
         assert "zablokowała otwarcie kreatora" in error.inner_text()
         browser.close()
+
+
+@pytest.mark.parametrize("kind,metadata_key", [
+    ("agreement", "contract_docx_template"),
+    ("declaration", "declaration_docx_template"),
+])
+def test_docx_delete_commit_failure_preserves_active_template(admin_app, admin_client, monkeypatch, kind, metadata_key):
+    from sqlalchemy.orm import Session
+
+    create_user(admin_app)
+    path = f"output/delete_commit/templates/{kind}/{kind}-template.docx"
+    form_id = create_form(admin_app, slug="delete_commit", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {
+            metadata_key: {"storage_path": path}, f"{kind if kind == 'declaration' else 'contract'}_template_source": "docx",
+        },
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "commit", lambda self: (_ for _ in ()).throw(RuntimeError("DB unavailable")))
+        response = admin_client.post(f"/admin/forms/{form_id}/{kind}-template/docx/delete",
+                                     data={"csrf_token": admin_csrf(admin_client)})
+        assert response.status_code == 500
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow[metadata_key]["storage_path"] == path
+        assert workflow.get("_docx_delete_pending") is None
+    assert storage.direct_files[path] == b"old template"
+
+
+@pytest.mark.parametrize("kind,metadata_key", [
+    ("agreement", "contract_docx_template"),
+    ("declaration", "declaration_docx_template"),
+])
+def test_docx_delete_storage_failure_retries_idempotently(admin_app, admin_client, monkeypatch, kind, metadata_key):
+    create_user(admin_app)
+    path = f"output/delete_retry/templates/{kind}/{kind}-template.docx"
+    form_id = create_form(admin_app, slug="delete_retry", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {metadata_key: {"storage_path": path}},
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    service = admin_app.extensions["services"].agreement_docx_template_service
+    original_delete = service.delete
+    calls = []
+
+    def failing_once(metadata):
+        calls.append(metadata["storage_path"])
+        if len(calls) == 1:
+            raise OSError("Nextcloud unavailable")
+        original_delete(metadata)
+
+    monkeypatch.setattr(service, "delete", failing_once)
+    url = f"/admin/forms/{form_id}/{kind}-template/docx/delete"
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert metadata_key not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+    assert storage.direct_files[path] == b"old template"
+
+    assert "Ponów sprzątanie DOCX" in admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
+    new_path = f"output/delete_retry/templates/{kind}/{kind}-template-new.docx"
+    storage.direct_files[new_path] = b"new template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+        definition = dict(form.definition_json)
+        workflow = dict(definition["workflow"])
+        workflow[metadata_key] = {"storage_path": new_path}
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+    retry_url = f"/admin/forms/{form_id}/docx-template/cleanup-retry"
+    assert admin_client.post(retry_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(retry_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert workflow[metadata_key]["storage_path"] == new_path
+        assert "_docx_delete_pending" not in workflow
+    assert path not in storage.direct_files
+    assert storage.direct_files[new_path] == b"new template"
+    assert calls == [path, path]
+
+
+def test_docx_delete_recovers_after_commit_before_storage_cleanup(admin_app, admin_client, monkeypatch):
+    import routes.admin.forms as forms_routes
+
+    create_user(admin_app)
+    path = "output/delete_crash/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_crash", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"contract_docx_template": {"storage_path": path}},
+    })
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/agreement-template/docx/delete"
+    with monkeypatch.context() as patch:
+        patch.setattr(forms_routes, "_cleanup_deleted_docx_templates", lambda db, form: (_ for _ in ()).throw(RuntimeError("process stopped")))
+        assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 500
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert "contract_docx_template" not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+    assert storage.direct_files[path] == b"old template"
+    import app as app_module
+
+    class RestartConfig(AdminTestConfig):
+        DATABASE_URL = admin_app.config["DATABASE_URL"]
+        TEMP_DIR = admin_app.config["TEMP_DIR"]
+
+    restarted_app = app_module.create_app(config_object=RestartConfig, storage_override=storage)
+    restarted_client = restarted_app.test_client()
+    login(restarted_client)
+    retry_url = f"/admin/forms/{form_id}/docx-template/cleanup-retry"
+    assert restarted_client.post(retry_url, data={"csrf_token": admin_csrf(restarted_client)}).status_code == 302
+    assert path not in storage.direct_files
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert "_docx_delete_pending" not in db.get(Form, form_id).definition_json["workflow"]
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_docx_delete_preserves_file_used_by_legacy_submission(admin_app, admin_client, archived):
+    create_user(admin_app)
+    path = "output/delete_used/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_used", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"contract_docx_template": {"storage_path": path}},
+    })
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormSubmission(
+            submission_id="delete-used-1", form_slug="delete_used",
+            deleted_at=datetime.now(timezone.utc) if archived else None,
+        ))
+        db.commit()
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"old template"
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/agreement-template/docx/delete"
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(f"/admin/forms/{form_id}/docx-template/cleanup-retry",
+                             data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert storage.direct_files[path] == b"old template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        workflow = db.get(Form, form_id).definition_json["workflow"]
+        assert "contract_docx_template" not in workflow
+        assert workflow["_docx_delete_pending"] == [path]
+
+
+def test_docx_cleanup_retry_preserves_file_referenced_by_form_version(admin_app, admin_client):
+    create_user(admin_app)
+    path = "output/delete_version/templates/agreement/agreement-template.docx"
+    form_id = create_form(admin_app, slug="delete_version", definition_json={
+        "title": "DOCX", "fields": [], "workflow": {"_docx_delete_pending": [path]},
+    })
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormVersion(
+            form_id=form_id, version_major=1, version_minor=0, version_label="1.0", status="published",
+            definition_json={"workflow": {"contract_docx_template": {"storage_path": path}}},
+        ))
+        db.commit()
+    storage = admin_app.extensions["services"].storage
+    storage.direct_files[path] = b"versioned template"
+    login(admin_client)
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/docx-template/cleanup-retry",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert response.status_code == 302
+    assert storage.direct_files[path] == b"versioned template"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.get(Form, form_id).definition_json["workflow"]["_docx_delete_pending"] == [path]
 
 
 def test_agreement_docx_upload_also_prepares_editable_builder_draft(admin_app, admin_client):

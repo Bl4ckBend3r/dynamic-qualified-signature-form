@@ -93,7 +93,7 @@
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-qualification-recheck-selection></div>
 </form>
-<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
+<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz przenieść zaznaczone zgłoszenia do archiwum?">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-delete-selection></div>
@@ -122,7 +122,8 @@
         {% if can_sign_office_agreement and can_send_email %}<label class="admin-check admin-submission-bulk__notification"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>{% endif %}
         {% if can_make_decision %}<button class="admin-button compact" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>{% endif %}
     </div>
-    {% if not read_only %}<details class="admin-submission-bulk__more"><summary class="admin-button-secondary compact">Więcej</summary><button class="admin-button-danger compact" type="submit" form="bulk-delete-form" data-delete-button disabled>Usuń zaznaczone</button></details>{% endif %}
+    {% if not read_only %}<details class="admin-submission-bulk__more"><summary class="admin-button-secondary compact">Więcej</summary><button class="admin-button-danger compact" type="submit" form="bulk-delete-form" data-delete-button disabled>Archiwizuj zaznaczone</button></details>{% endif %}
+    <a href="{{ url_for('admin.submissions_archive') }}">Archiwum zgłoszeń</a>
 </div>{% endif %}
 <form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">

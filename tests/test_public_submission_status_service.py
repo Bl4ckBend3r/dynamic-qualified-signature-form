@@ -123,6 +123,68 @@ def test_blocked_agreement_overrides_stale_positive_status_and_disables_actions(
     assert "podpis" not in status["next_action"].lower()
 
 
+def test_pdf_generation_failure_overrides_explicit_workflow_and_disables_document_actions():
+    row = accepted_row(
+        process_status="PDF_GENERATION_FAILED",
+        workflow_step="documents",
+        workflow_stage="documents",
+        declaration_filename="declaration.pdf",
+        agreement_filename="agreement.pdf",
+    )
+    form_config = {
+        "workflow": {
+            "flow_mode": "explicit",
+            "initial_step": "documents",
+            "steps": [{
+                "id": "documents",
+                "stage_type": "documents",
+                "document_lifecycle": "group",
+                "status": "WAITING_FOR_SIGNATURE",
+                "user_label": "Podpisz dokument",
+            }],
+        },
+        "documents": [{
+            "id": "declaration",
+            "kind": "generated_pdf",
+            "workflow_step": "documents",
+            "signature_required": True,
+        }],
+    }
+
+    status = build_public_submission_status(row, form_config=form_config)
+
+    assert status["effective_process_status"] == "PDF_GENERATION_FAILED"
+    assert status["status_title"] == "Zgłoszenie zostało zapisane"
+    assert status["status"]["step"] == "documents"
+    assert status["can_fill_declaration"] is False
+    assert status["can_download_declaration"] is False
+    assert status["can_upload_signed_declaration"] is False
+    assert status["can_generate_agreement"] is False
+    assert status["can_download_agreement"] is False
+    assert status["can_upload_signed_agreement"] is False
+
+
+def test_pdf_continuation_pending_remains_publicly_blocked_after_status_restore():
+    row = accepted_row(
+        process_status="FORM_SUBMITTED",
+        workflow_step="submission",
+        workflow_stage="submission",
+        data_json={
+            "_pdf_generation_retry": {
+                "phase": "continuation_pending",
+                "pdf_filename": "sample.pdf",
+            }
+        },
+    )
+
+    status = build_public_submission_status(row)
+
+    assert status["effective_process_status"] == "PDF_GENERATION_FAILED"
+    assert status["can_download_declaration"] is False
+    assert status["can_upload_signed_declaration"] is False
+    assert status["can_upload_signed_agreement"] is False
+
+
 def test_training_agreement_upload_is_available_only_after_download():
     agreement = {
         "id": "python",
@@ -266,7 +328,8 @@ def test_explicit_declaration_availability_uses_current_step_and_versioned_docum
         "documents": [{"id": "declaration", "enabled": document_enabled}],
         "workflow": {"flow_mode": "explicit", "steps": [
             {"id": "officer_review", "stage_type": "decision", "status": "WAITING_FOR_OFFICER_DECISION"},
-            {"id": "declaration", "stage_type": "document", "status": "DECLARATION_READY",
+            {"id": "declaration", "stage_type": "user_action", "document_id": "declaration",
+             "action": "generate_document", "status": "DECLARATION_READY",
              "next_action": "Uzupełnij i wygeneruj deklarację"},
         ]},
     }

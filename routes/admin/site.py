@@ -256,4 +256,11 @@ def service_document_admin_file(document_id: int):
         path = Path(document.storage_path or "")
         if not path.exists():
             abort(404)
-        return send_file(path, mimetype=document.mime_type or None, download_name=document.original_filename)
+        response = send_file(
+            path,
+            mimetype=document.mime_type or None,
+            download_name=document.original_filename,
+            as_attachment=document.mime_type == "text/html",
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response

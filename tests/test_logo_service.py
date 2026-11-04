@@ -16,6 +16,7 @@ from services.logo_service import (
     update_logo_metadata,
 )
 from werkzeug.security import generate_password_hash
+from services.upload_validation import UploadValidationError, validate_logo_upload
 
 
 PNG_BYTES = (
@@ -24,6 +25,40 @@ PNG_BYTES = (
     b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
     b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+
+def test_svg_logo_upload_rejects_embedded_html_with_encoded_script():
+    content = (
+        b'<svg xmlns="http://www.w3.org/2000/svg">'
+        b'<foreignObject><iframe srcdoc="&#60;script&#62;alert(1)&#60;/script&#62;"/>'
+        b'</foreignObject></svg>'
+    )
+
+    with pytest.raises(UploadValidationError):
+        validate_logo_upload("logo.svg", content, "image/svg+xml")
+
+
+def test_svg_logo_upload_accepts_static_vector():
+    content = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 1"/></svg>'
+
+    assert validate_logo_upload("logo.svg", content, "image/svg+xml") == "image/svg+xml"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.org/track.png"/></svg>',
+        b'<!DOCTYPE svg [<!ENTITY x "test">]><svg xmlns="http://www.w3.org/2000/svg"/>',
+        b'<?xml-stylesheet href="https://example.org/style.css"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><animateTransform attributeName="href"/></svg>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><path style="fill:url(https://example.org/a.svg)"/></svg>',
+    ],
+)
+def test_svg_logo_upload_rejects_active_or_external_content(content):
+    with pytest.raises(UploadValidationError):
+        validate_logo_upload("logo.svg", content, "image/svg+xml")
 
 
 def test_safe_asset_filename_removes_path_and_unsafe_chars():

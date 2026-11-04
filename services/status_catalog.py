@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 class ProcessStatusCode(StrEnum):
     DRAFT = "DRAFT"
+    PDF_GENERATION_FAILED = "PDF_GENERATION_FAILED"
     SUBMITTED = "SUBMITTED"
     WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
     REVIEW_ACCEPTED = "REVIEW_ACCEPTED"
@@ -38,6 +39,12 @@ class StatusDefinition:
 
 STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
     ProcessStatusCode.DRAFT: StatusDefinition(ProcessStatusCode.DRAFT, "Szkic", allowed_transitions=(ProcessStatusCode.SUBMITTED,)),
+    ProcessStatusCode.PDF_GENERATION_FAILED: StatusDefinition(
+        ProcessStatusCode.PDF_GENERATION_FAILED,
+        "Zgłoszenie zapisane — dokument oczekuje na przygotowanie",
+        requires_officer_action=True,
+        allowed_transitions=(ProcessStatusCode.SUBMITTED,),
+    ),
     ProcessStatusCode.SUBMITTED: StatusDefinition(
         ProcessStatusCode.SUBMITTED,
         "Wniosek złożony",
@@ -115,6 +122,7 @@ STATUS_CATALOG: dict[ProcessStatusCode, StatusDefinition] = {
 
 
 LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
+    "PDF_GENERATION_FAILED": ProcessStatusCode.PDF_GENERATION_FAILED,
     "FORM_SUBMITTED": ProcessStatusCode.SUBMITTED,
     "AUTO_REJECTED": ProcessStatusCode.AUTO_REJECTED,
     "RETURNED_FOR_CORRECTION": ProcessStatusCode.RETURNED_FOR_CORRECTION,
@@ -151,6 +159,7 @@ LEGACY_STATUS_MAP: dict[str, ProcessStatusCode] = {
 
 LEGACY_STATUS_LABELS: dict[str, str] = {
     "zlozony": "Złożony",
+    "PDF_GENERATION_FAILED": "Zgłoszenie zapisane — dokument wymaga ponowienia",
     "FORM_SUBMITTED": "Wniosek złożony",
     "AUTO_REJECTED": "Odrzucony automatycznie",
     "RETURNED_FOR_CORRECTION": "Wysłany do poprawy",

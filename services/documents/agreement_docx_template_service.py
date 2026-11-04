@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -65,7 +66,10 @@ class AgreementDocxTemplateService:
         else:
             known = AgreementVariableCatalog.context_names(fields)
         unknown = sorted(set(parsed.variables) - known)
-        storage_path = self.storage_path(form_slug, document_type=document_type, document_id=document_id, version_key=version_key)
+        storage_path = self.storage_path(
+            form_slug, document_type=document_type, document_id=document_id,
+            version_key=version_key, upload_id=uuid4().hex,
+        )
         self._ensure_directory(form_slug, document_type=document_type, document_id=document_id, version_key=version_key)
         self.storage.write_bytes(storage_path, content, DOCX_MIME_TYPE)
         return {
@@ -152,12 +156,13 @@ class AgreementDocxTemplateService:
         document_type: str = "agreement",
         document_id: str = "",
         version_key: str | None = None,
+        upload_id: str | None = None,
     ) -> str:
         from re import fullmatch
         if document_type == "document" and not fullmatch(r"[a-z][a-z0-9_]{1,63}", document_id):
             raise ValueError("Nieprawidłowe ID dokumentu.")
         directory = document_id if document_type == "document" else document_type
-        filename = f"{directory}-template.docx"
+        filename = f"{directory}-template-{upload_id}.docx" if upload_id else f"{directory}-template.docx"
         version_segment = f"/versions/{self._safe_version_key(version_key)}" if version_key else ""
         return f"{self.storage.output_dir}/{form_slug}/templates/{directory}{version_segment}/{filename}"
 

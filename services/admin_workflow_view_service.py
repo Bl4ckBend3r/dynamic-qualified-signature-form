@@ -32,6 +32,7 @@ COMPLETED_STATUSES = {
     ProcessStatus.BENEFICIARY_AGREEMENT_CONFIRMED.value,
 }
 BLOCKED_QUALIFICATION_STATUSES = {
+    ProcessStatus.PDF_GENERATION_FAILED.value,
     ProcessStatus.AUTO_REJECTED.value,
     ProcessStatus.RETURNED_FOR_CORRECTION.value,
 }
@@ -121,7 +122,9 @@ def build_admin_workflow_view(
         "officer_action": step if workflow.get("flow_mode") == "explicit" and step.get("stage_type") == "officer_action" else None,
         "sections": sections,
         "can_edit_application_decision": (
-            _workflow_allows_decision(submission, form_config or {})
+            False
+            if status == ProcessStatus.PDF_GENERATION_FAILED.value
+            else _workflow_allows_decision(submission, form_config or {})
             if workflow.get("steps") else can_edit_application_decision(submission)
         ),
         "can_review_agreement": can_review_agreement,
@@ -216,6 +219,8 @@ def _decision_date(decision: Mapping[str, Any] | None, fallback: datetime | None
 
 def _application_status(submission) -> str:
     status = str(getattr(submission, "process_status", "") or "")
+    if status == ProcessStatus.PDF_GENERATION_FAILED.value:
+        return "PDF wymaga ponownego przygotowania"
     if status == ProcessStatus.AUTO_REJECTED.value:
         return "Odrzucony automatycznie"
     if status == ProcessStatus.RETURNED_FOR_CORRECTION.value:
@@ -228,6 +233,8 @@ def _application_status(submission) -> str:
 
 def _application_action_and_state(submission) -> tuple[str, str]:
     status = str(getattr(submission, "process_status", "") or "")
+    if status == ProcessStatus.PDF_GENERATION_FAILED.value:
+        return "Ponów generowanie PDF", "current"
     if status == ProcessStatus.AUTO_REJECTED.value:
         return "Dalsze kroki zablokowane; administrator może wysłać zgłoszenie do poprawy", "completed"
     if status == ProcessStatus.RETURNED_FOR_CORRECTION.value:

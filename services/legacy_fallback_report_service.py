@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,9 @@ from models import FormSubmission, SubmissionDecision, SubmissionFile, Submissio
 from services.document_naming_service import resolve_pdf_storage_path
 from services.status_catalog import normalize_status
 from services.submission_document_service import SubmissionDocumentType
+
+
+logger = logging.getLogger(__name__)
 
 
 DOCUMENT_TYPES = {
@@ -204,7 +208,7 @@ class LegacyFallbackReportService:
             try:
                 db.rollback()
             except Exception:
-                pass
+                logger.warning("legacy_fallback_report_rollback_failed", exc_info=True)
 
     def _error_entry(self, submission: FormSubmission, area: str, exc: Exception) -> dict:
         category = "schema_mismatch" if self._is_schema_mismatch(exc) else "technical_error"

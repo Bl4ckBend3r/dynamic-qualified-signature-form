@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from hashlib import sha256
 import re
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ from sqlalchemy import select
 from services.mail_dispatch_service import MailDispatchRequest, MailDispatchService
 from services.mail_template_service import html_to_text, render_platform_mail_html, render_platform_mail_text
 from database import create_session_factory
-from models import EmailLog, Form, FormSubmission, FormVersion, MailFooter
+from models import EmailLog, Form, FormSubmission, FormVersion, MailFooter, PlatformMailTemplate
 from test_admin_panel import admin_app, create_form
 
 
@@ -300,6 +301,115 @@ def test_dispatch_raw_logs_success_and_failure(app):
     assert sent[0]["to_emails"] == ["jan@example.com"]
 
 
+def test_at_most_once_claim_survives_crash_after_smtp_acceptance(admin_app):
+    form_id = create_form(admin_app, slug="at-most-once-mail")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="at-most-once-1",
+            form_slug="at-most-once-mail",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        )
+        db.add(submission)
+        db.commit()
+        submission_id = submission.id
+
+    deliveries = []
+
+    def sender(**kwargs):
+        deliveries.append(kwargs)
+
+    service = MailDispatchService(smtp_sender=sender)
+    marker = '{"at_most_once_key": "operation-1"}'
+    with admin_app.app_context():
+        with factory() as db:
+            first = service.dispatch_raw(
+                event_type="submission_received",
+                recipient="jan@example.com",
+                subject="Temat",
+                html_body="<p>Body</p>",
+                db=db,
+                form=db.get(Form, form_id),
+                submission=db.get(FormSubmission, submission_id),
+                at_most_once_marker=marker,
+            )
+            assert first.status == "sent"
+            db.rollback()  # symulacja utraty aktualizacji sent po akceptacji SMTP
+
+        with factory() as db:
+            claimed = db.execute(select(EmailLog).where(
+                EmailLog.submission_id == submission_id,
+                EmailLog.administrator_message == marker,
+            )).scalar_one()
+            assert claimed.status == "pending"
+
+        with factory() as db:
+            repeated = service.dispatch_raw(
+                event_type="submission_received",
+                recipient="jan@example.com",
+                subject="Temat",
+                html_body="<p>Body</p>",
+                db=db,
+                form=db.get(Form, form_id),
+                submission=db.get(FormSubmission, submission_id),
+                at_most_once_marker=marker,
+            )
+
+    assert repeated.status == "skipped"
+    assert len(deliveries) == 1
+
+
+def test_submission_received_operation_id_uses_at_most_once_claim(admin_app, monkeypatch):
+    create_form(admin_app, slug="receipt-at-most-once", mail_mode="system")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add(PlatformMailTemplate(
+            template_type="submission_received",
+            name="Receipt",
+            subject="Odebrano {{ submission_id }}",
+            html_body="<p>Odebrano</p>",
+            text_body="Odebrano",
+            is_active=True,
+        ))
+        db.add(FormSubmission(
+            submission_id="receipt-at-most-once-1",
+            form_slug="receipt-at-most-once",
+            form_name="Receipt",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        ))
+        db.commit()
+
+    deliveries = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: deliveries.append(kwargs)
+    monkeypatch.setattr(dispatch, "_commit_email_log", lambda _db: False)
+
+    with admin_app.test_request_context("/"):
+        first = dispatch.dispatch_submission_received(
+            "receipt-at-most-once-1",
+            operation_id="pdf-operation-1",
+        )
+        repeated = dispatch.dispatch_submission_received(
+            "receipt-at-most-once-1",
+            operation_id="pdf-operation-1",
+        )
+
+    assert first.status == "sent"
+    assert repeated.status == "skipped"
+    assert len(deliveries) == 1
+    with factory() as db:
+        log = db.execute(select(EmailLog).where(
+            EmailLog.public_submission_id == "receipt-at-most-once-1",
+        )).scalar_one()
+        assert log.status == "pending"
+
+
 def test_dispatch_raw_missing_recipient_is_safe_and_logged():
     class FakeDb:
         def __init__(self):
@@ -552,6 +662,45 @@ def test_document_notice_uses_versioned_workflow_filters_and_file_log(admin_app)
             EmailLog.event_type == "document_received")).scalars().all()
         assert len(logs) == 2
         assert logs[-1].administrator_message != first_event
+
+
+def test_document_notice_can_wait_for_required_audit_before_dispatch(admin_app):
+    _, public_id = _seed_document_notice(
+        admin_app,
+        "document-audit-gate",
+        selected=["agreement"],
+    )
+    services = admin_app.extensions["services"]
+    sent = []
+    services.mail_dispatch_service.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    payload = b"signed training agreement"
+
+    with admin_app.app_context():
+        assert services.submission_document_service.record_document_metadata(
+            submission_id=public_id,
+            form_slug="document-audit-gate",
+            filename="agreement-signed.pdf",
+            file_bytes=payload,
+            document_id="training_agreement",
+            document_type="signed_training_agreement",
+            original_filename="agreement-signed.pdf",
+            status="signed",
+            signed=True,
+            uploaded_by_source="participant",
+            workflow_step_at_upload="agreement",
+            storage_path="output/agreement-signed.pdf",
+            dispatch_notification=False,
+        )
+        assert sent == []
+
+        services.mail_dispatch_service.dispatch_document_received_notification(
+            public_id,
+            document_id="training_agreement",
+            filename="agreement-signed.pdf",
+            checksum_sha256=sha256(payload).hexdigest(),
+        )
+
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize("enabled,selected", [(False, ["declaration"]), (True, [])])

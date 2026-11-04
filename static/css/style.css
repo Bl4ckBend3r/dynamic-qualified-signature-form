@@ -1,0 +1,8 @@
+/* Moduły z zachowaniem oryginalnej kolejności CSS. Edytuj pliki w katalogu public/ */
+@import url("./public/01-foundation.css");
+@import url("./public/02-theme-and-forms.css");
+@import url("./public/03-attendance.css");
+@import url("./public/04-public-forms.css");
+@import url("./public/05-footer.css");
+@import url("./public/06-responsive.css");
+@import url("./public/07-semantic-compatibility.css");

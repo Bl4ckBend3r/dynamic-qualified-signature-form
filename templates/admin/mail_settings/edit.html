@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Domyślna poczta systemowa{% endblock %}
+{% block content %}
+<div class="admin-page-title"><div><p class="admin-eyebrow">Super admin</p><h1>Domyślna poczta systemowa</h1></div></div>
+<form method="post" class="admin-card admin-form">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div class="admin-section">
+        <h2>Konfiguracja SMTP</h2>
+        <div class="admin-form-grid">
+            <label><span>SMTP host</span><input name="system_smtp_host" value="{{ smtp.host }}"></label>
+            <label><span>SMTP port</span><input type="number" min="1" max="65535" name="system_smtp_port" value="{{ smtp.port }}"></label>
+            <label><span>Użytkownik SMTP</span><input name="system_smtp_user" value="{{ smtp.user }}" autocomplete="off"></label>
+            <label><span>Nowe hasło SMTP</span><input type="password" name="system_smtp_password" value="" autocomplete="new-password" placeholder="{{ 'Hasło jest zapisane' if password_is_set else 'Brak zapisanego hasła' }}"></label>
+            <label><span>Nadawca e-mail</span><input type="email" name="system_smtp_mail_from" value="{{ smtp.mail_from }}"></label>
+            <label><span>Nazwa nadawcy</span><input name="system_smtp_sender_name" value="{{ smtp.sender_name }}"></label>
+            <label><span>Reply-To</span><input type="email" name="system_smtp_reply_to" value="{{ smtp.reply_to }}"></label>
+            <label><span>Timeout (s)</span><input type="number" min="1" max="120" name="system_smtp_timeout" value="{{ smtp.timeout }}"></label>
+            <label class="admin-check"><input type="checkbox" name="system_smtp_use_tls" {% if smtp.use_tls %}checked{% endif %}><span>TLS/STARTTLS</span></label>
+            <label class="admin-check"><input type="checkbox" name="system_smtp_use_ssl" {% if smtp.use_ssl %}checked{% endif %}><span>SSL</span></label>
+            {% if password_is_set %}<label class="admin-check"><input type="checkbox" name="system_smtp_clear_password"><span>Usuń zapisane hasło</span></label>{% endif %}
+        </div>
+    </div>
+    <div class="admin-section">
+        <h2>Potwierdzenie otrzymania zgłoszenia</h2>
+        <p>Jedyny automatyczny trigger: <code>submission_received</code>.</p>
+        <p class="admin-help">
+            Ten mail zawsze używa <strong>stopki ogólnej</strong>.
+            <a href="{{ url_for('admin.global_mail_footer_edit') }}">Edytuj stopkę ogólną</a>.
+        </p>
+        <label class="admin-check"><input type="checkbox" name="template_is_active" {% if template.is_active %}checked{% endif %}><span>Szablon aktywny</span></label>
+        <label class="admin-form-wide"><span>Temat</span><input name="template_subject" value="{{ template.subject }}"></label>
+        <label class="admin-form-wide"><span>Treść HTML</span><textarea name="template_html_body" rows="12">{{ template.html_body }}</textarea></label>
+        <label class="admin-form-wide"><span>Treść tekstowa (opcjonalna)</span><textarea name="template_text_body" rows="8">{{ template.text_body }}</textarea></label>
+        <p>Dostępne zmienne: <code>imie</code>, <code>nazwisko</code>, <code>submission_id</code>, <code>form_name</code>, <code>submission_date</code>, <code>status_url</code>, <code>platform_url</code>.</p>
+        {% if template.updated_at %}
+            <p class="admin-field-help">Ostatnia aktualizacja: {{ template.updated_at.strftime("%Y-%m-%d %H:%M") }}{% if template.updated_by %}, użytkownik: {{ template.updated_by.email }}{% endif %}.</p>
+        {% endif %}
+    </div>
+    <div class="admin-section">
+        <h2>Domyślna szata graficzna maili</h2>
+        <div class="admin-form-grid">
+            <label><span>Nazwa platformy</span><input name="layout_platform_name" value="{{ layout.platform_name }}"></label>
+            <label><span>Kolor przewodni</span><input type="color" name="layout_primary_color" value="{{ layout.primary_color }}"></label>
+            <label><span>Kolor akcentu</span><input type="color" name="layout_accent_color" value="{{ layout.accent_color }}"></label>
+            <label><span>Logo</span><select name="layout_logo_id"><option value="">Bez logo</option>{% for logo in logos %}<option value="{{ logo.id }}" {% if layout.logo_id == logo.id %}selected{% endif %}>{{ logo.name }}</option>{% endfor %}</select></label>
+            <label><span>Położenie logo w mailu</span><select name="layout_logo_position">
+                <option value="none" {% if layout.logo_position == "none" %}selected{% endif %}>Brak logo</option>
+                <option value="header" {% if layout.logo_position == "header" %}selected{% endif %}>Nagłówek</option>
+                <option value="before_content" {% if layout.logo_position == "before_content" %}selected{% endif %}>Przed treścią</option>
+                <option value="after_content" {% if layout.logo_position == "after_content" %}selected{% endif %}>Po treści</option>
+            </select></label>
+            <label><span>Wyrównanie logo</span><select name="layout_logo_alignment">
+                <option value="left" {% if layout.logo_alignment == "left" %}selected{% endif %}>Do lewej</option>
+                <option value="center" {% if layout.logo_alignment == "center" %}selected{% endif %}>Do środka</option>
+                <option value="right" {% if layout.logo_alignment == "right" %}selected{% endif %}>Do prawej</option>
+            </select></label>
+            <label><span>Wysokość logo</span><input type="number" min="16" max="200" name="layout_logo_height_px" value="{{ layout.logo_height_px }}"> <small>px</small></label>
+            <input type="hidden" name="layout_footer_html" value="{{ layout.footer_html }}">
+            <p class="admin-form-wide admin-help">Logo układu platformy nie jest renderowane w stopce wiadomości. Logo stopki skonfiguruj niezależnie w sekcji „Stopka ogólna”.</p>
+        </div>
+    </div>
+    <div class="admin-form-actions"><button class="admin-button" type="submit">Zapisz konfigurację</button></div>
+</form>
+<form method="post" action="{{ url_for('admin.system_mail_settings_test') }}" class="admin-form-actions">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <button class="admin-button-secondary" type="submit">Testuj połączenie</button>
+    <button class="admin-button-secondary" type="submit" formaction="{{ url_for('admin.system_mail_settings_test_email') }}">Wyślij wiadomość testową z logo stopki</button>
+</form>
+{% endblock %}

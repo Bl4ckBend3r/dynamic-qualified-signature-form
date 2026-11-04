@@ -31,14 +31,25 @@
       }
 
       .header-image {
-        width: 100%;
         margin: 12px 0 18px 0;
       }
 
       .header-image img {
         display: block;
-        width: 100%;
+        max-width: 100%;
         height: auto;
+      }
+
+      .header-image--center img {
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .header-image--right img {
+        margin-left: auto;
+      }
+      .header-image--logo img {
+        max-height: 100px;
+        object-fit: contain;
       }
 
       .description {
@@ -133,16 +144,33 @@
     <h1>Deklaracja uczestnictwa</h1>
 
     {% if pdf_image_url %}
-    <div class="header-image">
+    <div
+      class="header-image header-image--{{ pdf_image_alignment or 'left' }}{% if pdf_image_is_logo %} header-image--logo{% endif %}"
+    >
       <img
         src="{{ pdf_image_url }}"
-        alt="{{ pdf_image_alt or 'Obraz formularza' }}"
+        alt="{{ pdf_image_alt or 'Logo formularza' }}"
+        {%
+        if
+        pdf_image_width
+        %}style="width: {{ pdf_image_width }}px;"
+        {%
+        elif
+        pdf_image_is_logo
+        %}style="width: 180px;"
+        {%
+        else
+        %}style="width: 100%;"
+        {%
+        endif
+        %}
       />
     </div>
     {% endif %}
 
     <div class="description">
-      Deklaracja uczestnictwa wygenerowana automatycznie na podstawie danych z formularza:
+      Deklaracja uczestnictwa wygenerowana automatycznie na podstawie danych z
+      formularza:
       <strong>{{ form_definition.title }}</strong>.
     </div>
 
@@ -151,7 +179,21 @@
       <div><strong>Uczestnik:</strong> {{ participant_name }}</div>
     </div>
 
-    {% for section in submission_view %}
+    {% if selected_trainings %}
+    <div class="section">
+      <div class="section-title">Wybrane szkolenia</div>
+      <table>
+        <tbody>
+          {% for training in selected_trainings %}
+          <tr>
+            <td class="label">{{ loop.index }}.</td>
+            <td class="value">{{ training.name or training.id }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %} {% for section in submission_view %}
     <div class="section">
       <div class="section-title">{{ section["title"] }}</div>
       <table>
@@ -165,9 +207,7 @@
         </tbody>
       </table>
     </div>
-    {% endfor %}
-
-    {% if consents_view %}
+    {% endfor %} {% if consents_view %}
     <div class="section">
       <div class="section-title">Oświadczenia i zgody</div>
 
@@ -190,7 +230,8 @@
     {% endif %}
 
     <div class="signature-box">
-      Dokument wymaga podpisu elektronicznego uczestnika. Dopuszczalne podpisy: mSzafir lub Profil Zaufany.
+      Dokument wymaga podpisu elektronicznego uczestnika. Dopuszczalne podpisy:
+      mSzafir lub Profil Zaufany.
     </div>
   </body>
 </html>

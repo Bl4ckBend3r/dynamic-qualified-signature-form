@@ -52,7 +52,7 @@ class MockQualifiedSignatureProvider(QualifiedSignatureProvider):
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         request_id = str(uuid4())
-        created_at = datetime.now(timezone.utc).astimezone().isoformat()
+        created_at = datetime.now(timezone.utc).isoformat()
 
         request_data = {
             "request_id": request_id,
@@ -72,7 +72,7 @@ class MockQualifiedSignatureProvider(QualifiedSignatureProvider):
 
     def submit_document_for_signature(self, request_id: str) -> None:
         request_data = self._load_request_data(request_id)
-        now = datetime.now(timezone.utc).astimezone().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         if self.mock_mode == "pending":
             request_data["status"] = "pending"
@@ -117,7 +117,7 @@ class MockQualifiedSignatureProvider(QualifiedSignatureProvider):
         shutil.copy2(signed_source, final_path)
 
         request_data["signed_pdf_path"] = str(final_path)
-        request_data["updated_at"] = datetime.now(timezone.utc).astimezone().isoformat()
+        request_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._save_request_data(request_id, request_data)
 
         return final_path

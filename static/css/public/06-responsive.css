@@ -1,0 +1,191 @@
+/* RESPONSIVE */
+
+@media (max-width: 1200px) {
+    .forms-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    }
+}
+
+@media (max-width: 980px) {
+    .site-header__inner {
+        min-height: auto;
+        padding: 18px 0;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .site-nav {
+        width: 100%;
+        gap: 18px;
+        justify-content: flex-start;
+    }
+
+    .site-nav a {
+        padding: 4px 0 8px;
+    }
+}
+
+@media (max-width: 900px) {
+    .width-half,
+    .width-third,
+    .width-quarter,
+    .width-two-thirds,
+    .width-three-quarters {
+        grid-column: span 12;
+    }
+
+    .training-selection .checkbox-item span {
+        white-space: normal;
+    }
+
+    .result-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .forms-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .page-intro {
+        padding: 52px 0 34px;
+    }
+
+    .forms-showcase__header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+@media (max-width: 768px) {
+    .site-footer__columns {
+        flex-direction: column;
+        gap: 32px;
+    }
+
+    .site-footer__column--left,
+    .site-footer__column--right {
+        flex: 1 1 auto;
+        width: 100%;
+        max-width: none;
+        margin-left: 0;
+    }
+
+    .site-footer__social-slot--right .site-footer__social,
+    .site-footer__column--right > .site-footer__social {
+        justify-content: flex-start;
+    }
+}
+
+@media (max-width: 640px) {
+    .container {
+        width: min(var(--container), calc(100% - 20px));
+    }
+
+    .forms-showcase {
+        margin-top: 36px;
+    }
+
+    .form-tile__content {
+        padding: 24px 22px;
+    }
+
+    .form-tile__logo {
+        max-width: 100%;
+        max-height: 44px;
+        margin-bottom: 18px;
+    }
+
+    .site-brand {
+        align-items: flex-start;
+    }
+
+    .site-brand__logo {
+        width: 40px;
+        height: 40px;
+    }
+
+    .site-title {
+        font-size: 1.2rem;
+    }
+
+    .site-subtitle {
+        font-size: 0.88rem;
+    }
+
+    .site-nav {
+        gap: 14px 18px;
+    }
+
+    .site-nav a {
+        font-size: 0.94rem;
+    }
+
+    .card {
+        margin-top: 5vh;
+        padding: 22px;
+    }
+
+    .attendance-confirmation {
+        min-height: auto;
+        padding: 12px 0 28px;
+    }
+
+    .attendance-confirmation__card {
+        margin: 0;
+        padding: 26px 20px;
+    }
+
+    .attendance-confirmation__actions .btn-primary {
+        width: 100%;
+    }
+
+    .form-tile,
+    .form-tile--featured {
+        min-height: 180px;
+    }
+
+    .forms-showcase__header h2,
+    .card-header h2 {
+        font-size: 1.75rem;
+    }
+
+    .page-intro p {
+        font-size: 1.08rem;
+    }
+}
+.attachment-dropzone {
+    border: 2px dashed var(--color-border);
+    border-radius: 10px;
+    padding: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .65rem;
+    align-items: center;
+    background: var(--color-surface-muted);
+}
+
+.form-project-logo-row {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.form-project-logo {
+  display: block;
+  width: auto;
+  max-width: min(100%, 320px);
+  max-height: 140px;
+  object-fit: contain;
+}
+.attachment-dropzone.is-dragging { border-color: var(--color-warning); background: var(--color-surface-muted); }
+.attachment-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.attachment-dropzone small { flex-basis: 100%; }
+.attachment-file-list { margin: .65rem 0 0; padding: 0; list-style: none; }
+.attachment-file-list li { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem .6rem; background: var(--color-surface-muted); border-radius: 6px; margin-top: .35rem; }
+.attachment-file-list button { border: 0; background: transparent; color: var(--color-danger); cursor: pointer; }
+.draft-autosave-status { color: var(--color-text); font-size: .92rem; align-self: center; }
+.draft-resend-panel { margin-top: 1.25rem; border-top: 1px solid var(--color-border); padding-top: 1rem; }
+.draft-resend-panel summary { cursor: pointer; font-weight: 600; }
+.draft-resend-form { display: flex; flex-wrap: wrap; gap: .65rem; align-items: end; margin-top: .8rem; }
+.draft-resend-form label { flex-basis: 100%; }
+

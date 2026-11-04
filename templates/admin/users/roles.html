@@ -1,0 +1,9 @@
+{% extends "admin/base.html" %}
+{% block title %}Role i uprawnienia{% endblock %}
+{% block content %}
+<div class="admin-page-title"><div><p class="admin-eyebrow">Dostęp</p><h1>Role i uprawnienia</h1></div><div class="admin-actions"><a class="admin-button-secondary" href="{{ url_for('admin.users_list') }}">Użytkownicy</a><a class="admin-button" href="{{ url_for('admin.role_edit') }}">Dodaj rolę</a></div></div>
+<div class="admin-card admin-table-wrap"><table class="admin-table"><thead><tr><th>Nazwa</th><th>Zakres</th><th>Typ</th><th>Status</th><th></th></tr></thead><tbody>
+{% for role in roles %}<tr><td><strong>{{ role.name }}</strong><br><small>{{ role.key }}</small></td><td>{{ "Globalny" if role.scope == "global" else "Formularz" }}</td><td>{{ "Systemowa" if role.is_system else "Własna" }}</td><td>{{ "Aktywna" if role.is_active else "Nieaktywna" }}</td><td>{% if not role.is_system %}<a href="{{ url_for('admin.role_edit', role_id=role.id) }}">Edytuj</a>{% else %}<span class="admin-muted">Szablon chroniony</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="5">Brak ról. Uruchom migracje bazy.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

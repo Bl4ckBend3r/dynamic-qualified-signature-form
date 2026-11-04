@@ -1,0 +1,5 @@
+/* Strona zarządzania szkoleniami: karty, szczegóły, formularz, media. */
+@import url("./trainings/01-cards.css");
+@import url("./trainings/02-details.css");
+@import url("./trainings/03-editor-and-dates.css");
+@import url("./trainings/04-responsive.css");

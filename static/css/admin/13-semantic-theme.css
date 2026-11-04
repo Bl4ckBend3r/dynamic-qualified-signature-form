@@ -1,0 +1,138 @@
+/* Theme layer: map legacy admin surfaces to the shared semantic tokens. */
+.admin-body :is(input, select, textarea, option) {
+  color: var(--color-text);
+}
+
+.admin-body
+  :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  background-color: var(--color-input-bg);
+}
+
+.admin-body :is(input, select, textarea):disabled {
+  background-color: var(--color-input-disabled-bg);
+  color: var(--color-input-disabled-text);
+}
+
+.admin-body :is(input, textarea)::placeholder {
+  color: var(--color-placeholder);
+  opacity: 1;
+}
+
+.admin-body input:-webkit-autofill,
+.admin-body textarea:-webkit-autofill,
+.admin-body select:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-text);
+  box-shadow: 0 0 0 1000px var(--color-input-bg) inset;
+  caret-color: var(--color-text);
+}
+
+.admin-body :is(a, button, input, select, textarea, summary):focus-visible {
+  outline-color: var(--color-focus);
+}
+
+.admin-body
+  :is(
+    .admin-modal__footer,
+    .admin-condition-row,
+    .admin-instruction-stage,
+    .admin-instruction-preview__text,
+    .admin-form-header-preview,
+    .admin-tab-panel,
+    .admin-action-menu,
+    .admin-column-popover,
+    .admin-filter-panel,
+    .admin-submission-card,
+    .mail-footer-example,
+    .training-create-panel,
+    .training-date-card,
+    .training-question-card,
+    .training-subcard,
+    .training-kpi,
+    .document-source-panel,
+    .document-source-option,
+    .document-docx-dropzone,
+    .document-option-switch-card,
+    .document-variable-card,
+    .agreement-template-status,
+    .agreement-builder__editor-pane,
+    .agreement-builder__preview-pane,
+    .agreement-builder__variables,
+    .agreement-builder-block,
+    .agreement-builder-block__editable,
+    .agreement-builder-block td[contenteditable],
+    .agreement-builder-block li [contenteditable],
+    .agreement-builder__variable-list summary,
+    .agreement-builder--standalone .agreement-builder__header,
+    .agreement-builder--standalone .agreement-builder__footer
+  ) {
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.admin-body
+  :is(
+    .admin-badge-muted,
+    .admin-form-tab:hover,
+    .admin-form-header-preview__empty,
+    .admin-mail-preview,
+    .mail-footer-example__footer,
+    .training-dates-editor,
+    .training-question-fieldset,
+    .document-source-option:hover,
+    .document-editor-panel,
+    .document-variable-empty,
+    .agreement-builder-block > header,
+    .agreement-builder-block__condition
+  ) {
+  background-color: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.admin-body
+  :is(
+    .admin-flash-success,
+    .admin-badge-success,
+    .workflow-status-badge[data-stage-validity="valid"]
+  ) {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.admin-body
+  :is(.admin-flash-error, .admin-validation-errors, .admin-badge-danger) {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.admin-body
+  :is(
+    .admin-flash-warning,
+    .workflow-status-badge[data-stage-validity="invalid"],
+    .workflow-preview-errors
+  ) {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.admin-body :is(.admin-flash-info, .admin-badge-info) {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.admin-body .admin-table th,
+.admin-body .admin-table thead th {
+  background-color: var(--color-table-header);
+}
+
+.theme-toggle--admin {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 768px) {
+  .theme-toggle--admin {
+    margin-left: auto;
+  }
+}
+

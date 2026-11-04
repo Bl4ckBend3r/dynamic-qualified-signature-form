@@ -1,0 +1,78 @@
+{% extends "admin/base.html" %}
+{% block title %}Pola formularza{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/form_builder.css') }}">
+<div class="admin-page-title">
+    <div>
+        <p class="admin-eyebrow">{{ form.name }}</p>
+        <h1>Pola formularza</h1>
+    </div>
+    <div class="admin-actions">
+        <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
+        <a class="admin-button-secondary" href="{{ url_for('admin.form_edit', form_id=form.id, form_version_id=editable_version.id if editable_version else None) }}">Ustawienia</a>
+    </div>
+</div>
+{% if editable_version %}
+<div class="admin-alert admin-alert-info" data-editor-form-version="{{ editable_version.id }}">
+    <strong>Edytujesz wersję {{ editable_version.version_label }}</strong>
+    <span>Status: wersja robocza · ID {{ editable_version.id }}</span>
+</div>
+{% endif %}
+{% set active_tab = 'fields' %}
+{% include "admin/forms/_tabs.html" %}
+
+<form method="post" class="form-builder" data-form-builder>
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="action" value="builder_save">
+    {% if editable_version %}<input type="hidden" name="form_version_id" value="{{ editable_version.id }}">{% endif %}
+    <input type="hidden" name="builder_state" data-builder-state>
+    <div hidden aria-hidden="true">
+        {% for field in fields %}
+            <input type="hidden" value="{{ document_field_labels.get(field.name, '') }}">
+            {% for step in workflow_steps %}
+            <span data-legacy-field-name="field_{{ field.id }}_availability_{{ loop.index0 }}_visible"></span>
+            {% endfor %}
+        {% endfor %}
+    </div>
+    <header class="form-builder__toolbar">
+        <div>
+            <h2>Wizualny układ formularza</h2>
+            <p>Dodawaj pola, przeciągaj je i ustawiaj ich szerokość. Na telefonie pola automatycznie zajmą cały wiersz.</p>
+        </div>
+        <div class="form-builder__toolbar-actions">
+            <div class="form-builder__mode" role="group" aria-label="Tryb edytora">
+                <button type="button" class="is-active" data-builder-mode="edit">Edytor</button>
+                <button type="button" data-builder-mode="preview">Podgląd</button>
+            </div>
+            <button class="admin-button" type="submit">Zapisz</button>
+        </div>
+    </header>
+
+    <div class="form-builder__workspace">
+        {% include "admin/forms/form_builder/_field_palette.html" %}
+        {% include "admin/forms/form_builder/_form_canvas.html" %}
+        {% include "admin/forms/form_builder/_properties_panel.html" %}
+    </div>
+    <p class="form-builder__status" data-builder-status aria-live="polite"></p>
+</form>
+
+<script type="application/json" data-builder-initial-state>{{ builder_fields|tojson }}</script>
+<script type="application/json" data-builder-widths>{{ layout_widths|tojson }}</script>
+<script type="application/json" data-builder-types>{{ field_types|tojson }}</script>
+<script type="application/json" data-builder-workflow-steps>{{ workflow_steps|tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/form_builder/form-builder.js') }}"></script>
+<script>
+const editFormUrl = {{ url_for('admin.form_edit', form_id=form.id, form_version_id=editable_version.id if editable_version else None)|tojson }};
+const navigateToEditorTab = (tabName) => {
+    const url = new URL(editFormUrl, window.location.origin);
+    url.searchParams.set("tab", tabName);
+    window.location.href = url.toString();
+};
+document.querySelectorAll("[data-form-tab-target]").forEach((tab) => {
+    tab.addEventListener("click", () => navigateToEditorTab(tab.dataset.formTabTarget));
+});
+document.querySelector("[data-form-tab-select]")?.addEventListener("change", (event) => {
+    if (event.target.value !== "fields") navigateToEditorTab(event.target.value);
+});
+</script>
+{% endblock %}

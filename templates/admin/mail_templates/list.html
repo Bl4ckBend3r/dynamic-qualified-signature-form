@@ -6,7 +6,7 @@
         <p class="admin-eyebrow">{{ form.name }}</p>
         <h1>Szablony maili</h1>
     </div>
-    <div class="admin-actions">
+    <div class="admin-actions mail-template-list__toolbar">
         {% if not read_only %}
         <a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_html', form_id=form.id) }}">Importuj HTML</a>
         {% if g.admin_user.role == 'super_admin' %}<a class="admin-button-secondary" href="{{ url_for('admin.mail_template_import_zip', form_id=form.id) }}" title="Techniczny import kompletnej paczki HTML/TXT i zasobów">Import ZIP (zaawansowane)</a>{% endif %}
@@ -15,35 +15,36 @@
     </div>
 </div>
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Widok tylko do odczytu.</strong> Możesz przeglądać szablony, ale nie możesz ich zapisywać, importować ani usuwać.</div>{% endif %}
-<div class="admin-card admin-table-wrap">
-    <table class="admin-table">
+<div class="admin-card admin-table-wrap mail-template-list" role="region" aria-label="Lista szablonów maili" tabindex="0">
+    <table class="admin-table mail-template-list__table">
+        <colgroup><col class="mail-template-list__col-template"><col class="mail-template-list__col-type"><col class="mail-template-list__col-subject"><col class="mail-template-list__col-trigger"><col class="mail-template-list__col-active"><col class="mail-template-list__col-actions"></colgroup>
         <thead>
             <tr>
-                <th>Nazwa</th>
-                <th>Typ</th>
-                <th>Tytul</th>
-                <th>Temat</th>
-                <th>Trigger event</th>
-                <th>Status/decyzja</th>
-                <th>Aktywny</th>
-                <th>Akcje</th>
+                <th scope="col">Szablon</th>
+                <th scope="col">Typ</th>
+                <th scope="col">Temat</th>
+                <th scope="col">Wyzwalanie</th>
+                <th scope="col">Aktywność</th>
+                <th scope="col">Akcje</th>
             </tr>
         </thead>
         <tbody>
         {% for template in templates %}
             <tr>
-                <td>{{ template.name }}</td>
+                <td><strong class="mail-template-list__name">{{ template.name }}</strong><span class="mail-template-list__title">Tytuł: {{ template.content_title or "—" }}</span></td>
                 <td>{{ template_labels.get(template.template_type, template.template_type or template.mail_type) }}</td>
-                <td>{{ template.content_title or "-" }}</td>
-                <td>{{ template.subject }}</td>
-                <td>{{ template.trigger_event or "-" }}</td>
-                <td>{{ template.trigger_status or "-" }} / {{ template.trigger_decision or "-" }}{% if template.is_default_for_status %} <span class="admin-badge">domyslny</span>{% endif %}</td>
-                <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if template.is_active else "Nie" }}</span></td>
+                <td class="mail-template-list__subject">{% if template.subject %}{{ template.subject }}{% else %}<span class="mail-template-list__empty">—</span>{% endif %}</td>
+                <td><div class="mail-template-list__triggers">
+                    <div><span>Zdarzenie</span>{% if template.trigger_event %}<strong title="{{ template.trigger_event }}">{{ trigger_labels.events.get(template.trigger_event, template.trigger_event|replace('_', ' ')|capitalize) }}</strong>{% else %}<span class="mail-template-list__empty">—</span>{% endif %}</div>
+                    <div><span>Status</span>{% if template.trigger_status %}<span class="admin-badge admin-badge-info" title="{{ template.trigger_status }}">{{ trigger_labels.statuses.get(template.trigger_status, template.trigger_status|replace('_', ' ')|capitalize) }}</span>{% else %}<span class="mail-template-list__empty">—</span>{% endif %}{% if template.is_default_for_status %}<span class="admin-badge admin-badge-info">Domyślny</span>{% endif %}</div>
+                    <div><span>Decyzja</span>{% if template.trigger_decision %}<strong title="{{ template.trigger_decision }}">{{ trigger_labels.decisions.get(template.trigger_decision, template.trigger_decision|replace('_', ' ')|capitalize) }}</strong>{% else %}<span class="mail-template-list__empty">—</span>{% endif %}</div>
+                </div></td>
+                <td><span class="admin-badge {% if template.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if template.is_active else "Nieaktywny" }}</span></td>
                 <td>
-                    <div class="admin-actions">
+                    <div class="admin-actions mail-template-list__actions">
                         {% if read_only %}<span>Tylko do odczytu</span>{% else %}
-                        <a href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a>
-                        <button class="admin-link-button admin-link-danger" type="button" data-admin-modal-target="delete-mail-template-{{ template.id }}">Usuń</button>
+                        <a class="admin-button-secondary" href="{{ url_for('admin.mail_template_edit', form_id=form.id, template_id=template.id) }}">Edytuj</a>
+                        <button class="admin-button-danger" type="button" data-admin-modal-target="delete-mail-template-{{ template.id }}">Usuń</button>
                         <dialog class="admin-modal admin-modal-backdrop" id="delete-mail-template-{{ template.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-mail-template-title-{{ template.id }}" data-admin-modal>
                             <form method="dialog" class="admin-modal__surface">
                                 <header class="admin-modal__header"><h2 id="delete-mail-template-title-{{ template.id }}">Usunąć szablon maila?</h2></header>
@@ -62,7 +63,7 @@
                 </td>
             </tr>
         {% else %}
-            <tr><td colspan="8">Brak szablonow.</td></tr>
+            <tr><td colspan="6">Brak szablonów.</td></tr>
         {% endfor %}
         </tbody>
     </table>

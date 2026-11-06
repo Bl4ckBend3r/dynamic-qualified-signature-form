@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from form_loader import evaluate_scoped_condition
+from services.form_option_service import option_label_for_value
 from services.mail_training_context_service import find_training_field
 from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
@@ -141,19 +143,37 @@ def trigger_status_options(form) -> list[dict[str, str]]:
     return WorkflowMailTriggerService().options_for_form(form)["statuses"]
 
 
-def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def build_variable_catalog(form, preview_context: dict[str, Any] | None = None, *,
+                           definition: dict | None = None, include_sensitive: bool = True,
+                           actual_values: bool = False, include_form_fields: bool = True) -> list[dict[str, Any]]:
     context = preview_context or {}
+    definition = definition if definition is not None else (getattr(form, "definition_json", None) or {})
     groups: list[dict[str, Any]] = []
     seen: set[str] = set()
     for category, definitions in VARIABLE_GROUPS:
-        variables = [_variable(name, description, example, context) for name, description, example in definitions]
+        variables = [_variable(name, description, example, context, actual_values=actual_values) for name, description, example in definitions]
         groups.append({"category": category, "variables": variables})
         seen.update(item["name"] for item in variables)
 
     field_variables = []
-    for field in _form_fields(form):
+    field_definitions = _form_fields(form, definition, include_form_fields=include_form_fields)
+    field_names = {str(field.get("name") or "") for field in field_definitions}
+    if not include_sensitive:
+        from services.admin_submission_service import BUILTIN_SENSITIVE_FIELDS
+    else:
+        BUILTIN_SENSITIVE_FIELDS = set()
+    for field in field_definitions:
         name = str(field.get("name") or "").strip()
-        if not name or name in seen or name in TRAINING_VARIABLE_NAMES:
+        if actual_values and field.get("visible_if") and not evaluate_scoped_condition(
+                field["visible_if"], root_data=context.get("data_json") or context,
+                current_data=context.get("data_json") or context):
+            continue
+        if (not name or name in seen or name in TRAINING_VARIABLE_NAMES
+                or not include_sensitive and (name in BUILTIN_SENSITIVE_FIELDS
+                    or str(field.get("data_classification") or field.get("sensitivity") or "normal") != "normal"
+                    or field.get("type") == "repeatable_group" and any(
+                        str(child.get("data_classification") or child.get("sensitivity") or "normal") != "normal"
+                        for child in field.get("fields") or [] if isinstance(child, dict)))):
             continue
         field_variables.append(
             _variable(
@@ -161,15 +181,23 @@ def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) 
                 str(field.get("label") or _humanize(name)),
                 _field_example(field),
                 context,
+                actual_values=actual_values,
+                field=field,
             )
         )
         seen.add(name)
+        if field.get("type") in {"repeatable_group", "checkbox", "multi_select", "multiselect", "multiple_select", "checkbox_group", "checkbox-group"}:
+            text_name = f"{name}_text"
+            if text_name not in seen and text_name not in field_names:
+                field_variables.append(_variable(text_name, f"{field.get('label') or _humanize(name)} — tekst",
+                    "", context, actual_values=actual_values))
+                seen.add(text_name)
     if field_variables:
         groups.insert(3, {"category": "Pola formularza", "variables": field_variables})
 
-    if _supports_trainings(form, seen):
+    if _supports_trainings(form, seen, definition):
         training_variables = [
-            _variable(name, description, example, context)
+            _variable(name, description, example, context, actual_values=actual_values)
             for name, description, example in TRAINING_VARIABLES
             if name not in seen
         ]
@@ -187,27 +215,23 @@ def build_variable_catalog(form, preview_context: dict[str, Any] | None = None) 
     return groups
 
 
-def _form_fields(form) -> list[dict[str, Any]]:
+def _form_fields(form, definition: dict, *, include_form_fields: bool) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for field in sorted(getattr(form, "fields", []) or [], key=lambda item: getattr(item, "sort_order", 0)):
-        if getattr(field, "active", True):
-            result.append(
-                {
-                    "name": getattr(field, "name", ""),
-                    "label": getattr(field, "label", ""),
-                    "type": getattr(field, "type", "text"),
-                    "default": getattr(field, "default_value", ""),
-                    "options": getattr(field, "options", []),
-                }
-            )
-    for field in (getattr(form, "definition_json", None) or {}).get("fields") or []:
-        if isinstance(field, dict) and field.get("active", True):
+    if include_form_fields:
+        for field in sorted(getattr(form, "fields", []) or [], key=lambda item: getattr(item, "sort_order", 0)):
+            if getattr(field, "active", True):
+                result.append({"name": getattr(field, "name", ""), "label": getattr(field, "label", ""),
+                    "type": getattr(field, "type", "text"), "default": getattr(field, "default_value", ""),
+                    "options": getattr(field, "options", [])})
+    for field in definition.get("fields") or []:
+        if isinstance(field, dict) and field.get("active", True) and field.get("enabled", True):
             result.append(field)
     return result
 
 
-def _supports_trainings(form, _field_names: set[str]) -> bool:
-    return find_training_field(form) is not None
+def _supports_trainings(form, _field_names: set[str], definition: dict) -> bool:
+    from types import SimpleNamespace
+    return find_training_field(SimpleNamespace(definition_json=definition)) is not None
 
 
 def _field_example(field: dict[str, Any]) -> str:
@@ -228,18 +252,29 @@ def _field_example(field: dict[str, Any]) -> str:
     }.get(field_type, f"Przykładowa wartość: {field.get('label') or _humanize(str(field.get('name') or 'pole'))}")
 
 
-def _variable(name: str, description: str, fallback: str, context: dict[str, Any]) -> dict[str, Any]:
+def _variable(name: str, description: str, fallback: str, context: dict[str, Any], *,
+              actual_values: bool = False, field: dict | None = None) -> dict[str, Any]:
     raw_example = context
     for part in name.split('.'):
-        raw_example = raw_example.get(part, fallback) if isinstance(raw_example, dict) else fallback
+        raw_example = raw_example.get(part, "" if actual_values else fallback) if isinstance(raw_example, dict) else ("" if actual_values else fallback)
     if raw_example is None or raw_example == "":
-        raw_example = fallback
+        raw_example = "" if actual_values else fallback
+    if field and raw_example != "":
+        if isinstance(raw_example, (list, tuple)) and field.get("type") == "repeatable_group":
+            raw_example = f"{len(raw_example)} rekordów"
+        elif isinstance(raw_example, (list, tuple, set)):
+            raw_example = ", ".join(option_label_for_value(field.get("options"), item) for item in raw_example)
+        elif field.get("type") == "checkbox" and isinstance(raw_example, bool):
+            raw_example = "Tak" if raw_example else "Nie"
+        elif field.get("options"):
+            raw_example = option_label_for_value(field.get("options"), raw_example)
     return {
         "name": name,
         "key": name,
         "placeholder": "{{ " + name + " }}",
         "label": description,
         "description": description,
+        "type": str(field.get("type") or "text") if field else "",
         "example": str(raw_example),
         "available_in_html": True,
         "available_in_txt": True,

@@ -72,6 +72,7 @@ from services.admin_submission_service import (
 from services.workflow_service import WorkflowTransitionError, current_workflow_step
 from services.process_service import ProcessStatus, has_pending_pdf_generation
 from services.audit_log_service import AuditPendingError, pending_audit_state
+from services.submission_permanent_delete_service import SubmissionPermanentDeleteError
 from services.process_instruction_service import build_process_instruction_view
 from services.office_signed_agreement_service import OfficeSignedAgreementError
 from services.training_agreement_service import get_training_selection_field
@@ -414,6 +415,9 @@ def submissions_archive():
         )
         forms = db.execute(select(Form).where(Form.id.in_(form_ids or [-1]))).scalars().all()
         form_by_slug = {form.slug: form for form in forms}
+        restorable_form_ids = {
+            form.id for form in forms if has_permission(db, "can_edit_form", form=form)
+        }
         query = select(FormSubmission).where(FormSubmission.deleted_at.is_not(None))
         if user.role != ROLE_SUPER_ADMIN:
             query = query.where(FormSubmission.form_slug.in_(list(form_by_slug) or [""]))
@@ -426,7 +430,8 @@ def submissions_archive():
         )
         return render_template(
             "admin/submissions/archive.html", submissions=submissions,
-            form_by_slug=form_by_slug, pagination=pagination,
+            form_by_slug=form_by_slug, restorable_form_ids=restorable_form_ids,
+            pagination=pagination,
             pagination_urls=_pagination_urls("admin.submissions_archive", pagination),
         )
 
@@ -461,6 +466,33 @@ def submission_archive_detail(form_id: int, submission_pk: int):
             "admin/submissions/archive_detail.html", form=form, submission=submission,
             files=files, decisions=decisions, events=events, detail_view=detail_view,
         )
+
+
+@bp.post("/forms/<int:form_id>/submissions/archive/<int:submission_pk>/restore")
+@login_required
+def submission_restore(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        submission = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.id == submission_pk,
+                FormSubmission.form_slug == form.slug,
+                FormSubmission.deleted_at.is_not(None),
+            ).execution_options(include_deleted_submissions=True).with_for_update()
+        ).scalar_one_or_none() or abort(404)
+        submission.deleted_at = None
+        submission.deleted_by_user_id = None
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            current_app.logger.exception("Nie udało się przywrócić zgłoszenia %s.", submission_pk)
+            flash("Nie udało się przywrócić zgłoszenia.", "error")
+            return redirect(url_for("admin.submissions_archive"))
+    flash("Przywrócono zgłoszenie.", "success")
+    return redirect(url_for("admin.submissions_archive"))
+
+
 @bp.get("/forms/<int:form_id>/submissions")
 @login_required
 def submissions_list(form_id: int):
@@ -2898,32 +2930,36 @@ def submissions_decisions_update(form_id: int):
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/archive", endpoint="submission_archive")
 @bp.post("/forms/<int:form_id>/submissions/delete-selected")
 @login_required
-def submissions_delete_selected(form_id: int):
-    raw_ids = request.form.getlist("submission_pk_ids")
-    submission_ids = [int(item) for item in raw_ids if str(item).isdigit()]
-    if not submission_ids:
-        flash("Zaznacz co najmniej jedno zgłoszenie.", "error")
-        return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
+def submissions_delete_selected(form_id: int, submission_pk: int | None = None):
+    raw_ids = [str(submission_pk)] if submission_pk is not None else request.form.getlist("submission_pk_ids")
+    submission_ids = list(dict.fromkeys(int(item) for item in raw_ids if str(item).isdigit()))
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
+        if not submission_ids:
+            flash("Zaznacz co najmniej jedno zgłoszenie.", "error")
+            return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         submissions = db.execute(
             select(FormSubmission).where(FormSubmission.id.in_(submission_ids), FormSubmission.form_slug == form.slug)
             .execution_options(include_deleted_submissions=True).with_for_update()
         ).scalars().all()
+        missing_count = len(submission_ids) - len(submissions)
         if not submissions:
-            flash("Nie znaleziono zgłoszeń do usunięcia albo nie masz uprawnień.", "error")
+            flash("Nie znaleziono zgłoszeń do archiwizacji albo nie masz uprawnień.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
         try:
             archived_count = archive_submissions_transactionally(submissions, g.admin_user.id)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
-            current_app.logger.exception("Nie udało się usunąć zaznaczonych zgłoszeń dla formularza %s.", form_id)
-            flash("Nie udało się usunąć zaznaczonych zgłoszeń. Spróbuj ponownie.", "error")
+            current_app.logger.exception("Nie udało się zarchiwizować zgłoszeń dla formularza %s.", form_id)
+            flash("Nie udało się zarchiwizować zgłoszeń. Spróbuj ponownie.", "error")
             return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
     flash(f"Zarchiwizowano zgłoszenia: {archived_count}.", "success")
+    if missing_count:
+        flash(f"Pominięto {missing_count} nieistniejących zgłoszeń.", "warning")
     return redirect(request.form.get("next") or url_for("admin.submissions_list", form_id=form_id))
 
 
@@ -2936,6 +2972,92 @@ def archive_submissions_transactionally(submissions: list[FormSubmission], actor
             submission.deleted_by_user_id = actor_id
             count += 1
     return count
+
+
+def _permanent_delete_success_message(count: int) -> str:
+    if count == 1:
+        return "Trwale usunięto zgłoszenie."
+    noun = "zgłoszenia" if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14) else "zgłoszeń"
+    return f"Trwale usunięto {count} {noun}."
+
+
+@bp.post("/forms/<int:form_id>/submissions/permanent-delete")
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/permanent-delete", endpoint="submission_permanent_delete")
+@login_required
+@role_required(ROLE_SUPER_ADMIN)
+def submissions_permanent_delete(form_id: int, submission_pk: int | None = None):
+    archive_target = submission_pk is not None or request.form.get("return_to") == "archive"
+    target = url_for("admin.submissions_archive" if archive_target else "admin.submissions_list", **({} if archive_target else {"form_id": form_id}))
+    raw_ids = [str(submission_pk)] if submission_pk is not None else request.form.getlist("submission_pk_ids")
+    if not raw_ids or any(not item.isascii() or not item.isdecimal() or int(item) <= 0 for item in raw_ids):
+        flash("Wybierz poprawne identyfikatory zgłoszeń.", "error")
+        return redirect(target)
+    submission_ids = list(dict.fromkeys(int(item) for item in raw_ids))
+    service = current_app.extensions["services"].submission_permanent_delete_service
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        try:
+            paths = service.delete(db, form=form, submission_ids=submission_ids, actor=g.admin_user)
+            db.commit()
+        except SubmissionPermanentDeleteError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+            return redirect(target)
+        except Exception:
+            db.rollback()
+            current_app.logger.exception("Nie udało się trwale usunąć zgłoszeń dla formularza %s.", form_id)
+            flash("Nie udało się trwale usunąć zgłoszeń. Dane pozostały bez zmian.", "error")
+            return redirect(target)
+    failed_paths = service.delete_files(paths, db_factory=db_session_factory())
+    if failed_paths:
+        current_app.logger.error("Nie usunięto %s plików po trwałym usunięciu zgłoszeń dla formularza %s.", len(failed_paths), form_id)
+        flash("Zgłoszenia usunięto, ale część plików wymaga ręcznego usunięcia z magazynu.", "warning")
+    flash(_permanent_delete_success_message(len(submission_ids)), "success")
+    return redirect(target)
+
+
+@bp.post("/submissions/permanent-delete")
+@login_required
+@role_required(ROLE_SUPER_ADMIN)
+def submissions_permanent_delete_archive():
+    target = url_for("admin.submissions_archive")
+    raw_ids = request.form.getlist("submission_pk_ids")
+    if not raw_ids or any(not item.isascii() or not item.isdecimal() or int(item) <= 0 for item in raw_ids):
+        flash("Wybierz poprawne identyfikatory zgłoszeń.", "error")
+        return redirect(target)
+    wanted = set(int(item) for item in raw_ids)
+    service = current_app.extensions["services"].submission_permanent_delete_service
+    with db_session_factory()() as db:
+        submissions = list(db.execute(select(FormSubmission).where(FormSubmission.id.in_(wanted))
+            .execution_options(include_deleted_submissions=True).with_for_update()).scalars())
+        if len(submissions) != len(wanted) or any(item.deleted_at is None for item in submissions):
+            flash("Nie znaleziono wszystkich wybranych zgłoszeń w archiwum.", "error")
+            return redirect(target)
+        forms = {item.slug: item for item in db.execute(select(Form).where(
+            Form.slug.in_({submission.form_slug for submission in submissions})
+        )).scalars()}
+        if any(submission.form_slug not in forms for submission in submissions):
+            flash("Nie znaleziono formularza dla wybranego zgłoszenia.", "error")
+            return redirect(target)
+        paths = []
+        try:
+            for slug in sorted({submission.form_slug for submission in submissions}):
+                form = ensure_form_access(db, forms[slug].id, manage=True)
+                paths.extend(service.delete(db, form=form, submission_ids=[
+                    submission.id for submission in submissions if submission.form_slug == slug
+                ], actor=g.admin_user))
+            db.commit()
+        except Exception:
+            db.rollback()
+            current_app.logger.exception("Nie udało się trwale usunąć zgłoszeń z archiwum.")
+            flash("Nie udało się trwale usunąć zgłoszeń. Dane pozostały bez zmian.", "error")
+            return redirect(target)
+    failed_paths = service.delete_files(paths, db_factory=db_session_factory())
+    if failed_paths:
+        current_app.logger.error("Nie usunięto %s plików po trwałym usunięciu zgłoszeń z archiwum.", len(failed_paths))
+        flash("Zgłoszenia usunięto, ale część plików wymaga ręcznego usunięcia z magazynu.", "warning")
+    flash(_permanent_delete_success_message(len(wanted)), "success")
+    return redirect(target)
 
 
 def _decision_error_frames(exc: Exception) -> str:

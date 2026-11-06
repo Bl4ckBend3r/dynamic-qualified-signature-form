@@ -8,7 +8,7 @@
     <div class="mail-variable-sidebar__content" data-variable-content>
         <div class="admin-section-heading mail-variable-sidebar__heading">
             <div>
-                <h2 id="{{ variable_heading_id|default('mail-variables-heading') }}">4. Dostępne zmienne</h2>
+                <h2 id="{{ variable_heading_id|default('mail-variables-heading') }}">Dostępne zmienne</h2>
                 <p>Wstaw zmienną w miejscu kursora w ostatnio aktywnym polu.</p>
             </div>
             <button type="button" class="admin-button-secondary mail-variable-toggle" data-variable-collapse aria-expanded="true">Minimalizuj</button>
@@ -19,16 +19,17 @@
         </label>
         <div class="mail-variable-groups">
             {% for group in variable_catalog %}
-            <details class="mail-variable-group" open>
+            <details class="mail-variable-group">
                 <summary>{{ group.category }} <span>{{ group.variables|length }}</span></summary>
                 <div class="mail-variable-list">
                     {% for variable in group.variables %}
-                    <article class="mail-variable-row" data-variable-row data-variable-search="{{ variable.name }} {{ variable.label }} {{ variable.description }}">
-                        <div>
-                            <code>{{ variable.placeholder }}</code>
+                    <article class="mail-variable-row" data-variable-row data-variable-search="{{ variable.name }} {{ variable.label }} {{ variable.placeholder }} {{ variable.description }}">
+                        <div class="mail-variable-row__content">
                             <strong>{{ variable.label }}</strong>
-                            <small>{{ variable.description }}</small>
-                            <small>Przykład: {{ variable.example }}</small>
+                            <code title="{{ variable.placeholder }}">{{ variable.placeholder }}</code>
+                            {% if variable.type %}<small>Typ: {{ variable.type }}</small>{% endif %}
+                            {% if variable.description and variable.description|trim|lower != variable.label|trim|lower %}<small>{{ variable.description }}</small>{% endif %}
+                            {% if variable.example %}{% if variable.example|length > 100 or '<' in variable.example %}<details class="mail-variable-example"><summary>Przykład</summary><code>{{ variable.example }}</code></details>{% else %}<small class="mail-variable-example">Przykład: {{ variable.example }}</small>{% endif %}{% endif %}
                         </div>
                         <button type="button" class="admin-button-secondary mail-variable-insert" data-insert-variable="{{ variable.placeholder }}">Wstaw</button>
                     </article>

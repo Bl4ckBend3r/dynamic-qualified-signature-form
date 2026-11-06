@@ -38,6 +38,7 @@ from services.strict_mode_stabilization_service import StrictModeStabilizationSe
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_permanent_delete_service import SubmissionPermanentDeleteService
 from services.submission_attachment_service import SubmissionAttachmentService
 from services.submission_assignment_service import SubmissionAssignmentService
 from services.submission_training_service import SubmissionTrainingService
@@ -58,6 +59,7 @@ class ServiceContainer:
     storage_repository: StorageRepository
     submission_repository: object
     submission_service: SubmissionService
+    submission_permanent_delete_service: SubmissionPermanentDeleteService
     submission_attachment_service: SubmissionAttachmentService
     submission_assignment_service: SubmissionAssignmentService
     submission_training_service: SubmissionTrainingService
@@ -155,6 +157,9 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         app.logger.info("Submission repository: CSV/Nextcloud")
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
     audit_log_service = AuditLogService(repository=audit_repository)
+    submission_permanent_delete_service = SubmissionPermanentDeleteService(
+        storage=storage, audit_log_service=audit_log_service,
+    )
     submission_internal_note_service = SubmissionInternalNoteService(audit_log_service=audit_log_service)
     beneficiary_agreement_service = BeneficiaryAgreementService()
     office_signed_agreement_service = OfficeSignedAgreementService(storage)
@@ -263,6 +268,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage_repository=storage_repository,
         submission_repository=submission_repository,
         submission_service=submission_service,
+        submission_permanent_delete_service=submission_permanent_delete_service,
         submission_attachment_service=submission_attachment_service,
         submission_assignment_service=submission_assignment_service,
         submission_training_service=submission_training_service,

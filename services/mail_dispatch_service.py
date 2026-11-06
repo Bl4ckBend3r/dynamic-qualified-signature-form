@@ -692,7 +692,7 @@ class MailDispatchService:
                 record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot,
                 item_decision_id=item_decision_id, sent_by_id=sent_by_id, extra_context=extra_context,
                 subject_template=subject_template, force_send=force_send,
-                at_most_once_key=at_most_once_key)
+                at_most_once_key=at_most_once_key, attachments=attachments)
         footer = self._footer_for_submission(db, form=form, submission=submission, event_type=event_type)
         if template is None or getattr(template, "is_active", True) is False:
             current_app.logger.warning("mail_skipped reason=template_missing_or_inactive event=%s", event_type)
@@ -1213,7 +1213,7 @@ class MailDispatchService:
     def _dispatch_record_notifications(self, *, db, form, submission, template, definition, sources,
             event_type, event_id='', record_uuid='', group_key='', participant_snapshot=None,
             item_decision_id=None, sent_by_id=None, extra_context=None, subject_template='',
-            force_send=False, legacy_confirmation=False, at_most_once_key=''):
+            force_send=False, legacy_confirmation=False, at_most_once_key='', attachments=None):
         from sqlalchemy import or_, select
         from models import EmailLog, FormSubmission, MailTemplate
         from form_loader import EMAIL_REGEX
@@ -1228,6 +1228,8 @@ class MailDispatchService:
                 record_uuid=record_uuid, group_key=group_key, participant_snapshot=participant_snapshot)
         except ValueError as exc:
             return MailDispatchResult('failed', error_message=str(exc))
+        if attachments and any(not recipient.can_access_submission for recipient in recipients):
+            return MailDispatchResult('failed', error_message='Odbiorca nie ma dostępu do załączników zgłoszenia.')
         template_kind = 'form' if isinstance(template, MailTemplate) else 'platform'
         template_content = {field: getattr(template, field, '') for field in (
             'name', 'subject', 'html_body', 'text_body', 'body_html', 'body_text', 'content_html', 'content_text', 'content_title',
@@ -1275,7 +1277,7 @@ class MailDispatchService:
                     subject=self.render_subject(subject_template or frozen_template.subject, context),
                     html_body=html_body, text_body=text_body, context=context, db=db, form=form,
                     submission=submission, template=log_template, footer=footer, sent_by_id=sent_by_id,
-                    inline_images=inline_images,
+                    inline_images=inline_images, attachments=attachments or [],
                     at_most_once_marker=marker if at_most_once_key else "",
                     repeatable_group_key=recipient.group_key,
                     repeatable_item_id=recipient.record_uuid)

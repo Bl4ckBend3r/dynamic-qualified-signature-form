@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from docx import Document
@@ -14,7 +15,7 @@ from lxml import html as lxml_html
 
 pytest.importorskip("sqlalchemy")
 
-from flask import url_for
+from flask import g, render_template, url_for
 from sqlalchemy import select, text
 from werkzeug.security import generate_password_hash
 
@@ -46,6 +47,7 @@ from models import (
     SubmissionInternalNote,
     SubmissionTraining,
     TrainingAttendanceRecord,
+    TrainingParticipantActionHistory,
     SubmissionWorkflowEvent,
     SystemMailSettings,
     User,
@@ -930,6 +932,8 @@ def test_rbac_backend_separates_view_decision_and_mail(admin_app, admin_client):
 
     grant_rbac(admin_app, user_id, ["can_send_email", "can_make_decision", "can_export_data"], form_id=form_id)
     assert admin_client.get(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail").status_code == 200
+    assert admin_client.post(f"/admin/forms/{form_id}/submissions/{submission_pk}/mail",
+        data={"csrf_token": admin_csrf(admin_client), "subject": "Test", "html_body": "Treść"}).status_code == 403
     export = admin_client.get(f"/admin/forms/{form_id}/submissions/export.csv")
     assert export.status_code == 200
     assert b"participant@example.org" not in export.data
@@ -5227,12 +5231,108 @@ def test_send_mail_logs_email(admin_app, admin_client, monkeypatch):
 
     assert response.status_code == 302
     assert sent[0]["subject"] == "Witaj Jan"
+    assert sent[0]["attachments"] == []
     assert "platform-mail-card" in sent[0]["html_body"]
     assert "abc" in sent[0]["html_body"]
     with session_factory() as db:
         log = db.query(EmailLog).one()
         assert log.status == "sent"
         assert log.to_email == "jan@example.com"
+
+
+def test_manual_mail_attachments_are_selected_per_submission(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="mail_files", name="Pliki")
+    storage = admin_app.extensions["services"].storage
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        first = FormSubmission(submission_id="mail-files-first", form_slug="mail_files",
+            form_name="Pliki", email="first@example.com")
+        second = FormSubmission(submission_id="mail-files-second", form_slug="mail_files",
+            form_name="Pliki", email="second@example.com")
+        db.add_all([first, second])
+        db.flush()
+        rows = []
+        for submission, filename in ((first, "one.pdf"), (first, "two.pdf"), (second, "other.pdf"),
+                                     (first, "bad.pdf"), (first, "oversize.pdf")):
+            path = f"output/mail_files/documents/{submission.submission_id}/{filename}"
+            content = (b"incorrect content" if filename == "bad.pdf"
+                       else f"%PDF-1.4 {filename}".encode())
+            storage.write_bytes(path, content)
+            row = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
+                form_slug="mail_files", filename=filename, original_filename=filename,
+                storage_path=path, document_type="form_pdf", mime_type="application/pdf",
+                size_bytes=(26 * 1024 * 1024 if filename == "oversize.pdf" else len(content)), status="generated")
+            db.add(row)
+            rows.append(row)
+        db.commit()
+        first_pk, second_pk = first.id, second.id
+        first_files = [rows[0].id, rows[1].id]
+        other_file = rows[2].id
+        bad_file = rows[3].id
+        oversized_file = rows[4].id
+    sent = []
+    admin_app.extensions["notification_service"].smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    page = admin_client.get(f"/admin/forms/{form_id}/submissions/{first_pk}/mail").get_data(as_text=True)
+    token = page.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    assert "one.pdf" in page and "two.pdf" in page and "other.pdf" not in page
+    assert f'value="{oversized_file}" disabled' in page
+
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{first_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(file_id) for file_id in first_files]})
+    assert {item["filename"] for item in sent[-1]["attachments"]} == {"one.pdf", "two.pdf"}
+    assert all(item["content"].startswith(b"%PDF") for item in sent[-1]["attachments"])
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{first_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(other_file)]})
+    assert len(sent) == 1
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{first_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(bad_file)]})
+    assert len(sent) == 1
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{first_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(oversized_file)]})
+    assert len(sent) == 1
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(EmailLog).filter_by(submission_id=first_pk, status="failed").count() == 3
+
+    compose = admin_client.post(f"/admin/forms/{form_id}/submissions/mail-selected",
+        data={"csrf_token": token, "compose": "1", "submission_ids": ["mail-files-first", "mail-files-second"]})
+    assert compose.status_code == 200
+    assert f'name="attachment_ids_{first_pk}"' in compose.get_data(as_text=True)
+    sent.clear()
+    admin_client.post(f"/admin/forms/{form_id}/submissions/mail-selected", data={
+        "csrf_token": token, "send_now": "1", "submission_ids": ["mail-files-first", "mail-files-second"],
+        "subject": "Test", "html_body": "<p>Treść</p>",
+        f"attachment_ids_{first_pk}": [str(first_files[0])],
+        f"attachment_ids_{second_pk}": [str(other_file)],
+    })
+    assert len(sent) == 2
+    assert [item["filename"] for item in sent[0]["attachments"]] == ["one.pdf"]
+    assert [item["filename"] for item in sent[1]["attachments"]] == ["other.pdf"]
+    sent.clear()
+    admin_client.post(f"/admin/forms/{form_id}/submissions/mail-selected", data={
+        "csrf_token": token, "send_now": "1", "submission_ids": ["mail-files-first", "mail-files-second"],
+        "subject": "Test", "html_body": "<p>Treść</p>",
+        f"attachment_ids_{first_pk}": [str(other_file)],
+        f"attachment_ids_{second_pk}": [str(other_file)],
+    })
+    assert len(sent) == 1 and sent[0]["to_emails"] == ["second@example.com"]
+    storage.delete("output/mail_files/documents/mail-files-second/other.pdf")
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{second_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(other_file)]})
+    assert len(sent) == 1
+    def failing_sender(**_kwargs):
+        raise RuntimeError("SMTP unavailable")
+    admin_app.extensions["notification_service"].smtp_sender = failing_sender
+    admin_client.post(f"/admin/forms/{form_id}/submissions/{first_pk}/mail",
+        data={"csrf_token": token, "subject": "Test", "html_body": "<p>Treść</p>",
+              "attachment_ids": [str(first_files[0])]})
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        assert db.query(EmailLog).filter_by(submission_id=first_pk, status="failed").count() >= 4
 
 
 def test_send_mail_view_populates_editor_from_selected_template(admin_app, admin_client):
@@ -5736,6 +5836,112 @@ def test_mail_template_edit_does_not_expose_style_controls(admin_app, admin_clie
     assert "Margines" not in html
 
 
+@pytest.mark.parametrize("value", [None, "", "None", "null", "<p>{{ imie }} & None</p>"])
+def test_mail_template_editor_preserves_empty_and_literal_values(admin_app, value):
+    template = SimpleNamespace(
+        name=value,
+        subject=value,
+        content_title=value,
+        content_html=value,
+        html_body=None,
+        content_text=value,
+        text_body=None,
+        instruction_html=value,
+        instruction_text=value,
+        footer_note=value,
+        mail_type="html_text",
+        template_type="custom",
+        trigger_event="",
+        trigger_status="",
+        trigger_decision="",
+        is_active=False,
+        show_process_status=False,
+        is_default_for_status=False,
+    )
+    with admin_app.test_request_context("/admin/forms/1/mail-templates/new"):
+        g.admin_user = None
+        html = render_template(
+            "admin/mail_templates/edit.html",
+            form=SimpleNamespace(id=1, name="Formularz"),
+            template=template,
+            template_types=["custom"],
+            template_labels={"custom": "Własny"},
+            trigger_catalog={"message": ""},
+            trigger_events=[],
+            trigger_statuses=[],
+            trigger_decisions=[],
+            sample_submissions=[],
+            variable_catalog=[],
+            preview_html=None,
+            preview_text=None,
+            preview_subject="",
+        )
+    document = lxml_html.fromstring(html)
+    expected = value if value is not None else ""
+    for name in (
+        "name", "subject", "content_title", "body_html", "body_text",
+        "instruction_html", "instruction_text", "footer_note",
+    ):
+        field = document.xpath('//*[@name=$name]', name=name)[0]
+        actual = field.get("value") if field.tag == "input" else field.text_content()
+        assert actual == expected, name
+    assert document.xpath('//iframe[@data-preview-frame]')[0].get("srcdoc") == ""
+    assert document.xpath('//pre[@data-preview-text]')[0].text_content() == ""
+
+
+def test_mail_template_editor_keeps_saved_content(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="saved_mail_content", name="Formularz")
+    saved = "Świadomie wpisane None"
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        template = MailTemplate(
+            form_id=form_id,
+            name="Zapisany",
+            subject=saved,
+            content_title=saved,
+            content_html=saved,
+            html_body=saved,
+            content_text=saved,
+            text_body=saved,
+            instruction_html=saved,
+            instruction_text=saved,
+            footer_note=saved,
+        )
+        db.add(template)
+        db.commit()
+        template_id = template.id
+    login(admin_client)
+
+    response = admin_client.get(f"/admin/forms/{form_id}/mail-templates/{template_id}/edit")
+    assert response.status_code == 200
+    document = lxml_html.fromstring(response.get_data(as_text=True))
+    for name in (
+        "subject", "content_title", "body_html", "body_text",
+        "instruction_html", "instruction_text", "footer_note",
+    ):
+        field = document.xpath('//*[@name=$name]', name=name)[0]
+        actual = field.get("value") if field.tag == "input" else field.text_content()
+        assert actual == saved, name
+
+
+def test_mail_preview_renders_none_context_as_empty_and_keeps_literal_none():
+    from services.mail_template_service import render_platform_mail_html, render_platform_mail_text, render_template_text
+
+    context = {"missing": None, "literal": "None"}
+    assert render_template_text("{{ missing }}|{{ literal }}", context) == "|None"
+    template = SimpleNamespace(
+        name="Test",
+        content_title="Test",
+        content_html="<p>{{ missing }}|{{ literal }}</p>",
+        content_text="{{ missing }}|{{ literal }}",
+        instruction_html=None,
+        instruction_text=None,
+        footer_note=None,
+    )
+    assert "|None" in render_platform_mail_html(template, context)
+    assert "|None" in render_platform_mail_text(template, context)
+
+
 def test_admin_form_and_mail_editor_explain_required_fields(admin_app, admin_client):
     create_user(admin_app)
     form_id = create_form(admin_app, slug="required_notes", name="Required Notes")
@@ -5822,9 +6028,10 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
     assert "{{ available_trainings_text }}" in html
     assert 'data-insert-variable="{{ pesel }}"' in html
     assert 'class="admin-card mail-variable-sidebar"' in html
+    assert '<details class="mail-variable-group" open>' not in html
     assert 'data-variable-collapse' in html
     assert 'data-variable-expand' in html
-    assert html.index("5. Podgląd wiadomości") < html.index('class="admin-card mail-variable-sidebar"')
+    assert html.index("4. Podgląd wiadomości") < html.index('class="admin-card mail-variable-sidebar"')
     assert "js/mail_variables_panel.js" in html
 
 
@@ -5865,6 +6072,44 @@ def test_mail_template_live_preview_endpoint_uses_fallback_context_without_submi
     assert 'setTimeout(refreshPreview, 400)' in editor_html
     assert "data-preview-frame" in editor_html
     assert " sandbox " in editor_html
+
+
+@pytest.mark.parametrize(
+    "fields,body_visible,instruction_visible,note_visible",
+    [
+        ({}, False, False, False),
+        ({"body_html": "<p>Treść</p>"}, True, False, False),
+        ({"body_text": "Treść TXT"}, False, False, False),
+        ({"body_html": "<p>Treść</p>", "instruction_html": "<p>Krok</p>"}, True, True, False),
+        ({"body_html": "<p>Treść</p>", "footer_note": "<p>Uwaga</p>"}, True, False, True),
+        ({"instruction_html": "<p></p>", "footer_note": "<p>&nbsp;</p>"}, False, False, False),
+        ({"body_html": "None", "instruction_html": "None", "footer_note": "None"}, True, True, True),
+    ],
+)
+def test_mail_template_preview_omits_empty_optional_sections(
+    admin_app, admin_client, fields, body_visible, instruction_visible, note_visible,
+):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="mail_preview_optional", name="Formularz")
+    login(admin_client)
+    editor_html = admin_client.get(f"/admin/forms/{form_id}/mail-templates/new").get_data(as_text=True)
+    token = editor_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+    response = admin_client.post(
+        f"/admin/forms/{form_id}/mail-templates/preview",
+        data={"csrf_token": token, **fields},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert ('class="platform-mail-body"' in payload["html"]) is body_visible
+    assert ('class="platform-instruction-title"' in payload["html"]) is instruction_visible
+    assert ('class="platform-footer-note"' in payload["html"]) is note_visible
+    if fields.get("body_text"):
+        assert fields["body_text"] in payload["text"]
+    if not fields.get("body_html") == "None":
+        assert "None" not in payload["html"]
+        assert "None" not in payload["text"]
 
 
 def test_mail_variable_endpoints_return_form_and_submission_context(admin_app, admin_client):
@@ -5924,6 +6169,75 @@ def test_mail_variable_endpoints_return_form_and_submission_context(admin_app, a
     assert form_variables["firma"]["available_in_txt"] is True
     assert submission_variables["firma"]["example"] == "Realna firma"
     assert submission_variables["email"]["example"] == "real@example.com"
+
+
+def test_mail_variables_follow_form_and_submission_version(admin_app, admin_client):
+    create_user(admin_app)
+    first_id = create_form(admin_app, slug="mail_fields_a", name="Pierwszy", definition_json={
+        "fields": [{"name": "current_field", "label": "Nowe pole", "type": "text"}]})
+    second_id = create_form(admin_app, slug="mail_fields_b", name="Drugi", definition_json={
+        "fields": [{"name": "foreign_field", "label": "Obce pole", "type": "text"}]})
+    old_definition = {"fields": [
+        {"name": "old_field", "label": "Stare pole", "type": "text"},
+        {"name": "empty_field", "label": "Puste pole", "type": "text"},
+        {"name": "choices", "label": "Wybór", "type": "multi_select",
+         "options": [{"value": "a", "label": "Opcja A"}, {"value": "b", "label": "Opcja B"}]},
+        {"name": "confirmed", "label": "Potwierdzenie", "type": "checkbox"},
+        {"name": "people", "label": "Osoby", "type": "repeatable_group",
+         "fields": [{"name": "given", "label": "Imię", "type": "text"}]},
+    ]}
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        version = FormVersion(form_id=first_id, version_major=1, version_minor=0,
+            version_label="1.0", status="archived", definition_json=old_definition)
+        current_version = FormVersion(form_id=first_id, version_major=2, version_minor=0,
+            version_label="2.0", status="published", definition_json={
+                "fields": [{"name": "current_field", "label": "Nowe pole", "type": "text"}]})
+        db.add_all([version, current_version])
+        db.flush()
+        old = FormSubmission(submission_id="mail-old-version", form_slug="mail_fields_a",
+            form_version_id=version.id, data_json={"old_field": "Zapisana treść",
+                "choices": ["a", "b"], "confirmed": True, "people": [{"given": "Jan"}]})
+        foreign = FormSubmission(submission_id="mail-foreign", form_slug="mail_fields_b",
+            data_json={"foreign_field": "Cudze dane"})
+        new = FormSubmission(submission_id="mail-new-version", form_slug="mail_fields_a",
+            form_version_id=current_version.id, data_json={"current_field": "Nowa treść"})
+        db.add_all([old, foreign, new])
+        db.commit()
+        old_pk, foreign_pk, new_pk = old.id, foreign.id, new.id
+    login(admin_client)
+
+    current = admin_client.get(f"/admin/forms/{first_id}/mail-variables").get_json()
+    historic = admin_client.get(f"/admin/forms/{first_id}/mail-variables?submission_id={old_pk}").get_json()
+    newer = admin_client.get(f"/admin/forms/{first_id}/mail-variables?submission_id={new_pk}").get_json()
+    other = admin_client.get(f"/admin/forms/{second_id}/mail-variables").get_json()
+    def fields(payload):
+        return {item["key"]: item for group in payload["categories"]
+                if group["name"] == "Pola formularza" for item in group["variables"]}
+    assert "current_field" in fields(current) and "old_field" not in fields(current)
+    assert "old_field" in fields(historic) and "current_field" not in fields(historic)
+    assert "current_field" in fields(newer) and "old_field" not in fields(newer)
+    assert fields(newer)["current_field"]["example"] == "Nowa treść"
+    assert "foreign_field" in fields(other) and "foreign_field" not in fields(historic)
+    assert fields(historic)["old_field"]["example"] == "Zapisana treść"
+    assert fields(historic)["empty_field"]["example"] == ""
+    assert fields(historic)["choices"]["example"] == "Opcja A, Opcja B"
+    assert fields(historic)["confirmed"]["example"] == "Tak"
+    assert fields(historic)["choices_text"]["example"] == "Opcja A, Opcja B"
+    assert fields(historic)["confirmed_text"]["example"] == "Tak"
+    assert fields(historic)["people_text"]["example"] == "1. Imię: Jan"
+    assert admin_client.get(f"/admin/forms/{first_id}/mail-variables?submission_id={foreign_pk}").status_code == 404
+    assert admin_client.get(f"/admin/forms/{first_id}/mail-variables?submission_id=invalid").status_code == 400
+    editor = admin_client.get(f"/admin/forms/{first_id}/mail-templates/new").get_data(as_text=True)
+    token = editor.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    preview = admin_client.post(f"/admin/forms/{first_id}/mail-templates/preview", data={
+        "csrf_token": token, "preview_submission_id": str(old_pk),
+        "body_html": "<p>{{ old_field }} | {{ current_field }} | {{ participant.first_name }}</p>",
+        "body_text": "{{ old_field }} | {{ current_field }} | {{ participant.first_name }}",
+    }).get_json()
+    assert "Zapisana treść |" in preview["html"]
+    assert "Zapisana treść |" in preview["text"]
+    assert "Cudze dane" not in preview["html"] + preview["text"]
+    assert "Jan" not in preview["html"] + preview["text"]
 
 
 def test_mail_preview_reports_unknown_variable_without_server_error(admin_app, admin_client):
@@ -7140,6 +7454,124 @@ def test_bulk_delete_archives_submission_and_preserves_related_rows(admin_app, a
         assert archived.deleted_by_user_id == user_id
 
 
+def test_single_and_bulk_archive_restore_keep_documents_and_other_forms(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="archive_scope", name="Archive Scope")
+    other_form_id = create_form(admin_app, slug="archive_other", name="Archive Other")
+    session_factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with session_factory() as db:
+        rows = [
+            FormSubmission(submission_id=public_id, form_slug=slug, form_name=slug)
+            for public_id, slug in (("ARCHIVE-ONE", "archive_scope"), ("ARCHIVE-TWO", "archive_scope"), ("ARCHIVE-OTHER", "archive_other"))
+        ]
+        db.add_all(rows)
+        db.flush()
+        for row in rows:
+            db.add(SubmissionFile(submission_id=row.id, public_submission_id=row.submission_id, form_slug=row.form_slug, filename=f"{row.submission_id}.pdf", storage_path=f"documents/{row.submission_id}.pdf", document_type="form_pdf"))
+        db.commit()
+        first_id, second_id, other_id = (row.id for row in rows)
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+
+    bulk_url = f"/admin/forms/{form_id}/submissions/delete-selected"
+    assert admin_client.post(bulk_url, data={"csrf_token": token}).status_code == 302
+    single_url = f"/admin/forms/{form_id}/submissions/{first_id}/archive"
+    assert admin_client.get(single_url).status_code == 405
+    assert admin_client.post(single_url).status_code == 400
+    assert admin_client.post(single_url, data={"csrf_token": token}).status_code == 302
+    response = admin_client.post(bulk_url, data={"csrf_token": token, "submission_pk_ids": [str(second_id), str(other_id), "999999"]}, follow_redirects=True)
+    assert response.status_code == 200
+    assert "Pominięto 2 nieistniejących zgłoszeń" in response.get_data(as_text=True)
+    with session_factory() as db:
+        archived = db.execute(select(FormSubmission).where(FormSubmission.id.in_([first_id, second_id, other_id])).execution_options(include_deleted_submissions=True)).scalars().all()
+        assert {row.id for row in archived if row.deleted_at} == {first_id, second_id}
+        assert db.query(SubmissionFile).count() == 3
+
+    restore_url = f"/admin/forms/{form_id}/submissions/archive/{first_id}/restore"
+    assert admin_client.get(restore_url).status_code == 405
+    assert admin_client.post(restore_url).status_code == 400
+    assert admin_client.post(restore_url, data={"csrf_token": token}).status_code == 302
+    assert admin_client.post(restore_url, data={"csrf_token": token}).status_code == 404
+    assert admin_client.post(f"/admin/forms/{other_form_id}/submissions/archive/{second_id}/restore", data={"csrf_token": token}).status_code == 404
+    with session_factory() as db:
+        assert db.get(FormSubmission, first_id) is not None
+        assert db.get(FormSubmission, second_id) is None
+        assert db.get(FormSubmission, other_id) is not None
+        assert db.query(SubmissionFile).count() == 3
+
+
+def test_submission_bulk_menu_layout_and_selection_in_browser(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="bulk_layout", name="Bulk Layout")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add(FormSubmission(submission_id="BULK-LAYOUT", form_slug="bulk_layout", form_name="Bulk Layout"))
+        db.commit()
+    login(admin_client)
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        def serve(route):
+            url = urlsplit(route.request.url)
+            response = admin_client.get(url.path + (f"?{url.query}" if url.query else ""))
+            route.fulfill(status=response.status_code, content_type=response.content_type, body=response.data)
+
+        page.route("http://localhost/**", serve)
+        page.goto(f"http://localhost/admin/forms/{form_id}/submissions")
+        assert page.locator(".admin-submission-bulk__assignment select, .admin-submission-bulk__assignment input, .admin-submission-bulk__assignment button").count() == 3
+        assert page.locator("[data-delete-button]").is_disabled()
+        assert page.locator("[data-decision-button]").is_disabled()
+        colors = []
+        for theme in ("light", "dark"):
+            page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+            colors.append(page.locator(".admin-submission-bulk").evaluate("el => getComputedStyle(el).backgroundColor"))
+            for width in (390, 768, 1366, 1920):
+                page.set_viewport_size({"width": width, "height": 900})
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (theme, width)
+                panel = page.locator(".admin-submission-bulk")
+                height = panel.bounding_box()["height"]
+                summary = panel.locator("summary")
+                summary.focus()
+                page.keyboard.press("Enter")
+                menu = panel.locator(".admin-submission-bulk__menu")
+                assert menu.is_visible()
+                assert menu.evaluate("el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }")
+                assert panel.bounding_box()["height"] == height
+                page.keyboard.press("Escape")
+                assert not menu.is_visible()
+        assert colors[0] != colors[1]
+        page.locator(".submission-check").check()
+        assert page.locator("[data-selected-count]").inner_text() == "1"
+        assert page.locator("[data-delete-button]").is_enabled()
+        page.locator(".admin-submission-bulk__more summary").click()
+        page.locator("[data-delete-button]").click()
+        confirm = page.locator("#admin-global-confirm-dialog")
+        assert confirm.is_visible()
+        assert "1 zaznaczonych zgłoszeń" in confirm.inner_text()
+        confirm.locator("[data-admin-modal-close]").click()
+        assert page.locator("[data-permanent-delete-button]").is_enabled()
+        page.locator(".admin-submission-bulk__more summary").click()
+        page.locator("[data-permanent-delete-button]").click()
+        assert confirm.is_visible()
+        assert "trwale usunąć to zgłoszenie" in confirm.inner_text()
+        confirm.locator("[data-admin-modal-close]").click()
+        page.locator("[data-admin-action-toggle]").focus()
+        page.keyboard.press("Enter")
+        assert page.get_by_role("menuitem", name="Archiwizuj zgłoszenie").is_visible()
+        page.get_by_role("menuitem", name="Archiwizuj zgłoszenie").click()
+        assert confirm.is_visible()
+        assert "BULK-LAYOUT" in confirm.inner_text()
+        confirm.locator("[data-admin-modal-close]").click()
+        page.keyboard.press("Escape")
+        assert page.locator("[data-admin-action-toggle]").get_attribute("aria-expanded") == "false"
+        assert not errors
+        browser.close()
+
+
 def test_regular_admin_cannot_delete_submission_without_form_permission(admin_app, admin_client):
     create_user(admin_app, email="regular@example.com", role="admin")
     form_id = create_form(admin_app, slug="blocked_delete", name="Blocked Delete")
@@ -7163,6 +7595,7 @@ def test_regular_admin_cannot_delete_submission_without_form_permission(admin_ap
         submission.deleted_at = datetime.now(timezone.utc)
         db.commit()
     assert admin_client.get(f"/admin/forms/{form_id}/submissions/archive/{submission_pk}").status_code == 403
+    assert admin_client.post(f"/admin/forms/{form_id}/submissions/archive/{submission_pk}/restore", data={"csrf_token": token}).status_code == 403
     assert "abc" not in admin_client.get("/admin/submissions/archive").get_data(as_text=True)
 
 
@@ -11310,4 +11743,195 @@ def test_document_builder_browser_preserves_selection_and_toggles_inline_runs(ad
         assert list_model["items"][2]["level"] == 1
         assert list_model["list_styles"][1]["marker"] == "alpha-dot"
         assert list_model["list_styles"][1]["indent_mm"] == 12
+        browser.close()
+
+
+def test_permanent_delete_removes_selected_rows_dependencies_and_only_owned_files(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="hard_delete", name="Hard Delete")
+    storage = admin_app.extensions["services"].storage
+    unique_path = "output/hard_delete/unique.pdf"
+    shared_path = "output/hard_delete/shared.pdf"
+    storage.write_bytes(unique_path, b"unique")
+    storage.write_bytes(shared_path, b"shared")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        rows = [FormSubmission(submission_id=f"HARD-{index}", form_slug="hard_delete", form_name="Hard Delete") for index in range(3)]
+        db.add_all(rows)
+        db.flush()
+        ids = [row.id for row in rows]
+        db.add_all([
+            SubmissionFile(submission_id=ids[0], public_submission_id="HARD-0", form_slug="hard_delete", filename="unique.pdf", storage_path=unique_path),
+            SubmissionFile(submission_id=ids[1], public_submission_id="HARD-1", form_slug="hard_delete", filename="shared.pdf", storage_path=shared_path),
+            SubmissionFile(submission_id=ids[2], public_submission_id="HARD-2", form_slug="hard_delete", filename="shared.pdf", storage_path=shared_path),
+            SubmissionWorkflowEvent(submission_id=ids[0], public_submission_id="HARD-0", form_slug="hard_delete"),
+            SubmissionDecision(submission_id=ids[0], public_submission_id="HARD-0", form_slug="hard_delete"),
+            SubmissionAssignmentHistory(submission_id=ids[0], source="manual"),
+            EmailLog(submission_id=ids[0], public_submission_id="HARD-0"),
+        ])
+        training = SubmissionTraining(submission_id=ids[0], training_id="course", training_name_snapshot="Course")
+        db.add(training)
+        db.flush()
+        db.add(TrainingParticipantActionHistory(form_id=form_id, training_id="course", submission_training_id=training.id, action="selected"))
+        db.commit()
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    url = f"/admin/forms/{form_id}/submissions/permanent-delete"
+    assert admin_client.get(url).status_code == 405
+    assert admin_client.post(url, data={"csrf_token": token}, follow_redirects=True).status_code == 200
+    with factory() as db:
+        assert db.get(FormSubmission, ids[0]) is not None
+    assert admin_client.post(url, data={"csrf_token": token, "submission_pk_ids": [str(ids[0]), "999999"]}, follow_redirects=True).status_code == 200
+    with factory() as db:
+        assert db.get(FormSubmission, ids[0]) is not None
+    response = admin_client.post(url, data={"csrf_token": token, "submission_pk_ids": [str(ids[0]), str(ids[1])]}, follow_redirects=True)
+    assert "Trwale usunięto 2 zgłoszenia." in response.get_data(as_text=True)
+    with factory() as db:
+        assert db.get(FormSubmission, ids[0]) is None
+        assert db.get(FormSubmission, ids[1]) is None
+        assert db.get(FormSubmission, ids[2]) is not None
+        for model in (SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent, SubmissionDecision, SubmissionAssignmentHistory, EmailLog, TrainingParticipantActionHistory):
+            assert db.query(model).count() == (1 if model is SubmissionFile else 0)
+    assert not storage.exists(unique_path)
+    assert storage.exists(shared_path)
+    audit_entries = [json.loads(content) for path, content in storage.direct_files.items() if "/audit/events/" in path]
+    assert {entry["metadata"]["submission_pk"] for entry in audit_entries if entry["event_type"] == "permanent_delete"} == set(ids[:2])
+
+
+def test_permanent_delete_requires_superadmin_and_csrf(admin_app, admin_client):
+    user_id = create_user(admin_app, email="editor@example.com", role="admin")
+    form_id = create_form(admin_app, slug="hard_permission", user_id=user_id)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        row = FormSubmission(submission_id="HARD-PERMISSION", form_slug="hard_permission", form_name="Hard")
+        db.add(row)
+        db.commit()
+        pk = row.id
+    login(admin_client, email="editor@example.com")
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    url = f"/admin/forms/{form_id}/submissions/permanent-delete"
+    assert admin_client.post(url, data={"csrf_token": token, "submission_pk_ids": str(pk)}).status_code == 403
+    with admin_client.session_transaction() as session:
+        session.pop("admin_user_id", None)
+    create_user(admin_app)
+    login(admin_client)
+    assert admin_client.post(url, data={"submission_pk_ids": str(pk)}).status_code == 400
+    with factory() as db:
+        assert db.get(FormSubmission, pk) is not None
+
+
+def test_permanent_delete_rolls_back_when_audit_fails(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="hard_rollback")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    storage = admin_app.extensions["services"].storage
+    path = "output/hard_rollback/document.pdf"
+    storage.write_bytes(path, b"document")
+    with factory() as db:
+        row = FormSubmission(submission_id="HARD-ROLLBACK", form_slug="hard_rollback", form_name="Hard")
+        db.add(row)
+        db.flush()
+        pk = row.id
+        db.add(SubmissionFile(submission_id=pk, public_submission_id=row.submission_id, form_slug=row.form_slug, filename="document.pdf", storage_path=path))
+        db.commit()
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+    monkeypatch.setattr(admin_app.extensions["services"].audit_log_service, "log_event", fail_audit)
+    response = admin_client.post(f"/admin/forms/{form_id}/submissions/permanent-delete", data={"csrf_token": token, "submission_pk_ids": str(pk)}, follow_redirects=True)
+    assert "Dane pozostały bez zmian" in response.get_data(as_text=True)
+    with factory() as db:
+        assert db.get(FormSubmission, pk) is not None
+        assert db.query(SubmissionFile).count() == 1
+    assert storage.exists(path)
+
+
+def test_permanent_delete_archive_single_and_mixed_form_bulk(admin_app, admin_client):
+    create_user(admin_app)
+    first_form = create_form(admin_app, slug="hard_archive_one")
+    second_form = create_form(admin_app, slug="hard_archive_two")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        rows = [
+            FormSubmission(submission_id=f"HARD-ARCHIVE-{index}", form_slug=slug, form_name=slug, deleted_at=datetime.now(timezone.utc))
+            for index, slug in enumerate(("hard_archive_one", "hard_archive_one", "hard_archive_two"))
+        ]
+        db.add_all(rows)
+        db.commit()
+        ids = [row.id for row in rows]
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    archive_html = admin_client.get("/admin/submissions/archive").get_data(as_text=True)
+    assert "Usuń zaznaczone" in archive_html
+    assert "Przywróć" in archive_html
+    single = f"/admin/forms/{first_form}/submissions/{ids[0]}/permanent-delete"
+    assert admin_client.post(single, data={"csrf_token": token}, follow_redirects=True).status_code == 200
+    response = admin_client.post("/admin/submissions/permanent-delete", data={"csrf_token": token, "submission_pk_ids": [str(ids[1]), str(ids[2])]}, follow_redirects=True)
+    assert "Trwale usunięto 2 zgłoszenia." in response.get_data(as_text=True)
+    with factory() as db:
+        assert not db.execute(select(FormSubmission).where(FormSubmission.id.in_(ids)).execution_options(include_deleted_submissions=True)).scalars().all()
+
+
+def test_permanent_delete_reports_storage_failure_after_db_commit(admin_app, admin_client, monkeypatch):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="hard_storage")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    storage = admin_app.extensions["services"].storage
+    path = "output/hard_storage/documents/file.pdf"
+    storage.write_bytes(path, b"file")
+    with factory() as db:
+        row = FormSubmission(submission_id="HARD-STORAGE", form_slug="hard_storage", form_name="Hard")
+        db.add(row)
+        db.flush()
+        pk = row.id
+        db.add(SubmissionFile(submission_id=pk, public_submission_id=row.submission_id, form_slug=row.form_slug, filename="file.pdf", storage_path=path))
+        db.commit()
+    login(admin_client)
+    with admin_client.session_transaction() as session:
+        token = session["admin_csrf_token"]
+    def fail_delete(*args, **kwargs):
+        raise RuntimeError("storage unavailable")
+    monkeypatch.setattr(storage, "delete", fail_delete)
+    response = admin_client.post(f"/admin/forms/{form_id}/submissions/permanent-delete", data={"csrf_token": token, "submission_pk_ids": str(pk)}, follow_redirects=True)
+    assert "część plików wymaga ręcznego usunięcia" in response.get_data(as_text=True)
+    with factory() as db:
+        assert db.get(FormSubmission, pk) is None
+    assert storage.exists(path)
+
+
+def test_archive_permanent_delete_selection_and_confirmation_in_browser(admin_app, admin_client):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    create_user(admin_app)
+    create_form(admin_app, slug="archive_browser_one")
+    create_form(admin_app, slug="archive_browser_two")
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        db.add_all([
+            FormSubmission(submission_id=f"ARCHIVE-BROWSER-{index}", form_slug=slug, form_name=slug, deleted_at=datetime.now(timezone.utc))
+            for index, slug in enumerate(("archive_browser_one", "archive_browser_two"))
+        ])
+        db.commit()
+    login(admin_client)
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.route("http://localhost/**", lambda route: route.fulfill(
+            status=(response := admin_client.get(urlsplit(route.request.url).path)).status_code,
+            content_type=response.content_type,
+            body=response.data,
+        ))
+        page.goto("http://localhost/admin/submissions/archive")
+        button = page.locator("[data-archive-delete-button]")
+        assert button.is_disabled()
+        page.locator("[data-archive-select-all]").check()
+        assert button.is_enabled()
+        button.click()
+        confirm = page.locator("#admin-global-confirm-dialog")
+        assert confirm.is_visible()
+        assert "2 zaznaczone zgłoszenia" in confirm.inner_text()
+        confirm.locator("[data-admin-modal-close]").click()
         browser.close()

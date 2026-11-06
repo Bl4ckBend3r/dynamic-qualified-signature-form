@@ -31,6 +31,13 @@
                 <label class="admin-form-wide"><span>Treść TXT</span><textarea name="text_body" rows="6" data-mail-text data-variable-target></textarea></label>
                 <div class="admin-form-wide admin-validation-info"><strong>Stopka:</strong> {{ footer_usage_label }}</div>
             </div>
+            <section class="admin-section" aria-labelledby="mail-attachments-heading">
+                <h2 id="mail-attachments-heading">Załączniki zgłoszenia</h2>
+                <p>Wybierz pliki, które mają zostać dołączone do tej wiadomości.</p>
+                {% for file in attachment_candidates %}
+                <label class="admin-check"><input type="checkbox" name="attachment_ids" value="{{ file.id }}" {% if not file.available or not can_view_sensitive_data %}disabled{% endif %}><span>{{ file.filename }} · {{ file.document_type }} · {{ file.size_label }} · {{ 'Dostępny' if file.available else 'Niedostępny' }}</span></label>
+                {% else %}<p class="admin-empty-state">Brak plików przypisanych do zgłoszenia.</p>{% endfor %}
+            </section>
             <section class="admin-section"><h2>Podgląd</h2><div class="admin-card admin-mail-preview" data-mail-preview></div></section>
         </div>
         {% set variable_storage_key = 'submission-mail-variables-collapsed' %}

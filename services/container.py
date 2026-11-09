@@ -19,8 +19,6 @@ from services.documents.declaration_flow_service import DeclarationFlowService
 from services.documents.document_access_service import DocumentAccessService
 from services.documents.document_download_service import DocumentDownloadService
 from services.documents.document_signing_service import DocumentSigningService
-from services.failover_storage import FailoverStorage
-from services.local_storage import LocalStorage
 from services.form_config_service import FormConfigService
 from services.form_version_service import FormVersionService
 from services.form_draft_service import FormDraftService
@@ -40,6 +38,7 @@ from services.strict_mode_stabilization_service import StrictModeStabilizationSe
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_decision_service import SubmissionDecisionService
 from services.submission_service import SubmissionService
+from services.submission_permanent_delete_service import SubmissionPermanentDeleteService
 from services.submission_attachment_service import SubmissionAttachmentService
 from services.submission_assignment_service import SubmissionAssignmentService
 from services.submission_training_service import SubmissionTrainingService
@@ -60,6 +59,7 @@ class ServiceContainer:
     storage_repository: StorageRepository
     submission_repository: object
     submission_service: SubmissionService
+    submission_permanent_delete_service: SubmissionPermanentDeleteService
     submission_attachment_service: SubmissionAttachmentService
     submission_assignment_service: SubmissionAssignmentService
     submission_training_service: SubmissionTrainingService
@@ -105,53 +105,12 @@ class ServiceContainer:
 
 
 def create_services(app, storage_override=None) -> ServiceContainer:
-    #storage = storage_override or create_nextcloud_storage_from_env()
     if storage_override is not None:
         storage = storage_override
     else:
-        nextcloud_storage = create_nextcloud_storage_from_env()
-
-        failover_enabled = str(
-            app.config.get("STORAGE_FAILOVER_ENABLED", "false")
-        ).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-
-        if failover_enabled:
-            local_storage = LocalStorage(
-                root_dir=app.config.get(
-                    "LOCAL_STORAGE_PATH",
-                    "./data/storage",
-                ),
-                forms_dir=app.config.get(
-                    "NEXTCLOUD_FORMS_DIR",
-                    "Formularze",
-                ),
-                output_dir=app.config.get(
-                    "NEXTCLOUD_OUTPUT_DIR",
-                    "output",
-                ),
-            )
-
-            storage = FailoverStorage(
-                primary=nextcloud_storage,
-                fallback=local_storage,
-                retry_seconds=int(
-                    app.config.get(
-                        "STORAGE_FAILOVER_RETRY_SECONDS",
-                        30,
-                    )
-                ),
-            )
-
-            app.logger.info(
-                "Storage adapter: Nextcloud with local failover"
-            )
-        else:
-            storage = nextcloud_storage
+        if app.config.get("STORAGE_FAILOVER_ENABLED"):
+            app.logger.warning("STORAGE_FAILOVER_ENABLED is ignored; Nextcloud storage is required.")
+        storage = create_nextcloud_storage_from_env()
     
     
     form_config_service = FormConfigService()
@@ -197,7 +156,10 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         submission_repository = CsvSubmissionRepository(storage, form_slugs=form_slugs)
         app.logger.info("Submission repository: CSV/Nextcloud")
     audit_repository = StorageAuditLogRepository(storage, output_dir=app.config.get("NEXTCLOUD_OUTPUT_DIR", "output"))
-    audit_log_service = AuditLogService(Path(app.config["TEMP_DIR"]) / "audit_log.jsonl", repository=audit_repository)
+    audit_log_service = AuditLogService(repository=audit_repository)
+    submission_permanent_delete_service = SubmissionPermanentDeleteService(
+        storage=storage, audit_log_service=audit_log_service,
+    )
     submission_internal_note_service = SubmissionInternalNoteService(audit_log_service=audit_log_service)
     beneficiary_agreement_service = BeneficiaryAgreementService()
     office_signed_agreement_service = OfficeSignedAgreementService(storage)
@@ -306,6 +268,7 @@ def create_services(app, storage_override=None) -> ServiceContainer:
         storage_repository=storage_repository,
         submission_repository=submission_repository,
         submission_service=submission_service,
+        submission_permanent_delete_service=submission_permanent_delete_service,
         submission_attachment_service=submission_attachment_service,
         submission_assignment_service=submission_assignment_service,
         submission_training_service=submission_training_service,

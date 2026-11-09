@@ -878,10 +878,41 @@ def complete_version_upgrade(slug: str, submission_id: str):
         ).with_for_update()).scalar_one_or_none()
         if not form or not submission or not services.form_version_service.is_active_submission(submission):
             abort(404)
-        version = services.form_version_service.resolve_for_submission(db, submission)
+
+        service = services.form_version_service
+
+        historical = service.resolve_for_submission(
+            db,
+            submission,
+        )
+
+        if historical is None:
+            abort(404)
+
+        marker = (
+            (submission.data_json or {})
+            .get("_form_version_upgrade") or {}
+        )
+
+        target_id = marker.get("new_version_id")
+
+        version = (
+            db.get(FormVersion, target_id)
+            if marker.get("data_only") is True and target_id
+            else historical
+        )
+
+        if version is None or version.form_id != historical.form_id:
+            version = service.resolve_published(
+                db,
+                historical.form_id,
+            )
+
         if version is None:
-            abort(409, description="Brak opublikowanej wersji zgłoszenia.")
+            abort(404)
+
         definition = version.definition_json or {}
+
         form_meta, _ = version_to_public_form(db, form, version)
         service = services.form_version_service
 
@@ -923,9 +954,55 @@ def complete_version_upgrade(slug: str, submission_id: str):
         )
 
         if request.method == "GET":
-            db.commit()
-            if state["complete"]:
-                return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
+            state = service.refresh_submission_completion(db, submission)
+            from services.submission_decision_service import ConditionalApproval
+            if ConditionalApproval.active(submission):
+                _, state, _ = ConditionalApproval.inspect(db, submission)
+                edit_definition = service.completion_form_definition(submission, definition)
+                saved_values = service.submission_values(submission, edit_definition)
+
+                db.commit()
+
+                if not state["complete"]:
+                    return redirect(action)
+
+                # Resume workflow only after the required data is complete.
+                historical_definition = (
+                    historical.definition_json or {}
+                )
+
+                fresh_submission = (
+                    services.submission_repository.get_by_id(
+                        submission_id
+                    )
+                )
+
+                if fresh_submission:
+                    try:
+                        services.workflow_service.run_automatic_steps(
+                            fresh_submission,
+                            historical_definition,
+                        )
+                    except Exception:
+                        current_app.logger.exception(
+                            "Nie udało się wznowić workflow po "
+                            "uzupełnieniu danych zgłoszenia %s",
+                            submission_id,
+                        )
+                        flash(
+                            "Dane zostały zapisane. "
+                            "Dalszy etap wymaga sprawdzenia przez administratora.",
+                            "warning",
+                        )
+
+                return redirect(
+                    url_for(
+                        "documents.documents_to_sign",
+                        submission_id=submission_id,
+                        token=token,
+                    )
+                )
+
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
                 errors=state["errors"], values=saved_values, form_action=action,
@@ -937,20 +1014,34 @@ def complete_version_upgrade(slug: str, submission_id: str):
         csrf_valid, _ = _valid_public_csrf(request.form)
         if not csrf_valid:
             abort(400, description="Sesja formularza wygasła. Odśwież stronę i spróbuj ponownie.")
+        from services.audit_log_service import pending_audit_state
+        if pending_audit_state(submission):
+            abort(409, description="Poprzednia operacja oczekuje na audyt.")
         from form_loader import extract_submission_data
         from services.form_submission_mapper import FORM_FIELD_MAP, FORM_SUBMISSION_COLUMNS, convert_value_for_column
         from models import SubmissionWorkflowEvent
 
+        from services.submission_decision_service import ConditionalApproval
+        if ConditionalApproval.active(submission):
+            edit_definition = service.completion_form_definition(submission, definition)
+            saved_values = service.submission_values(submission, edit_definition)
         submitted = extract_submission_data(edit_definition, request.form)
         values = {**saved_values, **submitted}
         attachments, attachment_errors = services.submission_attachment_service.validate_uploads(
             edit_definition, values, request.files, submission_id=submission_id,
         )
         pending_files = {item.field_key for item in attachments}
-        errors = service.submission_data_errors(
-            submission, definition, db=db, values=values, pending_files=pending_files,
+
+        validation_state = service.refresh_submission_completion(
+            db,
+            submission,
+            values=values,
+            pending_files=pending_files,
         )
+
+        errors = dict(validation_state["errors"])
         errors.update(attachment_errors)
+
         if errors:
             error_definition = (
                 service.missing_fields_form_definition(
@@ -1000,7 +1091,30 @@ def complete_version_upgrade(slug: str, submission_id: str):
             source="form_version_data_completed", reason="Uzupełniono dane po aktualizacji formularza.",
             side_effects={"field_names": sorted(submitted), "remaining_fields": sorted(state["errors"])},
         ))
+        from services.submission_decision_service import ConditionalApproval
+        condition_audit = None
+        if state["complete"] and ConditionalApproval.active(submission):
+            closed = ConditionalApproval.check(db, submission, settle=True)
+            condition_audit = services.audit_log_service.stage_pending(
+                submission, event_type="CONDITIONAL_APPROVAL_RESOLVED", submission_id=submission_id,
+                form_slug=slug, actor="participant", metadata={"condition": closed},
+                required_permission="can_make_decision", operation_key=closed["operation_id"],
+                continuation={"kind": "workflow_transition", "previous_step": submission.workflow_step,
+                              "new_step": submission.workflow_step, "requested_side_effects": []},
+            )
         db.commit()
+        if condition_audit:
+            try:
+                services.audit_log_service.write_pending(condition_audit)
+                services.audit_log_service.mark_audit_complete(submission, condition_audit["operation_id"])
+                db.commit()
+                services.workflow_service.resume_audited_transition(
+                    services.submission_repository.get_by_id(submission_id), definition,
+                    {**condition_audit["continuation"], "_audit_operation_id": condition_audit["operation_id"]},
+                )
+            except Exception as exc:
+                db.rollback()
+                current_app.logger.error("conditional_approval_audit_pending error_type=%s", type(exc).__name__)
         if not state["complete"]:
             return redirect(action)
         return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
@@ -1113,7 +1227,11 @@ def logo_asset(logo_id: int, filename: str):
         logo_path = Path(logo.storage_path)
         if not logo_path.exists():
             abort(404)
-        return send_file(logo_path, mimetype=logo.mime_type or None)
+        response = send_file(logo_path, mimetype=logo.mime_type or None)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if logo.mime_type == "image/svg+xml":
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        return response
 
 
 def list_public_db_forms() -> list[dict]:

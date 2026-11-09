@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import current_app, has_app_context
@@ -11,6 +12,13 @@ from markupsafe import Markup
 from services.mail_template_service import build_mail_context as build_platform_mail_context
 from services.mail_template_service import render_template_text
 from services.mail_training_context_service import build_training_mail_context
+
+
+def _training_form_for_submission(form, submission):
+    version = getattr(submission, "form_version", None) if submission is not None else None
+    if version is not None and version.form_id == getattr(form, "id", None):
+        return SimpleNamespace(definition_json=version.definition_json or {}, slug=form.slug)
+    return form
 
 
 def resolve_mail_links(form, submission, *, definition=None, can_access_submission=True,
@@ -150,7 +158,7 @@ def build_mail_context(
     if participant is None:
         context.update(
             build_training_mail_context(
-                form,
+                _training_form_for_submission(form, submission),
                 submission,
                 availability_service=training_availability_service,
             )
@@ -179,7 +187,7 @@ def preview_mail_context(
         )
     )
     preview_training_context = build_training_mail_context(
-        form,
+        _training_form_for_submission(form, submission),
         submission,
         availability_service=training_availability_service,
         use_available_as_selected_fallback=submission is None,
@@ -216,7 +224,7 @@ def preview_mail_context(
     context["form_name"] = form.name
     context["form_title"] = getattr(form, "title", "") or form.name
     context["form_slug"] = form.slug
-    context.setdefault("form_description", getattr(form, "description", "") or "Przykładowy opis formularza")
+    context.setdefault("form_description", getattr(form, "description", "") or ("" if submission else "Przykładowy opis formularza"))
     context.setdefault("created_at", now.strftime("%d.%m.%Y %H:%M"))
     context.setdefault("updated_at", now.strftime("%d.%m.%Y %H:%M"))
     context.setdefault("process_status", "FORM_SUBMITTED")
@@ -224,8 +232,8 @@ def preview_mail_context(
     context.setdefault("process_status_label", context["status_label"])
     context.setdefault("officer_decision", "accepted")
     context.setdefault("officer_decision_reason", "Wniosek spełnia wymagania.")
-    context.setdefault("correction_message", "Uzupełnij brakujące dane.")
-    context.setdefault("user_instruction", getattr(form, "user_instruction", "") or "Postępuj zgodnie z instrukcją w wiadomości.")
+    context.setdefault("correction_message", "" if submission else "Uzupełnij brakujące dane.")
+    context.setdefault("user_instruction", getattr(form, "user_instruction", "") or ("" if submission else "Postępuj zgodnie z instrukcją w wiadomości."))
     context.setdefault("acceptance_required", "Tak")
     context.setdefault("declaration_required", "Tak")
     context.setdefault("agreement_required", "Nie")
@@ -240,7 +248,7 @@ def preview_mail_context(
     context.setdefault("trainings_total_price", "1 200,00 zł")
     context.setdefault("all_selected_trainings_total_formatted", "1 200,00 zł")
     context.setdefault("status_url", "https://formularze.example.com/status/przyklad")
-    context.setdefault("participant", {"record_uuid": "6ef64b28-530b-4df0-b421-53e6c8dd2735", "first_name": "Jan", "last_name": "Kowalski", "full_name": "Jan Kowalski", "email": "jan@example.org"})
+    context.setdefault("participant", {} if submission else {"record_uuid": "6ef64b28-530b-4df0-b421-53e6c8dd2735", "first_name": "Jan", "last_name": "Kowalski", "full_name": "Jan Kowalski", "email": "jan@example.org"})
     context.setdefault("submitted_at", "02.09.2026")
     context.setdefault("current_status", "Wniosek oczekuje na weryfikację")
     context.setdefault("public_status_url", "https://formularze.example.com/sprawdz-status")

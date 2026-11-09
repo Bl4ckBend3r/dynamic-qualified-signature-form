@@ -10,7 +10,7 @@
     <a class="admin-button-secondary" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Powrót</a>
 </div>
 
-<form method="post" enctype="multipart/form-data" class="admin-form mail-template-editor" data-mail-template-editor data-mail-variable-scope data-preview-url="{{ url_for('admin.mail_template_preview', form_id=form.id) }}">
+<form method="post" enctype="multipart/form-data" class="admin-form mail-template-editor" data-mail-template-editor data-mail-variable-scope data-preview-url="{{ url_for('admin.mail_template_preview', form_id=form.id) }}" data-variable-url="{{ url_for('admin.form_mail_variables', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <p class="admin-required-note">Pola oznaczone <span class="required-marker" aria-hidden="true">*</span> są obowiązkowe.</p>
 
@@ -20,12 +20,15 @@
                 <div class="admin-section-heading">
                     <div><h2 id="mail-basic-heading">1. Podstawowe informacje</h2><p>Ułatw sobie późniejsze odnalezienie i rozpoznanie szablonu.</p></div>
                 </div>
-                <div class="admin-form-grid">
-                    <label class="admin-field"><span>Nazwa szablonu <span class="required-marker" aria-hidden="true">*</span></span><input name="name" value="{{ template.name }}" required aria-required="true"><small class="admin-field-help">Nazwa jest widoczna tylko w panelu administracyjnym.</small></label>
+                <div class="admin-form-grid mail-editor-grid mail-editor-grid--basic">
+                    <label class="admin-field"><span>Nazwa szablonu&nbsp;<span class="required-marker" aria-hidden="true">*</span></span><input name="name" value="{{ template.name if template.name is not none else '' }}" required aria-required="true"><small class="admin-field-help">Nazwa jest widoczna tylko w panelu administracyjnym.</small></label>
                     <label class="admin-field"><span>Typ maila</span><select name="mail_type"><option value="html_text" {% if template.mail_type == "html_text" %}selected{% endif %}>HTML + TXT</option></select><small class="admin-field-help">Wiadomość zawiera wersję wizualną i tekstową.</small></label>
                     <label class="admin-field"><span>Typ szablonu</span><select name="template_type">{% for option in template_types %}<option value="{{ option }}" {% if template.template_type == option or (not template.template_type and option == "custom") %}selected{% endif %}>{{ template_labels.get(option, option) }}</option>{% endfor %}</select><small class="admin-field-help">Określa rolę wiadomości w procesie.</small></label>
-                    <label class="admin-check mail-editor-check"><input type="checkbox" name="is_active" {% if template.is_active %}checked{% endif %}><span>Szablon aktywny</span></label>
-                    <label class="admin-check mail-editor-check"><input type="checkbox" name="show_process_status" {% if template.show_process_status %}checked{% endif %}><span>Pokazuj status procesu w wiadomości <small>(odznacz: ukryj status procesu)</small></span></label>
+                    <div class="mail-editor-check-group" role="group" aria-label="Ustawienia wiadomości">
+                        <p class="mail-editor-check-group__label">Ustawienia wiadomości</p>
+                        <label class="admin-check mail-editor-check"><input type="checkbox" name="is_active" {% if template.is_active %}checked{% endif %}><span>Szablon aktywny</span></label>
+                        <label class="admin-check mail-editor-check"><input type="checkbox" name="show_process_status" {% if template.show_process_status %}checked{% endif %}><span>Pokazuj status procesu w wiadomości</span></label>
+                    </div>
                 </div>
             </section>
 
@@ -34,11 +37,14 @@
                     <div><h2 id="mail-trigger-heading">2. Wyzwalanie</h2><p>Wskaż, kiedy system może automatycznie wybrać ten szablon.</p></div>
                 </div>
                 {% if trigger_catalog.message %}<div class="admin-alert admin-alert-info">{{ trigger_catalog.message }}</div>{% endif %}
-                <div class="admin-form-grid">
+                <div class="admin-form-grid mail-editor-grid mail-editor-grid--trigger">
                     <label class="admin-field"><span>Zdarzenie</span><select name="trigger_event"><option value="">Dowolne zdarzenie</option>{% if template.trigger_event and template.trigger_event not in trigger_events|map(attribute='value')|list %}<option value="{{ template.trigger_event }}" selected>{{ template.trigger_event }} (wartość historyczna)</option>{% endif %}{% for option in trigger_events %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_event == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Biznesowa akcja z aktywnego workflow. Kod techniczny wybranej wartości jest dostępny w podpowiedzi.</small>{% if template.trigger_event and template.trigger_event not in trigger_events|map(attribute='value')|list %}<span class="admin-field-warning">Wybrane zdarzenie nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
                     <label class="admin-field"><span>Status procesu</span><select name="trigger_status"><option value="">Dowolny status</option>{% if template.trigger_status and template.trigger_status not in trigger_statuses|map(attribute='value')|list %}<option value="{{ template.trigger_status }}" selected>{{ template.trigger_status }} (wartość historyczna)</option>{% endif %}{% for option in trigger_statuses %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_status == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Opcjonalnie ogranicza szablon do aktywnego etapu workflow.</small>{% if template.trigger_status and template.trigger_status not in trigger_statuses|map(attribute='value')|list %}<span class="admin-field-warning">Wybrany status nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
                     <label class="admin-field"><span>Decyzja</span><select name="trigger_decision"><option value="">Dowolna decyzja</option>{% if template.trigger_decision and template.trigger_decision not in trigger_decisions|map(attribute='value')|list %}<option value="{{ template.trigger_decision }}" selected>{{ template.trigger_decision }} (wartość historyczna)</option>{% endif %}{% for option in trigger_decisions %}<option value="{{ option.value }}" title="{{ option.description }}" data-technical-value="{{ option.value }}" {% if template.trigger_decision == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><small class="admin-field-help">Aktywna decyzja urzędnika przypisana do etapu workflow.</small>{% if template.trigger_decision and template.trigger_decision not in trigger_decisions|map(attribute='value')|list %}<span class="admin-field-warning">Wybrana decyzja nie występuje w aktualnym workflow formularza.</span>{% endif %}</label>
-                    <label class="admin-check mail-editor-check"><input type="checkbox" name="is_default_for_status" {% if template.is_default_for_status %}checked{% endif %}><span>Domyślny dla wybranego statusu</span></label>
+                    <div class="mail-editor-check-group" role="group" aria-label="Ustawienia wyzwalania">
+                        <p class="mail-editor-check-group__label">Ustawienie domyślne</p>
+                        <label class="admin-check mail-editor-check"><input type="checkbox" name="is_default_for_status" {% if template.is_default_for_status %}checked{% endif %}><span>Domyślny dla wybranego statusu</span></label>
+                    </div>
                 </div>
             </section>
 
@@ -46,32 +52,32 @@
                 <div class="admin-section-heading">
                     <div><h2 id="mail-content-heading">3. Treść wiadomości</h2><p>Możesz wkleić treść lub wczytać ją z pliku. Wgrany plik zastąpi zawartość odpowiedniego pola.</p></div>
                 </div>
-                <div class="admin-form-grid">
-                    <label class="admin-field admin-form-wide"><span>Temat</span><input name="subject" value="{{ template.subject }}" data-variable-target><small class="admin-field-help">Temat widoczny w skrzynce odbiorcy.</small></label>
-                    <label class="admin-field admin-form-wide"><span>Tytuł wiadomości</span><input name="content_title" value="{{ template.content_title }}" data-variable-target><small class="admin-field-help">Nagłówek wyświetlany wewnątrz wiadomości.</small></label>
+                <div class="admin-form-grid mail-editor-grid mail-editor-grid--content">
+                    <label class="admin-field"><span>Temat</span><input name="subject" value="{{ template.subject if template.subject is not none else '' }}" data-variable-target><small class="admin-field-help">Temat widoczny w skrzynce odbiorcy.</small></label>
+                    <label class="admin-field"><span>Tytuł wiadomości</span><input name="content_title" value="{{ template.content_title if template.content_title is not none else '' }}" data-variable-target><small class="admin-field-help">Nagłówek wyświetlany wewnątrz wiadomości.</small></label>
                     <label class="admin-field"><span>Wgraj plik HTML</span><input type="file" name="html_file" accept=".html,text/html" data-load-file="body_html"><small class="admin-field-help">Alternatywnie użyj pola „Wklej HTML” poniżej.</small></label>
-                    <label class="admin-field"><span>Wgraj plik TXT</span><input type="file" name="txt_file" accept=".txt,text/plain" data-load-file="body_text"></label>
+                    <label class="admin-field"><span>Wgraj plik TXT</span><input type="file" name="txt_file" accept=".txt,text/plain" data-load-file="body_text"><small class="admin-field-help">Alternatywnie użyj pola „Treść TXT” poniżej.</small></label>
                 </div>
                 <div class="mail-editor-tabs" role="tablist" aria-label="Wersje wiadomości">
-                    <button type="button" class="mail-editor-tab is-active" data-editor-tab="html" aria-selected="true">HTML</button>
-                    <button type="button" class="mail-editor-tab" data-editor-tab="text" aria-selected="false">TXT</button>
-                    <button type="button" class="mail-editor-tab" data-editor-tab="extras" aria-selected="false">Dodatki</button>
-                    <button type="button" class="mail-editor-tab" data-editor-tab="preview" aria-selected="false">Podgląd</button>
+                    <button type="button" class="mail-editor-tab is-active" id="mail-editor-tab-html" role="tab" aria-controls="mail-editor-panel-html" data-editor-tab="html" aria-selected="true" tabindex="0">HTML</button>
+                    <button type="button" class="mail-editor-tab" id="mail-editor-tab-text" role="tab" aria-controls="mail-editor-panel-text" data-editor-tab="text" aria-selected="false" tabindex="-1">TXT</button>
+                    <button type="button" class="mail-editor-tab" id="mail-editor-tab-extras" role="tab" aria-controls="mail-editor-panel-extras" data-editor-tab="extras" aria-selected="false" tabindex="-1">Dodatki</button>
+                    <button type="button" class="mail-editor-tab" id="mail-editor-tab-preview" role="tab" aria-controls="mail-editor-panel-preview" data-editor-tab="preview" aria-selected="false" tabindex="-1">Podgląd</button>
                 </div>
-                <div class="mail-editor-panel is-active" data-editor-panel="html">
-                    <label class="admin-field"><span>Wklej HTML</span><textarea name="body_html" rows="15" class="mail-editor-code" data-variable-target>{{ template.content_html or template.html_body }}</textarea><small class="admin-field-help">Do formatowania użyj prostego HTML. Niedozwolone elementy zostaną usunięte podczas zapisu.</small></label>
+                <div class="mail-editor-panel is-active" id="mail-editor-panel-html" role="tabpanel" aria-labelledby="mail-editor-tab-html" data-editor-panel="html">
+                    <label class="admin-field"><span>Wklej HTML</span><textarea name="body_html" rows="15" wrap="off" class="mail-editor-code" data-variable-target>{{ template.content_html or template.html_body or '' }}</textarea><small class="admin-field-help">Do formatowania użyj prostego HTML. Niedozwolone elementy zostaną usunięte podczas zapisu.</small></label>
                 </div>
-                <div class="mail-editor-panel" data-editor-panel="text" hidden>
-                    <label class="admin-field"><span>Treść TXT</span><textarea name="body_text" rows="12" data-variable-target>{{ template.content_text or template.text_body }}</textarea><small class="admin-field-help">Czytelna wersja alternatywna dla klientów pocztowych bez HTML.</small></label>
+                <div class="mail-editor-panel" id="mail-editor-panel-text" role="tabpanel" aria-labelledby="mail-editor-tab-text" data-editor-panel="text" hidden>
+                    <label class="admin-field"><span>Treść TXT</span><textarea name="body_text" rows="12" wrap="off" class="mail-editor-code" data-variable-target>{{ template.content_text or template.text_body or '' }}</textarea><small class="admin-field-help">Czytelna wersja alternatywna dla klientów pocztowych bez HTML.</small></label>
                 </div>
-                <div class="mail-editor-panel" data-editor-panel="extras" hidden>
+                <div class="mail-editor-panel" id="mail-editor-panel-extras" role="tabpanel" aria-labelledby="mail-editor-tab-extras" data-editor-panel="extras" hidden>
                     <div class="admin-form-grid">
-                        <label class="admin-field admin-form-wide"><span>Instrukcja HTML</span><textarea name="instruction_html" rows="7" class="mail-editor-code" data-variable-target>{{ template.instruction_html }}</textarea></label>
-                        <label class="admin-field admin-form-wide"><span>Instrukcja TXT</span><textarea name="instruction_text" rows="6" data-variable-target>{{ template.instruction_text }}</textarea></label>
-                        <label class="admin-field admin-form-wide"><span>Notatka końcowa</span><textarea name="footer_note" rows="4" data-variable-target>{{ template.footer_note }}</textarea></label>
+                        <label class="admin-field admin-form-wide"><span>Instrukcja HTML</span><textarea name="instruction_html" rows="7" class="mail-editor-code" data-variable-target>{{ template.instruction_html if template.instruction_html is not none else '' }}</textarea></label>
+                        <label class="admin-field admin-form-wide"><span>Instrukcja TXT</span><textarea name="instruction_text" rows="6" data-variable-target>{{ template.instruction_text if template.instruction_text is not none else '' }}</textarea></label>
+                        <label class="admin-field admin-form-wide"><span>Notatka końcowa</span><textarea name="footer_note" rows="4" data-variable-target>{{ template.footer_note if template.footer_note is not none else '' }}</textarea></label>
                     </div>
                 </div>
-                <div class="mail-editor-panel" data-editor-panel="preview" hidden>
+                <div class="mail-editor-panel" id="mail-editor-panel-preview" role="tabpanel" aria-labelledby="mail-editor-tab-preview" data-editor-panel="preview" hidden>
                     <p class="admin-field-help">Podgląd jest stale dostępny bezpośrednio pod edytorem treści.</p>
                     <button type="button" class="admin-button-secondary" data-scroll-preview>Przejdź do podglądu</button>
                 </div>
@@ -80,7 +86,7 @@
 
             <section class="admin-card mail-editor-section mail-editor-preview" data-preview-section aria-labelledby="mail-preview-heading">
                 <div class="admin-section-heading">
-                    <div><h2 id="mail-preview-heading">5. Podgląd wiadomości</h2><p>Odświeża się automatycznie po zakończeniu edycji.</p></div>
+                    <div><h2 id="mail-preview-heading">4. Podgląd wiadomości</h2><p>Odświeża się automatycznie po zakończeniu edycji.</p></div>
                     <span class="mail-preview-state" data-preview-state aria-live="polite">Gotowy</span>
                 </div>
                 {% if sample_submissions %}
@@ -88,10 +94,19 @@
                 {% else %}
                 <div class="mail-preview-fallback">Brak zgłoszeń dla formularza — podgląd korzysta z przykładowych danych.</div>
                 {% endif %}
+                <section class="admin-section" aria-labelledby="mail-preview-attachments-heading">
+                    <h3 id="mail-preview-attachments-heading">Załączniki zgłoszenia</h3>
+                    <p class="admin-field-help">Sprawdź pliki wybranego zgłoszenia. Załączniki do wysłania wybiera się przy wysyłce wiadomości.</p>
+                    <div data-preview-attachments>
+                        {% for file in attachment_candidates %}
+                        <label class="admin-check"><input type="checkbox" value="{{ file.id }}" data-preview-attachment {% if not file.available %}disabled{% endif %}><span>{{ file.filename }} · {{ file.document_type }} · {{ file.size_label }} · {{ 'Dostępny' if file.available else 'Niedostępny' }}</span></label>
+                        {% else %}<p class="admin-empty-state">Brak plików dla wybranego zgłoszenia.</p>{% endfor %}
+                    </div>
+                </section>
                 <div class="mail-preview-error" data-preview-error role="alert" hidden></div>
                 <dl class="mail-preview-meta"><dt>Temat</dt><dd data-preview-subject>{{ preview_subject or "Bez tematu" }}</dd><dt>Tytuł wiadomości</dt><dd data-preview-title>{{ template.content_title or "Bez tytułu" }}</dd></dl>
-                <iframe class="mail-preview-frame" data-preview-frame title="Podgląd wiadomości HTML" sandbox srcdoc="{{ preview_html|e }}"></iframe>
-                <details class="mail-preview-text"><summary>Wersja tekstowa</summary><pre data-preview-text>{{ preview_text }}</pre></details>
+                <iframe class="mail-preview-frame" data-preview-frame title="Podgląd wiadomości HTML" sandbox srcdoc="{{ (preview_html if preview_html is not none else '')|e }}"></iframe>
+                <details class="mail-preview-text"><summary>Wersja tekstowa</summary><pre data-preview-text>{{ preview_text if preview_text is not none else '' }}</pre></details>
             </section>
         </div>
 
@@ -109,18 +124,31 @@
 document.addEventListener("DOMContentLoaded", () => {
     const editor = document.querySelector("[data-mail-template-editor]");
     if (!editor) return;
-    editor.querySelectorAll("[data-editor-tab]").forEach((tab) => tab.addEventListener("click", () => {
-        editor.querySelectorAll("[data-editor-tab]").forEach((item) => {
-            const active = item === tab;
-            item.classList.toggle("is-active", active);
-            item.setAttribute("aria-selected", String(active));
+    const tabs = Array.from(editor.querySelectorAll("[data-editor-tab]"));
+    tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => {
+            tabs.forEach((item) => {
+                const active = item === tab;
+                item.classList.toggle("is-active", active);
+                item.setAttribute("aria-selected", String(active));
+                item.tabIndex = active ? 0 : -1;
+            });
+            editor.querySelectorAll("[data-editor-panel]").forEach((panel) => {
+                const active = panel.dataset.editorPanel === tab.dataset.editorTab;
+                panel.classList.toggle("is-active", active);
+                panel.hidden = !active;
+            });
         });
-        editor.querySelectorAll("[data-editor-panel]").forEach((panel) => {
-            const active = panel.dataset.editorPanel === tab.dataset.editorTab;
-            panel.classList.toggle("is-active", active);
-            panel.hidden = !active;
+        tab.addEventListener("keydown", (event) => {
+            const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                : event.key === "ArrowLeft" ? (index - 1 + tabs.length) % tabs.length
+                : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+            if (next === null) return;
+            event.preventDefault();
+            tabs[next].focus();
+            tabs[next].click();
         });
-    }));
+    });
     editor.querySelector("[data-scroll-preview]")?.addEventListener("click", () => editor.querySelector("[data-preview-section]")?.scrollIntoView({behavior: "smooth"}));
 
     editor.querySelectorAll("[data-load-file]").forEach((input) => input.addEventListener("change", async () => {
@@ -138,17 +166,20 @@ document.addEventListener("DOMContentLoaded", () => {
     let previewController;
     const refreshPreview = async () => {
         previewController?.abort();
-        previewController = new AbortController();
+        const controller = new AbortController();
+        previewController = controller;
         previewState.textContent = "Odświeżanie…";
         previewState.classList.add("is-loading");
+        previewState.classList.remove("is-warning", "is-error");
         const payload = new FormData();
         payload.append("csrf_token", editor.querySelector('[name="csrf_token"]').value);
         ["name", "subject", "content_title", "body_html", "body_text", "instruction_html", "instruction_text", "footer_note", "template_type", "trigger_event", "trigger_status", "trigger_decision", "preview_submission_id"].forEach((name) => {
             payload.append(name, editor.querySelector(`[name="${name}"]`)?.value || "");
         });
         try {
-            const response = await fetch(editor.dataset.previewUrl, {method: "POST", body: payload, signal: previewController.signal, headers: {"X-Requested-With": "XMLHttpRequest"}});
+            const response = await fetch(editor.dataset.previewUrl, {method: "POST", body: payload, signal: controller.signal, headers: {"X-Requested-With": "XMLHttpRequest"}});
             const result = await response.json();
+            if (controller !== previewController) return;
             if (!response.ok || !result.ok) throw new Error(result.error || "Nie udało się odświeżyć podglądu.");
             editor.querySelector("[data-preview-subject]").textContent = result.subject || "Bez tematu";
             editor.querySelector("[data-preview-title]").textContent = result.title || "Bez tytułu";
@@ -159,23 +190,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 previewError.classList.add("is-warning");
                 previewError.hidden = false;
                 previewState.textContent = "Ostrzeżenie";
+                previewState.classList.add("is-warning");
             } else {
                 previewError.hidden = true;
                 previewError.classList.remove("is-warning");
                 previewState.textContent = "Aktualny";
             }
         } catch (error) {
-            if (error.name === "AbortError") return;
+            if (error.name === "AbortError" || controller !== previewController) return;
             previewError.textContent = error.message;
+            previewError.classList.remove("is-warning");
             previewError.hidden = false;
             previewState.textContent = "Błąd";
+            previewState.classList.add("is-error");
         } finally {
-            previewState.classList.remove("is-loading");
+            if (controller === previewController) previewState.classList.remove("is-loading");
         }
     };
     const schedulePreview = () => {
         clearTimeout(previewTimer);
+        previewController?.abort();
         previewState.textContent = "Oczekuje…";
+        previewState.classList.remove("is-loading", "is-warning", "is-error");
         previewTimer = setTimeout(refreshPreview, 400);
     };
     previewInputs.forEach((field) => {

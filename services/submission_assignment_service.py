@@ -73,6 +73,8 @@ class SubmissionAssignmentService:
             raise SubmissionAssignmentPermissionError("Brak uprawnienia do przydzielania spraw.")
         if submission.form_slug != form.slug:
             raise SubmissionAssignmentError("Zgłoszenie nie należy do wskazanego formularza.")
+        if submission.deleted_at is not None:
+            raise SubmissionAssignmentError("Zgłoszenie jest archiwalne.")
         previous_user_id = submission.assigned_to_user_id
         if previous_user_id == assignee_id:
             return None
@@ -118,6 +120,7 @@ class SubmissionAssignmentService:
         )
 
     def apply_filters(self, query, filters: Mapping[str, str], *, current_user_id: int):
+        query = query.where(FormSubmission.deleted_at.is_(None))
         queue = str(filters.get("queue") or "").strip()
         assignee = str(filters.get("assignee") or "").strip()
         priority = str(filters.get("priority") or "").strip()
@@ -168,7 +171,7 @@ class SubmissionAssignmentService:
             func.sum(case((and_(active, FormSubmission.due_at.is_not(None), FormSubmission.due_at < now), 1), else_=0)),
             func.sum(case((FormSubmission.process_status.in_(REVIEW_STATUSES), 1), else_=0)),
             func.sum(case((FormSubmission.process_status.in_(OFFICE_SIGNATURE_STATUSES), 1), else_=0)),
-        )
+        ).where(FormSubmission.deleted_at.is_(None))
         if form_slugs is not None:
             query = query.where(FormSubmission.form_slug.in_(list(form_slugs) or [""]))
         values = db.execute(query).one()

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from hashlib import sha256
 import re
 from types import SimpleNamespace
 
@@ -7,8 +8,10 @@ from sqlalchemy import select
 
 from services.mail_dispatch_service import MailDispatchRequest, MailDispatchService
 from services.mail_template_service import html_to_text, render_platform_mail_html, render_platform_mail_text
+from services.email_service import _send_email
+from services.mail_recipient_service import RecordMailRecipient
 from database import create_session_factory
-from models import EmailLog, Form, FormSubmission, FormVersion, MailFooter
+from models import EmailLog, Form, FormSubmission, FormVersion, MailFooter, PlatformMailTemplate
 from test_admin_panel import admin_app, create_form
 
 
@@ -26,6 +29,42 @@ def test_render_subject_body_and_fallbacks():
     assert service.render_subject(None, {}, fallback="Fallback") == "Fallback"
 
 
+def test_email_service_sends_selected_files_as_mime_attachments(monkeypatch):
+    messages = []
+    class FakeSmtp:
+        def __init__(self, *_args, **_kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def send_message(self, message):
+            messages.append(message)
+    monkeypatch.setattr("services.email_service.smtplib.SMTP", FakeSmtp)
+    _send_email(smtp_host="smtp.test", smtp_port=25, smtp_user="", smtp_password="",
+        mail_from="sender@example.com", to_emails=["recipient@example.com"],
+        subject="Pliki", html_body="<p>Treść</p>", text_body="Treść", use_tls=False,
+        attachments=[{"filename": "one.pdf", "content": b"%PDF-one", "content_type": "application/pdf"},
+                     {"filename": "two.pdf", "content": b"%PDF-two", "content_type": "application/pdf"}])
+    attached = list(messages[0].iter_attachments())
+    assert [item.get_filename() for item in attached] == ["one.pdf", "two.pdf"]
+    assert [item.get_content() for item in attached] == [b"%PDF-one", b"%PDF-two"]
+
+
+def test_record_mail_rejects_submission_files_for_unauthorized_recipient(admin_app, monkeypatch):
+    recipient = RecordMailRecipient("people", "record-1", "person@example.com", {}, False)
+    monkeypatch.setattr("services.mail_dispatch_service.MailRecipientResolver.resolve",
+        lambda *_args, **_kwargs: [recipient])
+    with admin_app.app_context():
+        result = MailDispatchService()._dispatch_record_notifications(
+            db=None, form=None, submission=None, template=SimpleNamespace(is_active=True),
+            definition={}, sources=[{"type": "repeatable_group"}], event_type="manual",
+            attachments=[{"filename": "private.pdf", "content": b"%PDF", "content_type": "application/pdf"}],
+        )
+    assert result.status == "failed"
+    assert "dostępu" in result.error_message
+
+
 def test_mail_renderer_escapes_values_and_keeps_structured_plain_text():
     template = SimpleNamespace(content_title="Powiadomienie", html_body=(
         '<p>{{ user_value }}</p><a href="{{ unsafe_url }}">Otwórz</a>'),
@@ -41,6 +80,148 @@ def test_mail_renderer_escapes_values_and_keeps_structured_plain_text():
     assert "<script>" not in text_body
     assert "Dane zgłoszenia:\nNumer zgłoszenia: ABC" in text_body
     assert "Dokumenty:\n- deklaracja.pdf\n- umowa.pdf" in text_body
+
+
+@pytest.mark.parametrize(
+    "body_html,body_text,instruction_html,instruction_text,footer_note,body_visible,instruction_visible,note_visible",
+    [
+        (None, None, None, None, None, False, False, False),
+        ("", "", "", "", "", False, False, False),
+        ("<p><br></p>", "", "<p>&nbsp;</p>", "", "<p></p>", False, False, False),
+        ("<p>Treść</p>", None, None, None, None, True, False, False),
+        (None, "Treść TXT", None, None, None, False, False, False),
+        ("<p>Treść</p>", None, "<p>Krok</p>", None, None, True, True, False),
+        ("<p>Treść</p>", None, None, "Krok", None, True, True, False),
+        ("<p>Treść</p>", None, None, None, "<p>Uwaga</p>", True, False, True),
+        ("None", "None", "None", "None", "None", True, True, True),
+    ],
+)
+def test_mail_renderer_skips_only_empty_sections(
+    body_html, body_text, instruction_html, instruction_text, footer_note,
+    body_visible, instruction_visible, note_visible,
+):
+    template = SimpleNamespace(
+        name="Test",
+        content_title="Test",
+        content_html=body_html,
+        html_body=body_html,
+        content_text=body_text,
+        text_body=body_text,
+        instruction_html=instruction_html,
+        instruction_text=instruction_text,
+        footer_note=footer_note,
+    )
+    html_body = render_platform_mail_html(template, {})
+    text_body = render_platform_mail_text(template, {})
+
+    assert ('class="platform-mail-body"' in html_body) is body_visible
+    assert ('class="platform-instruction-title"' in html_body) is instruction_visible
+    assert ('class="platform-footer-note"' in html_body) is note_visible
+    assert 'class="platform-mail-details"' not in html_body
+    if not any((body_visible, instruction_visible, note_visible)) and not body_text:
+        assert text_body == "Test"
+    if not instruction_visible:
+        assert "Instrukcja" not in text_body
+    else:
+        assert html_to_text(instruction_html or instruction_text) in text_body
+    if not note_visible:
+        assert "Uwaga" not in text_body
+    else:
+        assert html_to_text(footer_note) in text_body
+    if body_html == "<p>Treść</p>":
+        assert "Treść" in html_body and "Treść" in text_body
+    if body_html == "None":
+        assert "None" in html_body and "None" in text_body
+
+
+def test_mail_dispatch_uses_the_same_optional_section_renderer(monkeypatch):
+    service = MailDispatchService()
+    layout = {"platform_name": "", "footer_html": ""}
+    monkeypatch.setattr(service, "_footer_for_submission", lambda *args, **kwargs: None)
+    monkeypatch.setattr(service, "footer_logo_for_email", lambda *args, **kwargs: ("", []))
+    monkeypatch.setattr(service, "_layout_for_db", lambda db: layout)
+    monkeypatch.setattr(service, "_inline_images_from_layout", lambda current_layout: [])
+    template = SimpleNamespace(
+        name="Test", content_title="Test", content_html="<p>Treść</p>",
+        content_text=None, instruction_html="<p></p>", instruction_text=None,
+        footer_note=None,
+    )
+    context = {}
+
+    html_body, text_body, footer, images = service._render_submission_message(
+        None, form=None, submission=None, template=template, context=context,
+        event_type="manual",
+    )
+
+    assert html_body == render_platform_mail_html(template, context, layout=layout)
+    assert text_body == render_platform_mail_text(template, context)
+    assert footer is None and images == []
+
+
+def test_mail_renderer_skips_null_metadata_but_keeps_literal_none():
+    template = SimpleNamespace(name="Test", content_title="Test", content_html=None, content_text=None)
+    context = {
+        "mail_details": [(None, "Ukryte"), ("Puste", None), ("Numer", "123")],
+        "mail_documents": [None, "None"],
+    }
+
+    html_body = render_platform_mail_html(template, context)
+    text_body = render_platform_mail_text(template, context)
+
+    assert "Ukryte" not in html_body + text_body
+    assert "Puste" not in html_body + text_body
+    assert "Numer: 123" in text_body
+    assert "- None" in text_body
+    assert "<li" in html_body and ">None</li>" in html_body
+
+
+def test_mail_renderer_uses_actual_content_after_empty_legacy_markup():
+    template = SimpleNamespace(
+        name="Test", content_title="Test",
+        content_html="<p></p>", html_body="<p>Treść HTML</p>",
+        body_text="<p></p>", text_body="Treść TXT", content_text=None,
+        instruction_html="<p></p>", instruction_text="Krok", footer_note=None,
+    )
+
+    html_body = render_platform_mail_html(template, {})
+    text_body = render_platform_mail_text(template, {})
+
+    assert "Treść HTML" in html_body
+    assert "Treść TXT" in text_body
+    assert 'class="platform-instruction-title"' in html_body
+    assert "Krok" in html_body and "Krok" in text_body
+
+
+def test_mail_sections_follow_the_same_reading_order_in_html_and_text():
+    template = SimpleNamespace(
+        name="Test", content_title="Powiadomienie", content_html="<p>Treść główna</p>",
+        body_text="Treść główna", instruction_html="<p>Krok pierwszy</p>",
+        instruction_text="Krok pierwszy", footer_note="Uwaga końcowa",
+    )
+    context = {
+        "mail_details": [("Numer zgłoszenia", "ABC")],
+        "mail_documents": ["dokument.pdf"],
+    }
+
+    html_body = render_platform_mail_html(template, context)
+    text_body = render_platform_mail_text(template, context)
+
+    assert html_body.index('class="platform-mail-body"') < html_body.index('class="platform-mail-details"')
+    assert html_body.index('class="platform-mail-details"') < html_body.index('class="platform-instruction-title"')
+    assert html_body.index('class="platform-instruction-title"') < html_body.index('>Dokumenty</h2>')
+    assert text_body.index("Treść główna") < text_body.index("Dane zgłoszenia:")
+    assert text_body.index("Dane zgłoszenia:") < text_body.index("Instrukcja:\nKrok pierwszy")
+    assert text_body.index("Instrukcja:\nKrok pierwszy") < text_body.index("Dokumenty:")
+
+
+def test_mail_instruction_heading_is_not_repeated_when_provided_in_content():
+    template = SimpleNamespace(
+        name="Test", instruction_html="<h2>Instrukcja</h2><p>Krok</p>",
+        instruction_text="Instrukcja\nKrok",
+    )
+
+    assert render_platform_mail_html(template, {}).count(">Instrukcja</h2>") == 1
+    assert render_platform_mail_text(template, {}).count("Instrukcja") == 1
 
 
 def test_build_footer_handles_missing_footer_and_logo():
@@ -300,6 +481,115 @@ def test_dispatch_raw_logs_success_and_failure(app):
     assert sent[0]["to_emails"] == ["jan@example.com"]
 
 
+def test_at_most_once_claim_survives_crash_after_smtp_acceptance(admin_app):
+    form_id = create_form(admin_app, slug="at-most-once-mail")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="at-most-once-1",
+            form_slug="at-most-once-mail",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        )
+        db.add(submission)
+        db.commit()
+        submission_id = submission.id
+
+    deliveries = []
+
+    def sender(**kwargs):
+        deliveries.append(kwargs)
+
+    service = MailDispatchService(smtp_sender=sender)
+    marker = '{"at_most_once_key": "operation-1"}'
+    with admin_app.app_context():
+        with factory() as db:
+            first = service.dispatch_raw(
+                event_type="submission_received",
+                recipient="jan@example.com",
+                subject="Temat",
+                html_body="<p>Body</p>",
+                db=db,
+                form=db.get(Form, form_id),
+                submission=db.get(FormSubmission, submission_id),
+                at_most_once_marker=marker,
+            )
+            assert first.status == "sent"
+            db.rollback()  # symulacja utraty aktualizacji sent po akceptacji SMTP
+
+        with factory() as db:
+            claimed = db.execute(select(EmailLog).where(
+                EmailLog.submission_id == submission_id,
+                EmailLog.administrator_message == marker,
+            )).scalar_one()
+            assert claimed.status == "pending"
+
+        with factory() as db:
+            repeated = service.dispatch_raw(
+                event_type="submission_received",
+                recipient="jan@example.com",
+                subject="Temat",
+                html_body="<p>Body</p>",
+                db=db,
+                form=db.get(Form, form_id),
+                submission=db.get(FormSubmission, submission_id),
+                at_most_once_marker=marker,
+            )
+
+    assert repeated.status == "skipped"
+    assert len(deliveries) == 1
+
+
+def test_submission_received_operation_id_uses_at_most_once_claim(admin_app, monkeypatch):
+    create_form(admin_app, slug="receipt-at-most-once", mail_mode="system")
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        db.add(PlatformMailTemplate(
+            template_type="submission_received",
+            name="Receipt",
+            subject="Odebrano {{ submission_id }}",
+            html_body="<p>Odebrano</p>",
+            text_body="Odebrano",
+            is_active=True,
+        ))
+        db.add(FormSubmission(
+            submission_id="receipt-at-most-once-1",
+            form_slug="receipt-at-most-once",
+            form_name="Receipt",
+            email="jan@example.com",
+            process_status="FORM_SUBMITTED",
+            workflow_step="submission",
+            workflow_stage="submission",
+        ))
+        db.commit()
+
+    deliveries = []
+    dispatch = admin_app.extensions["services"].mail_dispatch_service
+    dispatch.smtp_sender = lambda **kwargs: deliveries.append(kwargs)
+    monkeypatch.setattr(dispatch, "_commit_email_log", lambda _db: False)
+
+    with admin_app.test_request_context("/"):
+        first = dispatch.dispatch_submission_received(
+            "receipt-at-most-once-1",
+            operation_id="pdf-operation-1",
+        )
+        repeated = dispatch.dispatch_submission_received(
+            "receipt-at-most-once-1",
+            operation_id="pdf-operation-1",
+        )
+
+    assert first.status == "sent"
+    assert repeated.status == "skipped"
+    assert len(deliveries) == 1
+    with factory() as db:
+        log = db.execute(select(EmailLog).where(
+            EmailLog.public_submission_id == "receipt-at-most-once-1",
+        )).scalar_one()
+        assert log.status == "pending"
+
+
 def test_dispatch_raw_missing_recipient_is_safe_and_logged():
     class FakeDb:
         def __init__(self):
@@ -552,6 +842,45 @@ def test_document_notice_uses_versioned_workflow_filters_and_file_log(admin_app)
             EmailLog.event_type == "document_received")).scalars().all()
         assert len(logs) == 2
         assert logs[-1].administrator_message != first_event
+
+
+def test_document_notice_can_wait_for_required_audit_before_dispatch(admin_app):
+    _, public_id = _seed_document_notice(
+        admin_app,
+        "document-audit-gate",
+        selected=["agreement"],
+    )
+    services = admin_app.extensions["services"]
+    sent = []
+    services.mail_dispatch_service.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    payload = b"signed training agreement"
+
+    with admin_app.app_context():
+        assert services.submission_document_service.record_document_metadata(
+            submission_id=public_id,
+            form_slug="document-audit-gate",
+            filename="agreement-signed.pdf",
+            file_bytes=payload,
+            document_id="training_agreement",
+            document_type="signed_training_agreement",
+            original_filename="agreement-signed.pdf",
+            status="signed",
+            signed=True,
+            uploaded_by_source="participant",
+            workflow_step_at_upload="agreement",
+            storage_path="output/agreement-signed.pdf",
+            dispatch_notification=False,
+        )
+        assert sent == []
+
+        services.mail_dispatch_service.dispatch_document_received_notification(
+            public_id,
+            document_id="training_agreement",
+            filename="agreement-signed.pdf",
+            checksum_sha256=sha256(payload).hexdigest(),
+        )
+
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize("enabled,selected", [(False, ["declaration"]), (True, [])])

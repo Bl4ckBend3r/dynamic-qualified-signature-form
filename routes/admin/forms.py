@@ -5,7 +5,7 @@ import re
 from copy import deepcopy
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
 from jinja2 import TemplateSyntaxError, UndefinedError, meta
@@ -95,6 +95,11 @@ from services.workflow_config_service import (
 )
 from services.decision_definition_service import DecisionDefinitionError
 from pdf_generator import render_document_html
+from services.form_access_service import (
+    encrypt_share_token,
+    decrypt_share_token,
+    verify_share_token,
+)
 
 from . import (
     ROLE_SUPER_ADMIN,
@@ -723,6 +728,7 @@ def form_delete(form_id: int):
         form = db.get(Form, form_id) or abort(404)
         submissions_count = db.execute(
             select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)
+            .execution_options(include_deleted_submissions=True)
         ).scalar() or 0
         if submissions_count:
             flash("Nie można usunąć formularza, ponieważ istnieją powiązane zgłoszenia.", "error")
@@ -882,6 +888,7 @@ def form_edit(form_id: int):
         active_tab = _normalize_form_editor_tab(requested_tab, g.admin_user.role)
         required_permission = "can_edit_workflow" if active_tab in {"workflow", "instructions"} else "can_edit_form"
         form = ensure_form_access(db, form_id, permission=required_permission)
+        form.docx_cleanup_allowed = can_manage_form(db, g.admin_user, form.id)
         version_service = current_app.extensions["services"].form_version_service
         requested_version_id = _requested_editor_version_id()
         editable_version = version_service.editable_draft(
@@ -906,7 +913,8 @@ def form_edit(form_id: int):
             (editable_version.definition_json if editable_version else form.definition_json) or {}
         ).get("documents", [])
         form.workflow_ids_locked = bool(
-            db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)).scalar()
+            db.execute(select(func.count(FormSubmission.id)).where(FormSubmission.form_slug == form.slug)
+                       .execution_options(include_deleted_submissions=True)).scalar()
         )
         users = db.execute(select(User).order_by(User.email)).scalars().all()
         logos = list_selectable_logos(db, g.admin_user, form.logo_id)
@@ -1441,6 +1449,78 @@ def declaration_docx_template_download(form_id: int):
         return send_file(BytesIO(content), mimetype=metadata.get("mime_type"), as_attachment=True, download_name=metadata.get("original_filename") or "szablon-deklaracji.docx")
 
 
+def _queue_docx_template_deletion(workflow: dict, metadata: dict) -> None:
+    path = str(metadata.get("storage_path") or "").strip()
+    if path:
+        pending = list(workflow.get("_docx_delete_pending") or [])
+        if path not in pending:
+            pending.append(path)
+        workflow["_docx_delete_pending"] = pending
+
+
+def _cleanup_deleted_docx_templates(db, form: Form) -> bool:
+    paths = list(((form.definition_json or {}).get("workflow") or {}).get("_docx_delete_pending") or [])
+    if not paths:
+        return True
+    service = current_app.extensions["services"].agreement_docx_template_service
+    try:
+        prefix = f"{service.storage.output_dir.rstrip('/')}/{form.slug}/templates/"
+        if any(
+            not path.startswith(prefix) or ".." in PurePosixPath(path).parts or "\\" in path
+            for path in paths
+        ):
+            current_app.logger.error("Nieprawidłowa ścieżka usuwanego szablonu DOCX formularza %s.", form.id)
+            return False
+        definitions = [form.definition_json or {}]
+        definitions.extend(db.execute(select(FormVersion.definition_json).where(
+            FormVersion.form_id == form.id,
+        )).scalars().all())
+        if any(
+            str(((((definition or {}).get("workflow") or {}).get(key) or {}).get("storage_path")) or "") in paths
+            for definition in definitions
+            for key in ("contract_docx_template", "declaration_docx_template")
+        ):
+            current_app.logger.warning("Szablon DOCX nadal jest wskazywany przez wersję formularza %s.", form.id)
+            return False
+        # Legacy submissions can still be rendering a template loaded before the DB commit.
+        if db.scalar(select(func.count(FormSubmission.id)).where(
+            FormSubmission.form_slug == form.slug, FormSubmission.form_version_id.is_(None),
+        ).execution_options(include_deleted_submissions=True)):
+            return False
+        for path in paths:
+            service.delete({"storage_path": path})
+        db.refresh(form)
+        definition = deepcopy(form.definition_json or {})
+        workflow = dict(definition.get("workflow") or {})
+        remaining = [path for path in workflow.get("_docx_delete_pending") or [] if path not in paths]
+        if remaining:
+            workflow["_docx_delete_pending"] = remaining
+        else:
+            workflow.pop("_docx_delete_pending", None)
+        definition["workflow"] = workflow
+        form.definition_json = definition
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        current_app.logger.warning("Nie udało się dokończyć usuwania szablonu DOCX formularza %s.", form.id, exc_info=True)
+        return False
+
+
+@bp.post("/forms/<int:form_id>/docx-template/cleanup-retry")
+@login_required
+def docx_template_cleanup_retry(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+        cleanup_ok = _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Zakończono sprzątanie usuniętych szablonów DOCX."
+            if cleanup_ok else "Pliki DOCX pozostają oczekujące na bezpieczne usunięcie.",
+            "success" if cleanup_ok else "warning",
+        )
+        return redirect(_form_editor_url(form.id, tab="agreement"))
+
+
 @bp.post("/forms/<int:form_id>/declaration-template/docx/delete")
 @login_required
 def declaration_docx_template_delete(form_id: int):
@@ -1450,14 +1530,19 @@ def declaration_docx_template_delete(form_id: int):
         definition = deepcopy(form.definition_json or {})
         workflow = dict(definition.get("workflow") or {})
         if editable_version is None:
-            current_app.extensions["services"].agreement_docx_template_service.delete(workflow.get("declaration_docx_template") or {})
+            _queue_docx_template_deletion(workflow, workflow.get("declaration_docx_template") or {})
         workflow.pop("declaration_docx_template", None)
         workflow["declaration_template_source"] = "builder" if workflow.get("declaration_builder_active_document") else "html"
         definition["workflow"] = workflow
         form.definition_json = definition
         _sync_editable_form_version(db, form)
         db.commit()
-        flash("Szablon DOCX deklaracji został usunięty.", "success")
+        cleanup_ok = editable_version is not None or _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Szablon DOCX deklaracji został usunięty."
+            if cleanup_ok else "Szablon usunięto z konfiguracji; usunięcie pliku oczekuje na ponowienie.",
+            "success" if cleanup_ok else "warning",
+        )
         return redirect(
     _form_editor_url(
         form.id,
@@ -1716,14 +1801,19 @@ def agreement_docx_template_delete(form_id: int):
         workflow = dict(definition.get("workflow") or {})
         metadata = workflow.get("contract_docx_template") or {}
         if editable_version is None:
-            current_app.extensions["services"].agreement_docx_template_service.delete(metadata)
+            _queue_docx_template_deletion(workflow, metadata)
         workflow.pop("contract_docx_template", None)
         workflow["contract_template_source"] = "builder" if workflow.get("contract_builder_active_document") else "html"
         definition["workflow"] = workflow
         form.definition_json = definition
         _sync_editable_form_version(db, form)
         db.commit()
-        flash("Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML.", "success")
+        cleanup_ok = editable_version is not None or _cleanup_deleted_docx_templates(db, form)
+        flash(
+            "Szablon DOCX został usunięty. Źródłem umowy jest ponownie HTML."
+            if cleanup_ok else "Szablon usunięto z konfiguracji; usunięcie pliku oczekuje na ponowienie.",
+            "success" if cleanup_ok else "warning",
+        )
         return redirect(
     _form_editor_url(
         form.id,
@@ -2625,8 +2715,10 @@ def form_share_link_regenerate(form_id: int):
             ), 400
 
         token, token_hash = generate_share_token()
+        encrypted_token = encrypt_share_token(token)
 
         form.share_token_hash = token_hash
+        form.share_token_encrypted = encrypted_token
 
         db.commit()
 
@@ -2644,6 +2736,79 @@ def form_share_link_regenerate(form_id: int):
         }
     )
 
+@bp.get("/forms/<int:form_id>/share-link/current")
+@login_required
+def form_share_link_current(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+
+        if not (form.is_active and form.is_public and not form.is_listed):
+            return jsonify(ok=False, error="Link niedostępny."), 400
+
+        if not form.share_token_encrypted:
+            return jsonify(
+                ok=False,
+                needs_import=bool(form.share_token_hash),
+                error="Brak zapisanego aktualnego linku.",
+            ), 409
+
+        try:
+            token = decrypt_share_token(form.share_token_encrypted)
+        except (RuntimeError, ValueError):
+            return jsonify(
+                ok=False,
+                error="Nie można odczytać zaszyfrowanego linku.",
+            ), 503
+
+        if not verify_share_token(form.share_token_hash, token):
+            return jsonify(ok=False, error="Niezgodny token dostępu."), 409
+
+        url = url_for(
+            "public_forms.form_page",
+            slug=form.slug,
+            access=token,
+            _external=True,
+        )
+
+    response = jsonify(ok=True, url=url)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+@bp.post("/forms/<int:form_id>/share-link/restore")
+@login_required
+def form_share_link_restore(form_id: int):
+    from urllib.parse import parse_qs, urlsplit
+
+    existing_link = (request.form.get("existing_link") or "").strip()
+    parsed = urlsplit(existing_link)
+    tokens = parse_qs(parsed.query).get("access", [])
+
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+
+        if not (form.is_active and form.is_public and not form.is_listed):
+            return jsonify(ok=False, error="Link niedostępny."), 400
+
+        expected_path = url_for(
+            "public_forms.form_page",
+            slug=form.slug,
+        )
+
+        if (
+            parsed.scheme not in ("http", "https")
+            or parsed.path != expected_path
+            or len(tokens) != 1
+            or not verify_share_token(form.share_token_hash, tokens[0])
+        ):
+            return jsonify(
+                ok=False,
+                error="Podany link nie odpowiada aktualnemu tokenowi formularza.",
+            ), 400
+
+        form.share_token_encrypted = encrypt_share_token(tokens[0])
+        db.commit()
+
+    return jsonify(ok=True)
 
 @bp.post("/forms/<int:form_id>/toggle")
 @login_required

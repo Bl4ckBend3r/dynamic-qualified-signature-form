@@ -326,6 +326,7 @@ sudo systemctl stop signature-app-new.service
 cd /opt/signature-app-new
 source .venv/bin/activate
 alembic upgrade head
+python -m scripts.deployment.init_form_share_key
 sudo systemctl start signature-app-new.service
 ```
 

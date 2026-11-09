@@ -105,7 +105,7 @@ class Config:
     SIGNATURE_API_TOKEN = os.getenv("SIGNATURE_API_TOKEN", "")
 
     SMTP_HOST = os.getenv("SMTP_HOST", "")
-    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_PORT = _env_int("SMTP_PORT", 587, minimum=1, maximum=65535)
     SMTP_USER = os.getenv("SMTP_USER", "")
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
     MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)
@@ -117,27 +117,7 @@ class Config:
     FORM_DRAFT_TTL_DAYS = _env_int("FORM_DRAFT_TTL_DAYS", 30, minimum=1, maximum=365)
     FORM_DRAFT_MAX_DATA_BYTES = _env_int("FORM_DRAFT_MAX_DATA_BYTES", 262144, minimum=4096, maximum=1048576)
     
-    STORAGE_FAILOVER_ENABLED = os.getenv(
-        "STORAGE_FAILOVER_ENABLED",
-        "false",
-    ).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-    LOCAL_STORAGE_PATH = os.getenv(
-        "LOCAL_STORAGE_PATH",
-        "./data/storage",
-    )
-
-    STORAGE_FAILOVER_RETRY_SECONDS = int(
-        os.getenv(
-            "STORAGE_FAILOVER_RETRY_SECONDS",
-            "30",
-        )
-    )
+    STORAGE_FAILOVER_ENABLED = _env_bool("STORAGE_FAILOVER_ENABLED", "false")
     
 
     @classmethod

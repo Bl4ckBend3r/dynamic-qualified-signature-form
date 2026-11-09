@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from models import Base, Form, FormPermission, FormSubmission, SubmissionAssignmentHistory, User
 from services.submission_assignment_service import (
+    SubmissionAssignmentError,
     SubmissionAssignmentPermissionError,
     SubmissionAssignmentService,
 )
@@ -114,6 +115,21 @@ def test_combined_assignment_filters_and_sql_queue_counts(assignment_db):
         assert counts["unassigned"] == 5
         assert counts["overdue"] == 1
         assert counts["waiting_office_signature"] == 1
+
+
+def test_archived_submission_cannot_be_assigned_or_counted(assignment_db):
+    factory, ids = assignment_db
+    service = SubmissionAssignmentService()
+    with factory() as db:
+        form = db.get(Form, ids["form"])
+        actor = db.get(User, ids["actor"])
+        submission = db.get(FormSubmission, ids["submissions"][0])
+        submission.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+        with pytest.raises(SubmissionAssignmentError, match="archiwalne"):
+            service.assign(db, submission, form, assignee_id=ids["anna"], actor=actor)
+        counts = service.queue_counts(db, user_id=ids["anna"], form_slugs=[form.slug])
+        assert counts["unassigned"] == 5
 
 
 def test_round_robin_rotates_three_users_and_skips_ineligible_accounts(assignment_db):

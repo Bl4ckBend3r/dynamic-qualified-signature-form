@@ -30,6 +30,14 @@
 {% set upgrade = (((submission|default({})).get('row') or {}).get('data_json') or {}).get('_form_version_upgrade', {}) %}
 
 <div class="card">
+    {% set condition = (((submission|default({})).get('row') or {}).get('data_json') or {}).get('_conditional_approval', {}) %}
+    {% if condition.get('status') == 'pending' %}
+    <section class="result-box">
+        <h3>Zgłoszenie zatwierdzone warunkowo</h3>
+        <p>Uzupełnij wymagane dane przed dalszym etapem lub przygotowaniem dokumentów.</p>
+        <a href="{{ url_for('public_forms.complete_version_upgrade', slug=submission.form_slug, submission_id=initial_submission_id, token=participant_access_token) }}">Uzupełnij dane</a>
+    </section>
+    {% endif %}
     {% if version_gap_documents|default([]) %}
     <section class="result-box" aria-labelledby="version-documents-title">
         <h3 id="version-documents-title">Dokumenty wymagane po aktualizacji formularza</h3>

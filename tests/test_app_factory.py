@@ -1,8 +1,36 @@
 from pathlib import Path
 import logging
+import runpy
 
 import pytest
 from flask import Flask
+
+
+def test_invalid_smtp_port_uses_default(monkeypatch):
+    monkeypatch.setenv("SMTP_PORT", "invalid")
+    config_class = runpy.run_path("config.py")["Config"]
+    assert config_class.SMTP_PORT == 587
+
+
+def test_create_app_uses_nextcloud_when_local_failover_flag_set(form_definition, tmp_path, monkeypatch, caplog):
+    import app as app_module
+    import services.container as container_module
+    from config import Config
+    from testing_support import InMemoryStorage
+
+    nextcloud_storage = InMemoryStorage(form_definition)
+    monkeypatch.setattr(container_module, "create_nextcloud_storage_from_env", lambda: nextcloud_storage)
+
+    class FailoverConfig(Config):
+        TESTING = True
+        DATABASE_URL = ""
+        TEMP_DIR = tmp_path
+        STORAGE_FAILOVER_ENABLED = True
+
+    created = app_module.create_app(config_object=FailoverConfig)
+
+    assert created.extensions["services"].storage is nextcloud_storage
+    assert "STORAGE_FAILOVER_ENABLED is ignored" in caplog.text
 
 
 def test_app_py_does_not_replace_module_with_sys_modules():
@@ -65,6 +93,25 @@ def test_create_app_rejects_insecure_session_cookie_in_production(form_definitio
         ALLOW_UNSCANNED_UPLOADS = False
 
     with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE"):
+        app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
+
+
+def test_create_app_requires_database_in_production(form_definition):
+    import app as app_module
+    from testing_support import InMemoryStorage
+    from config import Config
+
+    class ProductionConfig(Config):
+        ENV = "production"
+        TESTING = True
+        SECRET_KEY = "production-test-secret-key"
+        SESSION_COOKIE_SECURE = True
+        DATABASE_URL = ""
+        AUTO_DB_MIGRATE = False
+        AUTO_CREATE_DB_SCHEMA = False
+        ALLOW_UNSCANNED_UPLOADS = False
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
         app_module.create_app(config_object=ProductionConfig, storage_override=InMemoryStorage(form_definition))
 
 

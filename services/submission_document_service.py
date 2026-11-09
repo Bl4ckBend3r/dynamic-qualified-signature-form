@@ -11,6 +11,8 @@ from flask import current_app, has_app_context
 
 from services.documents.document_storage_service import DocumentStorageService
 from services.file_metadata import record_submission_file
+from services.upload_validation import (MAX_DOCUMENT_UPLOAD_BYTES, SAFE_ATTACHMENT_EXTENSIONS,
+    UploadValidationError, validate_attachment_upload, validate_upload_filename)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,14 @@ class SubmissionDocumentType:
 
 GENERATED_STATUS = "generated"
 SIGNED_STATUS = "signed"
+MAIL_DOCUMENT_TYPE_LABELS = {
+    "form_pdf": "PDF zgłoszenia", "signed_form_pdf": "Podpisany PDF zgłoszenia",
+    "declaration": "Deklaracja", "signed_declaration": "Podpisana deklaracja",
+    "agreement": "Umowa", "signed_agreement": "Podpisana umowa",
+    "training_agreement": "Umowa szkoleniowa",
+    "signed_training_agreement": "Podpisana umowa szkoleniowa",
+    "agreement_signed_by_office": "Umowa podpisana przez urząd",
+}
 
 
 class SubmissionDocumentService:
@@ -98,6 +108,68 @@ class SubmissionDocumentService:
         db.add(record)
         return record
 
+    def add_document_metadata_to_session(
+        self,
+        db,
+        submission,
+        *,
+        filename: str,
+        file_bytes: bytes,
+        document_id: str,
+        document_type: str,
+        original_filename: str,
+        storage_path: str,
+        workflow_step_at_upload: str,
+        training_key: str,
+        agreement_number: str,
+        mime_type: str,
+        signed: bool,
+        status: str,
+        signature_status: str,
+        signature_validation_result: Mapping[str, Any],
+        uploaded_by_source: str,
+    ):
+        """Stage an idempotent SubmissionFile upsert in the caller's transaction."""
+        from sqlalchemy import select
+        from models import SubmissionFile
+
+        clean_filename = Path(filename).name
+        record = db.execute(
+            select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.filename == clean_filename,
+                SubmissionFile.document_id == str(document_id or ""),
+                SubmissionFile.signed == bool(signed),
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            record = SubmissionFile(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                filename=clean_filename,
+                storage_path=str(storage_path or ""),
+            )
+            db.add(record)
+        record.document_id = str(document_id or "")
+        record.document_type = str(document_type or "")
+        record.storage_path = str(storage_path or "")
+        record.mime_type = str(mime_type or "application/pdf")
+        record.size_bytes = len(file_bytes)
+        record.checksum_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        record.signed = bool(signed)
+        record.status = str(status or "uploaded")
+        record.original_filename = Path(original_filename).name if original_filename else ""
+        record.signature_status = str(signature_status or "")
+        record.signature_validation_result = dict(signature_validation_result or {})
+        record.agreement_number = str(agreement_number or "")
+        record.training_key = str(training_key or "")
+        record.workflow_step_at_upload = str(workflow_step_at_upload or "")
+        record.uploaded_by_source = str(uploaded_by_source or "")
+        record.signed_at = datetime.now(timezone.utc) if signed else None
+        db.flush()
+        return record
+
     def record_signed_document(
         self,
         *,
@@ -117,6 +189,7 @@ class SubmissionDocumentService:
         workflow_step_at_upload: str = "",
         storage=None,
         uploaded_by_source: str = "",
+        dispatch_notification: bool = True,
     ) -> bool:
         return self.record_document_metadata(
             submission_id=submission_id,
@@ -137,6 +210,7 @@ class SubmissionDocumentService:
             status=SIGNED_STATUS,
             storage=storage,
             uploaded_by_source=uploaded_by_source,
+            dispatch_notification=dispatch_notification,
         )
 
     def record_document_metadata(
@@ -162,6 +236,7 @@ class SubmissionDocumentService:
         workflow_step_at_upload: str = "",
         storage=None,
         uploaded_by_source: str = "",
+        dispatch_notification: bool = True,
     ) -> bool:
         try:
             recorded = record_submission_file(
@@ -195,7 +270,7 @@ class SubmissionDocumentService:
                 exc_info=True,
             )
             return False
-        if (recorded and uploaded_by_source == "participant" and file_bytes is not None
+        if (dispatch_notification and recorded and uploaded_by_source == "participant" and file_bytes is not None
                 and status in {"uploaded", "signed"} and has_app_context()):
             try:
                 current_app.extensions["services"].mail_dispatch_service.dispatch_document_received_notification(
@@ -218,6 +293,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def list_documents(self, submission_id: str) -> list[dict]:
@@ -227,7 +304,82 @@ class SubmissionDocumentService:
             return self.submission_repository.list_submission_files(submission_id)
         except Exception:
             self.logger.warning("Nie udalo sie odczytac metadanych dokumentow dla %s.", submission_id, exc_info=True)
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return []
+
+    def mail_attachment_candidates(self, submission, *, include_sensitive: bool = False) -> list[dict]:
+        """Return only metadata owned by this submission; never expose storage paths."""
+        result = []
+        for item in self.list_documents(submission.submission_id):
+            if (item.get("submission_id") != submission.id
+                    or item.get("public_submission_id") != submission.submission_id
+                    or item.get("form_slug") != submission.form_slug):
+                continue
+            if not include_sensitive and item.get("data_classification", "normal") != "normal":
+                continue
+            filename = str(item.get("original_filename") or item.get("filename") or "")
+            available = (item.get("status") in {"generated", "signed", "active", "uploaded"}
+                         and item.get("antivirus_status") != "infected"
+                         and bool(item.get("storage_path"))
+                         and (item.get("size_bytes") is None or 0 < item["size_bytes"] <= MAX_DOCUMENT_UPLOAD_BYTES))
+            try:
+                validate_upload_filename(filename, allowed_suffixes={f".{ext}" for ext in SAFE_ATTACHMENT_EXTENSIONS})
+            except UploadValidationError:
+                available = False
+            if available and callable(getattr(self.storage, "exists", None)):
+                try:
+                    available = bool(self.storage.exists(item["storage_path"]))
+                except Exception:
+                    available = False
+            size = item.get("size_bytes")
+            size_label = ("rozmiar nieznany" if size is None else f"{size} B" if size < 1024
+                else f"{size / 1048576:.1f} MB" if size >= 1048576 else f"{size / 1024:.1f} KB")
+            result.append({"id": item["id"], "filename": filename,
+                "document_type": MAIL_DOCUMENT_TYPE_LABELS.get(item.get("document_type"),
+                    item.get("document_type") or "Dokument"),
+                "size_bytes": size, "size_label": size_label, "available": available})
+        return result
+
+    def load_mail_attachments(self, submission, selected_ids: list[str], *, include_sensitive: bool = False) -> list[dict]:
+        """Resolve each selected file against this submission before reading it."""
+        if not selected_ids:
+            return []
+        if any(not str(item).isdigit() for item in selected_ids) or len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("Nieprawidłowy wybór załączników.")
+        wanted = [int(item) for item in selected_ids]
+        rows = {item["id"]: item for item in self.list_documents(submission.submission_id)
+                if item.get("submission_id") == submission.id
+                and item.get("public_submission_id") == submission.submission_id
+                and item.get("form_slug") == submission.form_slug}
+        attachments = []
+        total_size = 0
+        for file_id in wanted:
+            item = rows.get(file_id)
+            if (not item or item.get("status") not in {"generated", "signed", "active", "uploaded"}
+                    or item.get("antivirus_status") == "infected"
+                    or not include_sensitive and item.get("data_classification", "normal") != "normal"):
+                raise ValueError("Wybrany załącznik nie jest dostępny dla tego zgłoszenia.")
+            filename = str(item.get("original_filename") or item.get("filename") or "")
+            if not item.get("storage_path") or (item.get("size_bytes") or 0) > MAX_DOCUMENT_UPLOAD_BYTES:
+                raise ValueError("Wybrany załącznik nie jest dostępny dla tego zgłoszenia.")
+            try:
+                content = DocumentStorageService().read_document_bytes(
+                    storage=self.storage, slug=submission.form_slug,
+                    filename=item["filename"], metadata=item,
+                    submission_id=submission.submission_id, strict_metadata=True)
+                clean_name, mime = validate_attachment_upload(filename, content,
+                    item.get("mime_type"), allowed_extensions=list(SAFE_ATTACHMENT_EXTENSIONS),
+                    max_size_bytes=MAX_DOCUMENT_UPLOAD_BYTES)
+                if item.get("checksum_sha256") and hashlib.sha256(content).hexdigest() != item["checksum_sha256"]:
+                    raise ValueError("Niezgodna suma kontrolna załącznika.")
+            except Exception as exc:
+                raise ValueError("Nie udało się pobrać bezpiecznego załącznika.") from exc
+            total_size += len(content)
+            if total_size > MAX_DOCUMENT_UPLOAD_BYTES:
+                raise ValueError("Łączny rozmiar załączników przekracza limit 25 MB.")
+            attachments.append({"filename": clean_name, "content": content, "content_type": mime})
+        return attachments
 
     def get_document_file(
         self,
@@ -253,6 +405,8 @@ class SubmissionDocumentService:
                 submission_id,
                 exc_info=True,
             )
+            if getattr(self.submission_repository, "supports_file_metadata", False):
+                raise
             return None
 
     def sync_from_legacy_fields(self, submission: Mapping[str, Any]) -> list[dict]:

@@ -12,6 +12,12 @@
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 {% set advanced_filter_active = filters.get('field') or filters.get('value') or filters.get('value_to') or filters.get('sort') not in (none, '', 'created_at') or filters.get('direction') not in (none, '', 'desc') or filters.get('checklist_status') or filters.get('queue') or filters.get('assignee') or filters.get('priority') %}
 <form id="submission-advanced-filters" method="get" class="admin-card admin-submission-filters">
+    <div class="admin-submission-filters__heading">
+    <div>
+        <h2>Filtry zgłoszeń</h2>
+        <p>Wyszukaj zgłoszenia według statusu, daty i dodatkowych kryteriów.</p>
+    </div>
+</div>
     <div class="admin-submission-filters__primary">
         <label class="admin-submission-search"><span class="visually-hidden">Szukaj</span><input name="q" value="{{ filters.get('q', '') }}" placeholder="Szukaj" aria-label="Szukaj zgłoszeń"></label>
         <label><span class="visually-hidden">Status</span><select name="status" aria-label="Status"><option value="">Wszystkie statusy</option>{% for option in status_options %}<option value="{{ option.value }}" {% if filters.get('status') == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
@@ -93,19 +99,45 @@
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-qualification-recheck-selection></div>
 </form>
-<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
+<form id="bulk-delete-form" method="post" action="{{ url_for('admin.submissions_delete_selected', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz przenieść zaznaczone zgłoszenia do archiwum?">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
     <div data-delete-selection></div>
 </form>
+{% if g.admin_user.role == 'super_admin' %}<form id="bulk-permanent-delete-form" method="post" action="{{ url_for('admin.submissions_permanent_delete', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz trwale usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <div data-permanent-delete-selection></div>
+</form>{% endif %}
 {% if can_assign_submissions %}<form id="bulk-assignment-form" method="post" action="{{ url_for('admin.submissions_assignment_update', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><input type="hidden" name="next" value="{{ request.full_path }}"><div data-assignment-selection></div>
 </form>{% endif %}
+{% if not read_only %}{% for submission in submissions %}
+<form id="submission-archive-form-{{ submission.id }}" method="post" action="{{ url_for('admin.submission_archive', form_id=form.id, submission_pk=submission.id) }}" data-admin-confirm-message="Czy zarchiwizować zgłoszenie {{ submission.submission_id }}?">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+</form>
+{% endfor %}{% endif %}
 {% set can_select_rows = can_make_decision or can_send_email or can_sign_office_agreement or can_assign_submissions or not read_only %}
-{% if can_select_rows %}<div class="admin-bulk-actions admin-submission-bulk" aria-label="Akcje dla zaznaczonych zgłoszeń">
-    <span class="admin-submission-bulk__count" aria-live="polite">Zaznaczono: <strong data-selected-count>0</strong></span>
-    <div class="admin-submission-bulk__controls">
+{% if can_select_rows %}<div class="admin-bulk-actions admin-submission-bulk" role="region"
+     aria-label="Akcje dla zaznaczonych zgłoszeń">
+
+    <div class="admin-submission-bulk__heading">
+        <div>
+            <h2>Akcje zbiorcze</h2>
+            <p>Wybierz zgłoszenia z tabeli, aby wykonać operację.</p>
+        </div>
+
+        <span class="admin-submission-bulk__count"
+              aria-live="polite">
+            Zaznaczono:
+            <strong data-selected-count>0</strong>
+        </span>
+    </div>
+
+    <div class="admin-submission-bulk__controls" role="region" aria-label="Działania zbiorcze — przewiń poziomo, aby zobaczyć wszystkie grupy" tabindex="0">
         {% if can_make_decision %}
+        <div class="admin-submission-bulk__group" role="group" aria-label="Kwalifikacja">
+            <span class="admin-submission-bulk__group-label">Kwalifikacja</span>
             <button
                 class="admin-button-secondary compact"
                 type="submit"
@@ -115,20 +147,40 @@
             >
                 Sprawdź warunki ponownie
             </button>
+        </div>
         {% endif %}
-        {% if can_assign_submissions %}<select name="assigned_to_user_id" form="bulk-assignment-form" aria-label="Prowadzący"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select><input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany" aria-label="Powód zmiany prowadzącego"><button class="admin-button-secondary compact" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz</button>{% endif %}
-        {% if can_send_email %}<button class="admin-button-secondary compact" type="submit" form="bulk-mail-form" data-mail-button disabled>Wyślij mail</button>{% endif %}
-        {% if can_sign_office_agreement %}<button class="admin-button-secondary compact" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź podpisy urzędu</button>{% endif %}
-        {% if can_sign_office_agreement and can_send_email %}<label class="admin-check admin-submission-bulk__notification"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>{% endif %}
-        {% if can_make_decision %}<button class="admin-button compact" type="submit" form="bulk-decisions-form">Zapisz decyzje</button>{% endif %}
+        {% if can_assign_submissions %}
+        <div class="admin-submission-bulk__group admin-submission-bulk__group--assignment" role="group" aria-label="Przypisywanie prowadzącego">
+            <span class="admin-submission-bulk__group-label">Przypisywanie prowadzącego</span>
+            <div class="admin-submission-bulk__assignment">
+                <select name="assigned_to_user_id" form="bulk-assignment-form" aria-label="Prowadzący"><option value="">Odepnij prowadzącego</option>{% for user in assignment_users %}<option value="{{ user.id }}">{{ user.email }}</option>{% endfor %}</select>
+                <input name="assignment_reason" form="bulk-assignment-form" placeholder="Powód zmiany" aria-label="Powód zmiany prowadzącego">
+                <button class="admin-button-secondary compact" type="submit" form="bulk-assignment-form" data-assignment-button disabled>Przypisz</button>
+            </div>
+        </div>
+        {% endif %}
+        {% if can_send_email %}<div class="admin-submission-bulk__group" role="group" aria-label="Komunikacja"><span class="admin-submission-bulk__group-label">Komunikacja</span><button class="admin-button-secondary compact" type="submit" form="bulk-mail-form" data-mail-button disabled>Wyślij mail</button></div>{% endif %}
+        {% if can_sign_office_agreement %}<div class="admin-submission-bulk__group" role="group" aria-label="Dokumenty"><span class="admin-submission-bulk__group-label">Dokumenty</span><button class="admin-button-secondary compact" type="submit" form="bulk-office-agreements-form" data-office-agreement-button disabled>Sprawdź podpisy urzędu</button>{% if can_send_email %}<label class="admin-check admin-submission-bulk__notification"><input type="checkbox" name="send_notification" form="bulk-office-agreements-form" checked><span>Wyślij znalezione umowy</span></label>{% endif %}</div>{% endif %}
+        {% if can_make_decision %}<div class="admin-submission-bulk__group admin-submission-bulk__group--decision" role="group" aria-label="Decyzje"><span class="admin-submission-bulk__group-label">Decyzje</span><button class="admin-button compact" type="submit" form="bulk-decisions-form" data-decision-button disabled>Zapisz decyzje</button></div>{% endif %}
     </div>
-    {% if not read_only %}<details class="admin-submission-bulk__more"><summary class="admin-button-secondary compact">Więcej</summary><button class="admin-button-danger compact" type="submit" form="bulk-delete-form" data-delete-button disabled>Usuń zaznaczone</button></details>{% endif %}
+    <details class="admin-submission-bulk__more">
+        <summary class="admin-button-secondary compact">Więcej</summary>
+        <div class="admin-submission-bulk__menu">
+            {% if not read_only %}<button class="compact" type="submit" form="bulk-delete-form" data-archive-button data-delete-button disabled>Archiwizuj zaznaczone</button>{% endif %}
+            {% if g.admin_user.role == 'super_admin' %}<button class="admin-button-danger compact" type="submit" form="bulk-permanent-delete-form" data-permanent-delete-button disabled>Usuń zaznaczone</button>{% endif %}
+            <a href="{{ url_for('admin.submissions_archive') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="4" rx="1"></rect><path d="M5 8v11h14V8M10 12h4"></path></svg>Archiwum zgłoszeń</a>
+        </div>
+    </details>
 </div>{% endif %}
 <form id="bulk-decisions-form" method="post" action="{{ url_for('admin.submissions_decisions_update', form_id=form.id) }}">
     <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
     <input type="hidden" name="next" value="{{ request.full_path }}">
-    <div class="admin-card admin-table-wrap">
-        <table class="admin-table admin-table--submissions admin-table--responsive">
+    <div class="admin-card admin-table-wrap admin-submissions-table-wrap"
+     role="region"
+     aria-label="Tabela zgłoszeń — przewiń poziomo, aby zobaczyć wszystkie kolumny"
+     tabindex="0">
+
+    <table class="admin-table admin-table--submissions admin-table--responsive">
             <thead>
                 <tr>
                     {% if can_select_rows %}<th scope="col" class="col-select"><input type="checkbox" id="select-all-submissions" aria-label="Zaznacz wszystkie zgłoszenia na stronie" title="Zaznacz wszystkie na stronie"></th>{% endif %}
@@ -198,6 +250,7 @@
                             {% if submission.process_status in ['AGREEMENT_WAITING_FOR_OFFICE_SIGNATURE', 'AGREEMENT_SIGNED_BY_OFFICE', 'AGREEMENT_SIGNATURE_INVALID'] %}<a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}">Sprawdź umowę podpisaną przez urząd</a>{% endif %}
                             {% if can_send_email %}<a href="{{ url_for('admin.submission_mail', form_id=form.id, submission_pk=submission.id) }}">Wyślij wiadomość</a>{% endif %}
                             <a href="{{ url_for('admin.submission_detail', form_id=form.id, submission_pk=submission.id) }}#correspondence">Pokaż korespondencję</a>
+                            {% if not read_only %}<button class="is-danger" type="submit" form="submission-archive-form-{{ submission.id }}">Archiwizuj zgłoszenie</button>{% endif %}
                             </div>
                         </div>
                     </td>
@@ -233,12 +286,16 @@
 {% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+    document.getElementById("admin-global-confirm-dialog")?.classList.add("admin-submission-confirm");
     const selectAll = document.getElementById("select-all-submissions");
     const checks = document.querySelectorAll(".submission-check");
     const selectedCount = document.querySelector("[data-selected-count]");
     const deleteForm = document.getElementById("bulk-delete-form");
     const deleteButton = document.querySelector("[data-delete-button]");
     const deleteSelection = document.querySelector("[data-delete-selection]");
+    const permanentDeleteForm = document.getElementById("bulk-permanent-delete-form");
+    const permanentDeleteButton = document.querySelector("[data-permanent-delete-button]");
+    const permanentDeleteSelection = document.querySelector("[data-permanent-delete-selection]");
     const mailButton = document.querySelector("[data-mail-button]");
     const officeAgreementButton = document.querySelector("[data-office-agreement-button]");
     const officeAgreementSelection = document.querySelector("[data-office-agreement-selection]");
@@ -250,6 +307,14 @@ document.addEventListener("DOMContentLoaded", function () {
     const qualificationRecheckSelection = document.querySelector(
         "[data-qualification-recheck-selection]"
     );
+    const decisionButton = document.querySelector("[data-decision-button]");
+
+    function syncDecisionButton() {
+        if (decisionButton) {
+            decisionButton.disabled = !Array.from(document.querySelectorAll(".admin-decision-select"))
+                .some(select => select.value);
+        }
+    }
 
     function syncDeleteButton() {
         const selected = Array.from(checks).filter(item => item.checked);
@@ -261,6 +326,13 @@ document.addEventListener("DOMContentLoaded", function () {
         if (deleteButton) {
             deleteButton.disabled = selected.length === 0;
         }
+        if (permanentDeleteButton) permanentDeleteButton.disabled = selected.length === 0;
+        if (permanentDeleteForm) permanentDeleteForm.dataset.adminConfirmMessage = selected.length === 1
+            ? "Czy na pewno chcesz trwale usunąć to zgłoszenie? Tej operacji nie można cofnąć."
+            : `Czy na pewno chcesz trwale usunąć ${selected.length} zaznaczone zgłoszenia? Tej operacji nie można cofnąć.`;
+        if (deleteForm && selected.length) {
+            deleteForm.dataset.adminConfirmMessage = `Czy zarchiwizować ${selected.length} zaznaczonych zgłoszeń?`;
+        }
         if (mailButton) mailButton.disabled = selected.length === 0;
         if (deleteSelection) {
             deleteSelection.innerHTML = "";
@@ -270,6 +342,16 @@ document.addEventListener("DOMContentLoaded", function () {
                 input.name = "submission_pk_ids";
                 input.value = item.dataset.submissionPk || "";
                 deleteSelection.appendChild(input);
+            });
+        }
+        if (permanentDeleteSelection) {
+            permanentDeleteSelection.innerHTML = "";
+            selected.forEach(item => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "submission_pk_ids";
+                input.value = item.dataset.submissionPk || "";
+                permanentDeleteSelection.appendChild(input);
             });
         }
         if (officeAgreementButton) officeAgreementButton.disabled = selected.length === 0;
@@ -319,6 +401,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     checks.forEach(item => item.addEventListener("change", syncDeleteButton));
     syncDeleteButton();
+    syncDecisionButton();
     if (deleteForm) {
         deleteForm.addEventListener("submit", function (event) {
             const selected = Array.from(checks).filter(item => item.checked);
@@ -326,6 +409,11 @@ document.addEventListener("DOMContentLoaded", function () {
                 event.preventDefault();
                 return;
             }
+        });
+    }
+    if (permanentDeleteForm) {
+        permanentDeleteForm.addEventListener("submit", function (event) {
+            if (!Array.from(checks).some(item => item.checked)) event.preventDefault();
         });
     }
 
@@ -336,6 +424,20 @@ document.addEventListener("DOMContentLoaded", function () {
             summary.setAttribute("aria-expanded", details.open ? "true" : "false");
         });
     });
+
+    const moreActions = document.querySelector(".admin-submission-bulk__more");
+    if (moreActions) {
+        moreActions.addEventListener("keydown", function (event) {
+            if (event.key === "Escape" && moreActions.open) {
+                event.preventDefault();
+                moreActions.open = false;
+                moreActions.querySelector("summary").focus();
+            }
+        });
+        document.addEventListener("click", function (event) {
+            if (moreActions.open && !moreActions.contains(event.target)) moreActions.open = false;
+        });
+    }
 
     function syncReason(select) {
         const controls = select.closest(".admin-decision-controls");
@@ -354,6 +456,7 @@ document.addEventListener("DOMContentLoaded", function () {
         syncReason(select);
         select.addEventListener("change", function () {
             syncReason(select);
+            syncDecisionButton();
         });
     });
 

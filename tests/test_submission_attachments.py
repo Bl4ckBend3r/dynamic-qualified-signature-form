@@ -131,6 +131,112 @@ def test_storage_sha256_and_attachment_versions_are_preserved():
         assert rows[0].storage_path in storage.files
 
 
+def test_failed_replacement_preserves_submission_and_previous_attachment(monkeypatch):
+    service, factory, storage = service_with_database()
+    with factory() as db:
+        db.add(FormSubmission(
+            submission_id="correction-1", form_slug="safe-form",
+            process_status="RETURNED_FOR_CORRECTION", data_json={"employment": "old"},
+        ))
+        db.commit()
+    prepared, errors = service.validate_uploads(
+        config(), {}, MultiDict([("certificate", upload("old.pdf"))])
+    )
+    assert errors == {}
+    service.persist(form_slug="safe-form", submission_id="correction-1", attachments=prepared)
+    with factory() as db:
+        original = db.execute(select(SubmissionFile)).scalar_one()
+        original_path = original.storage_path
+
+    original_write = storage.write_bytes
+
+    def fail_after_partial_write(path, content, content_type=None):
+        original_write(path, content, content_type)
+        raise OSError("Nextcloud write interrupted")
+
+    monkeypatch.setattr(storage, "write_bytes", fail_after_partial_write)
+    with pytest.raises(OSError, match="interrupted"):
+        service.persist(
+            form_slug="safe-form", submission_id="correction-1", attachments=prepared,
+            submission_updates={
+                "process_status": "FORM_SUBMITTED", "data_json": {"employment": "new"},
+            },
+        )
+
+    with factory() as db:
+        submission = db.execute(select(FormSubmission)).scalar_one()
+        files = db.execute(select(SubmissionFile)).scalars().all()
+        assert submission.process_status == "RETURNED_FOR_CORRECTION"
+        assert submission.data_json == {"employment": "old"}
+        assert len(files) == 1 and files[0].status == "active"
+    assert list(storage.files) == [original_path]
+
+    monkeypatch.setattr(storage, "write_bytes", original_write)
+    original_commit = factory.class_.commit
+
+    def fail_after_upload(session):
+        if len(storage.files) > 1:
+            raise RuntimeError("DB commit interrupted")
+        return original_commit(session)
+
+    monkeypatch.setattr(factory.class_, "commit", fail_after_upload)
+    with pytest.raises(RuntimeError, match="DB commit interrupted"):
+        service.persist(
+            form_slug="safe-form", submission_id="correction-1", attachments=prepared,
+            submission_updates={
+                "process_status": "FORM_SUBMITTED", "data_json": {"employment": "new"},
+            },
+        )
+    with factory() as db:
+        submission = db.execute(select(FormSubmission)).scalar_one()
+        files = db.execute(select(SubmissionFile)).scalars().all()
+        assert submission.process_status == "RETURNED_FOR_CORRECTION"
+        assert len(files) == 1 and files[0].status == "active"
+    assert list(storage.files) == [original_path]
+
+
+def test_orphan_report_is_read_only_and_does_not_infer_operation():
+    from scripts.migration.report_orphan_attachments import report_orphan_attachments
+
+    _, factory, _ = service_with_database()
+    with factory() as db:
+        submission = FormSubmission(submission_id="public-1", form_slug="safe-form")
+        db.add(submission)
+        db.flush()
+        root = "output/safe-form/submissions/public-1/attachments"
+        known = f"{root}/certificate/{'a' * 32}.pdf"
+        unknown = f"{root}/certificate/{'b' * 32}.pdf"
+        db.add(SubmissionFile(
+            submission_id=submission.id, public_submission_id="public-1",
+            form_slug="safe-form", document_id="certificate", field_key="certificate",
+            filename=f"{'a' * 32}.pdf", storage_path=known,
+        ))
+        db.commit()
+
+    class ListingStorage:
+        output_dir = "output"
+
+        def list_children(self, path):
+            if path == root:
+                return [("certificate", True)]
+            if path == f"{root}/certificate":
+                return [(known.rsplit("/", 1)[-1], False),
+                        (unknown.rsplit("/", 1)[-1], False),
+                        ("unrelated.txt", False)]
+            return []
+
+    report = report_orphan_attachments(factory, ListingStorage())
+    assert report["dry_run"] is True
+    assert report["files_examined"] == 2
+    assert report["candidates"] == [{
+        "submission_id": "public-1", "form_slug": "safe-form",
+        "field_key": "certificate", "storage_path": unknown,
+        "operation_id": None,
+        "classification": "untracked_path_requires_manual_review",
+    }]
+    with factory() as db:
+        assert db.query(SubmissionFile).count() == 1
+
 def test_required_file_for_one_submission_does_not_use_another_submission_attachment():
     service, factory, _ = service_with_database()
     with factory() as db:

@@ -1,213 +1,682 @@
-/* Compact form submissions workspace. */
+
+/* ==========================================
+   ZGŁOSZENIA — FILTRY, AKCJE I TABELA
+   ========================================== */
+
 .admin-submissions-summary {
-  justify-content: flex-start;
-  margin: -8px 0 12px;
-  color: var(--muted);
+    justify-content: flex-start;
+    margin: 0 0 16px;
+    color: var(--color-text-muted);
+    font-size: 14px;
 }
 
+/* FILTRY */
+
 .admin-submission-filters {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    margin-bottom: 20px;
+    padding: 22px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface);
+}
+
+.admin-submission-filters__heading {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.admin-submission-filters__heading h2,
+.admin-submission-bulk__heading h2 {
+    margin: 0 0 5px;
+    color: var(--color-heading);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.admin-submission-filters__heading p,
+.admin-submission-bulk__heading p {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 .admin-submission-filters__primary {
-  display: grid;
-  grid-template-columns: minmax(240px, 1.6fr) minmax(
-      190px,
-      1fr
-    ) 150px 150px auto;
-  gap: 10px;
-  align-items: end;
+    display: grid;
+    grid-template-columns:
+        minmax(240px, 1.6fr)
+        minmax(190px, 1fr)
+        repeat(2, minmax(150px, .8fr))
+        auto;
+    align-items: end;
+    gap: 14px;
+    min-width: 0;
 }
 
 .admin-submission-filters__primary label,
 .admin-submission-filters__additional label {
-  min-width: 0;
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+#submission-advanced-filters label > span {
+    color: var(--color-text-muted);
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .admin-submission-filters__primary input,
 .admin-submission-filters__primary select,
 .admin-submission-filters__additional input,
 .admin-submission-filters__additional select {
-  width: 100%;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    background: var(--color-input-bg);
+    color: var(--color-text);
+    border-color: var(--color-border);
 }
 
 .admin-submission-filters .admin-filter-more {
-  padding-top: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.admin-submission-filters .admin-filter-more > summary {
+    color: var(--color-link);
+    font-weight: 600;
 }
 
 .admin-submission-filters__additional {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
-  gap: 10px;
-  padding-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    padding-top: 14px;
 }
 
+.admin-submission-filters .admin-filter-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-self: end;
+}
+
+.admin-submission-filters .admin-filter-actions > * {
+    min-height: 44px;
+}
+
+/* AKCJE ZBIORCZE */
+
 .admin-submission-bulk {
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-alt);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    margin-bottom: 20px;
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface);
+}
+
+.admin-submission-bulk__heading {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--color-border);
 }
 
 .admin-submission-bulk__count {
-  flex: 0 0 auto;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 13px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.admin-submission-bulk__count strong {
+    color: var(--color-heading);
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
 }
 
 .admin-submission-bulk__controls {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+    grid-column: 1;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-color: var(--color-border-strong) var(--color-surface);
 }
 
-.admin-submission-bulk__controls select {
-  max-width: 210px;
+.admin-submission-bulk__group {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-muted);
 }
-.admin-submission-bulk__controls input:not([type]),
-.admin-submission-bulk__controls input[type="text"] {
-  max-width: 210px;
+
+.admin-submission-bulk__group-label {
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
 }
+
+.admin-submission-bulk__group--assignment {
+    flex-basis: 400px;
+}
+
+.admin-submission-bulk__assignment {
+    display: grid;
+    grid-template-columns:
+        minmax(0, 1.2fr)
+        minmax(0, .8fr)
+        auto;
+    align-items: center;
+    gap: 8px;
+
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.admin-submission-bulk__controls select,
+.admin-submission-bulk__controls input:not([type="checkbox"]) {
+    flex: 0 1 190px;
+    width: 190px;
+    min-width: 0;
+    max-width: 230px;
+    min-height: 44px;
+    background: var(--color-input-bg);
+    color: var(--color-text);
+    border-color: var(--color-border);
+}
+
+.admin-submission-bulk__controls .admin-submission-bulk__assignment > :is(select, input, button) {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 44px;
+}
+
+.admin-submission-bulk__controls button {
+    height: 44px;
+    padding: 9px 10px;
+    white-space: nowrap;
+    text-align: center;
+    flex: 0 0 auto;
+}
+
+.admin-submission-bulk__controls button:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
 .admin-submission-bulk__notification {
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    white-space: nowrap;
 }
+
+.admin-submission-bulk__notification input {
+    accent-color: var(--color-primary);
+}
+
 .admin-submission-bulk__more {
-  position: relative;
-  flex: 0 0 auto;
+    position: relative;
+    grid-column: 2;
+    justify-self: end;
+    align-self: center;
+    z-index: 20;
+    min-width: 0;
 }
+
 .admin-submission-bulk__more > summary {
-  list-style: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 44px;
+    padding: 10px 14px;
+    box-sizing: border-box;
+    list-style: none;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
 }
+
+.admin-submission-bulk__more > summary::after {
+    content: "▾";
+    font-size: 12px;
+}
+
+.admin-submission-bulk__more[open] > summary::after {
+    transform: rotate(180deg);
+}
+
 .admin-submission-bulk__more > summary::-webkit-details-marker {
-  display: none;
+    display: none;
 }
-.admin-submission-bulk__more[open] > button {
-  margin-top: 6px;
+
+
+.admin-submission-bulk__menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 30;
+
+    display: grid;
+    gap: 6px;
+
+    width: 280px;
+    max-width: calc(100vw - 32px);
+    padding: 8px;
+    box-sizing: border-box;
+
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+
+    box-shadow: 0 12px 28px var(--shadow-color);
+}
+
+.admin-submission-bulk__more:not([open])
+.admin-submission-bulk__menu {
+    display: none;
+}
+
+.admin-submission-bulk__menu > :is(a, button),
+.admin-submission-bulk__menu > form > button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+
+    border: 1px solid transparent;
+    border-radius: 8px;
+
+    background: transparent;
+    color: var(--color-text);
+
+    font: 600 13px/1.4 system-ui, sans-serif;
+    text-align: left;
+    text-decoration: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+
+.admin-submission-bulk__menu > form {
+    margin: 0;
+    width: 100%;
+}
+
+.admin-submission-bulk__menu > a {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-color: var(--color-border);
+}
+
+.admin-submission-bulk__menu > a svg {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+}
+
+.admin-submission-bulk__menu > a:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+    border-color: var(--color-border-strong);
+}
+
+.admin-submission-bulk__menu > [data-archive-button] {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border-color: var(--color-warning);
+}
+
+.admin-submission-bulk__menu > [data-archive-button]:hover:not(:disabled) {
+    background: var(--color-warning);
+    color: var(--color-text-inverse);
+}
+
+.admin-submission-bulk__menu > [data-permanent-delete-button] {
+    margin-top: 6px;
+    border-top-width: 3px;
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+.admin-submission-bulk__menu > [data-permanent-delete-button]:hover:not(:disabled) {
+    background: var(--color-danger);
+    color: var(--color-text-inverse);
+}
+
+.admin-submission-bulk__menu button:disabled {
+    opacity: 1;
+    background: var(--color-surface-muted);
+    color: var(--color-text-muted);
+    border-color: var(--color-border);
+    border-style: dashed;
+    cursor: not-allowed;
+}
+
+.admin-submission-bulk__more
+:is(summary, a, button):focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+.admin-submission-confirm {
+    width: min(500px, calc(100vw - 32px));
+    color: var(--color-text);
+}
+
+.admin-submission-confirm .admin-modal__body > p {
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.admin-submission-confirm .admin-modal__footer button {
+    min-height: 44px;
+}
+
+.admin-submission-confirm .admin-modal__footer button:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+
+/* TABELA — UKŁAD KOLUMN */
+
+.admin-submissions-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    padding: 0;
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface);
+    scrollbar-color:
+        var(--color-border-strong)
+        var(--color-surface);
 }
 
 .admin-table--submissions {
-  min-width: 1720px;
-  table-layout: fixed;
+    width: 100%;
+    min-width: 1780px;
+    table-layout: fixed;
+    border-collapse: collapse;
 }
 
 .admin-table--submissions .col-select {
-  width: 48px;
-  text-align: center;
-}
-.admin-table--submissions .col-id {
-  width: 145px;
-  min-width: 145px;
-}
-.admin-table--submissions .col-person {
-  width: 180px;
-}
-.admin-table--submissions .col-contact {
-  width: 220px;
-}
-.admin-table--submissions .col-date {
-  width: 145px;
-}
-.admin-table--submissions .col-form {
-  width: 210px;
-}
-.admin-table--submissions .col-assignee {
-  width: 190px;
-}
-.admin-table--submissions .col-priority {
-  width: 155px;
-}
-.admin-table--submissions .col-status {
-  width: 200px;
-}
-.admin-table--submissions .col-workflow {
-  width: 175px;
-}
-.admin-table--submissions .col-decision {
-  width: 230px;
-}
-.admin-table--submissions .col-actions {
-  width: 95px;
+    width: 48px;
+    text-align: center;
 }
 
-.admin-table--submissions th,
-.admin-table--submissions td {
-  padding: 9px 10px;
-  line-height: 1.3;
+.admin-table--submissions .col-id {
+    width: 135px;
+}
+
+.admin-table--submissions .col-person {
+    width: 165px;
+}
+
+.admin-table--submissions .col-contact {
+    width: 205px;
+}
+
+.admin-table--submissions .col-date {
+    width: 130px;
+}
+
+.admin-table--submissions .col-form {
+    width: 175px;
+}
+
+.admin-table--submissions .col-assignee {
+    width: 160px;
+}
+
+.admin-table--submissions .col-priority {
+    width: 135px;
+}
+
+.admin-table--submissions .col-status {
+    width: 165px;
+}
+
+.admin-table--submissions .col-workflow {
+    width: 155px;
+}
+
+.admin-table--submissions .col-decision {
+    width: 205px;
+}
+
+.admin-table--submissions .col-actions {
+    width: 100px;
+}
+
+/* TABELA — CZYTELNOŚĆ */
+
+.admin-table--submissions thead th {
+    padding: 14px 13px;
+    background: var(--color-table-header);
+    color: var(--color-heading);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .035em;
+    line-height: 1.4;
+    vertical-align: middle;
+}
+
+.admin-table--submissions tbody td {
+    padding: 15px 13px;
+    color: var(--color-text);
+    font-size: 13px;
+    line-height: 1.5;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+}
+
+.admin-table--submissions tbody tr:hover td {
+    background: var(--color-table-row-hover);
 }
 
 .admin-table--submissions td.admin-id-cell,
 .admin-table--submissions th.col-id {
-  padding: 9px 10px;
+    padding: 15px 13px;
+}
+
+.admin-table--submissions .admin-id-cell code {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.admin-table--submissions .admin-person-cell {
+    color: var(--color-heading);
+    font-weight: 700;
 }
 
 .admin-table--submissions .admin-contact-cell,
 .admin-table--submissions .admin-assignee-cell {
-  white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .admin-contact-cell > span,
 .admin-priority-cell > :is(span, small) {
-  display: block;
+    display: block;
 }
+
 .admin-contact-cell > span + span,
 .admin-priority-cell > :is(span, small) + :is(span, small) {
-  margin-top: 4px;
+    margin-top: 5px;
+}
+
+.admin-table--submissions .admin-contact-cell > span + span,
+.admin-table--submissions .admin-priority-cell small {
+    color: var(--color-text-muted);
+    font-size: 12px;
 }
 
 .admin-contact-filters {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
 }
 
 .admin-table--submissions .admin-form-name-cell {
-  max-width: none;
-  white-space: normal;
+    max-width: none;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    white-space: normal;
 }
 
 .admin-table--submissions .admin-badge {
-  width: fit-content;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 5px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
-.admin-table--submissions .admin-decision-controls,
-.admin-table--submissions .admin-decision-select,
-.admin-table--submissions .admin-decision-reason {
-  width: 100%;
-  min-width: 0;
+.admin-table--submissions
+:is(.admin-decision-controls, .admin-decision-select, .admin-decision-reason) {
+    width: 100%;
+    min-width: 0;
 }
+
+/* PRZYKLEJONA KOLUMNA AKCJI */
+
+.admin-table--submissions .actions-column {
+    position: sticky;
+    right: 0;
+    z-index: 3;
+    background: var(--color-surface);
+    border-left: 1px solid var(--color-border);
+}
+
+.admin-table--submissions thead .actions-column {
+    z-index: 5;
+    background: var(--color-table-header);
+}
+
+.admin-table--submissions tbody tr:nth-child(even)
+td.actions-column {
+    background: var(--color-surface-muted);
+}
+
+.admin-table--submissions tbody tr:hover
+td.actions-column {
+    background: var(--color-table-row-hover);
+}
+
+.admin-table--submissions .admin-action-toggle {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+/* DOSTĘPNOŚĆ */
+
+.admin-submissions-table-wrap:focus-visible,
+.admin-submission-bulk__controls:focus-visible,
+.admin-submission-bulk :is(button, select, input, summary):focus-visible,
+.admin-submission-filters :is(button, select, input, summary):focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+/* RESPONSYWNOŚĆ */
 
 @media (max-width: 1450px) {
-  .admin-submission-filters__additional {
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
-  }
-  .admin-table--submissions {
-    min-width: 1100px;
-  }
+    .admin-submission-filters__additional {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 900px) {
-  .admin-submission-filters__primary,
-  .admin-submission-filters__additional {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .admin-submission-bulk {
-    align-items: stretch;
-    flex-direction: column;
-  }
+    .admin-submission-filters__primary,
+    .admin-submission-filters__additional {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .admin-submission-filters,
+    .admin-submission-bulk {
+        padding: 16px;
+    }
 }
 
 @media (max-width: 620px) {
-  .admin-submission-filters__primary,
-  .admin-submission-filters__additional {
-    grid-template-columns: minmax(0, 1fr);
-  }
+    .admin-submission-filters__primary,
+    .admin-submission-filters__additional {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .admin-submission-bulk__heading {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .admin-submission-filters .admin-filter-actions {
+        flex-wrap: wrap;
+    }
 }
+
 
 .document-template-configuration {
   display: grid;

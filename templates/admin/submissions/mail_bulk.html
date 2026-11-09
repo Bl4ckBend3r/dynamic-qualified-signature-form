@@ -25,6 +25,17 @@
                 <label class="admin-form-wide"><span>Treść HTML</span><textarea name="html_body" rows="12" required data-mail-html data-variable-target data-variable-default-target></textarea></label>
                 <label class="admin-form-wide"><span>Treść tekstowa (opcjonalnie)</span><textarea name="text_body" rows="6" data-mail-text data-variable-target></textarea></label>
             </div>
+            <section class="admin-section" aria-labelledby="mail-bulk-attachments-heading">
+                <h2 id="mail-bulk-attachments-heading">Załączniki zgłoszenia</h2>
+                <p>Wybór jest osobny dla każdego zgłoszenia. Żaden plik nie jest dołączany automatycznie.</p>
+                {% for group in attachment_groups %}
+                <details><summary>{{ group.submission.submission_id }} — {{ group.files|length }} plików</summary>
+                    {% for file in group.files %}
+                    <label class="admin-check"><input type="checkbox" name="attachment_ids_{{ group.submission.id }}" value="{{ file.id }}" {% if not file.available or not can_view_sensitive_data %}disabled{% endif %}><span>{{ file.filename }} · {{ file.document_type }} · {{ file.size_label }} · {{ 'Dostępny' if file.available else 'Niedostępny' }}</span></label>
+                    {% else %}<p class="admin-empty-state">Brak plików.</p>{% endfor %}
+                </details>
+                {% endfor %}
+            </section>
             <section class="admin-section"><h2>Podgląd</h2><div class="admin-card admin-mail-preview" data-mail-preview></div></section>
         </div>
         {% set variable_storage_key = 'submission-mail-variables-collapsed' %}

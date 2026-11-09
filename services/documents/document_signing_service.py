@@ -11,6 +11,8 @@ from flask import current_app, has_app_context
 
 from services.documents.document_storage_service import DocumentStorageService
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
+from services.process_service import has_pending_pdf_generation
+from services.audit_log_service import pending_audit_state
 from services.upload_validation import UploadValidationError, validate_pdf_upload
 from signature_verifier import resolve_signature_policy, signature_verification_result, verify_signed_pdf
 
@@ -58,6 +60,12 @@ class DocumentSigningService:
             raise ValueError("Nie wybrano pliku PDF.")
         if not self.storage or not self.submission_repository or not self.submission_service:
             raise RuntimeError("DocumentSigningService is not configured.")
+        if hasattr(self.submission_repository, "get_by_id"):
+            submission = self.submission_repository.get_by_id(submission_id)
+            if has_pending_pdf_generation(submission):
+                raise ValueError("Dokument PDF nie jest jeszcze gotowy do podpisania.")
+            if pending_audit_state(submission):
+                raise ValueError("Poprzednia operacja oczekuje na zapis obowiązkowego audytu.")
 
         signed_pdf_filename = self.submission_service.build_signed_pdf_filename(slug, submission_id)
         uploaded_bytes = uploaded_file.read()
@@ -91,32 +99,32 @@ class DocumentSigningService:
                 "Nie otwieraj i nie zapisuj ponownie podpisanego PDF przed wgraniem."
             )
 
-        storage_path = self.document_storage_service.save_pdf(
+        with self.document_storage_service.transactional_pdf_write(
             storage=self.storage,
             slug=slug,
             filename=signed_pdf_filename,
             document_bytes=uploaded_bytes,
             document_type=None,
             signed=True,
-        )
+        ) as storage_path:
+            recorded = self.submission_document_service.record_signed_document(
+                submission_id=submission_id,
+                form_slug=slug,
+                filename=signed_pdf_filename,
+                file_bytes=uploaded_bytes,
+                document_id="form_submission",
+                document_type=SubmissionDocumentType.SIGNED_FORM_PDF,
+                original_filename=str(uploaded_file.filename or ""),
+                signature_status=str(verification.get("validation_status") or "INDETERMINATE").lower(),
+                signature_validation_result=verification,
+                storage_path=storage_path,
+                storage=self.storage,
+                uploaded_by_source="participant",
+            )
+            if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
+                raise RuntimeError("Nie udalo sie zapisac metadanych podpisanego dokumentu.")
         logger.info("document_signature_verified", extra={"event": "document_signature_verified", "operation": "signature_verification"})
         self.submission_repository.update(submission_id, {"signed_pdf_filename": signed_pdf_filename})
-        recorded = self.submission_document_service.record_signed_document(
-            submission_id=submission_id,
-            form_slug=slug,
-            filename=signed_pdf_filename,
-            file_bytes=uploaded_bytes,
-            document_id="form_submission",
-            document_type=SubmissionDocumentType.SIGNED_FORM_PDF,
-            original_filename=str(uploaded_file.filename or ""),
-            signature_status=str(verification.get("validation_status") or "INDETERMINATE").lower(),
-            signature_validation_result=verification,
-            storage_path=storage_path,
-            storage=self.storage,
-            uploaded_by_source="participant",
-        )
-        if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
-            raise RuntimeError("Nie udalo sie zapisac metadanych podpisanego dokumentu.")
         return SignedSubmissionPdfUpload(
             signed_filename=signed_pdf_filename,
             verification=verification,

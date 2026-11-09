@@ -8,6 +8,7 @@ from flask import abort, current_app, flash, g, jsonify, redirect, render_templa
 from sqlalchemy import or_, select
 
 from models import Form, FormSubmission, MailFooter, MailTemplate, MailTemplateAsset
+from services.audit_log_service import AuditPendingError
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_template_service import (
     MAIL_LAYOUT,
@@ -23,6 +24,7 @@ from services.mail_template_service import (
 from services.mail_template_editor_service import (
     build_variable_catalog,
 )
+from services.mail_dispatch_service import MailDispatchResult
 from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
 from . import (
@@ -82,7 +84,18 @@ def submission_mail(form_id: int, submission_pk: int):
             .order_by(MailFooter.form_id.desc(), MailFooter.name)
         ).scalars().all()
         if request.method == "POST":
-            result = send_admin_mail(db, form, submission, templates, footers)
+            if not can_view_sensitive_data:
+                abort(403)
+            try:
+                current_app.extensions["services"].audit_log_service.require_no_pending(submission)
+            except AuditPendingError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
+            try:
+                result = send_admin_mail(db, form, submission, templates, footers)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("admin.submission_mail", form_id=form.id, submission_pk=submission.id))
             db.commit()
             flash(*mail_flash(result))
             return redirect(url_for("admin.submission_detail", form_id=form.id, submission_pk=submission.id))
@@ -106,11 +119,10 @@ def submission_mail(form_id: int, submission_pk: int):
                 if resolved_footer
                 else "Brak aktywnej stopki e-mail"
             ),
-            variable_catalog=build_variable_catalog(
-                form,
-                _safe_preview_context(db, form, submission),
-            ),
+            variable_catalog=_mail_variable_catalog(db, form, submission),
             can_view_sensitive_data=can_view_sensitive_data,
+            attachment_candidates=(current_app.extensions["services"].submission_document_service.mail_attachment_candidates(
+                submission, include_sensitive=True) if can_view_sensitive_data else []),
         )
 
 
@@ -126,7 +138,9 @@ def submissions_mail_selected(form_id: int):
     selected_numeric_ids = {int(item) for item in selected_ids if item.isdigit()}
     selected_public_ids = set(selected_ids)
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id)
+        form = ensure_form_access(db, form_id, permission="can_send_email")
+        can_view_sensitive_data = current_app.extensions["services"].permission_service.has_permission(
+            db, g.admin_user, "can_view_sensitive_data", form=form)
         submissions = db.execute(select(FormSubmission).where(FormSubmission.form_slug == form.slug)).scalars().all()
         submissions = [
             submission
@@ -149,22 +163,34 @@ def submissions_mail_selected(form_id: int):
                 submissions=submissions,
                 templates=templates,
                 template_payload=mail_template_payload(templates),
-                variable_catalog=build_variable_catalog(form, _safe_preview_context(db, form, preview_submission)),
+                variable_catalog=_mail_variable_catalog(db, form, preview_submission),
                 missing_email_submissions=[item for item in submissions if not str(item.email or "").strip()],
+                attachment_groups=[{"submission": item, "files": (current_app.extensions["services"].submission_document_service.mail_attachment_candidates(
+                    item, include_sensitive=True) if can_view_sensitive_data else [])} for item in submissions],
+                can_view_sensitive_data=can_view_sensitive_data,
             )
+        if not can_view_sensitive_data:
+            abort(403)
         manual_template = _manual_template_from_request()
         summary = {"sent": 0, "failed": 0, "skipped": 0}
         skipped_ids = []
         for submission in submissions:
-            result = send_selected_submission_mail(
-                db,
-                form,
-                submission,
-                templates,
-                footers,
-                trigger_event=request.form.get("trigger_event", "manual_bulk").strip() or "manual_bulk",
-                manual_template=manual_template,
-            )
+            try:
+                current_app.extensions["services"].audit_log_service.require_no_pending(submission)
+            except AuditPendingError:
+                summary["skipped"] += 1
+                skipped_ids.append(submission.submission_id)
+                continue
+            try:
+                result = send_selected_submission_mail(
+                    db, form, submission, templates, footers,
+                    trigger_event=request.form.get("trigger_event", "manual_bulk").strip() or "manual_bulk",
+                    manual_template=manual_template,
+                    attachment_ids=request.form.getlist(f"attachment_ids_{submission.id}"),
+                )
+            except ValueError:
+                summary["failed"] += 1
+                continue
             summary[result.status] = summary.get(result.status, 0) + 1
             if result.status == "skipped":
                 skipped_ids.append(submission.submission_id)
@@ -183,12 +209,18 @@ def mail_templates_list(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id)
         templates = db.execute(select(MailTemplate).where(MailTemplate.form_id == form.id).order_by(MailTemplate.name)).scalars().all()
+        trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
+        trigger_labels = {
+            kind: {option["value"]: option["label"] for option in trigger_catalog[kind]}
+            for kind in ("events", "statuses", "decisions")
+        }
         return render_template(
             "admin/mail_templates/list.html",
             form=form,
             templates=templates,
             read_only=not can_manage_form(db, g.admin_user, form.id),
             template_labels=MAIL_TEMPLATE_LABELS,
+            trigger_labels=trigger_labels,
         )
 
 
@@ -266,7 +298,7 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             sample_submission = sample_submissions[0]
         preview_context = _safe_preview_context(db, form, sample_submission)
         preview_html = render_platform_mail_html(template, preview_context)
-        variable_catalog = build_variable_catalog(form, preview_context)
+        variable_catalog = _mail_variable_catalog(db, form, sample_submission, preview_context)
         trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
         return render_template(
             "admin/mail_templates/edit.html",
@@ -285,6 +317,9 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             trigger_decisions=trigger_catalog["decisions"],
             preview_subject=render_template_text(template.subject or "", preview_context),
             preview_text=render_platform_mail_text(template, preview_context),
+            attachment_candidates=(current_app.extensions["services"].submission_document_service.mail_attachment_candidates(
+                sample_submission, include_sensitive=True) if sample_submission and current_app.extensions["services"].permission_service.has_permission(
+                    db, g.admin_user, "can_view_sensitive_data", form=form) else []),
         )
 
 
@@ -294,11 +329,15 @@ def mail_template_preview(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, manage=True)
         sample_submission = None
-        submission_id = parse_optional_int(request.form.get("preview_submission_id"))
+        raw_submission_id = request.form.get("preview_submission_id", "").strip()
+        submission_id = parse_optional_int(raw_submission_id)
+        if raw_submission_id and not submission_id:
+            abort(400)
         if submission_id:
             candidate = db.get(FormSubmission, submission_id)
-            if candidate and candidate.form_slug == form.slug:
-                sample_submission = candidate
+            if not candidate or candidate.form_slug != form.slug:
+                abort(404)
+            sample_submission = candidate
         context = _safe_preview_context(db, form, sample_submission)
         trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
         selected_event = request.form.get("trigger_event", "").strip()
@@ -376,13 +415,21 @@ def mail_template_preview(form_id: int):
 @login_required
 def form_mail_variables(form_id: int):
     with db_session_factory()() as db:
-        form = ensure_form_access(db, form_id, permission="can_send_email")
+        form = db.get(Form, form_id) or abort(404)
+        permission_service = current_app.extensions["services"].permission_service
+        if not any(permission_service.has_permission(db, g.admin_user, key, form=form)
+                   for key in ("can_send_email", "can_edit_form")):
+            abort(403)
         submission = None
-        submission_pk = parse_optional_int(request.args.get("submission_id"))
+        raw_submission_id = request.args.get("submission_id", "").strip()
+        submission_pk = parse_optional_int(raw_submission_id)
+        if raw_submission_id and not submission_pk:
+            abort(400)
         if submission_pk:
             candidate = db.get(FormSubmission, submission_pk)
-            if candidate and candidate.form_slug == form.slug:
-                submission = candidate
+            if not candidate or candidate.form_slug != form.slug:
+                abort(404)
+            submission = candidate
         return jsonify(_mail_variable_payload(form, submission, db=db))
 
 
@@ -743,6 +790,7 @@ def send_admin_mail(db, form, submission, templates: list[MailTemplate], footers
         to_email=request.form.get("to_email", "").strip() or submission.email,
         subject_template=getattr(template, "subject", ""),
         event_type="manual",
+        attachment_ids=request.form.getlist("attachment_ids"),
     )
 
 
@@ -755,6 +803,7 @@ def send_selected_submission_mail(
     *,
     trigger_event: str,
     manual_template=None,
+    attachment_ids=None,
 ):
     template = manual_template or select_mail_template(templates, submission, trigger_event) or (templates[0] if templates else None)
     footer = select_default_footer(footers, form_id=form.id)
@@ -768,6 +817,7 @@ def send_selected_submission_mail(
         to_email=submission.email,
         subject_template=getattr(template, "subject", ""),
         event_type=trigger_event,
+        attachment_ids=attachment_ids,
     )
 
 
@@ -861,12 +911,15 @@ def _safe_preview_context(db, form, submission=None) -> dict:
     definition = form.definition_json or {}
     if submission is not None and submission.form_version_id:
         version = db.get(FormVersion, submission.form_version_id)
-        if version:
+        if version and version.form_id == form.id:
             definition = version.definition_json or definition
     classified = {
         str(field.get("name") or field.get("key") or "")
         for field in definition.get("fields", []) if isinstance(field, dict)
-        and str(field.get("data_classification") or field.get("sensitivity") or "normal") != "normal"
+        and (str(field.get("data_classification") or field.get("sensitivity") or "normal") != "normal"
+             or field.get("type") == "repeatable_group" and any(
+                 str(child.get("data_classification") or child.get("sensitivity") or "normal") != "normal"
+                 for child in field.get("fields") or [] if isinstance(child, dict)))
     }
     for key in BUILTIN_SENSITIVE_FIELDS | classified:
         if key in context:
@@ -880,10 +933,14 @@ def _safe_preview_context(db, form, submission=None) -> dict:
 
 def _mail_variable_payload(form, submission=None, *, db=None) -> dict:
     context = _safe_preview_context(db, form, submission) if db is not None else preview_mail_context(form, submission)
-    groups = build_variable_catalog(form, context)
+    groups = _mail_variable_catalog(db, form, submission, context) if db is not None else build_variable_catalog(form, context)
+    can_view_sensitive = db is not None and current_app.extensions["services"].permission_service.has_permission(
+        db, g.admin_user, "can_view_sensitive_data", form=form)
     return {
         "form_id": form.id,
         "submission_id": submission.id if submission else None,
+        "attachments": (current_app.extensions["services"].submission_document_service.mail_attachment_candidates(
+            submission, include_sensitive=True) if submission and can_view_sensitive else []),
         "categories": [
             {
                 "name": group["category"],
@@ -892,6 +949,23 @@ def _mail_variable_payload(form, submission=None, *, db=None) -> dict:
             for group in groups
         ],
     }
+
+
+def _mail_variable_catalog(db, form, submission=None, context=None):
+    from models import FormVersion
+
+    definition = form.definition_json or {}
+    if submission is not None and submission.form_version_id:
+        version = db.get(FormVersion, submission.form_version_id)
+        if version is not None and version.form_id == form.id:
+            definition = version.definition_json or {}
+    can_view_sensitive = current_app.extensions["services"].permission_service.has_permission(
+        db, g.admin_user, "can_view_sensitive_data", form=form)
+    return build_variable_catalog(
+        form, context if context is not None else _safe_preview_context(db, form, submission),
+        definition=definition, include_sensitive=can_view_sensitive, actual_values=submission is not None,
+        include_form_fields=submission is None or not submission.form_version_id,
+    )
 
 
 def _mail_trigger_template_context(form) -> dict:
@@ -915,9 +989,18 @@ def send_mail_for_submission(
     subject_template: str,
     event_type: str,
     log_template=None,
+    attachment_ids=None,
 ):
     files = current_app.extensions["services"].submission_document_service.list_documents(submission.submission_id)
     service = current_app.extensions["services"].mail_dispatch_service
+    try:
+        attachments = current_app.extensions["services"].submission_document_service.load_mail_attachments(
+            submission, attachment_ids or [], include_sensitive=True)
+    except ValueError as exc:
+        log = service.log_email(db, form=form, submission=submission, template=log_template or template,
+            footer=footer, to_email=to_email, subject=subject_template, sent_by_id=g.admin_user.id,
+            status="failed", event_type=event_type, error_message=str(exc))
+        return MailDispatchResult("failed", to_email, subject_template, str(exc), log)
     return service.dispatch_to_submission(
         db=db,
         form=form,
@@ -929,6 +1012,7 @@ def send_mail_for_submission(
         event_type=event_type,
         sent_by_id=g.admin_user.id,
         files=files,
+        attachments=attachments,
         context_builders={
             "documents_to_sign_url_builder": lambda item: url_for(
                 "documents.documents_to_sign",

@@ -7,19 +7,20 @@
         <h1>Szablony maili</h1>
     </div>
 </div>
-<div class="admin-card admin-table-wrap">
-    <table class="admin-table">
-        <thead><tr><th>Formularz</th><th>Slug</th><th>Status</th><th>Akcje</th></tr></thead>
+<div class="admin-card admin-table-wrap mail-templates-index" role="region" aria-label="Formularze i szablony maili" tabindex="0">
+    <table class="admin-table mail-templates-index__table">
+        <colgroup><col class="mail-templates-index__col-name"><col class="mail-templates-index__col-slug"><col class="mail-templates-index__col-status"><col class="mail-templates-index__col-actions"></colgroup>
+        <thead><tr><th scope="col">Formularz</th><th scope="col">Slug</th><th scope="col">Status</th><th scope="col">Akcje</th></tr></thead>
         <tbody>
         {% for form in forms %}
             <tr>
-                <td><strong>{{ form.name }}</strong></td>
-                <td><code>{{ form.slug }}</code></td>
+                <td><strong class="mail-templates-index__name">{{ form.name }}</strong></td>
+                <td><code class="mail-templates-index__slug">{{ form.slug }}</code></td>
                 <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
                 <td>
-                    <div class="admin-actions">
-                        <a href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
-                        <a href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
+                    <div class="admin-actions mail-templates-index__actions">
+                        <a class="admin-button" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
+                        <a class="admin-button-secondary" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
                     </div>
                 </td>
             </tr>

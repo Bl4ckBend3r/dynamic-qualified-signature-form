@@ -81,15 +81,35 @@ class FormVersionService:
             .order_by(FormVersion.published_at.desc(), FormVersion.id.desc())
         ).scalars().first()
 
-    def resolve_for_submission(self, db, submission: FormSubmission) -> FormVersion | None:
-        """Use the current published definition after validating the stored link."""
+
+    def resolve_for_submission(
+        self,
+        db,
+        submission: FormSubmission,
+    ) -> FormVersion | None:
+        """Return the exact workflow version assigned to the submission."""
         if submission.form_version_id:
             version = db.get(FormVersion, submission.form_version_id)
-            if version is None or version.form.slug != submission.form_slug:
+
+            if version is None:
                 return None
-            return self.resolve_published(db, version.form_id) or version
-        form_id = db.execute(select(Form.id).where(Form.slug == submission.form_slug)).scalar_one_or_none()
-        return self.resolve_published(db, form_id) if form_id is not None else None
+
+            if version.form.slug != submission.form_slug:
+                return None
+
+            return version
+
+        # Compatibility fallback for records without a stored version.
+        form_id = db.execute(
+            select(Form.id).where(Form.slug == submission.form_slug)
+        ).scalar_one_or_none()
+
+        return (
+            self.resolve_published(db, form_id)
+            if form_id is not None
+            else None
+        )
+
 
     def resolve_rendered_version(self, db, form: Form, version_id: int) -> FormVersion | None:
         return db.execute(
@@ -444,58 +464,126 @@ class FormVersionService:
             if not changed:
                 return total
 
+
     def upgrade_submission(
-        self, db, submission: FormSubmission, latest: FormVersion | None = None,
-        *, actor_id: int | None = None,
+        self,
+        db,
+        submission: FormSubmission,
+        latest: FormVersion | None = None,
+        *,
+        actor_id: int | None = None,
     ) -> bool:
-        """Switch the current configuration pointer without changing case state."""
-        old_version = db.get(FormVersion, submission.form_version_id) if submission.form_version_id else None
-        if submission.form_version_id and old_version is None:
-            raise FormVersionError("Zgłoszenie nie ma poprawnej historycznej wersji formularza.")
-        if old_version is not None and old_version.form.slug != submission.form_slug:
-            raise FormVersionError("Wersja zgłoszenia należy do innego formularza.")
-        latest = latest or self.resolve_for_submission(db, submission)
-        if latest is None or latest.status != FORM_VERSION_PUBLISHED or latest.form.slug != submission.form_slug or (old_version and latest.form_id != old_version.form_id):
-            raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
-        if old_version is not None and old_version.id == latest.id:
+        """
+        Update required-data requirements without changing
+        the workflow version assigned to the submission.
+        """
+        if not self.is_active_submission(submission):
             return False
 
-        from services.workflow_service import current_workflow_step
-        old_step = current_workflow_step(submission, (old_version.definition_json if old_version else latest.definition_json) or {})
+        if not submission.form_version_id:
+            return False
+
+        historical = db.get(
+            FormVersion,
+            submission.form_version_id,
+        )
+
+        if historical is None:
+            raise FormVersionError(
+                "Zgłoszenie nie ma poprawnej historycznej wersji formularza."
+            )
+
+        if historical.form.slug != submission.form_slug:
+            raise FormVersionError(
+                "Wersja zgłoszenia należy do innego formularza."
+            )
+
+        latest = latest or self.resolve_published(
+            db,
+            historical.form_id,
+        )
+
+        if latest is None:
+            return False
+
+        if (
+            latest.status != FORM_VERSION_PUBLISHED
+            or latest.form_id != historical.form_id
+        ):
+            raise FormVersionError(
+                "Nieprawidłowa wersja opublikowanego formularza."
+            )
+
+        if historical.id == latest.id:
+            return False
+
         data = dict(submission.data_json or {})
+        previous_marker = dict(
+            data.get("_form_version_upgrade") or {}
+        )
+
+        if (
+            previous_marker.get("data_only") is True
+            and previous_marker.get("new_version_id") == latest.id
+            and previous_marker.get("old_version_id") == historical.id
+        ):
+            self.refresh_submission_completion(
+                db,
+                submission,
+            )
+            return False
+
         now = datetime.now(timezone.utc)
-        data["_form_version_upgrade"] = {
-            "old_version_id": old_version.id if old_version else None,
+
+        marker = {
+            "old_version_id": historical.id,
             "new_version_id": latest.id,
             "upgraded_at": now.isoformat(),
+            "data_only": True,
             "missing_fields": [],
             "invalid_training_ids": [],
             "missing_documents": [],
         }
+
+        data["_form_version_upgrade"] = marker
         submission.data_json = data
-        submission.form_version_id = latest.id
         submission.updated_at = now
-        db.add(SubmissionWorkflowEvent(
-            submission_id=submission.id,
-            public_submission_id=submission.submission_id,
-            form_slug=submission.form_slug,
-            previous_status=submission.process_status,
-            new_status=submission.process_status,
-            previous_step=old_step,
-            new_step=old_step,
-            actor_id=actor_id,
-            actor_role="admin" if actor_id else "system",
-            source="form_version_upgrade",
-            reason="Zgłoszenie uzgodniono z nową opublikowaną wersją formularza.",
-            side_effects={
-                "old_version_id": old_version.id if old_version else None,
-                "new_version_id": latest.id,
-                "old_version_label": old_version.version_label if old_version else "",
-                "new_version_label": latest.version_label,
-                "workflow_step_preserved": old_step,
-            },
-        ))
+
+        # IMPORTANT:
+        # Do not change submission.form_version_id.
+        # The historical workflow remains assigned.
+
+        db.add(
+            SubmissionWorkflowEvent(
+                submission_id=submission.id,
+                public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug,
+                previous_status=submission.process_status,
+                new_status=submission.process_status,
+                previous_step=submission.workflow_step,
+                new_step=submission.workflow_step,
+                actor_id=actor_id,
+                actor_role="admin" if actor_id else "system",
+                source="form_version_requirements",
+                reason=(
+                    "Zaktualizowano wymagania dotyczące danych "
+                    "bez zmiany historycznej wersji workflow."
+                ),
+                side_effects={
+                    "old_version_id": historical.id,
+                    "new_version_id": latest.id,
+                    "workflow_version_preserved": True,
+                },
+            )
+        )
+
         db.flush()
+
+        self.refresh_submission_completion(
+            db,
+            submission,
+        )
+
         return True
 
     @staticmethod
@@ -663,7 +751,11 @@ class FormVersionService:
         steps = availability.step_ids(normalized)
         current = availability.resolve_step(normalized, current_workflow_step(
             {"workflow_step": step or submission.workflow_step, "data_json": submission.data_json}, normalized))
-        due = steps[:steps.index(current) + 1] if current in steps else [current]
+        due = (
+            steps[:steps.index(current) + 1]
+            if current in steps
+            else (steps or [current])
+        )
         due_fields = []
         for raw in normalized.get("fields") or []:
             if not isinstance(raw, dict) or raw.get("type") == "training_selection":
@@ -817,25 +909,56 @@ class FormVersionService:
                     submission.agreement_filename = ""
         return invalidated
 
+
     def refresh_submission_completion(
         self,
         db,
         submission: FormSubmission,
+        *,
+        values: Mapping | None = None,
+        pending_files: set[str] | None = None,
     ) -> dict:
-        version = self.resolve_for_submission(db, submission)
-        if version is None:
+        historical = self.resolve_for_submission(
+            db,
+            submission,
+        )
+
+        if historical is None:
             raise FormVersionError(
                 "Zgłoszenie nie ma poprawnej wersji formularza."
             )
 
-        definition = version.definition_json or {}
         data = dict(submission.data_json or {})
         marker = dict(data.get("_form_version_upgrade") or {})
+        data_only = marker.get("data_only") is True
+
+        target = historical
+
+        if data_only:
+            target_id = marker.get("new_version_id")
+            candidate = (
+                db.get(FormVersion, target_id)
+                if target_id
+                else None
+            )
+
+            if candidate is not None and candidate.form_id == historical.form_id:
+                target = candidate
+            else:
+                target = (
+                    self.resolve_published(db, historical.form_id)
+                    or historical
+                )
+                marker["new_version_id"] = target.id
+
+        definition = target.definition_json or {}
 
         errors = self.submission_data_errors(
             submission,
             definition,
             db=db,
+            values=values,
+            pending_files=pending_files,
         )
 
         if marker:
@@ -851,12 +974,12 @@ class FormVersionService:
                     old_version.definition_json or {},
                     definition,
                 )
-                changed_field_names = {
-                    *diff.get("added_fields", []),
-                    *diff.get("changed_fields", []),
-                }
+                changed_names = set(
+                    diff.get("added_fields", [])
+                    + diff.get("changed_fields", [])
+                )
             else:
-                changed_field_names = {
+                changed_names = {
                     str(field.get("name") or "")
                     for field in definition.get("fields") or []
                     if isinstance(field, dict) and field.get("name")
@@ -868,9 +991,14 @@ class FormVersionService:
                 submission,
                 definition,
             )
-            values = self.submission_values(
-                submission,
-                validation_definition,
+
+            current_values = (
+                dict(values)
+                if values is not None
+                else self.submission_values(
+                    submission,
+                    validation_definition,
+                )
             )
 
             required_changed_fields = set()
@@ -879,21 +1007,23 @@ class FormVersionService:
                 if not isinstance(field, dict):
                     continue
 
-                field_name = str(field.get("name") or "").strip()
+                name = str(field.get("name") or "").strip()
 
-                if not field_name:
+                if not name or name not in changed_names:
                     continue
 
-                if field_name not in changed_field_names:
-                    continue
-
-                if field.get("type") in {"section", "static_text"}:
+                if field.get("type") in {
+                    "section",
+                    "static_text",
+                    "training_selection",
+                }:
                     continue
 
                 visible_if = field.get("visible_if")
+
                 if visible_if and not evaluate_visible_if(
                     visible_if,
-                    values,
+                    current_values,
                 ):
                     continue
 
@@ -901,41 +1031,61 @@ class FormVersionService:
 
                 required_now = bool(field.get("required")) or bool(
                     required_if
-                    and evaluate_visible_if(required_if, values)
+                    and evaluate_visible_if(
+                        required_if,
+                        current_values,
+                    )
                 )
 
                 if required_now:
-                    required_changed_fields.add(field_name)
+                    required_changed_fields.add(name)
 
             errors = {
-                field_name: message
-                for field_name, message in errors.items()
-                if field_name in required_changed_fields
+                name: message
+                for name, message in errors.items()
+                if name in required_changed_fields
             }
 
-        invalid_training = self.invalid_training_selections(
-            db,
-            submission,
-            definition,
+        # Finished cases must never be blocked by newly added fields.
+        if data_only and not self.is_active_submission(submission):
+            errors = {}
+
+        # Data-only updates must not enforce optional training
+        # changes or unrelated document changes.
+        invalid_training = (
+            []
+            if data_only
+            else self.invalid_training_selections(
+                db,
+                submission,
+                definition,
+            )
+        )
+
+        missing_documents = (
+            []
+            if data_only
+            else list(marker.get("missing_documents") or [])
         )
 
         if marker:
+            if not data_only:
+                missing_documents = [
+                    item
+                    for item in missing_documents
+                    if not self._version_document_present(
+                        db,
+                        submission,
+                        item,
+                    )
+                ]
+
             marker["missing_fields"] = sorted(errors)
             marker["invalid_training_ids"] = invalid_training
-            marker["missing_documents"] = [
-                item
-                for item in marker.get("missing_documents") or []
-                if not self._version_document_present(
-                    db,
-                    submission,
-                    item,
-                )
-            ]
+            marker["missing_documents"] = missing_documents
 
             data["_form_version_upgrade"] = marker
             submission.data_json = data
-
-        missing_documents = marker.get("missing_documents", [])
 
         return {
             "errors": errors,
@@ -947,6 +1097,7 @@ class FormVersionService:
                 and not missing_documents
             ),
         }
+
     @staticmethod
     def _version_document_present(db, submission, item):
         definition_id = str(item.get("document_id") or "")
@@ -959,9 +1110,34 @@ class FormVersionService:
             query = query.where(SubmissionFile.signed.is_(True))
         return db.execute(query.limit(1)).scalar_one_or_none() is not None
 
-    def require_submission_data_complete(self, db, submission: FormSubmission) -> None:
-        if not self.refresh_submission_completion(db, submission)["complete"]:
-            raise FormVersionError("Formularz został zaktualizowany. Przed kontynuowaniem uzupełnij wymagane dane.")
+
+    def require_submission_data_complete(
+        self,
+        db,
+        submission: FormSubmission,
+    ) -> None:
+        marker = (
+            (submission.data_json or {})
+            .get("_form_version_upgrade") or {}
+        )
+
+        if marker.get("data_only") is not True:
+            return
+
+        if not self.is_active_submission(submission):
+            return
+
+        state = self.refresh_submission_completion(
+            db,
+            submission,
+        )
+
+        if state["errors"]:
+            raise FormVersionError(
+                "Formularz został zaktualizowany. "
+                "Przed kontynuowaniem uzupełnij wymagane dane."
+            )
+
 
     def archive(self, db, version: FormVersion) -> None:
         if version.status != FORM_VERSION_PUBLISHED:

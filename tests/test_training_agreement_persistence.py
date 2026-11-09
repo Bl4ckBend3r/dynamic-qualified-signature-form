@@ -38,6 +38,15 @@ class PdfStorage:
     def read_bytes(self, path):
         return self.files[path]
 
+    def write_bytes(self, path, content, content_type=None):
+        self.files[path] = bytes(content)
+
+    def delete(self, path, missing_ok=False):
+        if path in self.files:
+            del self.files[path]
+        elif not missing_ok:
+            raise FileNotFoundError(path)
+
     def get_pdf_bytes(self, slug, filename):
         for path, payload in self.files.items():
             if path.endswith(f"/{filename}") and f"/{slug}/pdf/" in path:
@@ -220,6 +229,34 @@ def test_duplicate_training_names_get_unique_filenames_and_numbers(tmp_path):
         assert [item.agreement_number for item in files] == [item["number"] for item in agreements]
     persisted = json.loads(repository.get_by_id("public-uuid")["training_agreements"])
     assert persisted == agreements
+
+
+def test_training_agreement_metadata_failure_removes_written_pdf(tmp_path, monkeypatch):
+    service, _, session_factory, storage, _, submission = build_service(
+        tmp_path,
+        [{"id": "excel", "name": "Excel", "price": "1200.00"}],
+    )
+    monkeypatch.setattr(
+        service.submission_document_service,
+        "record_generated_document",
+        lambda **_kwargs: False,
+    )
+    app = Flask(__name__)
+    app.config.update(TEMP_DIR=tmp_path, NEXTCLOUD_FORMS_DIR="Formularze", NEXTCLOUD_OUTPUT_DIR="output")
+
+    with app.test_request_context("/"), pytest.raises(RuntimeError, match="metadanych"):
+        service.generate_documents_for_collection(
+            submission,
+            agreement_config(),
+            "training_agreement",
+            "selected_trainings",
+            "training",
+            context_extra={"generated_date": "2026-07-16"},
+        )
+
+    assert storage.files == {}
+    with session_factory() as db:
+        assert db.query(SubmissionFile).count() == 0
 
 
 def test_regeneration_does_not_overwrite_existing_agreement_pdf(tmp_path):

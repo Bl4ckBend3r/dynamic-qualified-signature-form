@@ -1,0 +1,5 @@
+.env
+.env.form-share-key.lock
+.venv
+.git
+__pycache__

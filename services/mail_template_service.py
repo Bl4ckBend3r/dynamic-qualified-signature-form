@@ -14,7 +14,9 @@ from typing import Any
 from jinja2 import ChainableUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
+from form_loader import evaluate_scoped_condition
 from services.status_catalog import get_status_label
+from services.form_option_service import option_label_for_value
 from services.workflow_service import workflow_status_label
 
 
@@ -576,7 +578,11 @@ class _MailUndefined(ChainableUndefined):
 
 
 def _jinja_env(*, escape_html: bool = False) -> SandboxedEnvironment:
-    return SandboxedEnvironment(autoescape=escape_html, undefined=_MailUndefined)
+    return SandboxedEnvironment(
+        autoescape=escape_html,
+        undefined=_MailUndefined,
+        finalize=lambda value: "" if value is None else value,
+    )
 
 
 def render_template_text(raw_text: str, context: dict[str, Any], *, escape_html: bool = False) -> str:
@@ -608,6 +614,65 @@ def build_mail_context(form, submission, files: list | None = None, extra: dict 
     if submission:
         if participant is None:
             context.update(submission.data_json or {})
+            version = getattr(submission, "form_version", None)
+            definition = (version.definition_json if version is not None
+                          and version.form_id == getattr(form, "id", None)
+                          else getattr(form, "definition_json", None)) or {}
+            fields = [field for field in definition.get("fields") or [] if isinstance(field, dict)]
+            if version is None:
+                defined_names = {str(field.get("name") or "") for field in fields}
+                fields.extend({"name": item.name, "type": item.type, "options": item.options}
+                    for item in getattr(form, "fields", []) or [] if item.active and item.name not in defined_names)
+            field_names = {str(field.get("name") or "") for field in fields}
+            for field in fields:
+                name = str(field.get("name") or "")
+                if not name or f"{name}_text" in field_names:
+                    continue
+                if field.get("visible_if") and not evaluate_scoped_condition(
+                        field["visible_if"], root_data=submission.data_json or {},
+                        current_data=submission.data_json or {}):
+                    continue
+                if field.get("type") != "repeatable_group":
+                    value = context.get(name)
+                    if isinstance(value, (list, tuple, set)):
+                        context.setdefault(f"{name}_text", ", ".join(
+                            option_label_for_value(field.get("options"), item)
+                            for item in value if item is not None and str(item).strip()))
+                    elif field.get("type") == "checkbox" and isinstance(value, bool):
+                        context.setdefault(f"{name}_text", "Tak" if value else "Nie")
+                    continue
+                records = context.get(name)
+                if not isinstance(records, list):
+                    continue
+                lines = []
+                for index, record in enumerate(records, 1):
+                    values = record.get("values", record) if isinstance(record, dict) else {}
+                    if not isinstance(values, dict):
+                        continue
+                    parts = []
+                    for child in field.get("fields") or []:
+                        if not isinstance(child, dict) or child.get("name") not in values:
+                            continue
+                        if str(child.get("data_classification") or child.get("sensitivity") or "normal") != "normal":
+                            continue
+                        if child.get("visible_if") and not evaluate_scoped_condition(
+                                child["visible_if"], root_data=submission.data_json or {}, current_data=values):
+                            continue
+                        value = values[child["name"]]
+                        if value in (None, ""):
+                            continue
+                        if isinstance(value, (list, tuple, set)):
+                            display = ", ".join(option_label_for_value(child.get("options"), item)
+                                for item in value if item is not None and str(item).strip())
+                        elif isinstance(value, bool):
+                            display = "Tak" if value else "Nie"
+                        else:
+                            display = option_label_for_value(child.get("options"), value) if child.get("options") else str(value)
+                        if display:
+                            parts.append(f"{child.get('label') or child['name']}: {display}")
+                    if parts:
+                        lines.append(f"{index}. " + ", ".join(parts))
+                context[f"{name}_text"] = "\n".join(lines)
             dynamic_contact = {'imiona', 'imie', 'nazwisko', 'email', 'phone', 'telefon'}
             for column in submission.__table__.columns:
                 value = getattr(submission, column.name)
@@ -663,7 +728,7 @@ def build_mail_context(form, submission, files: list | None = None, extra: dict 
 
 def _mail_document_names(context: dict[str, Any]) -> list[str]:
     explicit = context.get("mail_documents")
-    return [str(item) for item in explicit if str(item).strip()] if isinstance(explicit, (list, tuple)) else []
+    return [str(item) for item in explicit if item is not None and str(item).strip()] if isinstance(explicit, (list, tuple)) else []
 
 
 def render_platform_mail_html(
@@ -674,32 +739,49 @@ def render_platform_mail_html(
 ) -> str:
     mail_layout = {**MAIL_LAYOUT, **(layout or {})}
     title = render_template_text(getattr(template, "content_title", "") or getattr(template, "name", "") or "Wiadomosc", context)
-    raw_body_html = (
-        getattr(template, "content_html", "")
-        or getattr(template, "body_html", "")
-        or getattr(template, "html_body", "")
-        or getattr(template, "content_intro", "")
-    )
-    body_html = sanitize_content_html(render_template_text(raw_body_html or "", context, escape_html=True))
+    body_html = ""
+    for source in (
+        getattr(template, "content_html", ""), getattr(template, "body_html", ""),
+        getattr(template, "html_body", ""), getattr(template, "content_intro", ""),
+    ):
+        candidate = sanitize_content_html(render_template_text(source or "", context, escape_html=True))
+        if html_to_text(candidate).strip():
+            body_html = candidate
+            break
     raw_instruction_html = getattr(template, "instruction_html", "") or ""
     raw_instruction_text = getattr(template, "instruction_text", "") or ""
+    formatted_instruction = build_instruction_html(raw_instruction_text)
+    if not formatted_instruction and raw_instruction_text.strip().rstrip(":").lower() != "instrukcja":
+        formatted_instruction = html.escape(raw_instruction_text).replace("\n", "<br>")
     instruction_html = sanitize_content_html(render_template_text(
-        raw_instruction_html or build_instruction_html(raw_instruction_text), context, escape_html=True))
+        raw_instruction_html, context, escape_html=True))
+    if not html_to_text(instruction_html).strip():
+        instruction_html = sanitize_content_html(render_template_text(
+            formatted_instruction, context, escape_html=True))
+    instruction_heading = (
+        "" if re.match(r"(?is)^\s*<h[1-4]\b[^>]*>\s*Instrukcja\s*</h[1-4]>", instruction_html)
+        else '<h2 class="platform-instruction-title" style="margin:0 0 8px;font-size:20px;line-height:1.3;">Instrukcja</h2>'
+    )
     instruction_section = (
-        f"""<tr><td class="platform-instruction-title" style="padding:0 24px 16px;color:{mail_layout["primary_color"]};font-size:24px;font-weight:700;line-height:1.4;">Instrukcja</td></tr>
-<tr><td style="padding:0 24px 16px;">{instruction_html}</td></tr>"""
-        if instruction_html.strip()
+        f'<tr><td style="padding:0 24px 16px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="border-collapse:collapse;background:{mail_layout["light_panel_background"]};'
+        f'border-left:3px solid {mail_layout["accent_color"]};">'
+        f'<tr><td style="padding:16px 20px;color:{mail_layout["primary_color"]};'
+        f'font-size:16px;line-height:1.5;word-break:break-word;">'
+        f'{instruction_heading}'
+        f'{instruction_html}</td></tr></table></td></tr>'
+        if html_to_text(instruction_html).strip()
         else ""
     )
-    instruction_media_css = "  .platform-instruction-title { font-size:20px !important; }\n" if instruction_section else ""
     footer_note = sanitize_content_html(render_template_text(
         getattr(template, "footer_note", "") or "", context, escape_html=True))
     footer_note_section = (
-        '<tr><td style="padding:0 24px 16px;">'
+        '<tr class="platform-footer-note"><td style="padding:0 24px 16px;">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;">'
         f'<tr><td style="padding:24px;color:#ffffff;font-size:16px;line-height:1.4;">{footer_note}</td></tr></table>'
         '</td></tr>'
-        if footer_note.strip()
+        if html_to_text(footer_note).strip()
         else ""
     )
     layout_footer = sanitize_content_html(render_template_text(
@@ -765,13 +847,26 @@ def render_platform_mail_html(
         ("Formularz", context.get("form_name", "")),
         ("Data", context.get("submitted_at", "")),
     ]
-    info_rows = [(str(label), str(value)) for label, value in info_rows if value not in (None, "")]
+    info_rows = [(str(label), str(value)) for label, value in info_rows if label not in (None, "") and value not in (None, "")]
     info_html = "".join(
         f'<tr><td style="padding:4px 0;color:#ffffff;font-size:16px;line-height:1.4;word-break:break-word;">'
         f'<strong>{html.escape(label)}:</strong> '
         f'<strong style="color:{mail_layout["accent_color"]};">{html.escape(value)}</strong>'
         f'</td></tr>'
         for label, value in info_rows
+    )
+    info_section = (
+        f'<tr class="platform-mail-details"><td style="padding:0 24px 16px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{info_html}</table>'
+        f'</td></tr></table></td></tr>'
+        if info_html else ""
+    )
+    body_section = (
+        f'<tr class="platform-mail-body"><td style="padding:0 24px 16px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["light_panel_background"]};border:1px solid {mail_layout["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{mail_layout["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>'
+        f'</td></tr>'
+        if html_to_text(body_html).strip() else ""
     )
     documents = _mail_document_names(context)
     documents_section = (
@@ -801,7 +896,6 @@ def render_platform_mail_html(
 <style>
 @media(max-width:550px) {{
   .platform-title {{ font-size:29.4px !important; }}
-{instruction_media_css.rstrip()}
 }}
 </style>
 </head>
@@ -812,16 +906,10 @@ def render_platform_mail_html(
     {header_logo_section}
     {platform_name_section}
 <tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;"><h1 style="margin:0;color:{mail_layout["primary_color"]};font-size:30px;font-weight:700;line-height:1.3;">{html.escape(title)}</h1></td></tr>
-<tr><td style="padding:0 24px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["primary_color"]};border-radius:20px;"><tr><td style="padding:24px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{info_html}</table>
-</td></tr></table>
-    </td></tr>
     {before_content_logo_section}
-    <tr><td style="padding:0 24px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{mail_layout["light_panel_background"]};border:1px solid {mail_layout["border_soft"]};border-radius:20px;"><tr><td style="padding:24px;color:{mail_layout["primary_color"]};font-size:16px;line-height:1.4;">{body_html}</td></tr></table>
-    </td></tr>
+    {body_section}
     {after_content_logo_section}
+    {info_section}
     {instruction_section}
     {documents_section}
     {action_section}
@@ -837,23 +925,27 @@ def render_platform_mail_html(
 def render_platform_mail_text(template, context: dict[str, Any], *, footer_text: str = "") -> str:
     title = html_to_text(render_template_text(
         getattr(template, "content_title", "") or getattr(template, "name", "") or "Wiadomosc", context))
-    raw_text = (
-        getattr(template, "body_text", "")
-        or getattr(template, "text_body", "")
-        or getattr(template, "content_text", "")
-    )
-    raw_body = (raw_text or getattr(template, "content_intro", "")
-        or getattr(template, "content_html", "")
-        or getattr(template, "body_html", "")
-        or getattr(template, "html_body", "")
-    )
-    body = render_template_text(raw_body or "", context)
-    body = html_to_text(body, preserve_links=True)
-    instruction = html_to_text(render_template_text(
-        getattr(template, "instruction_text", "") or html_to_text(
-            getattr(template, "instruction_html", "") or "", preserve_links=True),
-        context,
-    ), preserve_links=True)
+    body = ""
+    for source in (
+        getattr(template, "body_text", ""), getattr(template, "text_body", ""),
+        getattr(template, "content_text", ""), getattr(template, "content_intro", ""),
+        getattr(template, "content_html", ""), getattr(template, "body_html", ""),
+        getattr(template, "html_body", ""),
+    ):
+        candidate = html_to_text(render_template_text(source or "", context), preserve_links=True)
+        if candidate.strip():
+            body = candidate
+            break
+    instruction = ""
+    for source in (getattr(template, "instruction_text", ""), getattr(template, "instruction_html", "")):
+        candidate = html_to_text(render_template_text(source or "", context), preserve_links=True)
+        if candidate.strip():
+            instruction = candidate
+            break
+    instruction_text = (
+        instruction if instruction.splitlines()[0].strip().rstrip(":").casefold() == "instrukcja"
+        else f"Instrukcja:\n{instruction}"
+    ) if instruction else ""
     footer = html_to_text(render_template_text(
         getattr(template, "footer_note", "") or "", context), preserve_links=True)
     details = context.get("mail_details") or [
@@ -863,8 +955,8 @@ def render_platform_mail_text(template, context: dict[str, Any], *, footer_text:
     ]
     details_text = "Dane zgłoszenia:\n" + "\n".join(
         f"{html_to_text(str(label))}: {html_to_text(str(value), preserve_links=True)}"
-        for label, value in details if value not in (None, "")
-    ) if any(value not in (None, "") for _, value in details) else ""
+        for label, value in details if label not in (None, "") and value not in (None, "")
+    ) if any(label not in (None, "") and value not in (None, "") for label, value in details) else ""
     documents = _mail_document_names(context)
     documents_text = "Dokumenty:\n" + "\n".join(
         f"- {html_to_text(str(item))}" for item in documents if str(item).strip()) if documents else ""
@@ -872,7 +964,7 @@ def render_platform_mail_text(template, context: dict[str, Any], *, footer_text:
     action_url = str(context.get("mail_action_url") or "").strip()
     action_url = action_url if action_url.lower().startswith(("https://", "http://")) else ""
     action = "\n".join(part for part in (action_text, action_url) if part)
-    parts = [title, body, details_text, documents_text, instruction,
+    parts = [title, body, details_text, instruction_text, documents_text,
              f"Dalsze działanie:\n{action}" if action else "", footer,
              f"--------------------------------\n{footer_text}" if footer_text.strip() else ""]
     return "\n\n".join(part.strip() for part in parts if part and part.strip())

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -108,6 +108,28 @@ def test_attendance_token_is_hashed_and_confirmation_is_idempotent():
         assert db.execute(select(TrainingAttendanceRecord).where(TrainingAttendanceRecord.session_id == session.id)).scalars().all() == [record]
         assert record.status == "present"
         assert record.confirmation_method == "email_link"
+
+
+def test_archived_submission_blocks_attendance_and_survey_tokens():
+    with _db() as db:
+        form, _version, submission, _excel, _python = _seed(db)
+        service = TrainingManagementService()
+        attendance = service.create_attendance_session(
+            db, form, "excel", name="Excel", session_date=date(2026, 10, 12), actor_id=None
+        )
+        attendance.status = "active"
+        survey = service.create_survey(
+            db, form, "excel", name="Ankieta", description="", anonymous=True,
+            questions=[{"text": "Ocena", "type": "scale"}], actor_id=None,
+        )
+        survey.status = "active"
+        db.flush()
+        attendance_token = service.attendance_links(db, attendance)[0][2]
+        survey_token = service.survey_links(db, form, survey)[0][2]
+        submission.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+        assert service.confirm_attendance(db, attendance_token) is None
+        assert service.resolve_survey_invitation(db, survey_token) is None
 
 
 def test_survey_invitation_is_hashed_and_response_updates_same_record():

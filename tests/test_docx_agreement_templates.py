@@ -134,6 +134,21 @@ def test_upload_marks_unknown_variables_without_crashing_and_supports_replace_do
     assert storage.files == {}
 
 
+def test_replacing_docx_keeps_bytes_referenced_by_uncommitted_old_metadata():
+    storage = _MemoryStorage()
+    service = AgreementDocxTemplateService(storage)
+    old_content = _docx_bytes(lambda document: document.add_paragraph("Stary szablon"))
+    new_content = _docx_bytes(lambda document: document.add_paragraph("Nowy szablon"))
+    params = {"form_slug": "sample", "filename": "umowa.docx", "fields": [], "uploaded_by_user_id": 7}
+
+    old_metadata = service.upload(content=old_content, **params)
+    new_metadata = service.upload(content=new_content, **params)
+
+    assert old_metadata["storage_path"] != new_metadata["storage_path"]
+    assert service.download(old_metadata) == old_content
+    assert service.download(new_metadata) == new_content
+
+
 def test_preview_reloads_current_docx_bytes_from_storage():
     storage = _MemoryStorage()
     service = AgreementDocxTemplateService(storage)

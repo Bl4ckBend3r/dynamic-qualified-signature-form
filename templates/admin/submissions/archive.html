@@ -1,0 +1,66 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h1>Archiwum zgłoszeń</h1>
+<p>Zgłoszenia i powiązane dokumenty pozostają zachowane. Uprawniony administrator może przywrócić zgłoszenie.</p>
+{% if g.admin_user.role == 'super_admin' and submissions %}
+<form id="archive-permanent-delete-form" method="post" action="{{ url_for('admin.submissions_permanent_delete_archive') }}" data-admin-confirm-message="Czy na pewno chcesz trwale usunąć zaznaczone zgłoszenia? Tej operacji nie można cofnąć.">
+  <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+  <input type="hidden" name="return_to" value="archive">
+</form>
+<button class="admin-button-danger compact" type="submit" form="archive-permanent-delete-form" data-archive-delete-button disabled>Usuń zaznaczone</button>
+{% endif %}
+<table class="admin-table">
+  <thead><tr>{% if g.admin_user.role == 'super_admin' %}<th><input type="checkbox" data-archive-select-all aria-label="Zaznacz wszystkie zgłoszenia na stronie"></th>{% endif %}<th>ID</th><th>Formularz</th><th>Osoba</th><th>Data archiwizacji</th><th>ID administratora</th><th>Akcje</th></tr></thead>
+  <tbody>
+  {% for submission in submissions %}
+    {% set form = form_by_slug.get(submission.form_slug) %}
+    <tr>
+      {% if g.admin_user.role == 'super_admin' %}<td><input type="checkbox" class="archive-submission-check" value="{{ submission.id }}" aria-label="Zaznacz zgłoszenie {{ submission.submission_id }}"></td>{% endif %}
+      <td>{% if form %}<a href="{{ url_for('admin.submission_archive_detail', form_id=form.id, submission_pk=submission.id) }}">{{ submission.submission_id }}</a>{% else %}{{ submission.submission_id }}{% endif %}</td>
+      <td>{{ submission.form_name }}</td>
+      <td>{{ submission.imiona }} {{ submission.nazwisko }}</td>
+      <td>{{ submission.deleted_at|business_datetime }}</td>
+      <td>{{ submission.deleted_by_user_id }}</td>
+      <td>{% if form and form.id in restorable_form_ids %}<form method="post" action="{{ url_for('admin.submission_restore', form_id=form.id, submission_pk=submission.id) }}"><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-secondary compact" type="submit">Przywróć</button></form>{% endif %}
+      {% if form and g.admin_user.role == 'super_admin' %}<form method="post" action="{{ url_for('admin.submission_permanent_delete', form_id=form.id, submission_pk=submission.id) }}" data-admin-confirm-message="Czy na pewno chcesz trwale usunąć to zgłoszenie? Tej operacji nie można cofnąć."><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"><button class="admin-button-danger compact" type="submit">Usuń trwale</button></form>{% endif %}</td>
+    </tr>
+  {% else %}<tr><td colspan="{{ 7 if g.admin_user.role == 'super_admin' else 6 }}">Brak archiwalnych zgłoszeń.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% if pagination_urls.previous %}<a href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}
+{% if pagination_urls.next %}<a href="{{ pagination_urls.next }}">Następna</a>{% endif %}
+{% if g.admin_user.role == 'super_admin' %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const form = document.getElementById("archive-permanent-delete-form");
+  const button = document.querySelector("[data-archive-delete-button]");
+  const checks = Array.from(document.querySelectorAll(".archive-submission-check"));
+  const selectAll = document.querySelector("[data-archive-select-all]");
+  if (!form || !button) return;
+  function sync() {
+    const selected = checks.filter(item => item.checked);
+    button.disabled = !selected.length;
+    form.querySelectorAll('input[name="submission_pk_ids"]').forEach(item => item.remove());
+    selected.forEach(item => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "submission_pk_ids";
+      input.value = item.value;
+      form.appendChild(input);
+    });
+    form.dataset.adminConfirmMessage = selected.length === 1
+      ? "Czy na pewno chcesz trwale usunąć to zgłoszenie? Tej operacji nie można cofnąć."
+      : `Czy na pewno chcesz trwale usunąć ${selected.length} zaznaczone zgłoszenia? Tej operacji nie można cofnąć.`;
+    if (selectAll) {
+      selectAll.checked = checks.length > 0 && selected.length === checks.length;
+      selectAll.indeterminate = selected.length > 0 && selected.length < checks.length;
+    }
+  }
+  selectAll?.addEventListener("change", () => { checks.forEach(item => { item.checked = selectAll.checked; }); sync(); });
+  checks.forEach(item => item.addEventListener("change", sync));
+  form.addEventListener("submit", event => { if (button.disabled) event.preventDefault(); });
+  sync();
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -10,7 +10,19 @@
                             {% for decision in available_decisions %}<option value="{{ decision.code }}">{{ decision.label }}</option>{% endfor %}
                         </select>
                     </label>
-                    <label><span>Uzasadnienie decyzji negatywnej</span>
+                    {% if conditional_missing %}
+                    <fieldset><legend>Warunkowe zatwierdzenie</legend>
+                        <p>Braki lub błędy wymagające uzupełnienia:</p>
+                        <ul>{% for field, error in conditional_missing.items() %}<li>{{ field }}: {{ error }}</li>{% endfor %}</ul>
+                        <label><input type="checkbox" name="conditional_approval" value="1"> Zatwierdź warunkowo wybraną decyzję pozytywną</label>
+                        <label><span>Uzupełnienie przed wejściem w etap</span>
+                            <select name="conditional_deadline"><option value="">Wybierz etap</option>
+                            {% for step in conditional_steps %}<option value="{{ step.id }}">{{ step.admin_label or step.id }}</option>{% endfor %}</select>
+                        </label>
+                        <p>Wymagane checkboxy i błędy poprawności nie podlegają odroczeniu. Dane należy uzupełnić przed etapem dokumentowym.</p>
+                    </fieldset>
+                    {% endif %}
+                    <label><span>Uzasadnienie decyzji (obowiązkowe przy zatwierdzeniu warunkowym)</span>
                         <textarea name="officer_decision_reason" rows="3"></textarea>
                     </label>
                     <button class="admin-button" type="submit">Zapisz decyzję</button>
@@ -34,11 +46,9 @@
         {% for event in version_upgrade_events %}
         <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>
         {% endfor %}
-        {% if version_upgrade_state.get('missing_fields') %}
-        <p class="admin-alert admin-alert-warning">
-            Zgłoszenie wymaga uzupełnienia obowiązkowych danych przez uczestnika.
-        </p>
-        {% endif %}
+        {% if version_upgrade_state.get('missing_fields') or version_upgrade_state.get('invalid_training_ids') %}<p class="admin-alert admin-alert-warning">Zgłoszenie wymaga uzupełnienia danych przez uczestnika.</p>{% endif %}
+        {% set condition = (submission.data_json or {}).get('_conditional_approval', {}) %}
+        {% if condition %}<p class="admin-alert admin-alert-warning">Zatwierdzenie warunkowe: {{ 'rozliczone' if condition.status == 'completed' else 'oczekuje na uzupełnienie' }}. Etap graniczny: {{ condition.deadline_step }}.</p>{% endif %}
         <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>
         {% for section in workflow_view.sections %}{% if section.is_current %}<a href="#workflow-step-{{ loop.index }}">Przejdź do aktualnego etapu</a>{% endif %}{% endfor %}</div>
     </div>
@@ -53,6 +63,32 @@
         </div>
     </div>
 </header>
+{% set pdf_retry_state = submission.data_json.get('_pdf_generation_retry') if submission.data_json else none %}
+{% if submission.process_status == 'PDF_GENERATION_FAILED' or pdf_retry_state %}
+<div class="admin-alert admin-alert-warning">
+    <strong>Przygotowanie dokumentu PDF lub wznowienie procesu wymaga ponowienia.</strong>
+    Dane zgłoszenia i załączniki zostały zachowane, a dostęp do podpisywania pozostaje wstrzymany.
+    {% if can_manage_documents %}
+    <form method="post" action="{{ url_for('admin.submission_pdf_retry', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <button class="admin-button" type="submit">Ponów generowanie PDF</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+{% set audit_pending = submission.data_json.get('_audit_pending') if submission.data_json else none %}
+{% if audit_pending %}
+<div class="admin-alert admin-alert-danger">
+    <strong>Obowiązkowy audyt tej operacji nie został jeszcze zapisany.</strong>
+    Kolejne zależne operacje pozostają zablokowane do czasu uzgodnienia wpisu z Nextcloud.
+    {% if can_retry_required_audit %}
+    <form method="post" action="{{ url_for('admin.submission_audit_retry', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
+        <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+        <button class="admin-button" type="submit">Ponów zapis audytu</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
 {% if read_only %}<div class="admin-alert admin-alert-info"><strong>Ograniczony zakres działań.</strong> Dostępne operacje wynikają z ról przypisanych do tego formularza.</div>{% endif %}
 <div class="admin-submission-layout">
 <div class="admin-submission-main">

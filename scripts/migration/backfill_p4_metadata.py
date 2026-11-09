@@ -225,6 +225,22 @@ class BackfillP4Metadata:
                     generated_at=created_at,
                 )
             )
+        else:
+            data_json = submission.data_json if isinstance(submission.data_json, dict) else {}
+            retry_state = data_json.get("_pdf_generation_retry")
+            retry_filename = str(
+                retry_state.get("pdf_filename") if isinstance(retry_state, dict) else ""
+            ).strip()
+            if retry_filename:
+                candidates.append(
+                    DocumentCandidate(
+                        document_id="form_submission",
+                        document_type=SubmissionDocumentType.FORM_PDF,
+                        filename=retry_filename,
+                        storage_document_type="",
+                        generated_at=updated_at or created_at,
+                    )
+                )
         if submission.signed_pdf_filename:
             candidates.append(
                 DocumentCandidate(

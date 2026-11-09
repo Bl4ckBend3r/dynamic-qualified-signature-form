@@ -73,7 +73,7 @@
 .admin-body
   :is(
     .admin-badge-muted,
-    .admin-form-tab:hover,
+    .admin-form-tab:hover:not(.is-active):not([aria-selected="true"]),
     .admin-form-header-preview__empty,
     .admin-mail-preview,
     .mail-footer-example__footer,

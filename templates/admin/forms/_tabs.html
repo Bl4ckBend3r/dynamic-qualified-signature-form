@@ -4,6 +4,7 @@
     <a role="tab"
        data-form-external-tab
        href="{{ url_for('admin.form_versions', form_id=form.id) }}"
+       aria-selected="false"
        class="admin-form-tab">
         Wersje
     </a>
@@ -11,6 +12,7 @@
     <a role="tab"
        data-form-external-tab
        href="{{ url_for('admin.form_checklists', form_id=form.id) }}"
+       aria-selected="false"
        class="admin-form-tab">
         Checklisty weryfikacyjne
     </a>
@@ -28,6 +30,7 @@
        data-form-external-tab
        href="{% if editor_version_id %}{{ url_for('admin.form_fields', form_id=form.id, form_version_id=editor_version_id) }}{% else %}{{ url_for('admin.form_fields', form_id=form.id) }}{% endif %}"
        aria-selected="{{ 'true' if active_tab == 'fields' else 'false' }}"
+       {% if active_tab == 'fields' %}aria-current="page"{% endif %}
        class="admin-form-tab{% if active_tab == 'fields' %} is-active{% endif %}">
         Pola formularza
     </a>
@@ -124,6 +127,32 @@
         </button>
     {% endif %}
 </nav>
+
+<script>
+(() => {
+    const nav = document.querySelector("[data-form-tabs-nav]");
+    if (!nav) return;
+    const reveal = (tab) => {
+        if (!tab) return;
+        const navRect = nav.getBoundingClientRect();
+        const tabRect = tab.getBoundingClientRect();
+        const inset = 12;
+        if (tabRect.left < navRect.left + inset) {
+            nav.scrollLeft += tabRect.left - navRect.left - inset;
+        } else if (tabRect.right > navRect.right - inset) {
+            nav.scrollLeft += tabRect.right - navRect.right + inset;
+        }
+    };
+    const revealSelected = () => reveal(nav.querySelector('[aria-selected="true"]'));
+    requestAnimationFrame(revealSelected);
+    new MutationObserver(revealSelected).observe(nav, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-selected"],
+    });
+    nav.addEventListener("focusin", (event) => reveal(event.target.closest(".admin-form-tab")));
+})();
+</script>
 
 <label class="admin-form-tab-mobile">
     <span>Obszar konfiguracji</span>

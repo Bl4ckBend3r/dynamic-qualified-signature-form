@@ -7,10 +7,15 @@ services:
       - |
         set -e
         alembic upgrade head
+        python -m scripts.deployment.init_form_share_key --env-file /deployment/.env
         python -m scripts.deployment.deploy_form_versions
     restart: "no"
     env_file:
       - .env
+    environment:
+      FORM_SHARE_TOKEN_ENCRYPTION_KEY: ${FORM_SHARE_TOKEN_ENCRYPTION_KEY:-}
+    volumes:
+      - ./:/deployment
     depends_on:
       postgres:
         condition: service_healthy
@@ -27,6 +32,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
+      - ./.env:/app/.env:ro
       - formularze_tmp:/tmp/formularze
 
   postgres:

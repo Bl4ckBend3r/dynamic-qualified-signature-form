@@ -95,6 +95,11 @@ from services.workflow_config_service import (
 )
 from services.decision_definition_service import DecisionDefinitionError
 from pdf_generator import render_document_html
+from services.form_access_service import (
+    encrypt_share_token,
+    decrypt_share_token,
+    verify_share_token,
+)
 
 from . import (
     ROLE_SUPER_ADMIN,
@@ -2710,8 +2715,10 @@ def form_share_link_regenerate(form_id: int):
             ), 400
 
         token, token_hash = generate_share_token()
+        encrypted_token = encrypt_share_token(token)
 
         form.share_token_hash = token_hash
+        form.share_token_encrypted = encrypted_token
 
         db.commit()
 
@@ -2729,6 +2736,79 @@ def form_share_link_regenerate(form_id: int):
         }
     )
 
+@bp.get("/forms/<int:form_id>/share-link/current")
+@login_required
+def form_share_link_current(form_id: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+
+        if not (form.is_active and form.is_public and not form.is_listed):
+            return jsonify(ok=False, error="Link niedostępny."), 400
+
+        if not form.share_token_encrypted:
+            return jsonify(
+                ok=False,
+                needs_import=bool(form.share_token_hash),
+                error="Brak zapisanego aktualnego linku.",
+            ), 409
+
+        try:
+            token = decrypt_share_token(form.share_token_encrypted)
+        except (RuntimeError, ValueError):
+            return jsonify(
+                ok=False,
+                error="Nie można odczytać zaszyfrowanego linku.",
+            ), 503
+
+        if not verify_share_token(form.share_token_hash, token):
+            return jsonify(ok=False, error="Niezgodny token dostępu."), 409
+
+        url = url_for(
+            "public_forms.form_page",
+            slug=form.slug,
+            access=token,
+            _external=True,
+        )
+
+    response = jsonify(ok=True, url=url)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+@bp.post("/forms/<int:form_id>/share-link/restore")
+@login_required
+def form_share_link_restore(form_id: int):
+    from urllib.parse import parse_qs, urlsplit
+
+    existing_link = (request.form.get("existing_link") or "").strip()
+    parsed = urlsplit(existing_link)
+    tokens = parse_qs(parsed.query).get("access", [])
+
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, manage=True)
+
+        if not (form.is_active and form.is_public and not form.is_listed):
+            return jsonify(ok=False, error="Link niedostępny."), 400
+
+        expected_path = url_for(
+            "public_forms.form_page",
+            slug=form.slug,
+        )
+
+        if (
+            parsed.scheme not in ("http", "https")
+            or parsed.path != expected_path
+            or len(tokens) != 1
+            or not verify_share_token(form.share_token_hash, tokens[0])
+        ):
+            return jsonify(
+                ok=False,
+                error="Podany link nie odpowiada aktualnemu tokenowi formularza.",
+            ), 400
+
+        form.share_token_encrypted = encrypt_share_token(tokens[0])
+        db.commit()
+
+    return jsonify(ok=True)
 
 @bp.post("/forms/<int:form_id>/toggle")
 @login_required

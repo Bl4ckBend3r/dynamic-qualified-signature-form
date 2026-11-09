@@ -805,6 +805,7 @@ class Form(Base):
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_listed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     share_token_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    share_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     training_selection_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     label_text: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     label_variant: Mapped[str] = mapped_column(String(64), default="project", nullable=False)

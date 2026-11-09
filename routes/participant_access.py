@@ -114,6 +114,7 @@ def resolve_participant_submission_access(
     return ParticipantSubmissionAccess(submission=submission, credential=credential)
 
 
+
 def require_participant_submission_access(
     submission_id: str,
     *,
@@ -122,29 +123,80 @@ def require_participant_submission_access(
     submission_loader: Callable[[str], dict | None] | None = None,
     allow_incomplete: bool = False,
 ) -> ParticipantSubmissionAccess:
+    from flask import redirect, url_for
+    from werkzeug.exceptions import HTTPException
+
     access = resolve_participant_submission_access(
         submission_id,
         slug=slug,
         submission=submission,
         submission_loader=submission_loader,
     )
+
     if access is None:
         abort(404)
-    if request.method == "POST" and not allow_incomplete:
-        services = current_app.extensions["services"]
-        session_factory = getattr(getattr(services, "submission_repository", None), "session_factory", None)
-        if current_app.config.get("DATABASE_URL") and session_factory and hasattr(services, "form_version_service"):
-            with session_factory.begin() as db:
-                record = db.execute(select(FormSubmission).where(
+
+    if allow_incomplete:
+        return access
+
+    services = current_app.extensions["services"]
+    session_factory = getattr(
+        getattr(services, "submission_repository", None),
+        "session_factory",
+        None,
+    )
+
+    if (
+        current_app.config.get("DATABASE_URL")
+        and session_factory
+        and hasattr(services, "form_version_service")
+    ):
+        redirect_required = False
+        actual_slug = str(
+            access.submission.get("form_slug") or slug or ""
+        )
+
+        with session_factory.begin() as db:
+            record = db.execute(
+                select(FormSubmission).where(
                     FormSubmission.submission_id == submission_id,
-                    FormSubmission.form_slug == str(access.submission.get("form_slug") or ""),
-                ).with_for_update()).scalar_one_or_none()
-                if record is None:
-                    abort(404)
-                try:
-                    services.form_version_service.require_submission_data_complete(db, record)
-                except FormVersionError as exc:
-                    abort(409, description=str(exc))
+                    FormSubmission.form_slug == actual_slug,
+                ).with_for_update()
+            ).scalar_one_or_none()
+
+            if record is None:
+                abort(404)
+
+            service = services.form_version_service
+            marker = (
+                (record.data_json or {})
+                .get("_form_version_upgrade") or {}
+            )
+
+            if (
+                marker.get("data_only") is True
+                and service.is_active_submission(record)
+            ):
+                state = service.refresh_submission_completion(
+                    db,
+                    record,
+                )
+
+                redirect_required = bool(state["errors"])
+
+        if redirect_required:
+            target = url_for(
+                "public_forms.complete_version_upgrade",
+                slug=actual_slug,
+                submission_id=submission_id,
+                token=access.credential,
+            )
+
+            # Redirect instead of returning an HTTP 409 error.
+            raise HTTPException(
+                response=redirect(target, code=303)
+            )
+
     return access
 
 

@@ -878,10 +878,41 @@ def complete_version_upgrade(slug: str, submission_id: str):
         ).with_for_update()).scalar_one_or_none()
         if not form or not submission or not services.form_version_service.is_active_submission(submission):
             abort(404)
-        version = services.form_version_service.resolve_for_submission(db, submission)
+
+        service = services.form_version_service
+
+        historical = service.resolve_for_submission(
+            db,
+            submission,
+        )
+
+        if historical is None:
+            abort(404)
+
+        marker = (
+            (submission.data_json or {})
+            .get("_form_version_upgrade") or {}
+        )
+
+        target_id = marker.get("new_version_id")
+
+        version = (
+            db.get(FormVersion, target_id)
+            if marker.get("data_only") is True and target_id
+            else historical
+        )
+
+        if version is None or version.form_id != historical.form_id:
+            version = service.resolve_published(
+                db,
+                historical.form_id,
+            )
+
         if version is None:
-            abort(409, description="Brak opublikowanej wersji zgłoszenia.")
+            abort(404)
+
         definition = version.definition_json or {}
+
         form_meta, _ = version_to_public_form(db, form, version)
         service = services.form_version_service
 
@@ -929,9 +960,49 @@ def complete_version_upgrade(slug: str, submission_id: str):
                 _, state, _ = ConditionalApproval.inspect(db, submission)
                 edit_definition = service.completion_form_definition(submission, definition)
                 saved_values = service.submission_values(submission, edit_definition)
-            db.commit()
-            if state["complete"]:
-                return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
+
+                db.commit()
+
+                if not state["complete"]:
+                    return redirect(action)
+
+                # Resume workflow only after the required data is complete.
+                historical_definition = (
+                    historical.definition_json or {}
+                )
+
+                fresh_submission = (
+                    services.submission_repository.get_by_id(
+                        submission_id
+                    )
+                )
+
+                if fresh_submission:
+                    try:
+                        services.workflow_service.run_automatic_steps(
+                            fresh_submission,
+                            historical_definition,
+                        )
+                    except Exception:
+                        current_app.logger.exception(
+                            "Nie udało się wznowić workflow po "
+                            "uzupełnieniu danych zgłoszenia %s",
+                            submission_id,
+                        )
+                        flash(
+                            "Dane zostały zapisane. "
+                            "Dalszy etap wymaga sprawdzenia przez administratora.",
+                            "warning",
+                        )
+
+                return redirect(
+                    url_for(
+                        "documents.documents_to_sign",
+                        submission_id=submission_id,
+                        token=token,
+                    )
+                )
+
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
                 errors=state["errors"], values=saved_values, form_action=action,
@@ -960,10 +1031,17 @@ def complete_version_upgrade(slug: str, submission_id: str):
             edit_definition, values, request.files, submission_id=submission_id,
         )
         pending_files = {item.field_key for item in attachments}
-        errors = service.submission_data_errors(
-            submission, definition, db=db, values=values, pending_files=pending_files,
+
+        validation_state = service.refresh_submission_completion(
+            db,
+            submission,
+            values=values,
+            pending_files=pending_files,
         )
+
+        errors = dict(validation_state["errors"])
         errors.update(attachment_errors)
+
         if errors:
             error_definition = (
                 service.missing_fields_form_definition(

@@ -231,9 +231,50 @@ class WorkflowService:
         from services.submission_decision_service import ConditionalApproval
         if ConditionalApproval.active(submission):
             return
+
         public_id = submission["submission_id"]
+
+        # Do not execute automatic workflow actions while
+        # newly required participant data is incomplete.
+        session_factory = getattr(
+            self.submission_repository,
+            "session_factory",
+            None,
+        )
+
+        if session_factory:
+            from services.form_version_service import FormVersionService
+
+            with session_factory.begin() as db:
+                record = db.execute(
+                    select(FormSubmission).where(
+                        FormSubmission.submission_id == public_id
+                    )
+                ).scalar_one_or_none()
+
+                if record is not None:
+                    marker = (
+                        (record.data_json or {})
+                        .get("_form_version_upgrade") or {}
+                    )
+
+                    if marker.get("data_only") is True:
+                        state = (
+                            FormVersionService()
+                            .refresh_submission_completion(
+                                db,
+                                record,
+                            )
+                        )
+
+                        if state["errors"]:
+                            # Wait for participant data completion.
+                            # This is not a workflow error.
+                            return
+
         if public_id in self._driving:
             return
+
         self._driving.add(public_id)
         try:
             visited = set()
@@ -381,9 +422,15 @@ class WorkflowService:
                             ConditionalApproval.check(db, model, target_step=target_step)
                         except FormVersionError as exc:
                             raise WorkflowTransitionError(str(exc)) from exc
-                if self._decision_requires_complete_data(
-                    model, str((metadata or {}).get("officer_decision") or ""),
+                if (
+                    str(actor or "").strip().lower()
+                    in {"participant", "user"}
+                    and self._decision_requires_complete_data(
+                        model,
+                        code,
+                    )
                 ):
+
                     try:
                         FormVersionService().require_submission_data_complete(db, model)
                     except FormVersionError as exc:
@@ -596,7 +643,17 @@ class WorkflowService:
                 raise WorkflowTransitionError(str(exc)) from exc
         if old_status in {"AUTO_REJECTED", "RETURNED_FOR_CORRECTION"}:
             raise WorkflowTransitionError("Zgłoszenie wymaga decyzji o poprawie albo ponownego przesłania.")
-        if db is not None and self._decision_requires_complete_data(submission, decision_code):
+
+        if (
+            db is not None
+            and str(actor or "").strip().lower()
+            in {"participant", "user"}
+            and self._decision_requires_complete_data(
+                submission,
+                decision_code,
+            )
+        ):
+
             from services.form_version_service import FormVersionError, FormVersionService
             try:
                 FormVersionService().require_submission_data_complete(db, submission)

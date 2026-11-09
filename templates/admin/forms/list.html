@@ -1,117 +1,455 @@
-{% extends "admin/base.html" %}
-{% block title %}Formularze{% endblock %}
-{% block content %}
+{% extends "admin/base.html" %} {% block title %}Formularze{% endblock %} {%
+block content %}
 <div class="admin-page-title">
-    <div><p class="admin-eyebrow">Konfiguracja</p><h1>Formularze</h1></div>
-    {% if g.admin_user.role == "super_admin" %}<a class="admin-button" href="{{ url_for('admin.forms_upload') }}">Wgraj formularz</a>{% endif %}
+  <div>
+    <p class="admin-eyebrow">Konfiguracja</p>
+    <h1>Formularze</h1>
+  </div>
+  {% if g.admin_user.role == "super_admin" %}<a
+    class="admin-button"
+    href="{{ url_for('admin.forms_upload') }}"
+    >Wgraj formularz</a
+  >{% endif %}
 </div>
 
 <form id="form-column-filters" method="get">
-    <input type="hidden" name="sort" value="{{ filters.get('sort', 'sort_order') }}">
-    <input type="hidden" name="direction" value="{{ filters.get('direction', 'asc') }}">
+  <input
+    type="hidden"
+    name="sort"
+    value="{{ filters.get('sort', 'sort_order') }}"
+  />
+  <input
+    type="hidden"
+    name="direction"
+    value="{{ filters.get('direction', 'asc') }}"
+  />
 </form>
 <div class="admin-filter-summary">
-    <span>Znaleziono: <strong>{{ pagination.total }}</strong></span>
-    <a href="{{ url_for('admin.forms_list') }}">Wyczyść filtry</a>
+  <span>Znaleziono: <strong>{{ pagination.total }}</strong></span>
+  <a href="{{ url_for('admin.forms_list') }}">Wyczyść filtry</a>
 </div>
 
 {% macro sortable(label, field) -%}
-<a class="admin-sort-link" href="{{ sort_urls[field] }}">{{ label }}{% if filters.get('sort', 'sort_order') == field %}<span class="admin-sort-indicator" aria-label="{{ 'rosnąco' if filters.get('direction', 'asc') == 'asc' else 'malejąco' }}">{{ '↑' if filters.get('direction', 'asc') == 'asc' else '↓' }}</span>{% endif %}</a>
-{%- endmacro %}
-
-{% if forms %}
+<a class="admin-sort-link" href="{{ sort_urls[field] }}"
+  >{{ label }}{% if filters.get('sort', 'sort_order') == field %}<span
+    class="admin-sort-indicator"
+    aria-label="{{ 'rosnąco' if filters.get('direction', 'asc') == 'asc' else 'malejąco' }}"
+    >{{ '↑' if filters.get('direction', 'asc') == 'asc' else '↓' }}</span
+  >{% endif %}</a
+>
+{%- endmacro %} {% if forms %}
 <div class="admin-card admin-table-wrap">
-    <table class="admin-table admin-table--responsive">
-        <thead>
-            <tr>
-                <th>{{ sortable('Nazwa', 'name') }}</th>
-                <th>{{ sortable('Slug', 'slug') }}</th>
-                <th class="column-secondary">{{ sortable('Kolejność', 'sort_order') }}</th>
-                <th>{{ sortable('Status', 'status') }}</th>
-                <th class="column-secondary">{{ sortable('Publiczny', 'public') }}</th>
-                <th class="column-secondary">Etykieta</th>
-                <th class="column-secondary">{{ sortable('Zgłoszenia', 'submission_count') }}</th>
-                <th class="column-secondary">{{ sortable('Utworzono', 'created_at') }}</th>
-                <th class="actions-column">Akcje</th>
-            </tr>
+  <table class="admin-table admin-table--responsive">
+    <thead>
+      <tr>
+        <th>{{ sortable('Nazwa', 'name') }}</th>
+        <th>{{ sortable('Slug', 'slug') }}</th>
+        <th class="column-secondary">
+          {{ sortable('Kolejność', 'sort_order') }}
+        </th>
+        <th>{{ sortable('Status', 'status') }}</th>
+        <th class="column-secondary">{{ sortable('Publiczny', 'public') }}</th>
+        <th class="column-secondary">Etykieta</th>
+        <th class="column-secondary">
+          {{ sortable('Zgłoszenia', 'submission_count') }}
+        </th>
+        <th class="column-secondary">
+          {{ sortable('Utworzono', 'created_at') }}
+        </th>
+        <th class="actions-column">Akcje</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for form in forms %}
+      <tr>
+        <td class="admin-form-name-cell"><strong>{{ form.name }}</strong></td>
+        <td><code>{{ form.slug }}</code></td>
+        <td class="column-secondary">{{ form.sort_order }}</td>
+        <td>
+          <span
+            class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}"
+            >{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span
+          >
+        </td>
+        <td class="column-secondary">
+          <span
+            class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}"
+            >{{ "Tak" if form.is_public else "Nie" }}</span
+          >
+        </td>
+        <td class="column-secondary">
+          {% if form.label_text %}<span class="admin-project-label"
+            >{{ form.label_text }}</span
+          >{% else %}-{% endif %}
+        </td>
+        <td class="column-secondary">
+          {{ submission_counts.get(form.slug, 0) }}
+        </td>
+        <td class="column-secondary">
+          {{ form.created_at|business_datetime("%Y-%m-%d") if form.created_at
+          else "-" }}
+        </td>
+        <td class="actions-column">
+          <div class="admin-action-dropdown">
+            <button
+              type="button"
+              class="admin-button-secondary compact admin-action-toggle"
+              data-admin-action-toggle
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="form-actions-{{ form.id }}"
+            >
+              Akcje
+            </button>
+            <div
+              id="form-actions-{{ form.id }}"
+              class="admin-action-menu"
+              data-admin-action-menu
+              role="menu"
+              hidden
+            >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.submissions_list', form_id=form.id) }}"
+                >Zgłoszenia</a
+              >
+              {% if form.id in training_form_ids and form.id in
+              sla_view_form_ids %}<a
+                role="menuitem"
+                href="{{ url_for('admin.training_management', form_id=form.id) }}"
+                >Szkolenia</a
+              >{% endif %} {% if form.is_active and form.is_public and
+              form.is_listed %}
+              <a
+                role="menuitem"
+                href="{{ url_for('public_forms.form_page', slug=form.slug) }}"
+                target="_blank"
+                rel="noopener"
+              >
+                Podgląd publiczny
+              </a>
 
-        </thead>
-        <tbody>
-        {% for form in forms %}
-            <tr>
-                <td class="admin-form-name-cell"><strong>{{ form.name }}</strong></td>
-                <td><code>{{ form.slug }}</code></td>
-                <td class="column-secondary">{{ form.sort_order }}</td>
-                <td><span class="admin-badge {% if form.is_active %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Aktywny" if form.is_active else "Nieaktywny" }}</span></td>
-                <td class="column-secondary"><span class="admin-badge {% if form.is_public %}admin-badge-success{% else %}admin-badge-muted{% endif %}">{{ "Tak" if form.is_public else "Nie" }}</span></td>
-                <td class="column-secondary">{% if form.label_text %}<span class="admin-project-label">{{ form.label_text }}</span>{% else %}-{% endif %}</td>
-                <td class="column-secondary">{{ submission_counts.get(form.slug, 0) }}</td>
-                <td class="column-secondary">{{ form.created_at|business_datetime("%Y-%m-%d") if form.created_at else "-" }}</td>
-                <td class="actions-column">
-                    <div class="admin-action-dropdown">
-                        <button type="button" class="admin-button-secondary compact admin-action-toggle" data-admin-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="form-actions-{{ form.id }}">Akcje</button>
-                        <div id="form-actions-{{ form.id }}" class="admin-action-menu" data-admin-action-menu role="menu" hidden>
-                            <a role="menuitem" href="{{ url_for('admin.submissions_list', form_id=form.id) }}">Zgłoszenia</a>
-                            {% if form.id in training_form_ids and form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.training_management', form_id=form.id) }}">Szkolenia</a>{% endif %}
-                            {% if form.is_public %}<a role="menuitem" href="{{ url_for('public_forms.form_page', slug=form.slug) }}" target="_blank" rel="noopener">Podgląd publiczny</a>{% endif %}
-                            {% if form.is_public %}<button class="admin-link-button" type="button" role="menuitem" data-copy-public-link="{{ url_for('public_forms.form_page', slug=form.slug) }}">Kopiuj link</button>{% endif %}
-                            {% if form.id in sla_view_form_ids %}<a role="menuitem" href="{{ url_for('admin.form_sla', form_id=form.id) }}">Terminy i SLA</a>{% endif %}
-                            {% if g.admin_user.role in ["super_admin", "admin"] %}
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id) }}">Edytuj</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_versions', form_id=form.id) }}">Wersje i publikacja</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_fields', form_id=form.id) }}">Pola</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}">Workflow</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='documents') }}">Dokumenty</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='emails') }}">E-mail</a>
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='instructions') }}">Instrukcje</a>
-                                <a role="menuitem" href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}">Szablony maili</a>
-                                <a role="menuitem" href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}">Stopka maila</a>
-                                <form method="post" action="{{ url_for('admin.form_toggle', form_id=form.id) }}" data-admin-confirm-message="Czy na pewno chcesz zmienić aktywność formularza?">
-                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                                    <button class="admin-link-button" type="submit" role="menuitem">{{ "Dezaktywuj" if form.is_active else "Aktywuj" }}</button>
-                                </form>
-                                <form method="post" action="{{ url_for('admin.form_public_toggle', form_id=form.id) }}">
-                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                                    <button class="admin-link-button" type="submit" role="menuitem">{{ "Ukryj publicznie" if form.is_public else "Pokaż publicznie" }}</button>
-                                </form>
-                            {% endif %}
-                            {% if g.admin_user.role == "super_admin" %}
-                                <a role="menuitem" href="{{ url_for('admin.form_edit', form_id=form.id, tab='permissions') }}">Uprawnienia</a>
-                                <button class="admin-link-button admin-link-danger" type="button" role="menuitem" data-admin-modal-target="delete-form-{{ form.id }}">Usuń</button>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% if g.admin_user.role == "super_admin" %}
-                    <dialog class="admin-modal admin-modal-backdrop" id="delete-form-{{ form.id }}" role="dialog" aria-modal="true" aria-labelledby="delete-form-title-{{ form.id }}" data-admin-modal>
-                        <form method="dialog" class="admin-modal__surface"><header class="admin-modal__header"><h2 id="delete-form-title-{{ form.id }}">Usunąć formularz?</h2></header><div class="admin-modal__body"><p>Ta operacja może usunąć albo dezaktywować formularz oraz powiązane dane.</p></div><footer class="admin-modal__footer"><button class="admin-button-secondary" value="cancel" type="submit">Anuluj</button><button class="admin-button-danger" value="confirm" type="button" data-submit-delete="delete-form-post-{{ form.id }}">Usuń</button></footer></form>
-                    </dialog>
-                    <form id="delete-form-post-{{ form.id }}" method="post" action="{{ url_for('admin.form_delete', form_id=form.id) }}" hidden><input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}"></form>
-                    {% endif %}
-                </td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+              <button
+                type="button"
+                class="admin-link-button"
+                role="menuitem"
+                data-copy-private-link="{{ url_for('admin.form_share_link_current', form_id=form.id) }}"
+                data-restore-private-link="{{ url_for('admin.form_share_link_restore', form_id=form.id) }}"
+              >
+                Kopiuj link
+              </button>
+
+              {% elif form.is_active and form.is_public and not form.is_listed %}
+                  <button type="button" class="admin-link-button" role="menuitem"
+                          data-generate-private-link="{{ url_for('admin.form_share_link_regenerate', form_id=form.id) }}">
+                      Generuj nowy link
+                  </button>
+                  <button type="button" class="admin-link-button" role="menuitem"
+                          data-copy-private-link="{{ url_for('admin.form_share_link_current', form_id=form.id) }}"
+                          data-restore-private-link="{{ url_for('admin.form_share_link_restore', form_id=form.id) }}">
+                      Kopiuj link
+                  </button>
+              {% endif %} {% if form.id in sla_view_form_ids %}<a
+                role="menuitem"
+                href="{{ url_for('admin.form_sla', form_id=form.id) }}"
+                >Terminy i SLA</a
+              >{% endif %} {% if g.admin_user.role in ["super_admin", "admin"]
+              %}
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id) }}"
+                >Edytuj</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_versions', form_id=form.id) }}"
+                >Wersje i publikacja</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_fields', form_id=form.id) }}"
+                >Pola</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id, tab='workflow') }}"
+                >Workflow</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id, tab='documents') }}"
+                >Dokumenty</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id, tab='emails') }}"
+                >E-mail</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id, tab='instructions') }}"
+                >Instrukcje</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.mail_templates_list', form_id=form.id) }}"
+                >Szablony maili</a
+              >
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.mail_footers_list', form_id=form.id) }}"
+                >Stopka maila</a
+              >
+              <form
+                method="post"
+                action="{{ url_for('admin.form_toggle', form_id=form.id) }}"
+                data-admin-confirm-message="Czy na pewno chcesz zmienić aktywność formularza?"
+              >
+                <input
+                  type="hidden"
+                  name="csrf_token"
+                  value="{{ admin_csrf_token() }}"
+                />
+                <button class="admin-link-button" type="submit" role="menuitem">
+                  {{ "Dezaktywuj" if form.is_active else "Aktywuj" }}
+                </button>
+              </form>
+              <form
+                method="post"
+                action="{{ url_for('admin.form_public_toggle', form_id=form.id) }}"
+              >
+                <input
+                  type="hidden"
+                  name="csrf_token"
+                  value="{{ admin_csrf_token() }}"
+                />
+                <button class="admin-link-button" type="submit" role="menuitem">
+                  {{ "Ukryj publicznie" if form.is_public else "Pokaż
+                  publicznie" }}
+                </button>
+              </form>
+              {% endif %} {% if g.admin_user.role == "super_admin" %}
+              <a
+                role="menuitem"
+                href="{{ url_for('admin.form_edit', form_id=form.id, tab='permissions') }}"
+                >Uprawnienia</a
+              >
+              <button
+                class="admin-link-button admin-link-danger"
+                type="button"
+                role="menuitem"
+                data-admin-modal-target="delete-form-{{ form.id }}"
+              >
+                Usuń
+              </button>
+              {% endif %}
+            </div>
+          </div>
+          {% if g.admin_user.role == "super_admin" %}
+          <dialog
+            class="admin-modal admin-modal-backdrop"
+            id="delete-form-{{ form.id }}"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-form-title-{{ form.id }}"
+            data-admin-modal
+          >
+            <form method="dialog" class="admin-modal__surface">
+              <header class="admin-modal__header">
+                <h2 id="delete-form-title-{{ form.id }}">Usunąć formularz?</h2>
+              </header>
+              <div class="admin-modal__body">
+                <p>
+                  Ta operacja może usunąć albo dezaktywować formularz oraz
+                  powiązane dane.
+                </p>
+              </div>
+              <footer class="admin-modal__footer">
+                <button
+                  class="admin-button-secondary"
+                  value="cancel"
+                  type="submit"
+                >
+                  Anuluj</button
+                ><button
+                  class="admin-button-danger"
+                  value="confirm"
+                  type="button"
+                  data-submit-delete="delete-form-post-{{ form.id }}"
+                >
+                  Usuń
+                </button>
+              </footer>
+            </form>
+          </dialog>
+          <form
+            id="delete-form-post-{{ form.id }}"
+            method="post"
+            action="{{ url_for('admin.form_delete', form_id=form.id) }}"
+            hidden
+          >
+            <input
+              type="hidden"
+              name="csrf_token"
+              value="{{ admin_csrf_token() }}"
+            />
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
-<nav class="admin-pagination" aria-label="Paginacja formularzy"><span>Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{ pagination.pages }}</span><div class="admin-pagination__links">{% if pagination_urls.previous %}<a class="admin-button-secondary compact" href="{{ pagination_urls.previous }}">Poprzednia</a>{% endif %}{% if pagination_urls.next %}<a class="admin-button-secondary compact" href="{{ pagination_urls.next }}">Następna</a>{% endif %}</div></nav>
+<nav class="admin-pagination" aria-label="Paginacja formularzy">
+  <span
+    >Wyniki {{ pagination.total }} · strona {{ pagination.page }} z {{
+    pagination.pages }}</span
+  >
+  <div class="admin-pagination__links">
+    {% if pagination_urls.previous %}<a
+      class="admin-button-secondary compact"
+      href="{{ pagination_urls.previous }}"
+      >Poprzednia</a
+    >{% endif %}{% if pagination_urls.next %}<a
+      class="admin-button-secondary compact"
+      href="{{ pagination_urls.next }}"
+      >Następna</a
+    >{% endif %}
+  </div>
+</nav>
 {% else %}
-<div class="admin-empty-state"><h2>Nie znaleziono formularzy.</h2><p>Zmień filtry lub wyczyść je, aby zobaczyć inne wyniki.</p></div>
+<div class="admin-empty-state">
+  <h2>Nie znaleziono formularzy.</h2>
+  <p>Zmień filtry lub wyczyść je, aby zobaczyć inne wyniki.</p>
+</div>
 {% endif %}
-<div class="admin-toast" role="status" aria-live="polite" data-copy-link-status hidden>Link skopiowany</div>
+<input type="hidden" id="form-list-share-csrf" value="{{ admin_csrf_token() }}">
+<div
+  class="admin-toast"
+  role="status"
+  aria-live="polite"
+  data-copy-link-status
+  hidden
+>
+  Link skopiowany
+</div>
+
 <script>
-document.querySelectorAll("[data-submit-delete]").forEach(button => button.addEventListener("click", () => { const form = document.getElementById(button.dataset.submitDelete); if (form) form.submit(); }));
-document.querySelectorAll("[data-copy-public-link]").forEach((button) => button.addEventListener("click", async () => {
-    const absoluteUrl = new URL(button.dataset.copyPublicLink, document.baseURI).href;
-    const status = document.querySelector("[data-copy-link-status]");
-    try {
-        await navigator.clipboard.writeText(absoluteUrl);
-    } catch (_error) {
-        const input = document.createElement("textarea"); input.value = absoluteUrl; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0";
-        document.body.appendChild(input); input.select(); document.execCommand("copy"); input.remove();
+(() => {
+    const csrf = () => document.querySelector('#form-list-share-csrf')?.value?.trim();
+    const toast = document.querySelector('[data-copy-link-status]');
+    let toastTimer;
+
+    function message(text, error = false) {
+        if (toast) {
+            clearTimeout(toastTimer);
+            toast.textContent = text;
+            toast.hidden = false;
+            toastTimer = setTimeout(() => { toast.hidden = true; }, 6000);
+        }
+        if (error) window.alert(text);
     }
-    button.textContent = "Link skopiowany";
-    if (status) { status.hidden = false; window.setTimeout(() => { status.hidden = true; }, 2500); }
-    window.setTimeout(() => { button.textContent = "Kopiuj link"; }, 2500);
-}));
+
+    async function requestJson(url, options = {}) {
+        const response = await fetch(url, {
+            credentials: 'same-origin', cache: 'no-store',
+            headers: { Accept: 'application/json' }, ...options
+        });
+        let result;
+        try { result = await response.json(); }
+        catch { throw new Error(`Nieprawidłowa odpowiedź serwera (HTTP ${response.status}).`); }
+        if (!response.ok || !result.ok) {
+            const error = new Error(result.error || `Błąd HTTP ${response.status}.`);
+            error.needsImport = Boolean(result.needs_import);
+            throw error;
+        }
+        return result;
+    }
+
+    function postData(data) {
+        const token = csrf();
+        if (!token) throw new Error('Brak tokenu CSRF (admin_csrf_token).');
+        const body = new URLSearchParams({ csrf_token: token, ...data });
+        return {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: body.toString()
+        };
+    }
+
+    async function copyToClipboard(value) {
+        if (navigator.clipboard?.writeText) {
+            try { await navigator.clipboard.writeText(value); return true; }
+            catch { /* Try fallback. */ }
+        }
+        const input = document.createElement('textarea');
+        input.value = value;
+        input.readOnly = true;
+        input.style.cssText = 'position:fixed;opacity:0;left:0;top:0';
+        document.body.appendChild(input);
+        input.focus(); input.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); }
+        finally { input.remove(); }
+        if (!copied) window.prompt('Skopiuj link ręcznie:', value);
+        return copied;
+    }
+
+    document.addEventListener('click', async (event) => {
+        const button = event.target.closest(
+            '[data-generate-private-link], [data-copy-private-link], [data-copy-public-link]'
+        );
+        if (!button || button.disabled) return;
+        event.preventDefault();
+        button.disabled = true;
+        try {
+            if (button.hasAttribute('data-generate-private-link')) {
+                if (!window.confirm('Wygenerować NOWY link? Poprzedni straci ważność.')) return;
+                const result = await requestJson(
+                    button.dataset.generatePrivateLink, postData({})
+                );
+                if (!result.url) throw new Error('Serwer nie zwrócił adresu linku.');
+                message('Wygenerowano nowy link. Możesz użyć „Kopiuj link”.');
+            } else {
+                let url;
+                if (button.hasAttribute('data-copy-private-link')) {
+                    try {
+                        const result = await requestJson(button.dataset.copyPrivateLink);
+                        url = result.url;
+                    } catch (error) {
+                        if (!error.needsImport) throw error;
+                        const oldLink = window.prompt(
+                            'Ten formularz ma starszy link, którego nie można odtworzyć z hasha. ' +
+                            'Wklej istniejący link, aby zapisać go bez zmiany tokenu. Anuluj, jeśli go nie masz:'
+                        );
+                        if (!oldLink) return;
+                        await requestJson(
+                            button.dataset.restorePrivateLink,
+                            postData({ existing_link: oldLink.trim() })
+                        );
+                        const result = await requestJson(button.dataset.copyPrivateLink);
+                        url = result.url;
+                    }
+                } else {
+                    url = new URL(button.dataset.copyPublicLink, window.location.origin).href;
+                }
+                if (!url) throw new Error('Brak linku do skopiowania.');
+                if (await copyToClipboard(url)) {
+                    message('Link skopiowany. Nie zmieniono tokenu.');
+                }
+            }
+        } catch (error) {
+            message(error.message || 'Nie udało się wykonać operacji.', true);
+            console.error('Form sharing:', error);
+        } finally {
+            button.disabled = false;
+        }
+    });
+})();
 </script>
+
 {% endblock %}

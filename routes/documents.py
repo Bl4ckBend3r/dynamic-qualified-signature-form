@@ -457,7 +457,7 @@ def training_selection(submission_id: str):
     if not database_url:
         abort(404)
 
-    access = require_participant_submission_access(submission_id, allow_incomplete=True)
+    access = require_participant_submission_access(submission_id)
     token = access.credential
     session_factory = create_session_factory(database_url)
     with session_factory() as db:
@@ -1257,7 +1257,8 @@ def _render_document_fields(submission, document_step, credential, *, values=Non
 @bp.post("/document-steps/<slug>/<submission_id>/<step_id>/fields")
 def save_document_step_fields(slug, submission_id, step_id):
     access = require_participant_submission_access(
-        submission_id, slug=slug, allow_incomplete=True,
+        submission_id,
+        slug=slug,
     )
     require_public_csrf()
     definition = get_form_config(slug, submission_id) or {}
@@ -1476,8 +1477,15 @@ def documents_to_sign():
             errors = {}
             result = None
             status_code = 200
-            upgrade_state = ((submission.get("row") or {}).get("data_json") or {}).get("_form_version_upgrade") or {}
-            needs_upgrade_data = bool(upgrade_state.get("missing_fields") or upgrade_state.get("invalid_training_ids"))
+            upgrade_state = (
+                ((submission.get("row") or {}).get("data_json") or {})
+                .get("_form_version_upgrade") or {}
+            )
+
+            needs_upgrade_data = bool(
+                upgrade_state.get("missing_fields")
+            )
+
             if needs_upgrade_data:
                 pass  # Show the completion action before any document preparation.
             elif not submission["can_sign_documents"] and not submission.get("can_view_status_details"):

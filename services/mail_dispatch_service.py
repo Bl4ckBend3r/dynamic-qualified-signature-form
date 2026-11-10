@@ -1352,6 +1352,12 @@ class MailDispatchService:
             extra_context={
                 "qualification_message": message,
                 "qualification_message_html": escape(message),
+                "qualification_messages": [
+                    item["user_message"].strip()
+                    for item in evaluation.get("failed_conditions", [])
+                    if isinstance(item, dict)
+                    and item.get("user_message", "").strip()
+                ] or [message],
             },
             operation_id=operation_id,
         )

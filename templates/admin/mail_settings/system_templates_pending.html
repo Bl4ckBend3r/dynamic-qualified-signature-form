@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% block title %}Maile systemowe{% endblock %}
+
+{% block content %}
+<div class="admin-page-title">
+  <div>
+    <h1>Maile systemowe</h1>
+  </div>
+</div>
+
+<div class="admin-card">
+  <h2>Szablony systemowe</h2>
+  <p>
+    Rejestr systemowych wiadomości będzie dostępny
+    po zakończeniu inwentaryzacji i deduplikacji.
+  </p>
+  <p>
+    Dotychczasowe ustawienia są nadal dostępne
+    w konfiguracji poczty systemowej.
+  </p>
+  <a href="{{ url_for('admin.system_mail_settings') }}"
+     class="admin-button-secondary">
+    Otwórz dotychczasowe ustawienia
+  </a>
+</div>
+{% endblock %}

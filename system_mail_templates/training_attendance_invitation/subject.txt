@@ -1,0 +1,1 @@
+Potwierdź obecność — {{ session_name }}

@@ -1,0 +1,1 @@
+Podpisana umowa wymaga poprawy. Powód: {{ agreement_decision_reason_text }}

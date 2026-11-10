@@ -25,6 +25,7 @@ from services.mail_template_editor_service import (
     build_variable_catalog,
 )
 from services.mail_dispatch_service import MailDispatchResult
+from services.system_mail_registry import FORM_MAIL_TEMPLATE_LABELS
 from services.workflow_mail_trigger_service import WorkflowMailTriggerService
 
 from . import (
@@ -44,23 +45,7 @@ from . import (
 )
 
 
-MAIL_TEMPLATE_LABELS = {
-    "correction_accepted": "Akceptacja poprawionego wniosku",
-    "confirmation": "Złożenie wniosku",
-    "accepted": "Akceptacja",
-    "rejected": "Odrzucenie",
-    "auto_rejected_by_condition": "Odrzucenie zgłoszenia",
-    "correction_required": "Wysłanie do poprawy",
-    "returned_for_correction": "Wysłanie do poprawy",
-    "declaration_ready": "Deklaracja gotowa",
-    "declaration_signed": "Deklaracja podpisana",
-    "agreement_ready": "Umowa gotowa",
-    "agreement_signed_by_user": "Umowa podpisana przez beneficjenta",
-    "agreement_signed_by_office": "Umowa podpisana przez urząd",
-    "stage_rollback": "Cofnięcie etapu",
-    "repeatable_item_decision": "Decyzja dla elementu listy",
-    "custom": "Wiadomość własna",
-}
+MAIL_TEMPLATE_LABELS = FORM_MAIL_TEMPLATE_LABELS
 MAIL_PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)")
 
 

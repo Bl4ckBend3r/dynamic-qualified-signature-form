@@ -1,0 +1,3 @@
+Przeprowadzono ocenę warunków udziału dla Twojego zgłoszenia.
+{{ qualification_message }}
+Poniżej znajdują się dane zgłoszenia, którego dotyczy ten wynik. W razie pytań skontaktuj się z organizatorem formularza.

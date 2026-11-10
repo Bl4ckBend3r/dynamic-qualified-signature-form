@@ -96,3 +96,5 @@ Thumbs.db
 
 AGENTS.md
 docs\archive
+*.back*
+*.bak*

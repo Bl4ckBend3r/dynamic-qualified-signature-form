@@ -1,0 +1,1 @@
+Cofnięto etap zgłoszenia {{ submission_id }}

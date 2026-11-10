@@ -1,0 +1,1 @@
+Zgłoszenie {{ submission_id }} wymaga poprawy

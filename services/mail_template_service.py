@@ -907,9 +907,9 @@ def render_platform_mail_html(
     {platform_name_section}
 <tr><td class="platform-title" style="padding:0 24px 16px;text-align:center;"><h1 style="margin:0;color:{mail_layout["primary_color"]};font-size:30px;font-weight:700;line-height:1.3;">{html.escape(title)}</h1></td></tr>
     {before_content_logo_section}
+    {info_section}
     {body_section}
     {after_content_logo_section}
-    {info_section}
     {instruction_section}
     {documents_section}
     {action_section}

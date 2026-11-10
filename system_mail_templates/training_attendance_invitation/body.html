@@ -1,0 +1,2 @@
+<!-- system-mail: {"content_title":"Potwierdzenie obecności","action_text":"Otwórz indywidualny link i potwierdź obecność.","action_link_label":"Potwierdź obecność"} -->
+<p>{% if mail_message %}{% for line in mail_message_lines %}{% if not loop.first %}<br>{% endif %}{{ line }}{% endfor %}{% else %}Zapraszamy do potwierdzenia obecności na szkoleniu: {% for line in session_name_lines %}{% if not loop.first %}<br>{% endif %}{{ line }}{% endfor %}. To zaproszenie dotyczy Twojego zgłoszenia wskazanego poniżej.{% endif %}</p>

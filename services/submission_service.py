@@ -433,6 +433,17 @@ class SubmissionService:
     def _continue_submission_after_pdf(self, submission: dict, form_config: dict, qualification: dict) -> bool:
         operation_id = str(pdf_generation_retry_state(submission).get("operation_id") or "")
         self._initialize_submission_operations(submission["submission_id"], form_config)
+        if self.mail_dispatch_service:
+            try:
+                self.mail_dispatch_service.dispatch_submission_received(
+                    submission["submission_id"],
+                    operation_id=operation_id,
+                )
+            except Exception as exc:
+                current_app.logger.exception(
+                    "submission_received_mail_failed error=%s",
+                    exc.__class__.__name__,
+                )
         failed_conditions = qualification.get("failed_conditions", [])
         auto_rejected = any(item.get("failure_action") == "auto_reject" for item in failed_conditions)
         requires_officer_decision = any(
@@ -453,14 +464,6 @@ class SubmissionService:
             )
         elif self.workflow_service:
             self.workflow_service.enter_submission_review(submission, form_config)
-        if self.mail_dispatch_service:
-            try:
-                self.mail_dispatch_service.dispatch_submission_received(
-                    submission["submission_id"],
-                    operation_id=operation_id,
-                )
-            except Exception as exc:
-                current_app.logger.exception("submission_received_mail_failed error=%s", exc.__class__.__name__)
         admin_notification = form_config.get("new_submission_notification") or {}
         if (
             self.mail_dispatch_service
@@ -728,13 +731,21 @@ class SubmissionService:
         )
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
-        if self.workflow_service and start_workflow:
-            self.workflow_service.enter_submission_review(submission, form_config)
         if dispatch_received and self.mail_dispatch_service:
             try:
-                self.mail_dispatch_service.dispatch_submission_received(submission_id)
+                self.mail_dispatch_service.dispatch_submission_received(
+                    submission_id
+                )
             except Exception as exc:
-                current_app.logger.exception("submission_received_mail_failed error=%s", exc.__class__.__name__)
+                current_app.logger.exception(
+                    "submission_received_mail_failed error=%s",
+                    exc.__class__.__name__,
+                )
+
+        if self.workflow_service and start_workflow:
+            self.workflow_service.enter_submission_review(
+                submission, form_config
+            )
         return submission
 
     def submit_correction_form(
@@ -1535,13 +1546,29 @@ class SubmissionService:
             )
         if self.mail_dispatch_service:
             try:
-                self.mail_dispatch_service.dispatch_auto_rejected_by_condition(
+                current_app.logger.info(
+                    "auto_rejected_mail_start submission_id=%s",
+                    submission["submission_id"],
+                )
+
+                result = self.mail_dispatch_service.dispatch_auto_rejected_by_condition(
                     submission["submission_id"],
                     evaluation,
                     operation_id=operation_id,
                 )
-            except Exception as exc:
-                current_app.logger.exception("auto_rejected_mail_failed error=%s", exc.__class__.__name__)
+
+                current_app.logger.warning(
+                    "auto_rejected_mail_result submission_id=%s status=%s error=%s",
+                    submission["submission_id"],
+                    result.status,
+                    result.error_message or "-",
+                )
+
+            except Exception:
+                current_app.logger.exception(
+                    "auto_rejected_mail_failed submission_id=%s",
+                    submission["submission_id"],
+                )
 
     def get_submission_context(self, submission_id: str, form_config_service=None, storage=None) -> dict | None:
         row = self.submission_repository.get_by_id(submission_id)

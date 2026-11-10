@@ -1,0 +1,108 @@
+
+{% extends "admin/base.html" %}
+{% block title %}{{ mail_type.name }}{% endblock %}
+
+{% block content %}
+<div data-mail-variable-scope>
+
+<div class="admin-page-title">
+  <div>
+    <p class="admin-eyebrow">Maile systemowe</p>
+    <h1>{{ mail_type.name }}</h1>
+    <p>{{ mail_type.trigger }}</p>
+  </div>
+</div>
+
+<p>
+  <a href="{{ url_for('admin.system_mail_templates') }}"
+     class="admin-button-secondary">
+    Powrót do listy
+  </a>
+</p>
+
+<section class="admin-card">
+  <h2>Informacje o wiadomości</h2>
+
+  <p><strong>Identyfikator:</strong> {{ mail_type.id }}</p>
+  <p><strong>Odbiorca:</strong> {{ mail_type.recipient }}</p>
+  <p><strong>Polityka źródeł:</strong> {{ mail_type.source_policy }}</p>
+  <p><strong>Aktywny wpis w bazie:</strong>
+    {{ "Tak" if saved and saved.is_active else "Nie" }}
+  </p>
+</section>
+
+<section class="admin-card" style="margin-top:20px;">
+  <h2>Edytuj wiadomość</h2>
+  <p>Zmiany zostaną zapisane w konfiguracji platformowej. Przywrócenie odczyta treść z plików domyślnych.</p>
+  {% if error %}<p role="alert" class="admin-error">{{ error }}</p>{% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="action" value="save">
+    <p><label for="system-mail-subject"><strong>Temat wiadomości</strong></label></p>
+    <input id="system-mail-subject" name="subject" type="text" maxlength="500" required
+           data-variable-target value="{{ fields.subject }}" style="width:100%;">
+    <p><label for="system-mail-html"><strong>Treść HTML</strong></label></p>
+    <textarea id="system-mail-html" name="html_body" rows="12" required
+              data-variable-target data-variable-default-target style="width:100%;">{{ fields.html_body }}</textarea>
+    <p><label for="system-mail-text"><strong>Treść TXT</strong></label></p>
+    <textarea id="system-mail-text" name="text_body" rows="8" required
+              data-variable-target style="width:100%;">{{ fields.text_body }}</textarea>
+    <button type="submit" class="admin-button">Zapisz zmiany</button>
+  </form>
+  <form method="post" style="margin-top:12px;">
+    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+    <input type="hidden" name="action" value="restore">
+    <button type="submit" class="admin-button-secondary">Przywróć domyślny szablon</button>
+  </form>
+</section>
+
+<section class="admin-card" data-variable-panel data-variable-storage-key="system-mail-variables-{{ mail_type.id }}" style="margin-top:20px;">
+  <h2>Zmienne systemowe</h2>
+  <p>Zmienne wspólne pochodzą z kontekstu zgłoszenia; ich wartość zależy od danych i trybu odbiorcy. Pozostałe pochodzą ze zdarzenia „{{ mail_type.name }}”. Indywidualnych adresów nie pokazujemy w przykładach.</p>
+  <button type="button" class="admin-button-secondary" data-variable-collapse aria-expanded="true">Zwiń</button>
+  <button type="button" class="admin-button-secondary" data-variable-expand>Rozwiń</button>
+  <div class="mail-variable-panel-content">
+    <p><label for="system-mail-variable-filter">Szukaj zmiennej</label></p>
+    <input id="system-mail-variable-filter" type="search" data-variable-filter placeholder="Nazwa lub opis" style="width:100%;">
+    <div class="mail-variable-groups">
+      {% for category, variables in variable_categories.items() %}
+      <details class="mail-variable-group">
+        <summary>{{ category }} <span>{{ variables|length }}</span></summary>
+        <div class="mail-variable-list">
+          {% for variable in variables %}
+          <article class="mail-variable-row" data-variable-row data-variable-search="{{ variable.name }} {{ variable.syntax }} {{ variable.description }} {{ variable.example }}">
+            <div class="mail-variable-row__content">
+              <strong>{{ variable.name }}</strong>
+              <code>{{ variable.syntax }}</code>
+              <small>{{ variable.scope }}</small>
+              <small>{{ variable.description }}</small>
+              {% if variable.example %}<small>Przykład: {{ variable.example }}</small>{% endif %}
+            </div>
+            <button type="button" class="admin-button-secondary mail-variable-insert" data-insert-variable="{{ variable.syntax }}">Wstaw</button>
+            <button type="button" class="admin-button-secondary" data-copy-variable="{{ variable.syntax }}">Kopiuj</button>
+          </article>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    <p data-variable-empty hidden>Nie znaleziono zmiennych.</p>
+    <p data-variable-feedback role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<section class="admin-card" style="margin-top:20px;">
+  <h2>Podgląd aktualnej wiadomości</h2>
+  <p><strong>Temat:</strong> {{ preview_subject }}</p>
+
+  <iframe
+    title="Podgląd wiadomości"
+    sandbox
+    srcdoc="{{ preview_html }}"
+    style="width:100%;height:650px;border:0;background:white;">
+  </iframe>
+</section>
+</div>
+<script src="{{ url_for('static', filename='js/mail_variables_panel.js') }}" defer></script>
+
+{% endblock %}

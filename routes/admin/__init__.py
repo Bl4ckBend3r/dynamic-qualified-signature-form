@@ -98,24 +98,9 @@ OFFICER_DECISIONS = [
     ("rejected", "Odrzucono"),
     ("correction", "Do poprawy"),
 ]
-MAIL_TEMPLATE_TYPES = [
-    "confirmation",
-    "accepted",
-    "rejected",
-    "correction_required",
-    "declaration_signed",
-    "agreement_ready",
-    "agreement_signed_by_user",
-    "agreement_signed_by_office",
-    "agreement_rejected_by_office",
-    "stage_rollback",
-    "auto_rejected_by_condition",
-    "returned_for_correction",
-    "custom",
-    "correction_accepted",
-    "form_draft_resume",
-    "repeatable_item_decision",
-]
+from services.system_mail_registry import FORM_MAIL_TEMPLATE_TYPES  # noqa: E402
+
+MAIL_TEMPLATE_TYPES = list(FORM_MAIL_TEMPLATE_TYPES)
 
 
 def db_session_factory():

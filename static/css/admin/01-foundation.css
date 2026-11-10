@@ -654,3 +654,59 @@
 .admin-nav-dropdown-menu a:focus-visible {
     background: var(--color-surface-hover);
 }
+/* Podmenu poczty systemowej */
+
+.admin-mail-submenu {
+  position: relative;
+}
+
+.admin-mail-submenu > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.admin-mail-submenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-mail-submenu > summary::before {
+  content: "‹";
+  margin-right: 8px;
+}
+
+.admin-mail-submenu > summary:hover,
+.admin-mail-submenu > summary:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.admin-mail-submenu-items {
+  display: none;
+  position: absolute;
+  top: 0;
+  right: calc(100% - 4px);
+  min-width: 220px;
+  z-index: 10001;
+  padding: 8px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .18);
+}
+
+.admin-mail-submenu:hover > .admin-mail-submenu-items,
+.admin-mail-submenu:focus-within > .admin-mail-submenu-items,
+.admin-mail-submenu[open] > .admin-mail-submenu-items {
+  display: block;
+}
+
+@media (max-width: 600px) {
+  .admin-mail-submenu-items {
+    position: static;
+    box-shadow: none;
+    min-width: 0;
+  }
+}

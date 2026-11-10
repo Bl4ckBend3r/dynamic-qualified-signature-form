@@ -1,0 +1,54 @@
+{% extends "admin/base.html" %}
+{% block title %}Maile systemowe{% endblock %}
+
+{% block content %}
+
+<div class="system-mail-panels">
+    <a class="system-mail-card" href="{{ url_for('admin.system_mail_layout') }}">
+        <div class="system-mail-card__icon" aria-hidden="true">✉️</div>
+
+        <div class="system-mail-card__content">
+            <div class="system-mail-card__eyebrow">Wygląd wiadomości</div>
+            <h2 class="system-mail-card__title">Układ wiadomości</h2>
+            <p class="system-mail-card__description">
+                Ustaw kolory, logo, szerokość, nagłówek i ogólny układ wiadomości e-mail.
+            </p>
+
+            <ul class="system-mail-card__features">
+                <li>logo i branding</li>
+                <li>nagłówek i stopka</li>
+                <li>czytelny układ wiadomości</li>
+            </ul>
+        </div>
+
+        <div class="system-mail-card__footer">
+            <span class="system-mail-card__action">Przejdź do ustawień</span>
+            <span class="system-mail-card__arrow" aria-hidden="true">→</span>
+        </div>
+    </a>
+
+    <a class="system-mail-card" href="{{ url_for('admin.system_mail_templates') }}">
+        <div class="system-mail-card__icon" aria-hidden="true">📝</div>
+
+        <div class="system-mail-card__content">
+            <div class="system-mail-card__eyebrow">Treść wiadomości</div>
+            <h2 class="system-mail-card__title">Maile systemowe</h2>
+            <p class="system-mail-card__description">
+                Zarządzaj treścią i zmiennymi wiadomości generowanych automatycznie przez platformę.
+            </p>
+
+            <ul class="system-mail-card__features">
+                <li>edycja tematów i treści</li>
+                <li>zmienne systemowe</li>
+                <li>podgląd i przywracanie domyślnych treści</li>
+            </ul>
+        </div>
+
+        <div class="system-mail-card__footer">
+            <span class="system-mail-card__action">Otwórz listę szablonów</span>
+            <span class="system-mail-card__arrow" aria-hidden="true">→</span>
+        </div>
+    </a>
+</div>
+
+{% endblock %}

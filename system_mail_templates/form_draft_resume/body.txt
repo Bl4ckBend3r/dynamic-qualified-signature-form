@@ -1,0 +1,3 @@
+Twoja wersja robocza została zapisana.
+{{ draft_resume_url }}
+Link wygasa: {{ draft_expires_at }}

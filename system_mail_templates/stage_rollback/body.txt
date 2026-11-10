@@ -1,0 +1,4 @@
+Etap Twojego zgłoszenia został cofnięty.
+Aktualny status: {{ rollback_status_label }}
+Powód: {{ rollback_reason_text }}
+{{ rollback_next_action_text }}

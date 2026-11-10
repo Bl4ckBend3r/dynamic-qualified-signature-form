@@ -280,3 +280,7 @@
   border: 0 !important;
 }
 
+.system-mail-hub-grid > .system-mail-hub-card
+    + .system-mail-hub-card {
+    margin-top: 0;
+}

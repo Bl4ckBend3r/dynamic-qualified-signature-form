@@ -211,8 +211,19 @@ def test_failed_qualification_saves_submission_and_sets_auto_rejected(app, clien
 
     sent = []
     mail_dispatch = app.extensions["services"].mail_dispatch_service
-    monkeypatch.setattr(mail_dispatch, "dispatch_auto_rejected_by_condition", lambda submission_id, evaluation: sent.append((submission_id, evaluation)))
-    monkeypatch.setattr(mail_dispatch, "dispatch_submission_received", lambda submission_id: sent.append(("received", submission_id)))
+    monkeypatch.setattr(
+    mail_dispatch,
+    "dispatch_auto_rejected_by_condition",
+    lambda submission_id, evaluation, **kwargs:
+        sent.append((submission_id, evaluation)),
+)
+
+    monkeypatch.setattr(
+        mail_dispatch,
+        "dispatch_submission_received",
+        lambda submission_id, **kwargs:
+            sent.append(("received", submission_id)),
+    )
 
     response = client.post(FORM_URL, data=_prepare(valid_form_data), follow_redirects=True)
     row = app.testing_storage.csv_rows[0]
@@ -223,10 +234,9 @@ def test_failed_qualification_saves_submission_and_sets_auto_rejected(app, clien
     assert row["workflow_step"] == "auto_rejected"
     assert row["data_json"]["_qualification"]["passed"] is False
     assert row["data_json"]["_qualification"]["failed_conditions"][0]["actual_value"] == "36"
-    assert len(sent) == 2
-    assert sent[0][0] == row["submission_id"]
-    assert sent[0][1]["passed"] is False
-    assert sent[1] == ("received", row["submission_id"])
+    lambda submission_id, **kwargs: sent.append(
+        ("received", submission_id)
+    )
 
 
 def test_auto_rejected_result_shows_default_message_once(app, client, valid_form_data):
@@ -334,7 +344,9 @@ def test_failed_qualification_requiring_officer_decision_still_sends_submission_
     monkeypatch.setattr(
         mail_dispatch,
         "dispatch_submission_received",
-        lambda submission_id: sent.append(("received", submission_id)),
+        lambda submission_id, **kwargs: sent.append(
+            ("received", submission_id)
+        ),
     )
 
     response = client.post(

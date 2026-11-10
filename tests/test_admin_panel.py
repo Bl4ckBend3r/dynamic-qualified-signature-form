@@ -11935,3 +11935,107 @@ def test_archive_permanent_delete_selection_and_confirmation_in_browser(admin_ap
         assert "2 zaznaczone zgłoszenia" in confirm.inner_text()
         confirm.locator("[data-admin-modal-close]").click()
         browser.close()
+
+
+def test_system_mail_editor_saves_previews_restores_and_enforces_access(admin_app, admin_client):
+    from services.system_mail_registry import SYSTEM_MAIL_TYPES, load_default_template
+
+    create_user(admin_app)
+    login(admin_client)
+    base = "/admin/mail-settings/system-templates/"
+    for mail_type in SYSTEM_MAIL_TYPES:
+        page = admin_client.get(base + mail_type.id)
+        assert page.status_code == 200
+        html = page.get_data(as_text=True)
+        assert "Zmienne systemowe" in html
+        assert "Dostępne zmienne tego typu" not in html
+        assert "data-insert-variable" in html and "data-copy-variable" in html
+
+    path = base + "auto_rejected_by_condition"
+    assert admin_client.post(path, data={"action": "save", "subject": "A"}).status_code == 400
+    token = admin_csrf(admin_client)
+    payload = {"csrf_token": token, "action": "save",
+               "subject": "Odrzucono {{ submission_id }}",
+               "html_body": "<p>Powód: {{ qualification_message }}</p><script>alert(1)</script>",
+               "text_body": "Powód: {{ qualification_message }}"}
+    assert admin_client.post(path, data=payload).status_code == 302
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        saved = db.query(PlatformMailTemplate).filter_by(template_type="auto_rejected_by_condition").one()
+        assert saved.subject == payload["subject"]
+        assert "<script" not in saved.html_body
+        assert saved.is_active
+        dispatcher = admin_app.extensions["services"].mail_dispatch_service
+        resolved = dispatcher.resolve_system_template(db, event_type="auto_rejected_by_condition")
+        assert resolved is saved
+        assert dispatcher.render_subject(resolved.subject, {"submission_id": "ZGŁ-1"}) == "Odrzucono ZGŁ-1"
+        assert dispatcher.render_body(resolved.html_body, {"qualification_message": "Brak danych"}) == "<p>Powód: Brak danych</p>"
+    page = admin_client.get(path).get_data(as_text=True)
+    assert "Odrzucono {{ submission_id }}" in page
+    assert "Odrzucono ZGŁ-2026-001" in page
+    form_id = create_form(admin_app, slug="mail_editor_form", name="Mail editor")
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = FormSubmission(submission_id="MAIL-EDITOR-1", form_slug=form.slug,
+                                    form_name=form.name, email="jan@example.com")
+        db.add(submission)
+        db.commit()
+        sent = []
+        dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+        with admin_app.test_request_context("/"):
+            result = dispatcher.dispatch_formatted_notice(
+                db=db, form=form, submission=submission,
+                event_type="auto_rejected_by_condition", recipient=submission.email,
+                template_context={"qualification_message": "Brak danych"})
+        assert result.status == "sent"
+        assert sent[0]["subject"] == "Odrzucono MAIL-EDITOR-1"
+        assert "Powód: Brak danych" in sent[0]["html_body"]
+    with factory() as db:
+        form_template = MailTemplate(form_id=form_id, name="Formularzowe odrzucenie",
+                                     template_type="auto_rejected_by_condition",
+                                     subject="Formularz {{ submission_id }}",
+                                     html_body="<p>{{ qualification_message }}</p>",
+                                     text_body="{{ qualification_message }}", is_active=True)
+        db.add(form_template)
+        db.add(FormSubmission(submission_id="MAIL-EDITOR-2", form_slug="mail_editor_form",
+                              form_name="Mail editor", email="anna@example.com"))
+        db.commit()
+        form_template_id = form_template.id
+    with admin_app.test_request_context("/"):
+        rejection = dispatcher.dispatch_auto_rejected_by_condition(
+            "MAIL-EDITOR-2", {"user_message": "Brak danych"})
+    assert rejection.status == "sent"
+    with factory() as db:
+        log = db.query(EmailLog).filter_by(event_type="auto_rejected_by_condition",
+                                           public_submission_id="MAIL-EDITOR-2").one()
+        assert log.template_id == form_template_id
+    assert admin_client.post(path, data={"csrf_token": token, "action": "restore"}).status_code == 302
+    with factory() as db:
+        assert db.query(PlatformMailTemplate).filter_by(template_type="auto_rejected_by_condition").count() == 0
+        assert dispatcher.resolve_system_template(db, event_type="auto_rejected_by_condition").subject == load_default_template("auto_rejected_by_condition").subject
+
+    survey_path = base + "training_survey_invitation"
+    assert admin_client.post(survey_path, data={
+        "csrf_token": token, "action": "save", "subject": "Ankieta: {{ survey_name }}",
+        "html_body": "<p>Oceń: {{ survey_name }}</p>", "text_body": "Oceń: {{ survey_name }}",
+    }).status_code == 302
+    with factory() as db:
+        form = db.get(Form, form_id)
+        submission = db.query(FormSubmission).filter_by(submission_id="MAIL-EDITOR-1").one()
+        sent = []
+        dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+        with admin_app.test_request_context("/"):
+            result = dispatcher.dispatch_formatted_notice(
+                db=db, form=form, submission=submission,
+                event_type="training_survey_invitation", recipient=submission.email,
+                action_url="https://example.com/ankieta", template_context={"survey_name": "Ocena"})
+        assert result.status == "sent"
+        assert sent[0]["subject"] == "Ankieta: Ocena"
+        assert "Oceń: Ocena" in sent[0]["html_body"]
+        assert "Wypełnij ankietę" in sent[0]["html_body"]
+
+    admin_client.post("/admin/logout", data={"csrf_token": admin_csrf(admin_client)})
+    create_user(admin_app, email="ordinary@example.com", role="admin")
+    login(admin_client, email="ordinary@example.com")
+    assert admin_client.get(path).status_code == 403
+    assert admin_client.post(path, data={**payload, "csrf_token": admin_csrf(admin_client)}).status_code == 403

@@ -467,12 +467,10 @@ def training_attendance_send(form_id: int, training_id: str, session_id: int):
             link = url_for("training_public.attendance", token=token, _external=True)
             result = dispatch.dispatch_formatted_notice(
                 db=db, form=form, submission=submission, event_type="training_attendance_invitation",
-                recipient=submission.email, subject=f"Potwierdź obecność — {session.name}",
-                title="Potwierdzenie obecności", message=(
-                    f"Zapraszamy do potwierdzenia obecności na szkoleniu: {session.name}. "
-                    "To zaproszenie dotyczy Twojego zgłoszenia wskazanego poniżej."),
-                action_text="Otwórz indywidualny link i potwierdź obecność.",
-                action_url=link, action_link_label="Potwierdź obecność", sent_by_id=g.admin_user.id)
+                recipient=submission.email,
+                template_context={"session_name": str(session.name),
+                                  "session_name_lines": str(session.name).split("\n")},
+                action_url=link, sent_by_id=g.admin_user.id)
             if result.log is not None:
                 result.log.html_body = "[Indywidualny link obecności zredagowany]"
                 result.log.text_body = "[Indywidualny link obecności zredagowany]"
@@ -631,11 +629,11 @@ def training_survey_send(form_id: int, training_id: str, survey_id: int):
             link = url_for("training_public.survey", token=token, _external=True)
             result = dispatch.dispatch_formatted_notice(
                 db=db, form=form, submission=submission, event_type="training_survey_invitation",
-                recipient=submission.email, subject=survey.name, title=survey.name,
-                message=("Zapraszamy do wypełnienia ankiety dotyczącej szkolenia powiązanego "
-                         f"z Twoim zgłoszeniem.\n{survey.description}"),
-                action_text="Otwórz indywidualny link i wypełnij ankietę.",
-                action_url=link, action_link_label="Wypełnij ankietę", sent_by_id=g.admin_user.id)
+                recipient=submission.email,
+                template_context={"survey_name": survey.name,
+                                  "survey_description": str(survey.description),
+                                  "survey_description_lines": str(survey.description).split("\n")},
+                action_url=link, sent_by_id=g.admin_user.id)
             if result.log is not None:
                 result.log.html_body = "[Indywidualny link ankiety zredagowany]"
                 result.log.text_body = "[Indywidualny link ankiety zredagowany]"

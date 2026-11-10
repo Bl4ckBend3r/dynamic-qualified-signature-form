@@ -92,10 +92,19 @@
               </button>
 
               <div class="admin-nav-dropdown-menu" hidden>
-                {% if has_permission('can_manage_site') %}<a
-                  href="{{ url_for('admin.system_mail_settings') }}"
-                  >Poczta systemowa</a
-                >{% endif %} {% if g.admin_user.role == 'super_admin' %}<a
+                {% if has_permission('can_manage_site') %}
+                <details class="admin-mail-submenu">
+                  <summary>Poczta systemowa</summary>
+                  <div class="admin-mail-submenu-items">
+                    <a href="{{ url_for('admin.system_mail_mails') }}">
+                      Maile
+                    </a>
+                    <a href="{{ url_for('admin.system_mail_settings') }}">
+                      Ustawienia SMTP
+                    </a>
+                  </div>
+                </details>
+                {% endif %} {% if g.admin_user.role == 'super_admin' %}<a
                   href="{{ url_for('admin.decision_types') }}"
                   >Typy decyzji</a
                 >{% endif %} {% if has_permission('can_manage_users') %}<a

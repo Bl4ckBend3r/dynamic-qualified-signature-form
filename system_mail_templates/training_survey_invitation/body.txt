@@ -1,0 +1,2 @@
+{% if mail_message %}{{ mail_message }}{% else %}Zapraszamy do wypełnienia ankiety dotyczącej szkolenia powiązanego z Twoim zgłoszeniem.
+{{ survey_description }}{% endif %}

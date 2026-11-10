@@ -27,6 +27,9 @@ DEFAULT_LAYOUT = {
     "logo_position": "none",
     "logo_alignment": "center",
     "logo_height_px": 64,
+    "body_background": "#f0f1f5",
+    "card_background": "#ffffff",
+    "light_panel_background": "#f7f3ec",
 }
 DEFAULT_SMTP_TIMEOUT = 10
 
@@ -204,7 +207,19 @@ class MailSettingsService:
             "logo_height_px": _bounded_int(
                 form_data.get("layout_logo_height_px"), DEFAULT_LAYOUT["logo_height_px"], 16, 200
             ),
-        }
+            "body_background": _safe_color(
+                form_data.get("layout_body_background"),
+                DEFAULT_LAYOUT["body_background"],
+            ),
+            "card_background": _safe_color(
+                form_data.get("layout_card_background"),
+                DEFAULT_LAYOUT["card_background"],
+            ),
+            "light_panel_background": _safe_color(
+                form_data.get("layout_light_panel_background"),
+                DEFAULT_LAYOUT["light_panel_background"],
+            ),
+                    }
 
     def test_connection(self, config: Mapping[str, Any]) -> None:
         host = str(config.get("smtp_host") or config.get("host") or "").strip()

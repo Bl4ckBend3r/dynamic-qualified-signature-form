@@ -1,0 +1,2 @@
+Do systemu wpłynęło nowe zgłoszenie.
+Powiadomienie dotyczy formularza wskazanego poniżej. Szczegóły zgłoszenia są dostępne w panelu administracyjnym.

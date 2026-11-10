@@ -24,6 +24,11 @@ from services.footer_logo_service import (
 from services.instruction_html_service import sanitize_instruction_html
 from services.mail_footer_resolver import MailFooterResolver
 from services.mail_recipient_service import MailRecipientResolver
+from services.system_mail_registry import (
+    CONFIRMATION_EVENTS,
+    SYSTEM_MAIL_BY_ID,
+    load_default_template,
+)
 from services.mail_template_service import html_to_text, render_platform_mail_html, render_platform_mail_text, render_template_text
 from services.training_availability_service import TrainingAvailabilityService
 
@@ -299,6 +304,21 @@ class MailDispatchService:
         return self.mail_footer_resolver.resolve(db, mail_type=event_type, form=form, submission=submission)
 
     def _render_submission_message(self, db, *, form, submission, template, context, event_type):
+        from models import PlatformMailTemplate
+
+        presentation = template
+        if isinstance(template, PlatformMailTemplate) and event_type in SYSTEM_MAIL_BY_ID:
+            # CTA wording belongs to the file default, including when the
+            # administrator overrides the editable subject and message body.
+            presentation = load_default_template(event_type)
+        if getattr(presentation, "mail_action_text_template", "") or getattr(presentation, "mail_action_link_label_template", ""):
+            context = dict(context)
+            for key, field in (
+                ("mail_action_text", "mail_action_text_template"),
+                ("mail_action_link_label", "mail_action_link_label_template"),
+            ):
+                if key not in context and getattr(presentation, field, ""):
+                    context[key] = render_template_text(getattr(presentation, field), context)
         if "mail_documents" not in context:
             document = (context.get("document_label") or context.get("signed_agreement_filename")
                         or context.get("signed_filename"))
@@ -322,8 +342,9 @@ class MailDispatchService:
         return html_body, text_body, footer, self._inline_images_from_layout(layout) + footer_images
 
     def dispatch_formatted_notice(self, *, db, form, submission, event_type, recipient,
-                                  subject, title, message, sent_by_id=None,
-                                  action_text="", action_url="", action_link_label=""):
+                                  subject="", title="", message="", sent_by_id=None,
+                                  action_text="", action_url="", action_link_label="",
+                                  template_context=None):
         """Render a plain event notice through the same submission mail layout."""
         context = self.build_context_for_submission(form, submission, [])
         version = getattr(submission, "form_version", None)
@@ -334,15 +355,28 @@ class MailDispatchService:
             mail_details=(("Numer zgłoszenia", submission.submission_id),
                           ("Formularz", str(definition.get("title") or form.title or form.name)),
                           ("Data", event_at)),
-            mail_action_text=action_text,
             mail_action_url=action_url,
-            mail_action_link_label=action_link_label,
         )
-        template = SimpleNamespace(
-            content_title=title,
-            html_body="<p>" + escape(message).replace("\n", "<br>") + "</p>",
-            body_text=message,
-        )
+        if event_type in SYSTEM_MAIL_BY_ID:
+            context.update(template_context or {})
+            if action_text:
+                context["mail_action_text"] = action_text
+            if action_link_label:
+                context["mail_action_link_label"] = action_link_label
+            if message:
+                context["mail_message"] = message
+                context["mail_message_lines"] = message.split("\n")
+            template = self.resolve_system_template(db, event_type=event_type, form=form)
+            if title:
+                template.content_title = title
+            subject = self.render_subject(subject or template.subject, context)
+        else:
+            context.update(mail_action_text=action_text, mail_action_link_label=action_link_label)
+            template = SimpleNamespace(
+                content_title=title,
+                html_body="<p>" + escape(message).replace("\n", "<br>") + "</p>",
+                body_text=message,
+            )
         html_body, text_body, footer, inline_images = self._render_submission_message(
             db, form=form, submission=submission, template=template, context=context,
             event_type=event_type)
@@ -406,6 +440,42 @@ class MailDispatchService:
         if candidates:
             return sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)[0][2]
         return templates[0] if not event_type else None
+
+    def resolve_system_template(self, db, *, event_type: str, form=None):
+        """Apply the registered source priority, then read the file default."""
+        from models import MailTemplate, PlatformMailTemplate
+        from sqlalchemy import or_, select
+
+        mail_type = SYSTEM_MAIL_BY_ID[event_type]
+        policy = mail_type.source_policy
+        if policy in {"form_platform_fallback", "form_fallback"} and form is not None:
+            conditions = [MailTemplate.template_type == event_type]
+            if mail_type.form_match == "type_or_trigger":
+                conditions.append(MailTemplate.trigger_event == event_type)
+            if mail_type.form_trigger_status:
+                conditions.append(MailTemplate.trigger_status == mail_type.form_trigger_status)
+            query = select(MailTemplate).where(
+                MailTemplate.form_id == form.id,
+                MailTemplate.is_active.is_(True),
+                or_(*conditions),
+            )
+            if mail_type.form_order == "default_then_latest":
+                query = query.order_by(MailTemplate.is_default_for_status.desc(), MailTemplate.id.desc())
+            else:
+                query = query.order_by(MailTemplate.id.desc())
+            template = db.execute(query).scalars().first()
+            if template is not None:
+                return template
+        # Every registered type can have a global administrator override.  Form
+        # templates still win where the type permits them.
+        if policy in {"platform_required", "form_platform_fallback", "form_fallback", "dynamic"}:
+            query = select(PlatformMailTemplate).where(PlatformMailTemplate.template_type == event_type)
+            if policy != "platform_required":
+                query = query.where(PlatformMailTemplate.is_active.is_(True))
+            template = db.execute(query).scalar_one_or_none()
+            if template is not None:
+                return template
+        return load_default_template(event_type)
 
     def mail_template_type_score(self, template, submission) -> int:
         return mail_template_type_score(template, submission)
@@ -862,26 +932,19 @@ class MailDispatchService:
                 received = submitted_at.strftime("%d.%m.%Y, %H:%M:%S")
             else:
                 received = str(submitted_at or "")
-            subject = f"Nowe zgłoszenie — {title}"
             context = {
                 "form_name": title, "submission_id": public_id,
                 "mail_details": (("Numer zgłoszenia", public_id), ("Formularz", title),
                                  ("Data wpływu", received)),
             }
-            template = SimpleNamespace(
-                content_title=title,
-                html_body=("<p>Do systemu wpłynęło nowe zgłoszenie.</p>"
-                           "<p>Powiadomienie dotyczy formularza wskazanego poniżej. "
-                           "Szczegóły zgłoszenia są dostępne w panelu administracyjnym.</p>"),
-                body_text=("Do systemu wpłynęło nowe zgłoszenie.\n"
-                           "Powiadomienie dotyczy formularza wskazanego poniżej. "
-                           "Szczegóły zgłoszenia są dostępne w panelu administracyjnym."),
-            )
+            template = self.resolve_system_template(
+                db, event_type=NEW_SUBMISSION_ADMIN_EVENT, form=form)
             html_body, text_body, footer, inline_images = self._render_submission_message(
                 db, form=form, submission=submission, template=template, context=context,
                 event_type=NEW_SUBMISSION_ADMIN_EVENT)
             result = self.dispatch_raw(
-                event_type=NEW_SUBMISSION_ADMIN_EVENT, recipient=recipient, subject=subject,
+                event_type=NEW_SUBMISSION_ADMIN_EVENT, recipient=recipient,
+                subject=self.render_subject(template.subject, context),
                 html_body=html_body, text_body=text_body, db=db, form=form, submission=submission,
                 footer=footer, inline_images=inline_images,
             )
@@ -974,27 +1037,19 @@ class MailDispatchService:
                                  ("Dokument", document_label),
                                  ("Data wpływu", received)),
                 "mail_documents": [document_label],
-                "mail_action_text": "Sprawdź otrzymany dokument i kontynuuj obsługę zgłoszenia w panelu administracyjnym.",
             }
             if has_request_context():
                 admin_url = url_for("admin.submission_detail", form_id=form.id,
                                     submission_pk=submission.id, _external=True)
                 context["mail_action_url"] = admin_url
-            template = SimpleNamespace(
-                content_title="Powiadomienie o otrzymaniu dokumentu",
-                html_body=("<p>Otrzymano dokument związany ze zgłoszeniem.</p>"
-                           "<p>Wiadomość dotyczy zgłoszenia przesłanego za pomocą wskazanego formularza. "
-                           "Poniżej znajdują się szczegóły zdarzenia i zarejestrowany dokument.</p>"),
-                body_text=("Otrzymano dokument związany ze zgłoszeniem.\n"
-                           "Wiadomość dotyczy zgłoszenia przesłanego za pomocą wskazanego formularza. "
-                           "Poniżej znajdują się szczegóły zdarzenia i zarejestrowany dokument."),
-            )
+            template = self.resolve_system_template(
+                db, event_type=DOCUMENT_RECEIVED_ADMIN_EVENT, form=form)
             html_body, text_body, footer, inline_images = self._render_submission_message(
                 db, form=form, submission=submission, template=template, context=context,
                 event_type=DOCUMENT_RECEIVED_ADMIN_EVENT)
             result = self.dispatch_raw(
                 event_type=DOCUMENT_RECEIVED_ADMIN_EVENT, recipient=recipient,
-                subject=f"Wpłynął dokument — {title}", html_body=html_body,
+                subject=self.render_subject(template.subject, context), html_body=html_body,
                 text_body=text_body, db=db, form=form, submission=submission,
                 footer=footer, inline_images=inline_images,
             )
@@ -1013,7 +1068,7 @@ class MailDispatchService:
         if not database_url:
             return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
         from database import create_session_factory
-        from models import Form, FormSubmission, PlatformMailTemplate
+        from models import Form, FormSubmission
         from sqlalchemy import select
 
         with create_session_factory(database_url)() as db:
@@ -1025,9 +1080,7 @@ class MailDispatchService:
             if submission is None:
                 return MailDispatchResult("skipped", error_message="Brak zgłoszenia.")
             form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
-            template = db.execute(
-                select(PlatformMailTemplate).where(PlatformMailTemplate.template_type == "submission_received")
-            ).scalar_one_or_none()
+            template = self.resolve_system_template(db, event_type="submission_received")
             if form is None or template is None or not template.is_active:
                 current_app.logger.warning("mail_skipped reason=submission_template_missing_or_inactive form_slug=%s", submission.form_slug)
                 log = self.log_email(
@@ -1046,7 +1099,7 @@ class MailDispatchService:
                     log=log,
                 )
             definition = (submission.form_version.definition_json if submission.form_version else form.definition_json) or {}
-            for event in ('submission_created', 'submission_received'):
+            for event in CONFIRMATION_EVENTS:
                 sources = MailRecipientResolver.configured_sources(definition, event, template, step_id=submission.workflow_stage or submission.workflow_step)
                 if sources is not None:
                     return self._dispatch_record_notifications(db=db, form=form, submission=submission, template=template,
@@ -1120,8 +1173,8 @@ class MailDispatchService:
         if not database_url:
             return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
         from database import create_session_factory
-        from models import Form, FormDraft, MailTemplate
-        from sqlalchemy import or_, select
+        from models import Form, FormDraft
+        from sqlalchemy import select
 
         with create_session_factory(database_url)() as db:
             draft = db.execute(select(FormDraft).where(FormDraft.public_id == draft_public_id)).scalar_one_or_none()
@@ -1130,24 +1183,7 @@ class MailDispatchService:
             form = db.get(Form, draft.form_id)
             if form is None:
                 return MailDispatchResult("skipped", error_message="Brak formularza.")
-            template = db.execute(
-                select(MailTemplate)
-                .where(
-                    MailTemplate.form_id == form.id,
-                    MailTemplate.is_active.is_(True),
-                    or_(MailTemplate.template_type == "form_draft_resume", MailTemplate.trigger_event == "form_draft_resume"),
-                )
-                .order_by(MailTemplate.id.desc())
-            ).scalars().first()
-            if template is None:
-                template = SimpleNamespace(
-                    name="Link do wersji roboczej formularza",
-                    subject="Dokończ formularz {{ form_title }}",
-                    html_body='<p>Twoja wersja robocza została zapisana.</p><p><a href="{{ draft_resume_url }}">Dokończ formularz</a></p><p>Link wygasa: {{ draft_expires_at }}</p>',
-                    text_body="Twoja wersja robocza została zapisana.\n{{ draft_resume_url }}\nLink wygasa: {{ draft_expires_at }}",
-                    is_active=True,
-                    show_process_status=False,
-                )
+            template = self.resolve_system_template(db, event_type="form_draft_resume", form=form)
             result = self.dispatch_to_submission(
                 db=db,
                 form=form,
@@ -1307,26 +1343,12 @@ class MailDispatchService:
         *,
         operation_id: str = "",
     ) -> MailDispatchResult:
-        message = str(evaluation.get("user_message") or "").strip() or (
-            "Zgłoszenie zostało zapisane, ale nie spełnia warunków udziału."
-        )
+        message = str(evaluation.get("user_message") or "").strip()
+        if not message:
+            message = load_default_template("auto_rejected_by_condition").context_defaults["qualification_message"]
         return self._dispatch_special_submission_event(
             submission_id,
             event_type="auto_rejected_by_condition",
-            default_name="Odrzucenie zgłoszenia",
-            default_subject="Zgłoszenie {{ submission_id }} nie spełnia warunków udziału",
-            default_html=(
-                "<p>Przeprowadzono ocenę warunków udziału dla Twojego zgłoszenia.</p>"
-                "<p>{{ qualification_message }}</p>"
-                "<p>Poniżej znajdują się dane zgłoszenia, którego dotyczy ten wynik. "
-                "W razie pytań skontaktuj się z organizatorem formularza.</p>"
-            ),
-            default_text=(
-                "Przeprowadzono ocenę warunków udziału dla Twojego zgłoszenia.\n"
-                "{{ qualification_message }}\n"
-                "Poniżej znajdują się dane zgłoszenia, którego dotyczy ten wynik. "
-                "W razie pytań skontaktuj się z organizatorem formularza."
-            ),
             extra_context={
                 "qualification_message": message,
                 "qualification_message_html": escape(message),
@@ -1344,38 +1366,20 @@ class MailDispatchService:
         recipient: str = "",
         operation_id: str = "",
     ) -> MailDispatchResult:
+        defaults = load_default_template("returned_for_correction").context_defaults
+        clear_info = defaults[
+            "correction_clear_info_cleared" if cleared else "correction_clear_info_retained"
+        ]
         return self._dispatch_special_submission_event(
             submission_id,
             event_type="returned_for_correction",
-            default_name="Zgłoszenie wysłane do poprawy",
-            default_subject="Zgłoszenie {{ submission_id }} wymaga poprawy",
-            default_html=(
-                "<p>Zgłoszenie wymaga ponownego uzupełnienia.</p>"
-                "<p><strong>Powód:</strong> {{ correction_reason }}</p>"
-                "<p>{{ correction_message }}</p>"
-                "<p>{{ correction_clear_info }}</p>"
-                '<p><a href="{{ correction_url }}">Uzupełnij formularz ponownie</a></p>'
-            ),
-            default_text=(
-                "Zgłoszenie wymaga ponownego uzupełnienia.\n"
-                "Powód: {{ correction_reason }}\n{{ correction_message }}\n"
-                "{{ correction_clear_info }}\n{{ correction_url }}"
-            ),
             extra_context={
                 "correction_reason": reason,
                 "correction_reason_html": escape(reason),
                 "correction_message": message_to_user,
                 "correction_message_html": escape(message_to_user),
-                "correction_clear_info": (
-                    "Poprzednie dane zostały wyczyszczone."
-                    if cleared
-                    else "Poprzednie dane pozostawiono do ponownej edycji."
-                ),
-                "correction_clear_info_html": escape(
-                    "Poprzednie dane zostały wyczyszczone."
-                    if cleared
-                    else "Poprzednie dane pozostawiono do ponownej edycji."
-                ),
+                "correction_clear_info": clear_info,
+                "correction_clear_info_html": escape(clear_info),
             },
             recipient=recipient,
             include_correction_url=True,
@@ -1387,10 +1391,6 @@ class MailDispatchService:
         submission_id: str,
         *,
         event_type: str,
-        default_name: str,
-        default_subject: str,
-        default_html: str,
-        default_text: str,
         extra_context: dict,
         recipient: str = "",
         include_correction_url: bool = False,
@@ -1400,7 +1400,7 @@ class MailDispatchService:
         if not database_url:
             return MailDispatchResult("skipped", error_message="Brak bazy konfiguracji maili.")
         from database import create_session_factory
-        from models import Form, FormSubmission, MailTemplate, PlatformMailTemplate
+        from models import Form, FormSubmission
         from sqlalchemy import select
 
         with create_session_factory(database_url)() as db:
@@ -1414,30 +1414,7 @@ class MailDispatchService:
             form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
             if form is None:
                 return MailDispatchResult("skipped", error_message="Brak formularza.")
-            template = db.execute(
-                select(MailTemplate)
-                .where(
-                    MailTemplate.form_id == form.id,
-                    MailTemplate.template_type == event_type,
-                    MailTemplate.is_active.is_(True),
-                )
-                .order_by(MailTemplate.id.desc())
-            ).scalars().first()
-            if template is None:
-                template = db.execute(
-                    select(PlatformMailTemplate).where(
-                        PlatformMailTemplate.template_type == event_type,
-                        PlatformMailTemplate.is_active.is_(True),
-                    )
-                ).scalar_one_or_none()
-            if template is None:
-                template = SimpleNamespace(
-                    name=default_name,
-                    subject=default_subject,
-                    html_body=default_html,
-                    text_body=default_text,
-                    is_active=True,
-                )
+            template = self.resolve_system_template(db, event_type=event_type, form=form)
             context = dict(extra_context)
             if include_correction_url:
                 context["correction_url"] = url_for(
@@ -1500,8 +1477,11 @@ class MailDispatchService:
                 str(value or '').replace(credential, '[redacted]')
                 for value in (subject, html_body, text_body, error_message)
             )
+        template_log_id = None
         try:
-            from models import EmailLog
+            from models import EmailLog, MailTemplate
+            if isinstance(template, MailTemplate):
+                template_log_id = getattr(template, "id", None)
 
             log = EmailLog(
                 form_id=getattr(form, "id", None),
@@ -1511,7 +1491,7 @@ class MailDispatchService:
                 subject=subject or "",
                 html_body=html_body or "",
                 text_body=text_body or "",
-                template_id=getattr(template, "id", None),
+                template_id=template_log_id,
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,
                 status=status,
@@ -1529,7 +1509,7 @@ class MailDispatchService:
                 subject=subject or "",
                 html_body=html_body or "",
                 text_body=text_body or "",
-                template_id=getattr(template, "id", None),
+                template_id=template_log_id,
                 footer_id=getattr(footer, "id", None),
                 sent_by_id=sent_by_id,
                 status=status,

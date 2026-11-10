@@ -1,0 +1,5 @@
+Zgłoszenie wymaga ponownego uzupełnienia.
+Powód: {{ correction_reason }}
+{{ correction_message }}
+{{ correction_clear_info }}
+{{ correction_url }}

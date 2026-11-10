@@ -1969,36 +1969,8 @@ def _request_bool(payload, key: str, *, default: bool) -> bool:
 
 
 def _send_stage_rollback_email(db, form, submission, reason: str, target_status: str):
-    template = db.execute(
-        select(MailTemplate)
-        .where(
-            MailTemplate.form_id == form.id,
-            MailTemplate.template_type == "stage_rollback",
-            MailTemplate.is_active.is_(True),
-        )
-        .order_by(MailTemplate.id.desc())
-    ).scalars().first()
-    if template is None:
-        template = MailTemplate(
-            form_id=form.id,
-            name="Cofnięcie etapu zgłoszenia",
-            template_type="stage_rollback",
-            subject="Cofnięto etap zgłoszenia {{ submission_id }}",
-            content_html=(
-                "<p>Etap Twojego zgłoszenia został cofnięty.</p>"
-                "<p><strong>Aktualny status:</strong> {{ rollback_status_label }}</p>"
-                "<p><strong>Powód:</strong> {{ rollback_reason }}</p>"
-                "<p>{{ rollback_next_action }}</p>"
-            ),
-            content_text=(
-                "Etap Twojego zgłoszenia został cofnięty.\n"
-                "Aktualny status: {{ rollback_status_label }}\n"
-                "Powód: {{ rollback_reason_text }}\n"
-                "{{ rollback_next_action_text }}"
-            ),
-            use_platform_layout=True,
-            is_active=True,
-        )
+    template = current_app.extensions["services"].mail_dispatch_service.resolve_system_template(
+        db, event_type="stage_rollback", form=form)
 
     footer = db.execute(
         select(MailFooter)
@@ -2015,7 +1987,8 @@ def _send_stage_rollback_email(db, form, submission, reason: str, target_status:
     )
     next_action = str(instruction.get("next_action") or "").strip()
     if not next_action:
-        next_action = "Sprawdź aktualny status i dalsze instrukcje w aplikacji."
+        from services.system_mail_registry import load_default_template
+        next_action = load_default_template("stage_rollback").context_defaults["rollback_next_action"]
     services = current_app.extensions["services"]
     files = services.submission_document_service.list_documents(submission.submission_id)
     return services.mail_dispatch_service.dispatch_to_submission(
@@ -2072,81 +2045,8 @@ def _notify_beneficiary_agreement_decision(
         else "agreement_rejected_by_office"
     )
 
-    template = db.execute(
-        select(MailTemplate)
-        .where(
-            MailTemplate.form_id == form.id,
-            MailTemplate.is_active.is_(True),
-            (
-                (MailTemplate.template_type == template_type)
-                | (MailTemplate.trigger_event == template_type)
-                | (
-                    MailTemplate.trigger_status
-                    == ProcessStatus.AGREEMENT_SIGNED_BY_OFFICE.value
-                )
-            ),
-        )
-        .order_by(
-            MailTemplate.is_default_for_status.desc(),
-            MailTemplate.id.desc(),
-        )
-    ).scalars().first()
-
-    if template is None:
-        template = MailTemplate(
-            form_id=form.id,
-            name=(
-                "Umowa podpisana przez urząd"
-                if confirmed
-                else "Decyzja dotycząca podpisanej umowy"
-            ),
-            template_type=template_type,
-            subject=(
-                "Umowa została podpisana przez urząd"
-                if confirmed
-                else "Decyzja dotycząca umowy {{ submission_id }}"
-            ),
-            content_html=(
-                (
-                    "<p>Dzień dobry,</p>"
-                    "<p>informujemy, że umowa dotycząca zgłoszenia "
-                    "{{ public_submission_id }} została podpisana przez urząd.</p>"
-                    "<p>Formularz: {{ form_title }}<br>"
-                    "Numer zgłoszenia: {{ public_submission_id }}</p>"
-                    "{{ signed_agreements_table }}"
-                    "{% if signed_agreement_download_link %}"
-                    "<p><a href=\"{{ signed_agreement_download_link }}\">"
-                    "Pobierz podpisaną umowę</a></p>"
-                    "{% endif %}"
-                    "<p>Pozdrawiamy,<br>zespół platformy</p>"
-                )
-                if confirmed
-                else (
-                    "<p>Podpisana umowa wymaga poprawy.</p>"
-                    "<p><strong>Powód:</strong> {{ agreement_decision_reason }}</p>"
-                )
-            ),
-            content_text=(
-                (
-                    "Dzień dobry,\n\n"
-                    "informujemy, że umowa dotycząca zgłoszenia "
-                    "{{ public_submission_id }} została podpisana przez urząd.\n"
-                    "Formularz: {{ form_title }}\n"
-                    "Numer zgłoszenia: {{ public_submission_id }}\n"
-                    "{{ signed_agreements_text }}\n"
-                    "{{ signed_agreement_download_link }}\n\n"
-                    "Pozdrawiamy,\n"
-                    "zespół platformy"
-                )
-                if confirmed
-                else (
-                    "Podpisana umowa wymaga poprawy. "
-                    "Powód: {{ agreement_decision_reason_text }}"
-                )
-            ),
-            use_platform_layout=True,
-            is_active=True,
-        )
+    template = current_app.extensions["services"].mail_dispatch_service.resolve_system_template(
+        db, event_type=template_type, form=form)
 
     footer = db.execute(
         select(MailFooter)

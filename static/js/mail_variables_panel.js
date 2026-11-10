@@ -34,7 +34,29 @@ document.addEventListener("DOMContentLoaded", () => {
         panel.querySelector("[data-variable-collapse]")?.addEventListener("click", () => setCollapsed(true));
         panel.querySelector("[data-variable-expand]")?.addEventListener("click", () => setCollapsed(false));
 
-        panel.addEventListener("click", (event) => {
+        panel.addEventListener("click", async (event) => {
+            const copy = event.target.closest("[data-copy-variable]");
+            if (copy) {
+                try {
+                    if (navigator.clipboard?.writeText) {
+                        await navigator.clipboard.writeText(copy.dataset.copyVariable);
+                    } else {
+                        const holder = document.createElement("textarea");
+                        holder.value = copy.dataset.copyVariable;
+                        holder.style.position = "fixed";
+                        holder.style.opacity = "0";
+                        document.body.append(holder);
+                        holder.select();
+                        const copied = document.execCommand("copy");
+                        holder.remove();
+                        if (!copied) throw new Error("copy_failed");
+                    }
+                    if (feedback) feedback.textContent = `Skopiowano ${copy.dataset.copyVariable}.`;
+                } catch (_error) {
+                    if (feedback) feedback.textContent = "Nie udało się skopiować zmiennej.";
+                }
+                return;
+            }
             const button = event.target.closest("[data-insert-variable]");
             if (!button) return;
             target = target || fallback;

@@ -1,0 +1,1 @@
+{% if mail_message %}{{ mail_message }}{% else %}Zapraszamy do potwierdzenia obecności na szkoleniu: {{ session_name }}. To zaproszenie dotyczy Twojego zgłoszenia wskazanego poniżej.{% endif %}

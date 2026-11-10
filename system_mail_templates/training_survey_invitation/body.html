@@ -1,0 +1,2 @@
+<!-- system-mail: {"content_title":"{{ survey_name }}","action_text":"Otwórz indywidualny link i wypełnij ankietę.","action_link_label":"Wypełnij ankietę"} -->
+<p>{% if mail_message %}{% for line in mail_message_lines %}{% if not loop.first %}<br>{% endif %}{{ line }}{% endfor %}{% else %}Zapraszamy do wypełnienia ankiety dotyczącej szkolenia powiązanego z Twoim zgłoszeniem.<br>{% for line in survey_description_lines %}{% if not loop.first %}<br>{% endif %}{{ line }}{% endfor %}{% endif %}</p>

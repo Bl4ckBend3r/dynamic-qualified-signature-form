@@ -1,0 +1,66 @@
+
+{% extends "admin/base.html" %}
+{% block title %}Maile systemowe{% endblock %}
+
+{% block content %}
+
+<div class="admin-page-title">
+  <div>
+    <h1>Maile systemowe</h1>
+    <p>Szablony wiadomości generowanych przez platformę.</p>
+  </div>
+</div>
+
+<div class="admin-card">
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Nazwa wiadomości</th>
+          <th>Zdarzenie</th>
+          <th>Źródło</th>
+          <th>Pliki</th>
+          <th>Akcja</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>
+            <strong>{{ item.type.name }}</strong>
+            <div>
+              <small>{{ item.type.id }}</small>
+            </div>
+          </td>
+          <td>{{ item.type.trigger }}</td>
+          <td>
+            {% if item.saved and item.saved.is_active %}
+              Aktywny wpis w bazie
+            {% else %}
+              Brak aktywnego wpisu w bazie
+            {% endif %}
+          </td>
+          <td>
+            {% if item.error %}
+              <span style="color:#dc7070;">Błąd odczytu</span>
+            {% else %}
+              Kompletne
+            {% endif %}
+          </td>
+          <td>
+            <a class="admin-button-secondary"
+               href="{{ url_for(
+                 'admin.system_mail_template_detail',
+                 mail_type_id=item.type.id
+               ) }}">
+              Szczegóły
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

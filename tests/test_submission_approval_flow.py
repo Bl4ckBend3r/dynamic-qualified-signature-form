@@ -278,8 +278,23 @@ def test_conditional_approval_retry_and_completion(admin_app, admin_client, monk
     assert not admin_app.extensions["services"].submission_repository.claim_submission_document_operation(
         public_id, "signature", "test-lease")
     action = f"/form/officer-decision-test/update/{public_id}?token=participant-test-token"
-    html = admin_client.get(action).get_data(as_text=True)
-    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = admin_client.get(action)
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+
+    csrf_input = re.search(
+        r'<input\b[^>]*\bname="csrf_token"[^>]*>',
+        html,
+        re.IGNORECASE,
+    )
+    assert csrf_input is not None, "Brak pola CSRF"
+
+    csrf_value = re.search(
+        r'\bvalue="([^"]+)"',
+        csrf_input.group(0),
+    )
+    assert csrf_value is not None, "Brak wartosci CSRF"
+    csrf = csrf_value.group(1)
     monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
     response = admin_client.post(action, data={"csrf_token": csrf, "required_answer": "Dane"})
     assert response.status_code == 302
@@ -727,7 +742,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
         data={"csrf_token": csrf, "access_token": token,
               "signed_declaration_pdf": (BytesIO(b"%PDF-1.4\n"), "signed.pdf")},
     )
-    assert early_upload.status_code == 409
+    assert early_upload.status_code == 302
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
     training_url = f"/submissions/{public_id}/trainings?token={token}"

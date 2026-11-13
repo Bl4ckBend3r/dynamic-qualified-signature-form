@@ -443,16 +443,45 @@ class WorkflowService:
                         except FormVersionError as exc:
                             raise WorkflowTransitionError(str(exc)) from exc
                 if (
-                    str(actor or "").strip().lower()
-                    in {"participant", "user"}
-                    and self._decision_requires_complete_data(
-                        model,
-                        code,
-                    )
+                    self._decision_requires_complete_data(model, code)
+                    and not ConditionalApproval.active(model)
                 ):
-
                     try:
-                        FormVersionService().require_submission_data_complete(db, model)
+                        version_service = FormVersionService()
+
+                        if code:
+                            category = DecisionDefinitionService().resolve(
+                                model, code, scope="submission"
+                            ).get("semantic_category")
+
+                            if category == "positive":
+                                definition = (
+                                    model.form_version.definition_json
+                                    if model.form_version
+                                    else form_config or {}
+                                )
+
+                                if not definition:
+                                    raise FormVersionError(
+                                        "Brak konfiguracji formularza."
+                                    )
+
+                                errors = version_service.submission_data_errors(
+                                    model,
+                                    definition,
+                                    step=current_workflow_step(submission),
+                                    db=db,
+                                )
+
+                                if errors:
+                                    raise FormVersionError(
+                                        "Przed pozytywną decyzją uzupełnij wymagane dane."
+                                    )
+
+                        version_service.require_submission_data_complete(
+                            db, model
+                        )
+
                     except FormVersionError as exc:
                         raise WorkflowTransitionError(str(exc)) from exc
         old_step = current_workflow_step(submission)

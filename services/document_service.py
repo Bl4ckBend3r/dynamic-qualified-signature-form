@@ -182,7 +182,7 @@ class DocumentService:
                 from services.form_version_service import FormVersionError
                 raise FormVersionError("Przed przygotowaniem dokumentów uzupełnij i rozlicz warunkową decyzję.")
             if (record.data_json or {}).get("_form_version_upgrade"):
-                FormVersionService().require_submission_data_complete(db, record, allow_conditional=False)
+                FormVersionService().require_submission_data_complete(db, record)
 
     def generate_document(
         self,

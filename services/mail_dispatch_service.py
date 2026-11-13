@@ -102,24 +102,29 @@ class MailDispatchService:
     def dispatch_workflow_decision_event(self, *, db, form, submission, decision, actor_id=None, group_config=None, step_config=None):
         """Consume a configured decision event; all automatic delivery stays here."""
         from sqlalchemy import select
-        from models import EmailLog, SubmissionDecision
+        from models import EmailLog, RepeatableGroupItemDecision, SubmissionDecision
 
-        definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         definition = (submission.form_version.definition_json if submission.form_version else {}) or {}
         workflow = definition.get("workflow") or {}
         item_event = decision is not None
+        saved_decision = None
 
         if workflow.get("flow_mode") == "explicit" and not item_event:
-            if not workflow.get("send_email_notifications", False):
+            saved_decision = db.execute(select(SubmissionDecision).where(
+                SubmissionDecision.submission_id == submission.id,
+            ).order_by(SubmissionDecision.id.desc())).scalars().first()
+            if saved_decision is None or saved_decision.decision != submission.officer_decision:
                 return None
-
-            decision_value = str(submission.officer_decision or "").strip().lower()
-
+            event = {
+                "positive": "officer_accepted",
+                "negative": "officer_rejected",
+                "correction": "returned_for_correction",
+            }.get(saved_decision.semantic_category)
             notification_id = {
-                "accepted": "application_accepted",
-                "rejected": "application_rejected",
+                "positive": "application_accepted",
+                "negative": "application_rejected",
                 "correction": "correction_required",
-            }.get(decision_value)
+            }.get(saved_decision.semantic_category)
 
             config = next(
                 (
@@ -131,12 +136,29 @@ class MailDispatchService:
                 {},
             )
 
-            enabled = bool(
+            enabled = bool(workflow.get("send_email_notifications", False) and
                 config.get("enabled", False)
                 and config.get("automatic", False)
             )
+            triggered_template = self.select_template(
+                list(form.mail_templates), submission, event,
+                process_status=saved_decision.previous_status,
+                decision_code=saved_decision.decision,
+                require_event_trigger=True,
+            ) if event else None
+            if not enabled and triggered_template is None:
+                return None
+            template_type = str(config.get("template_type") or "repeatable_item_decision")
+            template = triggered_template or self.select_template(
+                list(form.mail_templates), submission, template_type,
+                process_status=saved_decision.previous_status,
+                decision_code=saved_decision.decision,
+            )
+            dispatch_event = event if triggered_template is not None else template_type
 
         elif workflow.get("flow_mode") == "explicit":
+            if decision.id is None or db.get(RepeatableGroupItemDecision, decision.id) is None:
+                return None
             step = step_config or next(
                 (
                     s
@@ -152,10 +174,12 @@ class MailDispatchService:
             config = (group_config or {}).get("decision_email") or {}
             enabled = config.get("automatic", False)
 
-        if not enabled:
-            return None
-        template_type = str(config.get("template_type") or "repeatable_item_decision")
-        template = self.select_template(list(form.mail_templates), submission, template_type)
+        if item_event or workflow.get("flow_mode") != "explicit":
+            if not enabled:
+                return None
+            template_type = str(config.get("template_type") or "repeatable_item_decision")
+            template = self.select_template(list(form.mail_templates), submission, template_type)
+            dispatch_event = template_type
         participant = dict(decision.participant_snapshot_json or {}) if item_event else {}
         recipient = str(participant.get("email") or "") if item_event else str(submission.email or "")
         if item_event:
@@ -175,10 +199,12 @@ class MailDispatchService:
         if item_event:
             context["decision_date"] = decision.decided_at
         else:
-            decision_id = db.execute(select(SubmissionDecision.id).where(SubmissionDecision.submission_id == submission.id)
-                .order_by(SubmissionDecision.id.desc())).scalars().first()
+            decision_id = saved_decision.id if saved_decision else db.execute(
+                select(SubmissionDecision.id).where(SubmissionDecision.submission_id == submission.id)
+                .order_by(SubmissionDecision.id.desc())
+            ).scalars().first()
         result = self.dispatch_to_submission(db=db, form=form, submission=submission, template=template,
-            to_email=recipient, event_type=template_type, sent_by_id=actor_id, extra_context=context,
+            to_email=recipient, event_type=dispatch_event, sent_by_id=actor_id, extra_context=context,
             recipient_source=config.get("recipient_source"),
             event_id=f"item_decision:{decision.id}" if item_event else f"submission_decision:{decision_id}" if decision_id else "",
             at_most_once_key=f"item_decision:{decision.id}" if item_event else f"submission_decision:{decision_id}" if decision_id else "",
@@ -401,7 +427,9 @@ class MailDispatchService:
     def _footer_logo_dimension(value, minimum: int, maximum: int) -> int | None:
         return normalize_footer_logo_dimension(value, minimum, maximum)
 
-    def select_template(self, templates: list[Any], submission=None, event_type: str | None = None):
+    def select_template(self, templates: list[Any], submission=None, event_type: str | None = None,
+                        *, process_status: str | None = None, decision_code: str | None = None,
+                        require_event_trigger: bool = False):
         if not templates:
             return None
         if submission is None and not event_type:
@@ -410,12 +438,16 @@ class MailDispatchService:
         for template in templates:
             if getattr(template, "is_active", True) is False:
                 continue
+            if require_event_trigger and not getattr(template, "trigger_event", ""):
+                continue
             if event_type and getattr(template, "trigger_event", "") and template.trigger_event != event_type:
                 continue
             if submission is not None:
-                if getattr(template, "trigger_status", "") and template.trigger_status != getattr(submission, "process_status", ""):
+                status = process_status if process_status is not None else getattr(submission, "process_status", "")
+                selected_decision = decision_code if decision_code is not None else getattr(submission, "officer_decision", "")
+                if getattr(template, "trigger_status", "") and template.trigger_status != status:
                     continue
-                if getattr(template, "trigger_decision", "") and template.trigger_decision != getattr(submission, "officer_decision", ""):
+                if getattr(template, "trigger_decision", "") and template.trigger_decision != selected_decision:
                     continue
                 type_score = self.mail_template_type_score(template, submission)
             else:
@@ -432,8 +464,8 @@ class MailDispatchService:
                 continue
             score = 0
             score += 8 if event_type and getattr(template, "trigger_event", "") == event_type else 0
-            score += 4 if submission is not None and getattr(template, "trigger_decision", "") == getattr(submission, "officer_decision", "") else 0
-            score += 2 if submission is not None and getattr(template, "trigger_status", "") == getattr(submission, "process_status", "") else 0
+            score += 4 if submission is not None and getattr(template, "trigger_decision", "") and template.trigger_decision == selected_decision else 0
+            score += 2 if submission is not None and getattr(template, "trigger_status", "") and template.trigger_status == status else 0
             score += type_score
             score += 1 if getattr(template, "is_default_for_status", False) else 0
             candidates.append((score, getattr(template, "id", 0) or 0, template))

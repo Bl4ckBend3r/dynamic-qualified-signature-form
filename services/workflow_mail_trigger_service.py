@@ -128,6 +128,24 @@ class WorkflowMailTriggerService:
                     if code:
                         decisions.append(self._decision(code, stage_id, stage_label))
 
+        for decision in workflow.get("decision_types") or []:
+            if not isinstance(decision, Mapping) or not self._is_enabled(decision):
+                continue
+            stage_id = str(decision.get("step_id") or "").strip()
+            if stage_id and stage_id not in active_step_ids:
+                continue
+            code = str(decision.get("code") or "").strip()
+            if code:
+                stage = next((item for item in steps if item.get("id") == stage_id), {})
+                decisions.append(self._decision(code, stage_id, self._stage_label(stage)))
+            event = {
+                "positive": "officer_accepted",
+                "negative": "officer_rejected",
+                "correction": "returned_for_correction",
+            }.get(decision.get("semantic_category"))
+            if event:
+                events.append(self._event(event, stage_id=stage_id))
+
         for collection in (
             definition.get("notifications") if isinstance(definition, Mapping) else None,
             workflow.get("notifications"),

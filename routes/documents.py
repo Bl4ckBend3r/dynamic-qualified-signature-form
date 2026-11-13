@@ -583,12 +583,25 @@ def upload_signed_declaration(slug: str, submission_id: str):
     form_config = get_form_config(slug, submission_id) or {}
     available = get_services().document_service.available_document_files(submission)
     declaration_filename = str(submission["row"].get("declaration_filename") or "")
+    
     if (
         not build_public_submission_status(submission["row"], form_config=form_config)["can_upload_signed_declaration"]
         or not any(file.get("filename") == declaration_filename for file in available)
     ):
-        flash("Ta czynność nie jest dostępna na bieżącym etapie zgłoszenia.", "error")
-        return redirect(documents_to_sign_url(submission_id, access.credential))
+        current_app.logger.warning(
+            "declaration_upload_blocked",
+            extra={
+                "event": "declaration_upload_blocked",
+                "operation": "declaration_upload",
+                "failure_reason": "document_not_ready",
+            },
+        )
+
+        return (
+            "Deklaracja nie jest jeszcze gotowa do podpisania.",
+            409,
+        )
+
 
     try:
         result = get_services().document_signing_service.upload_signed_document(

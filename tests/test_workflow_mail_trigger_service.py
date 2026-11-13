@@ -87,3 +87,22 @@ def test_trigger_catalog_without_workflow_uses_safe_system_events_only():
     ]
     assert all(item["source"] == "system" for item in catalog["events"])
     assert "nie ma aktywnego workflow" in catalog["message"]
+
+
+def test_trigger_catalog_includes_custom_officer_decision_events():
+    form = SimpleNamespace(definition_json={"workflow": {
+        "flow_mode": "explicit", "initial_step": "review",
+        "steps": [{"id": "review", "stage_type": "decision", "decision_scope": "submission",
+                   "status": "WAITING_FOR_OFFICER_DECISION"}],
+        "decision_types": [
+            {"code": "approved_locally", "step_id": "review", "semantic_category": "positive"},
+            {"code": "declined_locally", "step_id": "review", "semantic_category": "negative"},
+            {"code": "needs_revision", "step_id": "review", "semantic_category": "correction"},
+            {"code": "disabled", "step_id": "review", "semantic_category": "positive", "active": False},
+        ],
+    }})
+    catalog = WorkflowMailTriggerService().options_for_form(form)
+    events = {item["value"] for item in catalog["events"]}
+    decisions = {item["value"] for item in catalog["decisions"]}
+    assert {"officer_accepted", "officer_rejected", "returned_for_correction"} <= events
+    assert decisions == {"approved_locally", "declined_locally", "needs_revision"}

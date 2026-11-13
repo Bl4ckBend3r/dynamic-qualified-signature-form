@@ -963,8 +963,28 @@ def complete_version_upgrade(slug: str, submission_id: str):
 
                 db.commit()
 
+                
                 if not state["complete"]:
-                    return redirect(action)
+                    return render_template(
+                        "form_page.html",
+                        slug=slug,
+                        form_meta=form_meta,
+                        form_definition=edit_definition,
+                        errors=state["errors"],
+                        values=saved_values,
+                        form_action=action,
+                        correction_mode=True,
+                        correction_message=message,
+                        access_token=token,
+                        version_upgrade_mode=True,
+                        invalid_training_ids=state["invalid_training_ids"],
+                        training_correction_url=url_for(
+                            "documents.training_selection",
+                            submission_id=submission_id,
+                            token=token,
+                        ),
+                    )
+
 
                 # Resume workflow only after the required data is complete.
                 historical_definition = (

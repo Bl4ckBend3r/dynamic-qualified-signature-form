@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from database import create_session_factory
 from form_loader import load_form_definition
-from models import Form, FormSubmission, FormVersion, RepeatableGroupItemDecision, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
+from models import EmailLog, Form, FormSubmission, FormVersion, MailTemplate, RepeatableGroupItemDecision, SubmissionDecision, SubmissionFile, SubmissionWorkflowEvent
 from services.decision_definition_service import DecisionDefinitionError
 from test_admin_panel import admin_app, admin_client, create_form, create_user, login
 
@@ -277,9 +277,35 @@ def test_conditional_approval_retry_and_completion(admin_app, admin_client, monk
         admin_app.extensions["services"].workflow_service.transition_to(public_id, "declaration")
     assert not admin_app.extensions["services"].submission_repository.claim_submission_document_operation(
         public_id, "signature", "test-lease")
-    action = f"/form/officer-decision-test/update/{public_id}?token=participant-test-token"
-    html = admin_client.get(action).get_data(as_text=True)
-    csrf = html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    action = f"/form/officer-decision-test/update/{public_id}?token=participant-test-token"    
+    response = admin_client.get(action)
+
+    assert response.status_code == 200, (
+        f"Nieprawidłowy status formularza: {response.status_code}"
+    )
+
+    html = response.get_data(as_text=True)
+
+    assert 'name="csrf_token"' in html, (
+        "Formularz nie zawiera pola CSRF."
+    )
+
+    csrf_input = re.search(
+        r'<input\b[^>]*\bname="csrf_token"[^>]*>',
+        html,
+        re.IGNORECASE,
+    )
+    assert csrf_input is not None, "Nie znaleziono pola CSRF"
+
+    csrf_value = re.search(
+        r'\bvalue="([^"]+)"',
+        csrf_input.group(0),
+    )
+    assert csrf_value is not None, "Pole CSRF nie ma wartości"
+
+    csrf = csrf_value.group(1)
+
+
     monkeypatch.setattr(audit, "write_pending", lambda marker: (_ for _ in ()).throw(OSError("offline")))
     response = admin_client.post(action, data={"csrf_token": csrf, "required_answer": "Dane"})
     assert response.status_code == 302
@@ -807,7 +833,7 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
         db.commit()
     wrong_step = admin_client.post(upload_url, data={"csrf_token": csrf, "access_token": token,
         "signed_declaration_pdf": (BytesIO(downloaded.data), "signed.pdf")})
-    assert wrong_step.status_code == 302
+    assert wrong_step.status_code == 409
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         assert db.query(SubmissionFile).filter_by(submission_id=pk, signed=True).count() == 0
         submission = db.get(FormSubmission, pk)
@@ -824,7 +850,9 @@ def test_participant_can_fill_declaration_from_versioned_step(admin_app, admin_c
                                                  "signature_type": "trusted_profile", "validation_status": "VALID"})
     uploaded = admin_client.post(upload_url, data={"csrf_token": csrf, "access_token": token,
         "signed_declaration_pdf": (BytesIO(downloaded.data), "signed.pdf")})
-    assert uploaded.status_code == 302
+    assert uploaded.status_code == (
+        409 if legacy_signature else 302
+    )
     with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
         submission = db.get(FormSubmission, pk)
         if legacy_signature:
@@ -1094,7 +1122,8 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     complete_loty_submission(services, row, people)
     pk = services.submission_repository.get_by_id(row['submission_id'])['id']
     deliveries = []
-    monkeypatch.setattr(services.mail_dispatch_service, 'select_template', lambda *args: SimpleNamespace(id=1))
+    monkeypatch.setattr(services.mail_dispatch_service, 'select_template',
+                        lambda *args, **kwargs: None if kwargs.get('require_event_trigger') else SimpleNamespace(id=1))
     monkeypatch.setattr(services.mail_dispatch_service, 'dispatch_to_submission', lambda **kwargs: deliveries.append(kwargs) or MailDispatchResult('sent'))
     login(admin_client)
     detail = f'/admin/forms/{form_id}/submissions/{pk}'
@@ -1113,3 +1142,138 @@ def test_explicit_submission_decision_event_and_officer_action(admin_app, admin_
     assert services.submission_repository.get_by_id(row['submission_id'])['workflow_stage'] == 'completed'
     with create_session_factory(admin_app.config['DATABASE_URL'])() as db:
         assert db.get(FormVersion, row['form_version_id']).definition_json == definition
+
+
+@pytest.mark.parametrize("variant,expected_count", [
+    ("template_only", 1),
+    ("workflow_disabled", 1),
+    ("workflow_and_template", 1),
+    ("legacy_only", 1),
+    ("wrong_event", 0),
+    ("wrong_status", 0),
+    ("wrong_decision", 0),
+    ("inactive", 0),
+    ("no_trigger", 0),
+    ("unrestricted_status_decision", 1),
+])
+def test_officer_decision_template_trigger_sends_once(
+    admin_app, admin_client, variant, expected_count,
+):
+    create_user(admin_app)
+    form_id, pk, public_id = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        submission.email = "participant@example.org"
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        if variant in {"workflow_disabled", "workflow_and_template", "legacy_only"}:
+            definition["workflow"]["send_email_notifications"] = variant != "workflow_disabled"
+            definition["workflow"]["email_notifications"] = [{
+                "id": "application_accepted", "enabled": True, "automatic": True,
+                "template_type": "accepted",
+            }]
+        version.definition_json = definition
+        db.add(MailTemplate(
+            form_id=form_id, name="Wniosek zaakceptowany", template_type="accepted",
+            subject="Akceptacja {{ submission_id }}", text_body="Decyzja {{ decision_code }}",
+            trigger_event="officer_rejected" if variant == "wrong_event" else
+                "" if variant in {"no_trigger", "legacy_only"} else "officer_accepted",
+            trigger_status="OTHER_STATUS" if variant == "wrong_status" else
+                "" if variant == "unrestricted_status_decision" else "WAITING_FOR_OFFICER_DECISION",
+            trigger_decision="other_code" if variant == "wrong_decision" else
+                "" if variant == "unrestricted_status_decision" else "pzytywna",
+            is_active=variant != "inactive", is_default_for_status=True,
+        ))
+        db.commit()
+
+    sent = []
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk).status_code == 302
+
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        saved = db.scalar(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk))
+        assert saved is not None and saved.semantic_category == "positive"
+        assert saved.previous_status == "WAITING_FOR_OFFICER_DECISION"
+        assert submission.process_status == "DECLARATION_READY"
+        logs = db.scalars(select(EmailLog).where(EmailLog.submission_id == pk,
+            EmailLog.status == "sent")).all()
+        assert len(logs) == expected_count
+        if expected_count:
+            assert logs[0].to_email == "participant@example.org"
+            assert logs[0].event_type == ("accepted" if variant == "legacy_only" else "officer_accepted")
+            assert logs[0].template_id is not None
+            assert sent[0]["to_emails"] == ["participant@example.org"]
+            # A repeated event or a second workflow path cannot send this decision again.
+            with admin_app.app_context():
+                dispatcher.dispatch_workflow_decision_event(
+                    db=db, form=db.get(Form, form_id), submission=submission,
+                    decision=None, step_config=definition["workflow"]["steps"][0],
+                )
+            db.commit()
+    assert len(sent) == expected_count
+
+
+@pytest.mark.parametrize("category,code,event,target,status", [
+    ("negative", "office_declined", "officer_rejected", "completed", "PROCESS_COMPLETED"),
+    ("correction", "needs_revision", "returned_for_correction", "correction", "WAITING_FOR_CORRECTION"),
+])
+def test_custom_officer_decision_category_triggers_email(
+    admin_app, admin_client, category, code, event, target, status,
+):
+    create_user(admin_app)
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        submission.email = "recipient@example.org"
+        version = submission.form_version
+        definition = deepcopy(version.definition_json)
+        if target == "correction":
+            definition["workflow"]["steps"].append({
+                "id": target, "stage_type": "user_action", "status": status,
+            })
+        definition["workflow"]["decision_types"].append({
+            "code": code, "label": code, "semantic_category": category,
+            "step_id": "officer_review", "target_step": target, "scope": "submission",
+            "require_reason": False,
+        })
+        version.definition_json = definition
+        db.add(MailTemplate(
+            form_id=form_id, name=code, template_type="custom",
+            subject="Decyzja", text_body="{{ decision_code }}",
+            trigger_event=event, trigger_status="WAITING_FOR_OFFICER_DECISION",
+            trigger_decision=code, is_active=True,
+        ))
+        db.commit()
+    sent = []
+    admin_app.extensions["services"].mail_dispatch_service.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    login(admin_client)
+    assert post_officer_decision(admin_app, admin_client, form_id, pk, decision=code).status_code == 302
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        saved = db.scalar(select(SubmissionDecision).where(SubmissionDecision.submission_id == pk))
+        assert saved is not None and saved.semantic_category == category
+        assert db.get(FormSubmission, pk).workflow_step == target
+        logs = db.scalars(select(EmailLog).where(EmailLog.submission_id == pk,
+            EmailLog.status == "sent")).all()
+        assert len(logs) == 1 and logs[0].event_type == event
+    assert len(sent) == 1 and sent[0]["to_emails"] == ["recipient@example.org"]
+
+
+def test_decision_trigger_requires_saved_decision(admin_app):
+    form_id, pk, _ = officer_decision_fixture(admin_app)
+    dispatcher = admin_app.extensions["services"].mail_dispatch_service
+    sent = []
+    dispatcher.smtp_sender = lambda **kwargs: sent.append(kwargs)
+    with admin_app.app_context(), create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        submission = db.get(FormSubmission, pk)
+        submission.officer_decision = "pzytywna"
+        db.add(MailTemplate(form_id=form_id, name="Akceptacja", template_type="accepted",
+                            subject="Decyzja", text_body="Akceptacja",
+                            trigger_event="officer_accepted", is_active=True))
+        db.commit()
+        assert dispatcher.dispatch_workflow_decision_event(
+            db=db, form=db.get(Form, form_id), submission=submission, decision=None,
+        ) is None
+    assert sent == []

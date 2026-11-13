@@ -2992,6 +2992,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
     decision_definition = decision_service.resolve(submission, decision, scope="submission")
     category = str(decision_definition.get("semantic_category") or "neutral")
 
+        
     if category == "positive":
         validation = current_app.extensions["services"].verification_checklist_service.validate_for_decision(
             db, submission, decision="accepted", workflow_step=current_step,
@@ -2999,11 +3000,39 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
                 db, g.admin_user, form
             ),
         )
+
         if not validation.valid:
             return {
-                "invalid_stage": False, "missing_reason": False, "skipped": False,
-                "schema_warning": False, "send_mail": False, "checklist_errors": list(validation.errors),
+                "invalid_stage": False,
+                "missing_reason": False,
+                "skipped": False,
+                "schema_warning": False,
+                "send_mail": False,
+                "checklist_errors": list(validation.errors),
             }
+
+        if not conditional_requested:
+            from services.form_version_service import FormVersionService
+
+            errors = FormVersionService().submission_data_errors(
+                submission,
+                historical_definition,
+                step=current_step,
+                db=db,
+            )
+
+            if errors:
+                return {
+                    "invalid_stage": False,
+                    "missing_reason": False,
+                    "skipped": False,
+                    "schema_warning": False,
+                    "send_mail": False,
+                    "checklist_errors": [
+                        "Przed pozytywną decyzją uzupełnij wymagane dane formularza."
+                    ],
+                }
+
 
     reason = str(reason_value or "").strip() if category != "positive" or "require_reason" in decision_definition or "reason_required" in decision_definition else ""
     if decision_definition.get("reason_required", decision_definition.get("require_reason", category in {"negative", "correction"})) and not reason:

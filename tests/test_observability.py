@@ -2,6 +2,9 @@ import json
 import logging
 
 from flask import Flask
+from jinja2 import UndefinedError
+import pytest
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from services.observability import (
     ContextFilter,
@@ -9,7 +12,10 @@ from services.observability import (
     configure_logging,
     redact_log_text,
     register_observability,
+    safe_identifier_hash,
+    trace_declaration_generation,
 )
+from test_admin_panel import admin_app, create_form, create_user, login
 
 
 def _app(*, log_format="text", metrics_token=""):
@@ -134,3 +140,122 @@ def test_metrics_token_allows_remote_scrape():
         environ_base={"REMOTE_ADDR": "203.0.113.10"},
     )
     assert response.status_code == 200
+
+
+def test_declaration_trace_records_start_completion_and_safe_browser():
+    app = _app(log_format="text")
+
+    @app.get("/declaration-test")
+    def declaration_test():
+        with trace_declaration_generation("private-submission", "review", "ready") as trace:
+            trace.stage = "pdf_conversion"
+        return {"ok": True}
+
+    response = app.test_client().get(
+        "/declaration-test?token=query-secret",
+        headers={"User-Agent": "Mozilla/5.0 Firefox/132.0 user@example.org token=agent-secret"},
+    )
+    assert response.status_code == 200
+    records = [entry for entry in app.extensions["runtime_log_buffer"].snapshot(event_name="declaration_generation_")
+               if json.loads(entry["rendered"]).get("submission_ref") == safe_identifier_hash("private-submission")]
+    assert [entry["event"] for entry in reversed(records)] == [
+        "declaration_generation_started", "declaration_generation_completed",
+    ]
+    started = json.loads(records[-1]["rendered"])
+    completed = json.loads(records[0]["rendered"])
+    assert started["request_id"] == response.headers["X-Request-ID"]
+    assert started["method"] == "GET" and started["endpoint"].endswith("declaration_test")
+    assert started["browser"] == "Firefox 132.0"
+    assert started["document_type"] == "declaration"
+    assert started["workflow_step"] == "review" and started["document_status"] == "ready"
+    assert len(started["submission_ref"]) == 16 and started["submission_ref"] != "private-submission"
+    assert completed["stage"] == "completed" and completed["duration_ms"] >= 0
+    rendered = "".join(entry["rendered"] for entry in records)
+    for secret in ("private-submission", "query-secret", "user@example.org", "agent-secret"):
+        assert secret not in rendered
+
+
+def test_declaration_trace_classifies_failure_without_exception_message():
+    app = _app()
+    with app.test_request_context("/declaration-test?token=query-secret",
+                                  headers={"User-Agent": "Mozilla/5.0 Chrome/131.0"}):
+        try:
+            with trace_declaration_generation("private-submission", "paper") as trace:
+                trace.stage = "pdf_conversion"
+                raise RuntimeError("pesel=44051401458 token=secret-value")
+        except RuntimeError:
+            pass
+    failed = next(entry for entry in app.extensions["runtime_log_buffer"].snapshot(
+        event_name="declaration_generation_failed") if
+        json.loads(entry["rendered"]).get("submission_ref") == safe_identifier_hash("private-submission") and
+        entry["stage"] == "pdf_conversion")
+    payload = json.loads(failed["rendered"])
+    assert payload["browser"] == "Chrome 131.0"
+    assert payload["stage"] == "pdf_conversion"
+    assert payload["reason_code"] == "PDF_CONVERSION_FAILED"
+    assert payload["exception_type"] == "RuntimeError"
+    assert "44051401458" not in failed["rendered"]
+    assert "secret-value" not in failed["rendered"]
+
+
+@pytest.mark.parametrize("stage,error,reason,event", [
+    ("validation", ValueError("private"), "DOCUMENT_VALIDATION_FAILED", "declaration_generation_validation_failed"),
+    ("claim", ValueError("private"), "DOCUMENT_OPERATION_CLAIM_REJECTED", "declaration_generation_blocked"),
+    ("template_load", FileNotFoundError("private"), "TEMPLATE_FILE_READ_FAILED", "declaration_generation_failed"),
+    ("template_load", RequestsConnectionError("private"), "NEXTCLOUD_UNAVAILABLE", "declaration_generation_failed"),
+    ("pdf_conversion", UndefinedError("private"), "TEMPLATE_SUBSTITUTION_FAILED", "declaration_generation_failed"),
+    ("storage_write", OSError("private"), "DOCUMENT_STORAGE_WRITE_FAILED", "declaration_generation_failed"),
+    ("workflow_update", RuntimeError("private"), "WORKFLOW_STATUS_UPDATE_FAILED", "declaration_generation_failed"),
+])
+def test_declaration_trace_distinguishes_failure_stage(stage, error, reason, event):
+    app = _app()
+    with app.app_context():
+        with pytest.raises(type(error)):
+            with trace_declaration_generation("private-submission") as trace:
+                trace.stage = stage
+                raise error
+    entries = app.extensions["runtime_log_buffer"].snapshot(event_name=event)
+    assert any(entry["reason_code"] == reason and entry["stage"] == stage for entry in entries)
+
+
+def test_declaration_diagnostics_are_visible_only_to_superadmin(admin_app):
+    create_user(admin_app)
+    from models import FormSubmission, FormVersion
+    form_id = create_form(admin_app, slug="diagnostic-version")
+    with admin_app.extensions["services"].submission_repository.session_factory.begin() as db:
+        version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+            version_label="1.0", status="published", definition_json={"fields": []})
+        db.add(version)
+        db.flush()
+        db.add(FormSubmission(submission_id="outdated-diagnostic-case", form_slug="diagnostic-version",
+            form_version_id=None, data_json={"_form_version_upgrade": {"missing_fields": ["city"]}},
+            document_states={"version_revisions": {"declaration": {"status": "pending"}}}))
+    with admin_app.test_request_context("/document-steps/test", headers={"User-Agent": "Firefox/132.0"}):
+        try:
+            with trace_declaration_generation("diagnostic-submission", "paper") as trace:
+                trace.stage = "template_load"
+                raise FileNotFoundError("token=private")
+        except FileNotFoundError:
+            pass
+    client = admin_app.test_client()
+    login(client)
+    page = client.get("/admin/diagnostics")
+    assert page.status_code == 200
+    assert "Generowanie dokumentów" in page.text
+    assert "Stan schematu bazy danych" in page.text
+    assert "Synchronizacja wniosków i dokumentów" in page.text
+    assert safe_identifier_hash("outdated-diagnostic-case") in page.text
+    assert "brakujące dane" in page.text and "declaration: pending" in page.text
+    assert "TEMPLATE_FILE_READ_FAILED" in page.text
+    assert "sqlite" in page.text
+    assert "secret" not in page.text
+    logs = client.get("/admin/runtime-logs?event=declaration_generation_")
+    assert logs.status_code == 200
+    assert "declaration_generation_failed" in logs.text
+    assert "TEMPLATE_FILE_READ_FAILED" in logs.text
+    assert "diagnostic-submission" not in logs.text
+    create_user(admin_app, email="ordinary@example.com", role="admin")
+    ordinary = admin_app.test_client()
+    login(ordinary, email="ordinary@example.com")
+    assert ordinary.get("/admin/diagnostics").status_code == 403
+    assert ordinary.get("/admin/runtime-logs").status_code == 403

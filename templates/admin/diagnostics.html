@@ -63,6 +63,56 @@
       </a>
     </section>
 
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header"><div>
+        <span class="diagnostics-card-label">WERSJE</span>
+        <h2>Synchronizacja wniosków i dokumentów</h2>
+      </div></div>
+      <p>Błędy synchronizacji w buforze: {{ sync_error_count }}. Wnioski wymagające uwagi na bieżącej stronie:</p>
+      {% if sync_issue_message %}<p>{{ sync_issue_message }}</p>{% endif %}
+      {% if version_issues %}
+        <ul>
+          {% for issue in version_issues %}
+            <li><a href="{{ url_for('admin.submission_detail', form_id=issue.form_id, submission_pk=issue.submission_pk) }}">{{ issue.submission_ref }}</a> — {{ issue.reasons|join(', ') }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}<p>Brak problemów na bieżącej stronie.</p>{% endif %}
+      {% if next_sync_cursor %}
+        <a class="admin-button" href="{{ url_for('admin.diagnostics', sync_after=next_sync_cursor) }}">Następne 100 wniosków</a>
+      {% endif %}
+      <a class="admin-button" href="{{ url_for('admin.runtime_logs', event='document_revision_') }}">Logi rewizji dokumentów</a>
+    </section>
+
+
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header"><div>
+        <span class="diagnostics-card-label">DOKUMENTY</span>
+        <h2>Generowanie dokumentów</h2>
+      </div></div>
+      <p>Przebieg generowania deklaracji, w tym etap operacji i bezpieczny kod przyczyny.</p>
+      <dl class="diagnostics-details">
+        <div><dt>Błędy w buforze</dt><dd>{{ generation_error_count }}</dd></div>
+        <div><dt>Ostatni kod</dt><dd>{{ generation_last_reason }}</dd></div>
+        <div><dt>Stan migracji</dt><dd>{{ database_status.state }}</dd></div>
+      </dl>
+      <a class="admin-button" href="{{ url_for('admin.runtime_logs', event='declaration_generation_') }}">Otwórz logi generowania deklaracji</a>
+    </section>
+
+    <section class="admin-card diagnostics-card">
+      <div class="diagnostics-card-header"><div>
+        <span class="diagnostics-card-label">BAZA DANYCH</span>
+        <h2>Stan schematu bazy danych</h2>
+      </div></div>
+      <dl class="diagnostics-details">
+        <div><dt>Aplikacja</dt><dd>{{ database_status.application }}</dd></div>
+        <div><dt>Alembic</dt><dd>{{ database_status.alembic }}</dd></div>
+        <div><dt>Aktualna rewizja</dt><dd>{{ database_status.current|join(', ') or '-' }}</dd></div>
+        <div><dt>Oczekiwany HEAD</dt><dd>{{ database_status.heads|join(', ') or '-' }}</dd></div>
+        <div><dt>Zgodność</dt><dd>{{ database_status.state }}</dd></div>
+        <div><dt>Informacja</dt><dd>{{ database_status.message }}</dd></div>
+      </dl>
+    </section>
+
 
     <section class="admin-card diagnostics-card">
       <div class="diagnostics-card-header">

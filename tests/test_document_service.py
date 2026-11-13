@@ -6,6 +6,7 @@ from flask import Flask, render_template_string
 
 from services.document_service import DocumentService, normalize_selected_items
 from services.document_naming_service import resolve_pdf_storage_path
+from testing_support import InMemoryStorage
 
 
 def test_document_context_exposes_selected_trainings_list():
@@ -81,6 +82,40 @@ def test_forced_declaration_generation_preserves_existing_pdf_bytes(monkeypatch)
     assert storage.files[old_path] == b"old PDF"
     assert storage.files[recorded[0]["storage_path"]] == b"new PDF"
     assert recorded[0]["storage_path"] != old_path
+
+
+@pytest.mark.parametrize("source,document,expected", [
+    ("html", {"template_source": "html", "template_html": "<p>Fresh HTML</p>"}, "Fresh HTML"),
+    ("builder", {"template_source": "builder", "builder_document": {"version": 1,
+        "blocks": [{"id": "body", "type": "paragraph", "content": "Fresh builder"}]}}, "Fresh builder"),
+    ("docx", {"template_source": "docx", "template_metadata": {"storage_path": "current.docx"}}, "Fresh DOCX"),
+])
+def test_revision_uses_current_html_builder_or_docx_template(monkeypatch, source, document, expected):
+    storage = InMemoryStorage({})
+    recorded = []
+    rendered = []
+    service = DocumentService(storage=storage,
+        pdf_render_service=SimpleNamespace(render_document_pdf_bytes=lambda **kwargs:
+            rendered.append(kwargs["template_html"]) or b"%PDF-1.4\ncurrent\n%%EOF"),
+        submission_document_service=SimpleNamespace(record_generated_document=lambda **kwargs:
+            recorded.append(kwargs) or True, list_documents=lambda _id: []))
+    monkeypatch.setattr(service, "get_document_by_id", lambda *_: {"id": "declaration", "enabled": True,
+        "fields": [], **document})
+    monkeypatch.setattr(service, "build_filename_for_document", lambda *_: "current.pdf")
+    monkeypatch.setattr(service, "resolve_pdf_image_url", lambda *_: None)
+    monkeypatch.setattr("services.document_service.build_document_pdf_context", lambda **kwargs: {})
+    monkeypatch.setattr("services.document_service.build_declaration_render_context", lambda context, **kwargs: context)
+    if source == "docx":
+        monkeypatch.setattr("services.document_service.parse_stored_agreement_docx",
+                            lambda *_: SimpleNamespace(html="<p>Fresh DOCX</p>"))
+    submission = {"submission_id": "SUB1", "form_slug": "form", "data_json": {}}
+    metadata = {"form_version_id": 2, "revision": 2, "template_hash": "new-template"}
+    with Flask(__name__).app_context():
+        generated = service.generate_document(submission, {"fields": []}, "declaration",
+                                              revision_metadata=metadata)
+    assert expected in rendered[0]
+    assert "-v2-r2" in generated["filename"]
+    assert recorded[0]["revision_metadata"] == metadata
 
 
 @pytest.mark.parametrize(

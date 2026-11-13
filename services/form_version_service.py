@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
+import logging
 from typing import Iterable, Mapping
+from uuid import uuid4
 
 from sqlalchemy import func, or_, select
 
@@ -20,6 +23,7 @@ FORM_VERSION_STATUSES = {
     FORM_VERSION_PUBLISHED,
     FORM_VERSION_ARCHIVED,
 }
+logger = logging.getLogger(__name__)
 
 
 class FormVersionError(ValueError):
@@ -87,28 +91,15 @@ class FormVersionService:
         db,
         submission: FormSubmission,
     ) -> FormVersion | None:
-        """Return the exact workflow version assigned to the submission."""
+        """Return the published operational version for this submission's form."""
         if submission.form_version_id:
             version = db.get(FormVersion, submission.form_version_id)
-
-            if version is None:
+            if version is None or version.form.slug != submission.form_slug:
                 return None
+            return self.resolve_published(db, version.form_id)
 
-            if version.form.slug != submission.form_slug:
-                return None
-
-            return version
-
-        # Compatibility fallback for records without a stored version.
-        form_id = db.execute(
-            select(Form.id).where(Form.slug == submission.form_slug)
-        ).scalar_one_or_none()
-
-        return (
-            self.resolve_published(db, form_id)
-            if form_id is not None
-            else None
-        )
+        form_id = db.execute(select(Form.id).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+        return self.resolve_published(db, form_id) if form_id is not None else None
 
 
     def resolve_rendered_version(self, db, form: Form, version_id: int) -> FormVersion | None:
@@ -449,20 +440,202 @@ class FormVersionService:
         return upgraded
 
     def synchronize_published_submissions(self, session_factory, form_id: int, version_id: int, *,
-                                          actor_id: int | None) -> int:
+                                          actor_id: int | None, max_batches: int | None = None) -> int:
         """Finish publication in short, retryable transactions of at most 100 rows."""
+        logger.info("submission_version_sync_started", extra={"event": "submission_version_sync_started", "form_id": form_id})
         total = 0
+        batches = 0
+        last_id = 0
+        try:
+            while True:
+                with session_factory.begin() as db:
+                    form = db.get(Form, form_id)
+                    version = db.get(FormVersion, version_id)
+                    if form is None or version is None or version.form_id != form_id or version.status != FORM_VERSION_PUBLISHED:
+                        raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
+                    rows = db.execute(select(FormSubmission).where(
+                        FormSubmission.form_slug == form.slug,
+                        or_(FormSubmission.form_version_id.is_(None), FormSubmission.form_version_id != version.id),
+                        FormSubmission.id > last_id,
+                    ).order_by(FormSubmission.id).limit(100).with_for_update()).scalars().all()
+                    changed = 0
+                    for submission in rows:
+                        try:
+                            with db.begin_nested():
+                                changed += bool(self.upgrade_submission(db, submission, version, actor_id=actor_id))
+                        except Exception as exc:
+                            from services.observability import safe_identifier_hash
+                            logger.error("submission_version_sync_failed", extra={
+                                "event": "submission_version_sync_failed", "form_id": form_id,
+                                "submission_ref": safe_identifier_hash(submission.submission_id),
+                                "exception_type": type(exc).__name__, "reason_code": "SUBMISSION_VERSION_CONFLICT"})
+                    if rows:
+                        last_id = rows[-1].id
+                total += changed
+                batches += 1
+                if not rows or (max_batches is not None and batches >= max_batches):
+                    logger.info("submission_version_sync_completed", extra={
+                        "event": "submission_version_sync_completed", "form_id": form_id, "selected_count": total})
+                    return total
+        except Exception as exc:
+            logger.error("submission_version_sync_failed", extra={
+                "event": "submission_version_sync_failed", "form_id": form_id,
+                "exception_type": type(exc).__name__, "reason_code": "SUBMISSION_VERSION_SYNC_FAILED"})
+            raise
+
+    def process_document_revisions(self, session_factory, form_id: int, version_id: int,
+                                   document_service, *, page_size: int = 50) -> int:
+        """Resume durable revision work one submission at a time, outside publication transactions."""
+        from services.documents.document_workflow_service import step_documents
+        from services.form_config_service import FormConfigService
+        from services.observability import safe_identifier_hash
+        from services.training_service import parse_training_snapshots
+
+        completed = 0
+        last_id = 0
+        with session_factory() as db:
+            form = db.get(Form, form_id)
+            version = db.get(FormVersion, version_id)
+            if not form or not version or version.form_id != form_id or version.status != FORM_VERSION_PUBLISHED:
+                raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
+            form_slug = form.slug
+            definition = FormConfigService().normalize_form_config(version.definition_json or {})
+        documents = {item.get("id"): item for item in document_service.get_documents_config(definition)}
+        steps = (definition.get("workflow") or {}).get("steps") or []
         while True:
-            with session_factory.begin() as db:
-                form = db.get(Form, form_id)
-                version = db.get(FormVersion, version_id)
-                if form is None or version is None or version.form_id != form_id or version.status != FORM_VERSION_PUBLISHED:
-                    raise FormVersionError("Brak opublikowanej wersji docelowej tego formularza.")
-                changed = self.upgrade_active_submissions(
-                    db, form, version, actor_id=actor_id, max_batches=1)
-            total += changed
-            if not changed:
-                return total
+            with session_factory() as db:
+                rows = db.execute(select(FormSubmission.id, FormSubmission.submission_id).where(
+                    FormSubmission.form_slug == form_slug,
+                    FormSubmission.form_version_id == version_id,
+                    FormSubmission.id > last_id,
+                ).order_by(FormSubmission.id).limit(page_size)).all()
+            if not rows:
+                return completed
+            last_id = rows[-1].id
+            for pk, public_id in rows:
+                with session_factory() as db:
+                    record = db.get(FormSubmission, pk)
+                    work = dict((record.document_states or {}).get("version_revisions") or {}) if record else {}
+                for document_id, item in work.items():
+                    if item.get("version_id") != version_id or item.get("status") == "completed":
+                        continue
+                    document = documents.get(document_id)
+                    if not document:
+                        continue
+                    token = uuid4().hex
+                    if not document_service.submission_repository.claim_submission_document_operation(
+                            public_id, f"revision:{version_id}:{document_id}", token):
+                        continue
+                    submission_ref = safe_identifier_hash(public_id)
+                    metadata = {"form_version_id": version_id, "template_hash": item["template_hash"],
+                                "revision": item["revision"], "requires_signature": bool(document.get("signature_required", True))}
+                    try:
+                        with session_factory.begin() as db:
+                            record = db.get(FormSubmission, pk)
+                            completion = self.refresh_submission_completion(db, record)
+                            waiting = bool(completion["errors"] or completion["invalid_training_ids"])
+                            if document_id in {"agreement", "training_agreement"}:
+                                row = document_service.submission_repository.get_by_id(public_id) or {}
+                                waiting = waiting or not bool(parse_training_snapshots(row.get("selected_trainings")))
+                            if waiting:
+                                states = deepcopy(record.document_states or {})
+                                states["version_revisions"][document_id]["status"] = "waiting_for_data"
+                                record.document_states = states
+                        if waiting:
+                            logger.info("document_revision_waiting_for_data", extra={
+                                "event": "document_revision_waiting_for_data", "submission_ref": submission_ref,
+                                "document_type": document_id, "form_id": form_id,
+                            })
+                            continue
+                        logger.info("document_revision_generation_started", extra={
+                            "event": "document_revision_generation_started", "submission_ref": submission_ref,
+                            "document_type": document_id, "form_id": form_id,
+                        })
+                        step_id = next((str(step.get("id") or "") for step in steps if any(
+                            candidate.get("id") == document_id for candidate in step_documents(definition, step))), "")
+                        row = document_service.submission_repository.get_by_id(public_id)
+                        if not row:
+                            raise FormVersionError("Nie znaleziono zgłoszenia dla rewizji dokumentu.")
+                        if document_id in {"agreement", "training_agreement"} and parse_training_snapshots(row.get("selected_trainings")):
+                            document_service.generate_documents_for_collection(
+                                row, definition, document_id, document.get("repeat_over") or "selected_trainings",
+                                document.get("repeat_item_alias") or "training", revision_metadata=metadata,
+                                revision_step_id=step_id)
+                        else:
+                            existing = document_service.submission_document_service.list_documents(public_id)
+                            already_generated = any(file.get("document_id") == document_id and
+                                (file.get("signature_validation_result") or {}).get("form_version_id") == version_id and
+                                (file.get("signature_validation_result") or {}).get("template_hash") == item["template_hash"]
+                                for file in existing)
+                            if not already_generated:
+                                document_service.generate_document(row, definition, document_id, force=True,
+                                    revision_metadata=metadata, revision_step_id=step_id)
+                        with session_factory.begin() as db:
+                            record = db.get(FormSubmission, pk)
+                            files = db.execute(select(SubmissionFile).where(
+                                SubmissionFile.submission_id == pk,
+                                SubmissionFile.document_id == document_id,
+                            )).scalars().all()
+                            generated_ids = [file.id for file in files if
+                                (file.signature_validation_result or {}).get("form_version_id") == version_id and
+                                (file.signature_validation_result or {}).get("template_hash") == item["template_hash"]]
+                            if not generated_ids:
+                                raise FormVersionError("Brak zapisu nowej rewizji dokumentu.")
+                            states = deepcopy(record.document_states or {})
+                            current = states["version_revisions"][document_id]
+                            current.update(status="completed", file_ids=generated_ids,
+                                           generated_at=datetime.now(timezone.utc).isoformat(),
+                                           requires_signature=metadata["requires_signature"])
+                            record.document_states = states
+                            if metadata["requires_signature"]:
+                                data = deepcopy(record.data_json or {})
+                                upgrade = dict(data.get("_form_version_upgrade") or {})
+                                missing = list(upgrade.get("missing_documents") or [])
+                                for file in files:
+                                    if file.id not in generated_ids:
+                                        continue
+                                    training_key = str(file.training_key or "")
+                                    if any(entry.get("document_id") == document_id and
+                                           entry.get("training_key", "") == training_key and
+                                           entry.get("revision_version_id") == version_id for entry in missing):
+                                        continue
+                                    missing.append({"document_id": document_id, "step_id": step_id,
+                                        "kind": "generated_pdf", "label": document.get("label") or document_id,
+                                        "signature_required": True, "training_key": training_key,
+                                        "minimum_file_id": file.id - 1, "revision_version_id": version_id})
+                                upgrade["missing_documents"] = missing
+                                data["_form_version_upgrade"] = upgrade
+                                record.data_json = data
+                            db.add(SubmissionWorkflowEvent(submission_id=pk, public_submission_id=public_id,
+                                form_slug=form_slug, previous_status=record.process_status,
+                                new_status=record.process_status, previous_step=record.workflow_step,
+                                new_step=record.workflow_step, source="document_revision_generation",
+                                reason="Wygenerowano rewizję dokumentu po publikacji formularza.",
+                                actor_role="system", side_effects={"document_id": document_id,
+                                    "form_version_id": version_id, "revision": item["revision"],
+                                    "file_ids": generated_ids, "requires_signature": metadata["requires_signature"]}))
+                        completed += 1
+                        logger.info("document_revision_generation_completed", extra={
+                            "event": "document_revision_generation_completed", "submission_ref": submission_ref,
+                            "document_type": document_id, "form_id": form_id,
+                        })
+                    except Exception as exc:
+                        with session_factory.begin() as db:
+                            record = db.get(FormSubmission, pk)
+                            if record:
+                                states = deepcopy(record.document_states or {})
+                                current = (states.get("version_revisions") or {}).get(document_id)
+                                if current and current.get("version_id") == version_id:
+                                    current["status"] = "failed"
+                                    current["error_type"] = type(exc).__name__
+                                    record.document_states = states
+                        logger.error("document_revision_generation_failed", extra={
+                            "event": "document_revision_generation_failed", "submission_ref": submission_ref,
+                            "document_type": document_id, "form_id": form_id,
+                            "exception_type": type(exc).__name__, "reason_code": "DOCUMENT_REVISION_FAILED",
+                        })
+                    finally:
+                        document_service.submission_repository.release_document_operation(public_id, token)
 
 
     def upgrade_submission(
@@ -473,73 +646,41 @@ class FormVersionService:
         *,
         actor_id: int | None = None,
     ) -> bool:
-        """
-        Update required-data requirements without changing
-        the workflow version assigned to the submission.
-        """
-        if not self.is_active_submission(submission):
-            return False
-
-        if not submission.form_version_id:
-            return False
-
-        historical = db.get(
-            FormVersion,
-            submission.form_version_id,
-        )
-
-        if historical is None:
-            raise FormVersionError(
-                "Zgłoszenie nie ma poprawnej historycznej wersji formularza."
-            )
-
-        if historical.form.slug != submission.form_slug:
-            raise FormVersionError(
-                "Wersja zgłoszenia należy do innego formularza."
-            )
-
-        latest = latest or self.resolve_published(
-            db,
-            historical.form_id,
-        )
+        """Move the operational pointer while preserving the original version and case state."""
+        historical = db.get(FormVersion, submission.form_version_id) if submission.form_version_id else None
+        if submission.form_version_id and (historical is None or historical.form.slug != submission.form_slug):
+            raise FormVersionError("Zgłoszenie nie ma poprawnej wersji tego formularza.")
+        form_id = historical.form_id if historical else db.execute(
+            select(Form.id).where(Form.slug == submission.form_slug)
+        ).scalar_one_or_none()
+        if form_id is None:
+            raise FormVersionError("Nie znaleziono formularza powiązanego ze zgłoszeniem.")
+        latest = latest or self.resolve_published(db, form_id)
 
         if latest is None:
             return False
 
         if (
             latest.status != FORM_VERSION_PUBLISHED
-            or latest.form_id != historical.form_id
+            or latest.form_id != form_id
         ):
             raise FormVersionError(
                 "Nieprawidłowa wersja opublikowanego formularza."
             )
 
-        if historical.id == latest.id:
+        if historical and historical.id == latest.id:
             return False
 
         data = dict(submission.data_json or {})
-        previous_marker = dict(
-            data.get("_form_version_upgrade") or {}
-        )
-
-        if (
-            previous_marker.get("data_only") is True
-            and previous_marker.get("new_version_id") == latest.id
-            and previous_marker.get("old_version_id") == historical.id
-        ):
-            self.refresh_submission_completion(
-                db,
-                submission,
-            )
-            return False
-
         now = datetime.now(timezone.utc)
-
+        origin_id = data.get("_original_form_version_id") or (historical.id if historical else None)
+        if origin_id:
+            data["_original_form_version_id"] = origin_id
         marker = {
-            "old_version_id": historical.id,
+            "old_version_id": historical.id if historical else None,
             "new_version_id": latest.id,
             "upgraded_at": now.isoformat(),
-            "data_only": True,
+            "data_only": False,
             "missing_fields": [],
             "invalid_training_ids": [],
             "missing_documents": [],
@@ -547,11 +688,9 @@ class FormVersionService:
 
         data["_form_version_upgrade"] = marker
         submission.data_json = data
+        submission.form_version_id = latest.id
         submission.updated_at = now
-
-        # IMPORTANT:
-        # Do not change submission.form_version_id.
-        # The historical workflow remains assigned.
+        self._queue_document_revisions(db, submission, historical, latest)
 
         db.add(
             SubmissionWorkflowEvent(
@@ -564,15 +703,12 @@ class FormVersionService:
                 new_step=submission.workflow_step,
                 actor_id=actor_id,
                 actor_role="admin" if actor_id else "system",
-                source="form_version_requirements",
-                reason=(
-                    "Zaktualizowano wymagania dotyczące danych "
-                    "bez zmiany historycznej wersji workflow."
-                ),
+                source="form_version_upgrade",
+                reason="Zaktualizowano operacyjną wersję formularza.",
                 side_effects={
-                    "old_version_id": historical.id,
+                    "old_version_id": historical.id if historical else None,
                     "new_version_id": latest.id,
-                    "workflow_version_preserved": True,
+                    "original_version_id": origin_id,
                 },
             )
         )
@@ -585,6 +721,72 @@ class FormVersionService:
         )
 
         return True
+
+    @staticmethod
+    def _queue_document_revisions(db, submission, historical, latest):
+        """Record document work without touching historical files or signed state."""
+        from services.form_config_service import FormConfigService
+        from services.observability import safe_identifier_hash
+
+        config = FormConfigService()
+        old_documents = {item.get("id"): item for item in config.normalize_documents_config(
+            historical.definition_json or {})} if historical else {}
+        new_documents = {item.get("id"): item for item in config.normalize_documents_config(
+            latest.definition_json or {})}
+        states = deepcopy(submission.document_states or {})
+        pending = dict(states.get("version_revisions") or {})
+        missing_documents = list(((submission.data_json or {}).get("_form_version_upgrade") or {}).get("missing_documents") or [])
+        for document_id in ("declaration", "agreement", "training_agreement"):
+            document = new_documents.get(document_id)
+            if not document or not document.get("enabled", True):
+                continue
+            previous = old_documents.get(document_id)
+            if previous and not FormVersionService._document_signing_config_changed(previous, document):
+                continue
+            if document.get("kind") != "generated_pdf":
+                if document.get("required", True) and not any(
+                        item.get("document_id") == document_id for item in missing_documents):
+                    prior_files = db.execute(select(SubmissionFile.id).where(
+                        SubmissionFile.submission_id == submission.id,
+                        SubmissionFile.document_id == document_id)).scalars().all()
+                    missing_documents.append({"document_id": document_id,
+                        "step_id": str(document.get("workflow_step") or ""),
+                        "kind": document.get("kind") or "uploaded_file",
+                        "signature_required": bool(document.get("signature_required", True)),
+                        "minimum_file_id": max(prior_files, default=0) if previous else 0})
+                continue
+            fingerprint = hashlib.sha256(json.dumps(FormVersionService._document_signing_config(document),
+                sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+            if pending.get(document_id, {}).get("template_hash") == fingerprint:
+                continue
+            existing = db.execute(select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission.id,
+                SubmissionFile.document_id == document_id,
+            )).scalars().all()
+            prior = pending.get(document_id) or {}
+            history = [*(prior.get("history") or [])]
+            if prior:
+                history.append({key: prior.get(key) for key in
+                    ("version_id", "template_hash", "revision", "file_ids", "status")})
+            pending[document_id] = {
+                "version_id": latest.id, "template_hash": fingerprint,
+                "revision": max(len(existing), int(prior.get("revision") or 0)) + 1,
+                "status": "pending", "file_ids": [], "history": history,
+            }
+            logger.info("document_revision_outdated", extra={
+                "event": "document_revision_outdated", "document_type": document_id,
+                "submission_ref": safe_identifier_hash(submission.submission_id),
+                "reason_code": "TEMPLATE_VERSION_CHANGED", "form_id": latest.form_id,
+            })
+        if pending:
+            states["version_revisions"] = pending
+            submission.document_states = states
+        if missing_documents:
+            data = deepcopy(submission.data_json or {})
+            marker = dict(data.get("_form_version_upgrade") or {})
+            marker["missing_documents"] = missing_documents
+            data["_form_version_upgrade"] = marker
+            submission.data_json = data
 
     @staticmethod
     def _reconcile_new_document_requirements(db, submission, old_definition, new_definition, current_step):
@@ -1106,6 +1308,10 @@ class FormVersionService:
             SubmissionFile.document_id == definition_id,
             SubmissionFile.workflow_step_at_upload == str(item.get("step_id") or ""),
             SubmissionFile.status.in_(["signed"] if signed_required else ["uploaded", "signed", "generated"]))
+        if item.get("minimum_file_id"):
+            query = query.where(SubmissionFile.id > int(item["minimum_file_id"]))
+        if item.get("training_key"):
+            query = query.where(SubmissionFile.training_key == str(item["training_key"]))
         if signed_required:
             query = query.where(SubmissionFile.signed.is_(True))
         return db.execute(query.limit(1)).scalar_one_or_none() is not None
@@ -1121,7 +1327,7 @@ class FormVersionService:
             .get("_form_version_upgrade") or {}
         )
 
-        if marker.get("data_only") is not True:
+        if not marker:
             return
 
         if not self.is_active_submission(submission):
@@ -1132,10 +1338,10 @@ class FormVersionService:
             submission,
         )
 
-        if state["errors"]:
+        if state["errors"] or state["missing_documents"]:
             raise FormVersionError(
                 "Formularz został zaktualizowany. "
-                "Przed kontynuowaniem uzupełnij wymagane dane."
+                "Przed kontynuowaniem uzupełnij wymagane dane i dokumenty."
             )
 
 
@@ -1195,3 +1401,42 @@ class FormVersionService:
             key = str(step.get("id") or step.get("name") or index)
             result[key] = step
         return result
+
+
+def schedule_version_sync(app, form_id: int, version_id: int, *, actor_id: int | None = None,
+                          sync_submissions: bool = True) -> None:
+    """Run durable, restartable batches outside the publication or participant request."""
+    from concurrent.futures import ThreadPoolExecutor
+    from database import create_session_factory
+    from threading import Lock
+
+    lock = app.extensions.setdefault("form_version_sync_lock", Lock())
+
+    def run():
+        with app.app_context():
+            service = app.extensions["services"].form_version_service
+            factory = create_session_factory(app.config["DATABASE_URL"])
+            try:
+                if sync_submissions:
+                    service.synchronize_published_submissions(factory, form_id, version_id, actor_id=actor_id)
+                service.process_document_revisions(factory, form_id, version_id,
+                    app.extensions["services"].document_service)
+            except Exception as exc:
+                logger.error("submission_version_sync_failed", extra={
+                    "event": "submission_version_sync_failed", "form_id": form_id,
+                    "exception_type": type(exc).__name__, "reason_code": "BACKGROUND_SYNC_FAILED"})
+
+    with lock:
+        executor = app.extensions.get("form_version_sync_executor")
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="form-version-sync")
+            app.extensions["form_version_sync_executor"] = executor
+        jobs = app.extensions.setdefault("form_version_sync_jobs", {})
+        for finished_key, future in list(jobs.items()):
+            if future.done():
+                jobs.pop(finished_key, None)
+        key = (form_id, version_id, sync_submissions)
+        prior = jobs.get(key)
+        if prior and not prior.done():
+            return
+        jobs[key] = executor.submit(run)

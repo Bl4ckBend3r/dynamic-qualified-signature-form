@@ -180,6 +180,7 @@ def database_migration_status(
     heads = tuple(script.get_heads())
     with checked_engine.connect() as connection:
         current = tuple(MigrationContext.configure(connection).get_current_heads())
+        dialect = connection.dialect.name
     known = {revision.revision for revision in script.walk_revisions()}
     unknown = tuple(sorted(set(current) - known))
     if unknown:
@@ -198,6 +199,7 @@ def database_migration_status(
         "heads": list(heads),
         "head_count": len(heads),
         "unknown": list(unknown),
+        "dialect": dialect,
     }
 
 

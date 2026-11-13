@@ -1117,6 +1117,10 @@ def complete_version_upgrade(slug: str, submission_id: str):
                 current_app.logger.error("conditional_approval_audit_pending error_type=%s", type(exc).__name__)
         if not state["complete"]:
             return redirect(action)
+        if hasattr(services, "document_service"):
+            from services.form_version_service import schedule_version_sync
+            schedule_version_sync(current_app._get_current_object(), version.form_id, version.id,
+                                  sync_submissions=False)
         return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
 
 

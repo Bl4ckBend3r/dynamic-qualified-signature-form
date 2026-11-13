@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from io import BytesIO
 import importlib
+import json
 import re
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from flask import Blueprint, Flask
+from werkzeug.datastructures import FileStorage
 from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, Text, create_engine, func, inspect, select
 from sqlalchemy.orm import sessionmaker
 
@@ -27,6 +30,7 @@ from services.form_version_service import (
     FormVersionValidationError,
 )
 from services.training_catalog_service import TrainingCatalogService
+from test_admin_panel import admin_app
 
 
 def _definition(field_name: str = "email", title: str = "Formularz") -> dict:
@@ -140,7 +144,7 @@ def test_conditional_stage_visibility_survives_draft_and_publication(tmp_path):
         assert published["workflow"]["steps"][0]["show_only_when_current"] is True
 
 
-def test_publish_upgrades_active_submissions_and_records_only_metadata(tmp_path):
+def test_publish_upgrades_active_submissions_and_flags_new_required_data(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -156,7 +160,8 @@ def test_publish_upgrades_active_submissions_and_records_only_metadata(tmp_path)
         assert migrated.form_version_id == new_id
         assert migrated.data_json["email"] == "user@example.org"
         assert migrated.data_json["legacy_note"] == "zachowaj"
-        assert migrated.data_json["_form_version_upgrade"]["missing_fields"] == []
+        assert migrated.data_json["_form_version_upgrade"]["missing_fields"] == ["city"]
+        assert migrated.data_json["_original_form_version_id"] == old_id
         assert [field["name"] for field in db.get(FormVersion, old_id).definition_json["fields"]] == ["email"]
         event = db.execute(select(SubmissionWorkflowEvent).where(SubmissionWorkflowEvent.submission_id == submission_id)).scalar_one()
         assert event.source == "form_version_upgrade"
@@ -348,7 +353,7 @@ def test_reconcile_keeps_removed_values_but_flags_new_option_and_required_field(
         draft.status = FORM_VERSION_PUBLISHED
         service.upgrade_submission(db, submission, draft)
         marker = submission.data_json["_form_version_upgrade"]
-        assert marker["missing_fields"] == []
+        assert marker["missing_fields"] == ["choice", "telephone"]
         assert set(service.refresh_submission_completion(db, submission)["errors"]) == {"choice", "telephone"}
         assert submission.data_json["choice"] == "A"
         assert submission.data_json["removed"] == "historical"
@@ -450,6 +455,38 @@ def test_deferred_publication_synchronizes_multiple_short_batches(tmp_path):
             FormSubmission.form_version_id == version_id)) == 205
         assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
             SubmissionWorkflowEvent.source == "form_version_upgrade")) == 205
+
+
+def test_sync_handles_missing_version_legacy_state_and_invalid_foreign_version(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db)
+        old = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        draft = service.clone_to_draft(db, form, old, actor_id=None)
+        service.publish(db, form, draft, actor_id=None, synchronize_submissions=False)
+        other = _form_with_field(db, slug="unrelated-form")
+        unrelated = service.create_initial_version(db, other, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        db.add_all([
+            FormSubmission(submission_id="missing-version", form_slug=form.slug, form_version_id=None,
+                data_json={"email": "a@example.org"}, document_states={"legacy_declaration": {"signed": True}}),
+            FormSubmission(submission_id="archived-version", form_slug=form.slug, form_version_id=old.id,
+                data_json={"email": "b@example.org"}, document_states={"legacy_declaration": {"signed": True}}),
+            FormSubmission(submission_id="foreign-version", form_slug=form.slug, form_version_id=unrelated.id,
+                data_json={"email": "c@example.org"}),
+        ])
+        db.flush()
+        form_id, version_id, old_id, foreign_id = form.id, draft.id, old.id, unrelated.id
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 2
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 0
+    with Session() as db:
+        rows = {item.submission_id: item for item in db.execute(select(FormSubmission).where(
+            FormSubmission.form_slug == "versioned")).scalars()}
+        assert rows["missing-version"].form_version_id == version_id
+        assert rows["archived-version"].form_version_id == version_id
+        assert rows["archived-version"].data_json["_original_form_version_id"] == old_id
+        assert rows["archived-version"].document_states["legacy_declaration"] == {"signed": True}
+        assert rows["foreign-version"].form_version_id == foreign_id
 
 
 def test_correction_uses_bound_published_qualification_while_draft_changes(tmp_path):
@@ -1142,6 +1179,188 @@ def test_document_context_uses_upgraded_submission_version_after_new_publication
     assert current_config["title"] == "Nowy dokument"
     assert "late_required" in {field.get("name") for field in historical_config["fields"]}
     assert "late_required" in {field.get("name") for field in current_config["fields"]}
+
+
+def test_publication_generates_new_declaration_revision_without_touching_signed_history(admin_app, monkeypatch):
+    services = admin_app.extensions["services"]
+    version_service = services.form_version_service
+    document_service = services.document_service
+    session_factory = services.submission_repository.session_factory
+    rendered = []
+    attempts = 0
+
+    def render(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        rendered.append(kwargs["template_html"])
+        if attempts == 1:
+            raise RuntimeError("temporary renderer failure")
+        return b"%PDF-1.4\nnew declaration\n%%EOF"
+
+    monkeypatch.setattr(document_service.pdf_render_service, "render_document_pdf_bytes", render)
+    with admin_app.app_context():
+        with session_factory.begin() as db:
+            old_definition = _definition()
+            old_definition["documents"] = [{"id": "declaration", "kind": "generated_pdf",
+                "enabled": True, "template_html": "<p>Old declaration</p>"}]
+            new_definition = deepcopy(old_definition)
+            new_definition["documents"][0]["template_html"] = "<p>New declaration</p>"
+            new_definition["fields"].append({"name": "city", "label": "City", "type": "text", "required": True})
+            form = Form(slug="revision-declaration", name="Revision", title="Revision",
+                        definition_json=new_definition)
+            db.add(form)
+            db.flush()
+            old = FormVersion(form_id=form.id, version_major=1, version_minor=0,
+                version_label="1.0", status=FORM_VERSION_ARCHIVED, definition_json=old_definition)
+            latest = FormVersion(form_id=form.id, version_major=1, version_minor=1,
+                version_label="1.1", status=FORM_VERSION_PUBLISHED, definition_json=new_definition)
+            db.add_all([old, latest])
+            db.flush()
+            submission = FormSubmission(submission_id="revision-case", form_slug=form.slug,
+                form_version_id=old.id, data_json={"email": "participant@example.org", "city": "A"},
+                email="participant@example.org", process_status="COMPLETED", workflow_step="done")
+            db.add(submission)
+            db.flush()
+            signed = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
+                form_slug=form.slug, document_id="declaration", document_type="signed_declaration",
+                filename="old-signed.pdf", storage_path="historical/old-signed.pdf",
+                signed=True, status="signed")
+            db.add(signed)
+            waiting = FormSubmission(submission_id="revision-waiting", form_slug=form.slug,
+                form_version_id=old.id, data_json={"email": "waiting@example.org"},
+                email="waiting@example.org", process_status="WAITING_FOR_OFFICER_DECISION",
+                workflow_step="submission")
+            db.add(waiting)
+            db.flush()
+            form_id, version_id, submission_pk, signed_id = form.id, latest.id, submission.id, signed.id
+            assert version_service.upgrade_submission(db, submission, latest)
+            assert version_service.upgrade_submission(db, waiting, latest)
+            waiting_pk = waiting.id
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 0
+        with session_factory() as db:
+            assert db.get(FormSubmission, submission_pk).document_states["version_revisions"]["declaration"]["status"] == "failed"
+            assert db.get(FormSubmission, waiting_pk).document_states["version_revisions"]["declaration"]["status"] == "waiting_for_data"
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 1
+        with session_factory.begin() as db:
+            waiting = db.get(FormSubmission, waiting_pk)
+            waiting.data_json = {**waiting.data_json, "city": "B"}
+            version_service.refresh_submission_completion(db, waiting)
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 1
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 0
+        with session_factory() as db:
+            submission = db.get(FormSubmission, submission_pk)
+            files = db.execute(select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission_pk).order_by(SubmissionFile.id)).scalars().all()
+            assert len(files) == 2
+            assert db.get(SubmissionFile, signed_id).status == "signed"
+            assert files[-1].signature_validation_result["form_version_id"] == version_id
+            assert files[-1].signature_validation_result["revision"] == 2
+            assert submission.process_status == "COMPLETED" and submission.workflow_step == "done"
+            assert submission.document_states["version_revisions"]["declaration"]["status"] == "completed"
+            assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
+                SubmissionWorkflowEvent.submission_id == submission_pk,
+                SubmissionWorkflowEvent.source == "document_revision_generation")) == 1
+        generated_file = files[-1]
+        monkeypatch.setattr(services.document_signing_service, "verify_stored_pdf", lambda *args, **kwargs: {
+            "is_signed": True, "cryptographically_valid": True, "integrity_ok": True,
+            "validation_status": "VALID", "signature_count": 1,
+            "is_allowed_signature": True, "signature_type": "mszafir",
+        })
+        monkeypatch.setattr(services.mail_dispatch_service, "dispatch_document_received_notification",
+                            lambda *args, **kwargs: None)
+        original_pdf = services.storage.read_bytes(generated_file.storage_path)
+        uploaded = FileStorage(stream=BytesIO(original_pdf + b"\n% signed revision"),
+                               filename="signed-revision.pdf", content_type="application/pdf")
+        with admin_app.test_request_context("/version-documents/revision-declaration/revision-case/declaration/upload"):
+            result = document_service.document_workflow.upload_version_gap(
+                services.submission_repository.get_by_id("revision-case"), new_definition,
+                "declaration", uploaded)
+        assert result["is_valid"]
+        with session_factory() as db:
+            refreshed = db.get(FormSubmission, submission_pk)
+            assert refreshed.data_json["_form_version_upgrade"]["missing_documents"] == []
+            assert refreshed.document_states["version_revisions"]["declaration"]["signature_status"] == "signed"
+            assert db.get(SubmissionFile, signed_id).status == "signed"
+    assert rendered == ["<p>New declaration</p>"] * 3
+
+
+@pytest.mark.parametrize("document_id", ["agreement", "training_agreement"])
+def test_publication_generates_current_contract_for_each_training(admin_app, monkeypatch, document_id):
+    services = admin_app.extensions["services"]
+    version_service = services.form_version_service
+    document_service = services.document_service
+    session_factory = services.submission_repository.session_factory
+    templates = []
+
+    def render(**kwargs):
+        templates.append(kwargs["template_html"])
+        return b"%PDF-1.4\nnew agreement\n%%EOF"
+
+    monkeypatch.setattr(document_service.pdf_render_service, "render_document_pdf_bytes", render)
+    with admin_app.app_context():
+        with session_factory.begin() as db:
+            old_definition = _definition()
+            old_definition["documents"] = [{"id": document_id, "kind": "generated_pdf",
+                "enabled": True, "generation_mode": "per_training", "repeat_over": "selected_trainings",
+                "template_html": "<p>Old contract</p>"}]
+            new_definition = deepcopy(old_definition)
+            new_definition["documents"][0]["template_html"] = "<p>New contract</p>"
+            form = Form(slug=f"revision-{document_id}", name="Revision", title="Revision",
+                        definition_json=new_definition)
+            db.add(form); db.flush()
+            old = FormVersion(form_id=form.id, version_major=1, version_minor=0,
+                version_label="1.0", status=FORM_VERSION_ARCHIVED, definition_json=old_definition)
+            latest = FormVersion(form_id=form.id, version_major=1, version_minor=1,
+                version_label="1.1", status=FORM_VERSION_PUBLISHED, definition_json=new_definition)
+            db.add_all([old, latest]); db.flush()
+            submission = FormSubmission(submission_id=f"revision-{document_id}-case", form_slug=form.slug,
+                form_version_id=old.id, data_json={"email": "participant@example.org"},
+                email="participant@example.org", process_status="COMPLETED", workflow_step="done",
+                selected_trainings=json.dumps([{"id": "one", "name": "Course One", "price": "100"},
+                                               {"id": "two", "name": "Course Two", "price": "200"}]))
+            db.add(submission); db.flush()
+            signed = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
+                form_slug=form.slug, document_id=document_id, document_type=f"signed_{document_id}",
+                filename="old-signed.pdf", storage_path="historical/old-signed.pdf",
+                training_key="one", agreement_number="OLD/1", signed=True, status="signed")
+            db.add(signed); db.flush()
+            form_id, version_id, submission_pk, signed_id = form.id, latest.id, submission.id, signed.id
+            version_service.upgrade_submission(db, submission, latest)
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 1
+        assert version_service.process_document_revisions(session_factory, form_id, version_id, document_service) == 0
+        with session_factory() as db:
+            files = db.execute(select(SubmissionFile).where(
+                SubmissionFile.submission_id == submission_pk).order_by(SubmissionFile.id)).scalars().all()
+            assert len(files) == 3
+            assert db.get(SubmissionFile, signed_id).agreement_number == "OLD/1"
+            assert db.get(SubmissionFile, signed_id).status == "signed"
+            assert {file.training_key for file in files[1:]} == {"one", "two"}
+            assert len({file.agreement_number for file in files[1:]}) == 2
+            assert all(file.signature_validation_result["form_version_id"] == version_id for file in files[1:])
+            assert db.get(FormSubmission, submission_pk).process_status == "COMPLETED"
+            missing = db.get(FormSubmission, submission_pk).data_json["_form_version_upgrade"]["missing_documents"]
+            assert {item["training_key"] for item in missing} == {"one", "two"}
+        monkeypatch.setattr(services.document_signing_service, "verify_stored_pdf", lambda *args, **kwargs: {
+            "is_signed": True, "cryptographically_valid": True, "integrity_ok": True,
+            "validation_status": "VALID", "signature_count": 1,
+            "is_allowed_signature": True, "signature_type": "mszafir",
+        })
+        monkeypatch.setattr(services.mail_dispatch_service, "dispatch_document_received_notification",
+                            lambda *args, **kwargs: None)
+        first = next(file for file in files[1:] if file.training_key == "one")
+        uploaded = FileStorage(stream=BytesIO(services.storage.read_bytes(first.storage_path) + b"\n% signed"),
+                               filename="signed-first.pdf", content_type="application/pdf")
+        with admin_app.test_request_context(f"/version-documents/{document_id}/upload"):
+            result = document_service.document_workflow.upload_version_gap(
+                services.submission_repository.get_by_id(f"revision-{document_id}-case"),
+                new_definition, document_id, uploaded, training_key="one")
+        assert result["is_valid"]
+        with session_factory() as db:
+            submission = db.get(FormSubmission, submission_pk)
+            assert [item["training_key"] for item in submission.data_json["_form_version_upgrade"]["missing_documents"]] == ["two"]
+            assert submission.document_states["version_revisions"][document_id].get("signature_status") != "signed"
+            assert submission.process_status == "COMPLETED"
+    assert templates == ["<p>New contract</p>"] * 2
 
 
 def test_migration_creates_technical_version_and_backfills_submissions(monkeypatch):

@@ -99,12 +99,22 @@ class PdfRenderService:
             except Exception as exc:
                 logger = getattr(app, "logger", None)
                 if logger:
-                    logger.exception(
-                        "Blad renderowania PDF: submission_id=%s template_name=%s fields=%s",
-                        context.get("submission_id", ""),
-                        template_name,
-                        summarize_structured_context(context),
-                    )
+                    if document_type == "declaration":
+                        logger.error("pdf_render_failed", extra={
+                            "event": "pdf_render_failed", "operation": "document_generation",
+                            "document_type": document_type, "exception_type": type(exc).__name__,
+                        })
+                    else:
+                        logger.exception(
+                            "Blad renderowania PDF: submission_id=%s template_name=%s fields=%s",
+                            context.get("submission_id", ""), template_name,
+                            summarize_structured_context(context),
+                        )
+                if document_type == "declaration":
+                    error = PdfRenderError("Nie udalo sie wyrenderowac PDF.")
+                    error.cause_module = type(exc).__module__
+                    error.cause_type = type(exc).__name__
+                    raise error from None
                 raise PdfRenderError(f"Nie udalo sie wyrenderowac PDF: {exc}") from exc
         finally:
             tmp_pdf_path.unlink(missing_ok=True)

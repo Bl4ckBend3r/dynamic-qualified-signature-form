@@ -417,6 +417,21 @@ class PostgresSubmissionRepository(SubmissionRepository):
         from sqlalchemy import select, update, or_
         from models import FormSubmission
         from services.audit_log_service import pending_audit_state
+        from services.observability import declaration_trace, safe_diagnostic_code, safe_identifier_hash
+
+        def denied(reason_code: str) -> bool:
+            diagnostic = declaration_trace()
+            if diagnostic:
+                diagnostic.reason_code = reason_code.upper()
+            logger.warning("document_operation_claim_denied", extra={
+                "event": "document_operation_claim_denied",
+                "operation": "document_operation_claim",
+                "submission_ref": safe_identifier_hash(submission_id),
+                "workflow_step": safe_diagnostic_code(step_id),
+                "reason_code": reason_code,
+                "stage": "claim",
+            })
+            return False
         with self.session_factory() as db:
             if db.get_bind().dialect.name == "sqlite":
                 db.connection().exec_driver_sql("BEGIN IMMEDIATE")
@@ -425,29 +440,64 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 .where(FormSubmission.submission_id == submission_id)
                 .with_for_update()
             ).scalar_one_or_none()
-            if not model or (model.workflow_step or model.workflow_stage) != step_id:
-                return False
+            if not model:
+                return denied("submission_not_found")
+            if (model.workflow_step or model.workflow_stage) != step_id:
+                return denied("workflow_step_mismatch")
             from services.submission_decision_service import ConditionalApproval
             if ConditionalApproval.active(model):
-                return False
+                return denied("conditional_approval_active")
             marker = pending_audit_state(model)
             continuation = marker.get("continuation") if marker else None
+            kind = continuation.get("kind") if isinstance(continuation, dict) else None
+            target_matches = isinstance(continuation, dict) and continuation.get("new_step") == step_id
+            if isinstance(continuation, dict) and "new_step" not in continuation and marker.get("audit_complete") is True:
+                # Older completed markers did not snapshot the destination step.
+                # Reconstruct it only from a persisted decision tied to this submission.
+                audit_event = marker.get("event") or {}
+                if audit_event.get("event_type") == "WORKFLOW_STATUS_CHANGED":
+                    if kind == "officer_decision":
+                        from models import SubmissionDecision
+                        saved = db.execute(select(SubmissionDecision).where(
+                            SubmissionDecision.submission_id == model.id,
+                        ).order_by(SubmissionDecision.id.desc())).scalars().first()
+                        target_matches = bool(
+                            saved and saved.target_step == step_id
+                            and saved.workflow_step == continuation.get("source_step")
+                            and saved.decision == model.officer_decision
+                            and saved.previous_status == audit_event.get("old_value")
+                            and saved.target_status == audit_event.get("new_value")
+                        )
+                    elif kind == "repeatable_item_decision":
+                        from uuid import NAMESPACE_URL, uuid5
+                        from models import RepeatableGroupItemDecision
+                        decision_id = str(continuation.get("decision_id") or "")
+                        saved = db.get(RepeatableGroupItemDecision, int(decision_id)) if decision_id.isdigit() else None
+                        expected_id = str(uuid5(NAMESPACE_URL,
+                            f"required-audit-operation:{submission_id}:WORKFLOW_STATUS_CHANGED:"
+                            f"repeatable-item-decision:{continuation.get('decision_id')}:{step_id}"))
+                        target_matches = bool(
+                            saved and saved.submission_id == model.id
+                            and saved.group_key == continuation.get("group_key")
+                            and marker.get("operation_id") == expected_id
+                            and model.process_status == audit_event.get("new_value")
+                        )
             allowed_handoff = bool(
                 replaces_audit_operation_id
                 and marker.get("audit_complete") is True
                 and str(marker.get("operation_id") or "") == replaces_audit_operation_id
                 and isinstance(continuation, dict)
-                and continuation.get("kind") == "workflow_transition"
-                and continuation.get("new_step") == step_id
+                and kind in {"workflow_transition", "officer_decision", "repeatable_item_decision"}
+                and target_matches
             )
             if marker and not allowed_handoff:
-                return False
+                return denied("audit_pending" if not marker.get("audit_complete") else "audit_handoff_invalid")
             if replaces_audit_operation_id and not marker:
-                return False
+                return denied("audit_handoff_invalid")
             states = dict(model.document_states or {})
             prior = states.get("document_operation", "")
             if prior and float(states.get("document_operation_until") or 0) > time.time():
-                return False
+                return denied("document_operation_locked")
             states.update(document_operation=token, document_operation_until=str(time.time() + 900))
             operation = FormSubmission.document_states["document_operation"].as_string()
             result = db.execute(update(FormSubmission).where(
@@ -457,7 +507,9 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 operation == prior if prior else or_(operation.is_(None), operation == ""),
             ).values(document_states=states).execution_options(synchronize_session=False))
             db.commit()
-            return result.rowcount == 1
+            if result.rowcount != 1:
+                return denied("concurrent_update_conflict")
+            return True
 
     def claim_submission_document_operation(
         self,

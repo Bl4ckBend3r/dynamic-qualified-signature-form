@@ -64,6 +64,7 @@ class SubmissionDocumentService:
         storage_path: str = "",
         workflow_step_at_upload: str = "",
         storage=None,
+        revision_metadata: Mapping[str, Any] | None = None,
     ) -> bool:
         return self.record_document_metadata(
             submission_id=submission_id,
@@ -80,6 +81,7 @@ class SubmissionDocumentService:
             storage_path=storage_path,
             signed=False,
             status=GENERATED_STATUS,
+            signature_validation_result=dict(revision_metadata or {}),
             storage=storage,
         )
 

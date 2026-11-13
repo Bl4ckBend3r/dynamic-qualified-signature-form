@@ -708,12 +708,19 @@ class DocumentWorkflowService:
         return row, step, document
 
     def _claim(self, row, step, *, replaces_audit_operation_id=""):
+        from services.observability import declaration_trace
+
+        diagnostic = declaration_trace()
+        if diagnostic:
+            diagnostic.stage = "claim"
         if not hasattr(self.repository, "claim_document_operation"):
             raise ValueError("Złożone etapy dokumentowe wymagają trwałej bazy metadanych.")
         token = uuid4().hex
         claim_args = {"replaces_audit_operation_id": replaces_audit_operation_id} if replaces_audit_operation_id else {}
         if not self.repository.claim_document_operation(row["submission_id"], step["id"], token, **claim_args):
             raise ValueError("Dokument jest już przetwarzany. Odśwież status za chwilę.")
+        if diagnostic:
+            diagnostic.stage = "validation"
         return token
 
     def _finalize_composite_training_agreement(
@@ -859,6 +866,13 @@ class DocumentWorkflowService:
 
     def _save(self, row, step, state, token, substate, event, actor="system", *, field_values=None):
         state["substate"] = substate
+        from services.observability import declaration_trace
+        diagnostic = declaration_trace()
+        previous_stage = diagnostic.stage if diagnostic else ""
+        if diagnostic:
+            declaration_state = (state.get("documents") or {}).get("declaration") or {}
+            diagnostic.document_status = declaration_state.get("substate") or substate
+            diagnostic.stage = "workflow_update"
         state["status"] = STATE_CODES.get(substate, DocumentState.PENDING.value)
         if substate == "completed" and not state.get("signature_required", True):
             state["status"] = DocumentState.READY.value
@@ -869,6 +883,8 @@ class DocumentWorkflowService:
             state["document_id"] = legacy_document_id
         if not self.repository.save_document_step(row["submission_id"], step["id"], state, token, event, actor, field_values=field_values):
             raise ValueError("Etap zmienił się podczas obsługi dokumentu.")
+        if diagnostic:
+            diagnostic.stage = previous_stage
 
     def _files(self, row, step, document_id=None):
         target_document_id = str(
@@ -2004,12 +2020,14 @@ class DocumentWorkflowService:
                 "can_retry": can_generate or aggregate_substate in {"failed", "verification_error", "verification_failed"}, "form_definition": form_definition,
                 "form_document_id": form_document_id, "values": form_values or dict(row),}
 
-    def version_gap_files(self, submission, definition, document_id):
-        item = self.documents._version_gap_entry(submission, definition, document_id)
+    def version_gap_files(self, submission, definition, document_id, training_key=""):
+        item = self.documents._version_gap_entry(submission, definition, document_id, training_key)
         row = self.repository.get_by_id(self.documents._submission_id(submission))
         files = self.documents.submission_document_service.list_documents(row["submission_id"])
         return [file for file in files if file.get("document_id") == document_id
                 and file.get("workflow_step_at_upload") == item["step_id"]
+                and int(file.get("id") or 0) > int(item.get("minimum_file_id") or 0)
+                and str(file.get("training_key") or "") == str(training_key or "")
                 and file.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}]
 
     def generate_version_gap(self, submission, definition, document_id):
@@ -2024,13 +2042,13 @@ class DocumentWorkflowService:
         self._refresh_version_gap(submission)
         return result
 
-    def upload_version_gap(self, submission, definition, document_id, uploaded_file):
+    def upload_version_gap(self, submission, definition, document_id, uploaded_file, training_key=""):
         if not uploaded_file or not uploaded_file.filename:
             raise ValueError("Wybierz plik dokumentu.")
-        marker = self.documents._version_gap_entry(submission, definition, document_id)
+        marker = self.documents._version_gap_entry(submission, definition, document_id, training_key)
         document = self.documents.get_document_by_id(definition, document_id)
         row = self.repository.get_by_id(self.documents._submission_id(submission))
-        files = self.version_gap_files(row, definition, document_id)
+        files = self.version_gap_files(row, definition, document_id, training_key)
         if any(file.get("status") in {"signed", "uploaded"} for file in files):
             raise ValueError("Dokument został już przyjęty.")
         signature_required = bool(document.get("signature_required", True))
@@ -2043,7 +2061,8 @@ class DocumentWorkflowService:
         if document.get("kind") == "generated_pdf" and not generated:
             raise ValueError("Najpierw wygeneruj dokument.")
         digest = sha256(data).hexdigest()
-        filename = f"{row['submission_id']}-{sha256(document_id.encode()).hexdigest()[:12]}-upgrade-{digest[:16]}.{extension}"
+        filename = (f"{row['submission_id']}-{sha256(document_id.encode()).hexdigest()[:12]}"
+                    f"-{sha256(training_key.encode()).hexdigest()[:8]}-upgrade-{digest[:16]}.{extension}")
         pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
             slug=row["form_slug"], filename=filename, document_bytes=data,
             document_type=self.documents._storage_document_type(document_id), signed=signature_required)
@@ -2136,12 +2155,18 @@ class DocumentWorkflowService:
                 document_status=document_status,
             )
         accepted = outcome == "VALID_SIGNATURE"
+        if generated:
+            revision_meta = generated.get("signature_validation_result") or {}
+            verification.update({key: revision_meta[key] for key in
+                ("form_version_id", "template_hash", "revision", "requires_signature")
+                if key in revision_meta})
         verification["result_code"] = outcome
         recorded = self.documents.submission_document_service.record_document_metadata(
             submission_id=row["submission_id"], form_slug=row["form_slug"], filename=filename, file_bytes=data,
             document_id=document_id, document_type=self.documents.workflow_upload_metadata_type(document_id,
                 signer="participant", signed=signature_required), original_filename=uploaded_file.filename,
             storage_path=storage_path, workflow_step_at_upload=marker["step_id"], mime_type=mime_type,
+            training_key=training_key,
             signed=bool(signature_required and accepted),
             status="signed" if signature_required and accepted else "uploaded" if accepted else "rejected",
             signature_status=str(verification.get("validation_status") or "not_required").lower(),
@@ -2170,17 +2195,43 @@ class DocumentWorkflowService:
 
     def _refresh_version_gap(self, submission):
         from sqlalchemy import select
-        from models import FormSubmission
+        from models import FormSubmission, SubmissionFile
         from services.form_version_service import FormVersionService
         with self.repository.session_factory() as db:
             model = db.execute(select(FormSubmission).where(FormSubmission.submission_id ==
                 self.documents._submission_id(submission)).with_for_update()).scalar_one()
             FormVersionService().refresh_submission_completion(db, model)
+            states = deepcopy(model.document_states or {})
+            revisions = states.get("version_revisions") or {}
+            for document_id, revision in revisions.items():
+                if revision.get("status") != "completed" or not revision.get("requires_signature"):
+                    continue
+                signed_files = db.execute(select(SubmissionFile).where(
+                    SubmissionFile.submission_id == model.id,
+                    SubmissionFile.document_id == document_id,
+                    SubmissionFile.signed.is_(True),
+                    SubmissionFile.status == "signed",
+                )).scalars().all()
+                related = [file.id for file in signed_files if
+                    (file.signature_validation_result or {}).get("form_version_id") == revision.get("version_id") and
+                    (file.signature_validation_result or {}).get("template_hash") == revision.get("template_hash")]
+                generated = db.execute(select(SubmissionFile).where(
+                    SubmissionFile.id.in_(revision.get("file_ids") or [-1]),
+                    SubmissionFile.submission_id == model.id,
+                )).scalars().all()
+                signed_keys = {file.training_key or "" for file in signed_files if file.id in related}
+                if generated and all((file.training_key or "") in signed_keys for file in generated):
+                    revision["signed_file_ids"] = related
+                    revision["signature_status"] = "signed"
+            model.document_states = states
             db.commit()
 
     def download_version_gap(self, submission, definition, document_id, filename):
         row = self.repository.get_by_id(self.documents._submission_id(submission))
-        file = next((file for file in self.version_gap_files(row, definition, document_id)
+        markers = ((row.get("data_json") or {}).get("_form_version_upgrade") or {}).get("missing_documents") or []
+        file = next((file for marker in markers if marker.get("document_id") == document_id
+                     for file in self.version_gap_files(row, definition, document_id,
+                         str(marker.get("training_key") or ""))
                      if file.get("filename") == filename and file.get("status") == "generated"), None)
         if not file:
             raise ValueError("Dokument nie jest dostępny.")
@@ -2194,10 +2245,17 @@ class DocumentWorkflowService:
             definition,
         )
 
+        from services.observability import trace_declaration_generation
+
+        if any(document.get("id") == "declaration" for document in step_documents(definition, step)):
+            status = document_step_state(row, step["id"]).get("substate") or "pending"
+            with trace_declaration_generation(row["submission_id"], step["id"], status):
+                return self._start_group(
+                    row, step, definition,
+                    replaces_audit_operation_id=replaces_audit_operation_id,
+                )
         return self._start_group(
-            row,
-            step,
-            definition,
+            row, step, definition,
             replaces_audit_operation_id=replaces_audit_operation_id,
         )
 

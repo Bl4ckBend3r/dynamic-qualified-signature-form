@@ -177,11 +177,16 @@ class WorkflowService:
             submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
     def definition_for(self, submission: dict) -> dict:
-        """Resolve immutable configuration, never the current form editor."""
-        if not getattr(self.submission_repository, "session_factory", None) or not submission.get("form_version_id"):
+        """Resolve the published operational snapshot for this submission's form."""
+        if not getattr(self.submission_repository, "session_factory", None):
             return {}
         with self.submission_repository.session_factory() as db:
-            version = db.get(FormVersion, submission["form_version_id"])
+            from models import FormSubmission
+            from services.form_version_service import FormVersionService
+            row = db.execute(select(FormSubmission).where(
+                FormSubmission.submission_id == submission.get("submission_id")
+            )).scalar_one_or_none()
+            version = FormVersionService().resolve_for_submission(db, row) if row else None
             return dict(version.definition_json or {}) if version else {}
 
     def advance_after_action(
@@ -221,7 +226,12 @@ class WorkflowService:
                                   form_config=form_config,
                                   replaces_audit_operation_id=replaces_audit_operation_id):
             raise WorkflowTransitionError("Nie udało się zapisać przejścia workflow.")
-        submission.update(workflow_step=target, workflow_stage=target, process_status=status)
+        fresh = self.submission_repository.get_by_id(submission["submission_id"]) or {}
+        submission.update(
+            workflow_step=fresh.get("workflow_step") or target,
+            workflow_stage=fresh.get("workflow_stage") or target,
+            process_status=fresh.get("process_status") or status,
+        )
 
     def run_automatic_steps(
         self, submission: dict, form_config: dict, *, replaces_audit_operation_id: str = "",
@@ -294,13 +304,23 @@ class WorkflowService:
                         raise WorkflowTransitionError("Pętla dokumentowa wymaga działania użytkownika lub urzędnika.")
                     visited.add(current)
                     start_args = {"replaces_audit_operation_id": handoff_id} if handoff_id else {}
-                    if not self.document_service.document_workflow.start(submission, form_config, **start_args):
-                        return
-                    target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
-                    self._enter_configured_step(
-                        submission, form_config, target,
-                        replaces_audit_operation_id=handoff_id,
-                    )
+                    from contextlib import nullcontext
+                    from services.documents.document_workflow_service import document_step_state, step_documents
+                    from services.observability import trace_declaration_generation
+
+                    has_declaration = any(item.get("id") == "declaration" for item in step_documents(form_config, step))
+                    status = (document_step_state(submission, current).get("substate") or "pending") if has_declaration else ""
+                    diagnostic_scope = trace_declaration_generation(public_id, current, status) if has_declaration else nullcontext()
+                    with diagnostic_scope as diagnostic:
+                        if not self.document_service.document_workflow.start(submission, form_config, **start_args):
+                            return
+                        target = self.resolve_next_step(form_config, current, submission_data=submission.get("data_json"))
+                        if diagnostic:
+                            diagnostic.stage = "workflow_update"
+                        self._enter_configured_step(
+                            submission, form_config, target,
+                            replaces_audit_operation_id=handoff_id,
+                        )
                     handoff_id = ""
                     continue
                 if kind in {"decision", "final", "user_action", "officer_action"} or step.get("final"):
@@ -726,7 +746,13 @@ class WorkflowService:
                 metadata={"reason": reason, "validated": transition_allowed,
                           "conditional_approval_resolved": condition_closed},
                 required_permission=audit_permission,
-                continuation=audit_continuation,
+                continuation=(
+                    {**audit_continuation, "new_step": new_step}
+                    if audit_continuation and audit_continuation.get("kind") in {
+                        "officer_decision", "repeatable_item_decision"
+                    }
+                    else audit_continuation
+                ),
                 operation_key=audit_operation_key,
             )
         return submission

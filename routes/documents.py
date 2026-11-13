@@ -19,7 +19,7 @@ from werkzeug.exceptions import HTTPException
 from sqlalchemy import select
 from database import create_session_factory
 from form_loader import values_for_rerender
-from models import Form, FormSubmission, SubmissionFile, SubmissionTraining
+from models import Form, FormSubmission, FormVersion, SubmissionFile, SubmissionTraining
 from services.document_service import DocumentType
 from services.audit_log_service import AuditPendingError
 from services.submission_training_service import TrainingSelectionError
@@ -75,8 +75,7 @@ def get_form_config(slug: str, submission_id: str | None = None) -> dict | None:
                     version = services.form_version_service.resolve_for_submission(db, submission)
                     if version:
                         return services.form_config_service.normalize_form_config(version.definition_json or {})
-                    if submission.form_version_id:
-                        return None
+                    return None
             return services.form_config_service.normalize_form_config(form.definition_json or {})
     return services.form_config_service.get_form_config(services.storage, slug)
 
@@ -1117,11 +1116,25 @@ def generate_group_document(slug, submission_id, step_id, document_id):
     require_public_csrf()
     definition = get_form_config(slug, submission_id) or {}
     try:
-        get_services().document_service.document_workflow.generate_group_document(
-            access.submission, definition, step_id, document_id)
+        if document_id == "declaration":
+            from services.observability import trace_declaration_generation
+            from services.documents.document_workflow_service import document_step_state
+
+            row = access.submission.get("row") or access.submission
+            status = document_step_state(row, step_id).get("substate") or "pending"
+            with trace_declaration_generation(submission_id, step_id, status):
+                get_services().document_service.document_workflow.generate_group_document(
+                    access.submission, definition, step_id, document_id)
+        else:
+            get_services().document_service.document_workflow.generate_group_document(
+                access.submission, definition, step_id, document_id)
         flash("Dokument został przygotowany.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
+    except Exception:
+        if document_id != "declaration":
+            raise
+        abort(500)
     return redirect(documents_to_sign_url(submission_id, access.credential))
 
 
@@ -1168,8 +1181,22 @@ def generate_version_document(slug, submission_id, document_id):
     require_public_csrf()
     definition = get_form_config(slug, submission_id) or {}
     try:
-        get_services().document_service.document_workflow.generate_version_gap(access.submission, definition, document_id)
-        flash("Dokument został przygotowany.", "success")
+        markers = (((access.submission.get("row") or {}).get("data_json") or {})
+                   .get("_form_version_upgrade") or {}).get("missing_documents") or []
+        revision = next((item for item in markers if item.get("document_id") == document_id
+                         and item.get("revision_version_id")), None)
+        if revision:
+            from services.form_version_service import schedule_version_sync
+            with db_session_factory()() as db:
+                version = db.get(FormVersion, revision["revision_version_id"])
+                if not version or version.status != "published":
+                    raise ValueError("Aktualna wersja dokumentu jest niedostępna.")
+                schedule_version_sync(current_app._get_current_object(), version.form_id, version.id,
+                                      sync_submissions=False)
+            flash("Ponowiono przygotowanie dokumentu w tle.", "success")
+        else:
+            get_services().document_service.document_workflow.generate_version_gap(access.submission, definition, document_id)
+            flash("Dokument został przygotowany.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
     return redirect(documents_to_sign_url(submission_id, access.credential))
@@ -1182,7 +1209,8 @@ def upload_version_document(slug, submission_id, document_id):
     definition = get_form_config(slug, submission_id) or {}
     try:
         result = get_services().document_service.document_workflow.upload_version_gap(
-            access.submission, definition, document_id, request.files.get("document_pdf"))
+            access.submission, definition, document_id, request.files.get("document_pdf"),
+            training_key=str(request.form.get("training_key") or ""))
         flash(result["message"], "success" if result["is_valid"] else "error")
     except ValueError as exc:
         flash(str(exc), "error")
@@ -1447,6 +1475,9 @@ def _version_gap_view(submission, submission_id):
         return []
     definition = get_form_config(submission["form_slug"], submission_id) or {}
     files = get_services().submission_document_service.list_documents(submission_id)
+    from services.training_service import parse_training_snapshots
+    training_names = {item["id"]: item["name"] for item in parse_training_snapshots(
+        (submission.get("row") or {}).get("selected_trainings"))}
     view = []
     for item in pending:
         document = get_services().document_service.get_document_by_id(definition, item.get("document_id"))
@@ -1454,8 +1485,11 @@ def _version_gap_view(submission, submission_id):
             continue
         generated = next((file for file in files if file.get("document_id") == item["document_id"]
                           and file.get("workflow_step_at_upload") == item["step_id"]
+                          and int(file.get("id") or 0) > int(item.get("minimum_file_id") or 0)
+                          and str(file.get("training_key") or "") == str(item.get("training_key") or "")
                           and file.get("status") == "generated"), None)
         view.append({**item, "label": document.get("participant_label") or document.get("label") or item.get("label"),
+                     "training_name": training_names.get(str(item.get("training_key") or ""), ""),
                      "generated_filename": generated["filename"] if generated else ""})
     return view
 

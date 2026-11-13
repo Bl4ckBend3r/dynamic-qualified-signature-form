@@ -9,6 +9,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Iterator
 
@@ -28,6 +29,8 @@ _SENSITIVE_PAIR = re.compile(
 _SENSITIVE_QUERY = re.compile(r"(?i)([?&](?:token|access_token|csrf|signature_token)=)[^&\s]+")
 _EMAIL = re.compile(r"(?i)(?<![\w.+-])[\w.+-]+@[a-z0-9.-]+\.[a-z]{2,}(?![\w.-])")
 _LOG_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
+_BROWSER = re.compile(r"(Firefox|Edg|Chrome|Version)/([0-9.]+)")
+_DECLARATION_TRACE: ContextVar[object | None] = ContextVar("declaration_trace", default=None)
 
 
 def redact_log_text(value: object) -> str:
@@ -40,6 +43,101 @@ def redact_log_text(value: object) -> str:
 
 def safe_identifier_hash(value: str) -> str:
     return hashlib.sha256(str(value).strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
+def declaration_trace():
+    return _DECLARATION_TRACE.get()
+
+
+def safe_diagnostic_code(value: object) -> str:
+    candidate = str(value or "").strip()
+    return candidate if _SAFE_ID.fullmatch(candidate) else "unknown"
+
+
+class DeclarationGenerationTrace:
+    def __init__(self, submission_id: str, workflow_step: str = "", document_status: str = "") -> None:
+        self.submission_ref = safe_identifier_hash(submission_id)
+        self.workflow_step = safe_diagnostic_code(workflow_step)
+        self.document_status = safe_diagnostic_code(document_status)
+        self.stage = "validation"
+        self.reason_code = ""
+        self.started = time.monotonic()
+        self.browser = "unknown"
+        if has_request_context():
+            user_agent = request.headers.get("User-Agent", "")
+            matches = {match.group(1): match.group(2) for match in _BROWSER.finditer(user_agent)}
+            for name in ("Firefox", "Edg", "Chrome", "Version"):
+                if name in matches and (name != "Version" or "Safari" in user_agent):
+                    self.browser = f"{'Safari' if name == 'Version' else name} {matches[name]}"
+                    break
+
+    def emit(self, event: str, *, exception_type: str = "") -> None:
+        fields = {
+            "event": event,
+            "operation": "declaration_generation",
+            "document_type": "declaration",
+            "submission_ref": self.submission_ref,
+            "workflow_step": self.workflow_step,
+            "document_status": self.document_status,
+            "stage": self.stage,
+            "browser": self.browser,
+            "duration_ms": round((time.monotonic() - self.started) * 1000, 2),
+            "reason_code": self.reason_code,
+            "exception_type": exception_type,
+        }
+        logging.getLogger("declaration_generation").log(
+            logging.ERROR if event.endswith(("failed", "blocked")) else logging.INFO,
+            event,
+            extra=fields,
+        )
+
+
+@contextmanager
+def trace_declaration_generation(submission_id: str, workflow_step: str = "", document_status: str = ""):
+    existing = declaration_trace()
+    if existing is not None:
+        yield existing
+        return
+    trace = DeclarationGenerationTrace(submission_id, workflow_step, document_status)
+    token = _DECLARATION_TRACE.set(trace)
+    trace.emit("declaration_generation_started")
+    try:
+        yield trace
+    except Exception as exc:
+        if trace.stage == "claim":
+            trace.reason_code = trace.reason_code or "DOCUMENT_OPERATION_CLAIM_REJECTED"
+            event = "declaration_generation_blocked"
+        elif trace.stage == "validation" and isinstance(exc, ValueError):
+            trace.reason_code = trace.reason_code or "DOCUMENT_VALIDATION_FAILED"
+            event = "declaration_generation_validation_failed"
+        else:
+            codes = {
+                "template_load": "TEMPLATE_READ_FAILED",
+                "context_build": "TEMPLATE_CONTEXT_FAILED",
+                "pdf_conversion": "PDF_CONVERSION_FAILED",
+                "storage_write": "DOCUMENT_STORAGE_WRITE_FAILED",
+                "metadata_write": "DOCUMENT_METADATA_WRITE_FAILED",
+                "workflow_update": "WORKFLOW_STATUS_UPDATE_FAILED",
+            }
+            trace.reason_code = trace.reason_code or codes.get(trace.stage, "DECLARATION_GENERATION_FAILED")
+            cause = exc.__cause__ or exc
+            cause_module = getattr(exc, "cause_module", type(cause).__module__)
+            if trace.stage == "pdf_conversion" and cause_module.startswith("jinja2"):
+                trace.reason_code = "TEMPLATE_SUBSTITUTION_FAILED"
+            elif trace.stage in {"template_load", "storage_write"} and cause_module.startswith(("requests", "urllib3", "webdav")):
+                trace.reason_code = "NEXTCLOUD_UNAVAILABLE"
+            elif trace.stage == "template_load" and isinstance(cause, FileNotFoundError):
+                trace.reason_code = "TEMPLATE_FILE_READ_FAILED"
+            elif trace.stage == "metadata_write" and cause_module.startswith("sqlalchemy"):
+                trace.reason_code = "DOCUMENT_METADATA_DB_FAILED"
+            event = "declaration_generation_failed"
+        trace.emit(event, exception_type=getattr(exc, "cause_type", type(exc).__name__))
+        raise
+    else:
+        trace.stage = "completed"
+        trace.emit("declaration_generation_completed")
+    finally:
+        _DECLARATION_TRACE.reset(token)
 
 
 def _request_context() -> dict[str, object]:
@@ -92,6 +190,11 @@ class JsonLogFormatter(logging.Formatter):
         "decision_category",
         "selected_count",
         "failure_reason",
+        "browser",
+        "submission_ref",
+        "document_status",
+        "stage",
+        "reason_code",
     )
 
     def format(self, record: logging.LogRecord) -> str:
@@ -181,6 +284,8 @@ class RuntimeLogBufferHandler(logging.Handler):
                         "",
                     )
                 ),
+                "reason_code": redact_log_text(getattr(record, "reason_code", "")),
+                "stage": redact_log_text(getattr(record, "stage", "")),
                 "rendered": rendered,
             }
 
@@ -354,7 +459,7 @@ def configure_logging(app: Flask) -> None:
         root.addHandler(runtime_handler)
 
     runtime_handler.setLevel(root.level)
-    runtime_handler.setFormatter(formatter)
+    runtime_handler.setFormatter(JsonLogFormatter())
 
     for existing_filter in tuple(
         runtime_handler.filters

@@ -121,6 +121,79 @@ def diagnostics():
     handler = current_app.extensions.get(
         "runtime_log_buffer"
     )
+    if handler:
+        with handler.lock:
+            generation_logs = list(handler.records)
+    else:
+        generation_logs = []
+    generation_errors = [entry for entry in generation_logs if entry.get("event") in {
+        "declaration_generation_validation_failed", "declaration_generation_blocked",
+        "declaration_generation_failed",
+    }]
+    sync_errors = sum(entry.get("event") in {"submission_version_sync_failed", "document_revision_generation_failed"}
+                      for entry in generation_logs)
+    version_issues = []
+    next_sync_cursor = None
+    sync_issue_message = ""
+    database_url_for_sync = str(current_app.config.get("DATABASE_URL") or "").strip()
+    if database_url_for_sync:
+        from models import FormVersion
+        from services.observability import safe_diagnostic_code, safe_identifier_hash
+
+        try:
+            cursor = max(0, request.args.get("sync_after", default=0, type=int))
+            with create_session_factory(database_url_for_sync)() as db:
+                published = {form.slug: (form.id, version.id) for form, version in db.execute(
+                    select(Form, FormVersion).join(FormVersion, FormVersion.form_id == Form.id).where(
+                        FormVersion.status == "published"))}
+                rows = db.execute(select(FormSubmission.id, FormSubmission.submission_id,
+                    FormSubmission.form_slug, FormSubmission.form_version_id,
+                    FormSubmission.data_json, FormSubmission.document_states).where(
+                        FormSubmission.id > cursor).order_by(FormSubmission.id).limit(101)).all()
+                if len(rows) > 100:
+                    next_sync_cursor = rows[99].id
+                for row in rows[:100]:
+                    target = published.get(row.form_slug)
+                    if not target:
+                        continue
+                    marker = (row.data_json or {}).get("_form_version_upgrade") or {}
+                    revisions = (row.document_states or {}).get("version_revisions") or {}
+                    reasons = []
+                    if row.form_version_id != target[1]:
+                        reasons.append("wersja formularza")
+                    if marker.get("missing_fields") or marker.get("invalid_training_ids"):
+                        reasons.append("brakujące dane")
+                    for document_id, revision in revisions.items():
+                        if revision.get("status") != "completed":
+                            reasons.append(f"{safe_diagnostic_code(document_id)}: {safe_diagnostic_code(revision.get('status') or 'pending')}")
+                    if reasons:
+                        version_issues.append({"form_id": target[0], "submission_pk": row.id,
+                            "submission_ref": safe_identifier_hash(row.submission_id), "reasons": reasons})
+        except Exception:
+            sync_issue_message = "Nie udało się odczytać listy wniosków. Sprawdź stan schematu bazy."
+
+    database_status = {"application": "-", "alembic": "-", "state": "unavailable",
+                       "current": [], "heads": [], "message": "Brak połączenia z bazą danych."}
+    database_url = str(current_app.config.get("DATABASE_URL") or "").strip()
+    if database_url:
+        from sqlalchemy.engine import make_url
+        from database import normalize_database_url
+        from services.database_schema_service import database_migration_status
+
+        try:
+            database_status["application"] = make_url(normalize_database_url(database_url)).get_backend_name()
+            migration = database_migration_status(database_url)
+            database_status.update(alembic=migration.get("dialect", "-"), state=migration["state"],
+                                   current=migration["current"], heads=migration["heads"])
+            database_status["message"] = {
+                "head": "Schemat jest na oczekiwanej rewizji.",
+                "behind": "Schemat wymaga sprawdzenia migracji.",
+                "unknown": "Aktualna rewizja nie występuje w lokalnym grafie migracji.",
+                "multiple_heads": "Graf migracji ma więcej niż jeden HEAD.",
+                "unversioned": "Baza nie ma zapisanej rewizji Alembic.",
+            }.get(migration["state"], "Nie można potwierdzić zgodności schematu.")
+        except Exception:
+            database_status["message"] = "Nie udało się odczytać stanu migracji. Sprawdź logi serwera."
 
     services = current_app.extensions.get(
         "services"
@@ -168,6 +241,13 @@ def diagnostics():
             if handler is not None
             else 0
         ),
+        generation_error_count=len(generation_errors),
+        generation_last_reason=(generation_errors[-1].get("reason_code") or "-") if generation_errors else "-",
+        database_status=database_status,
+        sync_error_count=sync_errors,
+        version_issues=version_issues,
+        next_sync_cursor=next_sync_cursor,
+        sync_issue_message=sync_issue_message,
         storage_type=storage_type,
         storage_failover_enabled=(
             storage_failover_enabled

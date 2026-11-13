@@ -632,11 +632,15 @@ def form_version_publish(form_id: int, version_id: int):
             return redirect(url_for("admin.form_versions", form_id=form.id))
     try:
         service.synchronize_published_submissions(
-            db_session_factory(), published_form_id, published_version_id, actor_id=g.admin_user.id)
+            db_session_factory(), published_form_id, published_version_id,
+            actor_id=g.admin_user.id, max_batches=1)
     except Exception:
         current_app.logger.exception("Nie udało się zsynchronizować zgłoszeń po publikacji wersji %s", published_version_id)
         flash("Wersję opublikowano, ale synchronizacja zgłoszeń wymaga ponowienia.", "error")
         return redirect(url_for("admin.form_versions", form_id=form_id))
+    from services.form_version_service import schedule_version_sync
+    schedule_version_sync(current_app._get_current_object(), published_form_id, published_version_id,
+                          actor_id=g.admin_user.id)
     flash((f"Zsynchronizowano zgłoszenia z wersją {published_label}." if retry_sync
            else f"Opublikowano wersję {published_label}."), "success")
     return redirect(url_for("admin.form_versions", form_id=form_id))

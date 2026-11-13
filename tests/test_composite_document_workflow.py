@@ -4,15 +4,16 @@ from io import BytesIO
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 import json
+import logging
 
 import pytest
 from pypdf import PdfWriter
 from sqlalchemy import select
 from werkzeug.datastructures import FileStorage, MultiDict
 
-from models import FormSubmission, FormVersion, SubmissionTraining, SubmissionWorkflowEvent
+from models import FormSubmission, FormVersion, RepeatableGroupItemDecision, SubmissionDecision, SubmissionTraining, SubmissionWorkflowEvent
 from services.documents.document_workflow_service import (
     document_item_state,
     document_step_state,
@@ -264,6 +265,28 @@ def test_generic_document_stage_custom_generation_with_declaration_step_id(compo
     assert env.document.download(env.row(), env.definition, "declaration", item["generated_filename"]) == env.pdf
     with pytest.raises(ValueError, match="nie jest dostępny"):
         env.document.generate_group_document(env.row(), env.definition, "declaration", "other_step")
+
+
+def test_manual_declaration_generation_is_traced_without_changing_pdf(composite_env, caplog):
+    env = composite_env()
+    env.enter()
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    assert page.status_code == 200
+    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    filename = env.state()['generated_filename']
+    caplog.clear()
+    url = f"/document-steps/{row['form_slug']}/{env.public_id}/paper/generate/declaration?token={row['access_token']}"
+    response = client.post(url, data={'csrf_token': csrf}, headers={'User-Agent': 'Mozilla/5.0 Firefox/132.0'})
+    assert response.status_code == 302
+    events = [record for record in caplog.records if record.name == 'declaration_generation']
+    assert [record.getMessage() for record in events] == [
+        'declaration_generation_started', 'declaration_generation_completed',
+    ]
+    assert events[0].browser == 'Firefox 132.0'
+    assert env.state()['generated_filename'] == filename
+    assert env.document.download(env.row(), env.definition, 'paper', filename) == env.pdf
 
 
 def test_generic_document_stage_single_agreement_with_office_signature(composite_env):
@@ -1237,6 +1260,56 @@ def test_document_operation_lease_can_be_reclaimed_after_expiry(composite_env):
     assert states['document_operation_until'] == '0'
 
 
+def test_document_claim_denial_logs_reason_without_operation_token(composite_env, caplog, monkeypatch):
+    env = composite_env()
+    claim = env.repo.claim_document_operation
+    with caplog.at_level(logging.WARNING, logger='repositories.submission_repository'):
+        assert not claim('missing-submission', 'paper', 'private-token')
+        assert not claim(env.public_id, 'wrong-step', 'private-token')
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, env.row()['id'])
+            model.data_json = {**(model.data_json or {}), '_conditional_approval': {'status': 'pending'}}
+            db.commit()
+        assert not claim(env.public_id, 'intake', 'private-token')
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, env.row()['id'])
+            model.data_json = {'_audit_pending': {'operation_id': 'private-audit', 'audit_complete': False}}
+            db.commit()
+        assert not claim(env.public_id, 'intake', 'private-token')
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, env.row()['id'])
+            model.data_json = {'_audit_pending': {'operation_id': 'private-audit', 'audit_complete': True}}
+            db.commit()
+        assert not claim(env.public_id, 'intake', 'private-token')
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, env.row()['id'])
+            model.data_json = {}
+            db.commit()
+        assert claim(env.public_id, 'intake', 'private-token')
+        assert not claim(env.public_id, 'intake', 'second-private-token')
+        env.repo.release_document_operation(env.public_id, 'private-token')
+        from sqlalchemy.orm import Session
+        from sqlalchemy.sql.dml import Update
+        original_execute = Session.execute
+
+        def lose_cas(self, statement, *args, **kwargs):
+            if isinstance(statement, Update) and statement.table.name == 'form_submissions':
+                return SimpleNamespace(rowcount=0)
+            return original_execute(self, statement, *args, **kwargs)
+
+        monkeypatch.setattr(Session, 'execute', lose_cas)
+        assert not claim(env.public_id, 'intake', 'third-private-token')
+    denials = [record for record in caplog.records if record.getMessage() == 'document_operation_claim_denied']
+    assert [record.reason_code for record in denials] == [
+        'submission_not_found', 'workflow_step_mismatch', 'conditional_approval_active',
+        'audit_pending', 'audit_handoff_invalid', 'document_operation_locked',
+        'concurrent_update_conflict',
+    ]
+    assert all(record.stage == 'claim' and len(record.submission_ref) == 16 for record in denials)
+    assert all('private-token' not in record.getMessage() and 'private-audit' not in record.getMessage()
+               for record in denials)
+
+
 def test_document_claim_requires_matching_completed_workflow_audit(composite_env):
     env = composite_env()
     env.enter()
@@ -1341,6 +1414,205 @@ def test_document_audit_handoff_serializes_concurrent_retry(composite_env):
     assert outcomes.count(True) == 1
     winner = 'a' if outcomes[0] else 'b'
     env.repo.release_document_operation(env.public_id, winner)
+
+
+def _officer_document_case(env):
+    env.definition['workflow']['decision_types'] = [{
+        'code': 'approved', 'label': 'Akceptacja', 'scope': 'submission',
+        'step_id': 'review', 'target_step': 'paper', 'semantic_category': 'positive',
+    }]
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id,
+        )).scalar_one()
+        model.workflow_step = model.workflow_stage = 'review'
+        model.process_status = 'WAITING_FOR_OFFICER_DECISION'
+        db.get(FormVersion, model.form_version_id).definition_json = deepcopy(env.definition)
+        db.commit()
+    client = env.app.test_client()
+    create_user(env.app)
+    login(client)
+    detail = f'/admin/forms/{env.form_id}/submissions/{env.row()["id"]}'
+    page = client.get(detail)
+    csrf = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    return client, detail, csrf
+
+
+def test_officer_acceptance_starts_declaration_without_duplicate(composite_env, caplog):
+    env = composite_env()
+    client, detail, csrf = _officer_document_case(env)
+    assert client.post(detail + '/decision', data={
+        'csrf_token': csrf, 'officer_decision': 'approved',
+    }).status_code == 302
+    assert len(env.generated) == 1
+    assert env.state()['generated_filename']
+    assert len([file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file.get('document_id') == 'declaration']) == 1
+    events = [record.getMessage() for record in caplog.records if record.name == 'declaration_generation']
+    assert events.count('declaration_generation_started') == 1
+    assert events.count('declaration_generation_completed') == 1
+    filename = env.state()['generated_filename']
+    assert env.document.download(env.row(), env.definition, 'paper', filename) == env.pdf
+    assert not env.row()['data_json'].get('_audit_pending')
+    assert client.post(detail + '/decision', data={
+        'csrf_token': csrf, 'officer_decision': 'approved',
+    }).status_code == 302
+    assert len(env.generated) == 1
+    assert len([file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file.get('document_id') == 'declaration']) == 1
+
+
+def test_officer_acceptance_waits_for_declaration_fields(composite_env):
+    env = composite_env()
+    configure_document_fields(env)
+    client, detail, csrf = _officer_document_case(env)
+    assert client.post(detail + '/decision', data={
+        'csrf_token': csrf, 'officer_decision': 'approved',
+    }).status_code == 302
+    assert env.row()['workflow_step'] == 'paper'
+    assert env.state()['substate'] == 'collect_data'
+    assert not env.generated
+    assert not env.row()['data_json'].get('_audit_pending')
+
+
+@pytest.mark.parametrize('legacy_marker', [False, True])
+def test_officer_acceptance_generates_declaration_and_retry_reuses_document(
+    composite_env, monkeypatch, legacy_marker, caplog,
+):
+    env = composite_env()
+    client, detail, csrf = _officer_document_case(env)
+    render = env.services.document_service.pdf_render_service.render_document_pdf_bytes
+    monkeypatch.setattr(env.services.document_service.pdf_render_service,
+                        'render_document_pdf_bytes', lambda **kwargs: (_ for _ in ()).throw(ValueError('render unavailable')))
+    assert client.post(detail + '/decision', data={
+        'csrf_token': csrf, 'officer_decision': 'approved',
+    }).status_code == 302
+    failed = [record for record in caplog.records if record.getMessage() == 'declaration_generation_failed']
+    assert failed and failed[-1].stage == 'pdf_conversion'
+    assert failed[-1].reason_code == 'PDF_CONVERSION_FAILED'
+    row = env.row()
+    marker = row['data_json']['_audit_pending']
+    assert marker['audit_complete'] is True
+    assert marker['continuation']['new_step'] == 'paper'
+    assert row['workflow_step'] == 'paper'
+    states = row['document_states']
+    states = json.loads(states) if isinstance(states, str) else states
+    assert states.get('document_operation', '') == ''
+    with env.repo.session_factory() as db:
+        assert db.scalar(select(SubmissionDecision).where(
+            SubmissionDecision.submission_id == row['id']
+        )) is not None
+    if legacy_marker:
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, row['id'])
+            data = deepcopy(model.data_json)
+            data['_audit_pending']['continuation'].pop('new_step')
+            data['_audit_pending']['continuation']['source_step'] = 'unrelated'
+            model.data_json = data
+            db.commit()
+        assert not env.repo.claim_document_operation(
+            env.public_id, 'paper', 'invalid-history',
+            replaces_audit_operation_id=marker['operation_id'],
+        )
+        with env.repo.session_factory() as db:
+            model = db.get(FormSubmission, row['id'])
+            data = deepcopy(model.data_json)
+            data['_audit_pending']['continuation']['source_step'] = 'review'
+            model.data_json = data
+            db.commit()
+    monkeypatch.setattr(env.services.document_service.pdf_render_service,
+                        'render_document_pdf_bytes', render)
+    assert client.post(detail + '/retry-audit', data={'csrf_token': csrf}).status_code == 302
+    assert len(env.generated) == 1
+    row = env.row()
+    assert env.state()['generated_filename']
+    assert len([file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file.get('document_id') == 'declaration']) == 1
+    states = row['document_states']
+    states = json.loads(states) if isinstance(states, str) else states
+    assert states.get('document_operation', '') == ''
+    assert not row['data_json'].get('_audit_pending')
+    assert client.post(detail + '/decision', data={
+        'csrf_token': csrf, 'officer_decision': 'approved',
+    }).status_code == 302
+    assert len(env.generated) == 1
+
+
+@pytest.mark.parametrize('kind', ['workflow_transition', 'officer_decision', 'repeatable_item_decision'])
+def test_completed_decision_audit_handoff_keeps_document_lease(composite_env, kind):
+    env = composite_env()
+    env.enter()
+    operation_id = str(uuid4())
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        model.data_json = {**(model.data_json or {}), '_audit_pending': {
+            'operation_id': operation_id, 'audit_complete': True,
+            'continuation': {'kind': kind, 'new_step': 'paper'},
+        }}
+        db.commit()
+    claim = env.repo.claim_document_operation
+    assert not claim(env.public_id, 'paper', 'wrong-id', replaces_audit_operation_id=str(uuid4()))
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        data = deepcopy(model.data_json)
+        data['_audit_pending']['audit_complete'] = False
+        model.data_json = data
+        db.commit()
+    assert not claim(env.public_id, 'paper', 'before-audit', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        data = deepcopy(model.data_json)
+        data['_audit_pending']['audit_complete'] = True
+        data['_audit_pending']['continuation']['new_step'] = 'other'
+        model.data_json = data
+        db.commit()
+    assert not claim(env.public_id, 'paper', 'wrong-step', replaces_audit_operation_id=operation_id)
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        data = deepcopy(model.data_json)
+        data['_audit_pending']['continuation']['new_step'] = 'paper'
+        model.data_json = data
+        db.commit()
+    assert claim(env.public_id, 'paper', 'first', replaces_audit_operation_id=operation_id)
+    assert not claim(env.public_id, 'paper', 'second', replaces_audit_operation_id=operation_id)
+    env.repo.release_document_operation(env.public_id, 'first')
+
+
+def test_legacy_repeatable_decision_handoff_requires_persisted_decision(composite_env):
+    env = composite_env()
+    env.enter()
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        decision = RepeatableGroupItemDecision(
+            submission_id=model.id, group_key='people', item_id=str(uuid4()),
+            decision_code='yes', decision_label='Tak', semantic_category='positive',
+        )
+        db.add(decision)
+        db.flush()
+        operation_id = str(uuid5(NAMESPACE_URL,
+            f'required-audit-operation:{env.public_id}:WORKFLOW_STATUS_CHANGED:'
+            f'repeatable-item-decision:{decision.id}:paper'))
+        model.data_json = {**(model.data_json or {}), '_audit_pending': {
+            'operation_id': operation_id, 'audit_complete': True,
+            'event': {'event_type': 'WORKFLOW_STATUS_CHANGED',
+                      'new_value': model.process_status},
+            'continuation': {'kind': 'repeatable_item_decision',
+                             'decision_id': decision.id, 'group_key': 'wrong'},
+        }}
+        db.commit()
+    assert not env.repo.claim_document_operation(
+        env.public_id, 'paper', 'wrong-group', replaces_audit_operation_id=operation_id,
+    )
+    with env.repo.session_factory() as db:
+        model = db.get(FormSubmission, env.row()['id'])
+        data = deepcopy(model.data_json)
+        data['_audit_pending']['continuation']['group_key'] = 'people'
+        model.data_json = data
+        db.commit()
+    assert env.repo.claim_document_operation(
+        env.public_id, 'paper', 'valid-item', replaces_audit_operation_id=operation_id,
+    )
+    env.repo.release_document_operation(env.public_id, 'valid-item')
 
 
 @pytest.mark.parametrize('outcome', ['INVALID', 'INDETERMINATE', 'UNSIGNED'])

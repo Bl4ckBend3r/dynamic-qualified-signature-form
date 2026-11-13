@@ -99,9 +99,14 @@ def resolve_participant_submission_access(
                     _access_denied("submission_not_found")
                     return None
                 version_service = services.form_version_service
-                if record.form_version_id:
-                    version_service.upgrade_submission(db, record)
-                    version_service.refresh_submission_completion(db, record)
+                upgraded = version_service.upgrade_submission(db, record)
+                version_service.refresh_submission_completion(db, record)
+                version = version_service.resolve_for_submission(db, record) if upgraded else None
+                sync_target = (version.form_id, version.id) if version else None
+            if sync_target and hasattr(services, "document_service"):
+                from services.form_version_service import schedule_version_sync
+                schedule_version_sync(current_app._get_current_object(), *sync_target,
+                                      sync_submissions=False)
             if loaded_from_service:
                 submission = services.submission_service.get_submission_context(
                     submission_id,
@@ -174,7 +179,7 @@ def require_participant_submission_access(
             )
 
             if (
-                marker.get("data_only") is True
+                marker
                 and service.is_active_submission(record)
             ):
                 state = service.refresh_submission_completion(

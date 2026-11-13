@@ -192,10 +192,45 @@ class DocumentService:
         context_extra: dict | None = None,
         force: bool = False,
         version_gap: bool = False,
+        revision_metadata: dict | None = None,
+        revision_step_id: str = "",
     ) -> dict:
+        if document_id != DocumentType.DECLARATION:
+            return self._generate_document_impl(submission, form_config, document_id, context_extra, force, version_gap,
+                                                revision_metadata, revision_step_id)
+        from services.observability import trace_declaration_generation
+
+        row = self._row(submission)
+        status = (
+            "signed" if str(row.get("declaration_signed") or "").lower() == "tak"
+            else "generated" if str(row.get("declaration_generated") or "").lower() == "tak"
+            else "pending"
+        )
+        with trace_declaration_generation(
+            str(row.get("submission_id") or ""),
+            str(row.get("workflow_step") or row.get("workflow_stage") or ""),
+            status,
+        ):
+            return self._generate_document_impl(submission, form_config, document_id, context_extra, force, version_gap,
+                                                revision_metadata, revision_step_id)
+
+    def _generate_document_impl(
+        self,
+        submission: dict,
+        form_config: dict,
+        document_id: str,
+        context_extra: dict | None = None,
+        force: bool = False,
+        version_gap: bool = False,
+        revision_metadata: dict | None = None,
+        revision_step_id: str = "",
+    ) -> dict:
+        from services.observability import declaration_trace
+
+        diagnostic = declaration_trace() if document_id == DocumentType.DECLARATION else None
         gap = self._version_gap_entry(submission, form_config, document_id) if version_gap else None
         from services.submission_decision_service import ConditionalApproval
-        if not version_gap or ConditionalApproval.active(self._row(submission)):
+        if not revision_metadata and (not version_gap or ConditionalApproval.active(self._row(submission))):
             self._require_version_completion(submission)
             self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
@@ -212,7 +247,7 @@ class DocumentService:
         row = self._row(submission)
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
-        composite = {"id": gap["step_id"]} if gap else self.composite_step(row, form_config)
+        composite = {"id": revision_step_id} if revision_step_id else {"id": gap["step_id"]} if gap else self.composite_step(row, form_config)
         resolved_context_extra = dict(context_extra or {})
         agreement_number = ""
         if document_id == DocumentType.AGREEMENT:
@@ -223,6 +258,8 @@ class DocumentService:
                 sequence=1,
                 generated_date=generated_date,
             )
+            if revision_metadata:
+                agreement_number = f"{agreement_number}/R{revision_metadata['revision']}"
             resolved_context_extra.update(
                 {
                     "generated_date": generated_date,
@@ -241,11 +278,17 @@ class DocumentService:
             existing_filename = str(row.get("agreement_filename") or "").strip()
             generated_field = "agreement_generated"
 
-        if not composite and not force and row.get(generated_field, "").strip().lower() == "tak" and existing_filename:
+        if not revision_metadata and not composite and not force and row.get(generated_field, "").strip().lower() == "tak" and existing_filename:
             try:
                 self.storage.get_pdf_bytes(slug, existing_filename)
             except Exception:
-                current_app.logger.warning("Brak PDF %s w storage, regeneruję.", existing_filename)
+                if diagnostic:
+                    current_app.logger.warning("declaration_existing_pdf_unavailable", extra={
+                        "event": "declaration_existing_pdf_unavailable",
+                        "stage": "storage_read", "reason_code": "DOCUMENT_FILE_READ_FAILED",
+                    })
+                else:
+                    current_app.logger.warning("Brak PDF %s w storage, regeneruję.", existing_filename)
             else:
                 return {
                     "enabled": True,
@@ -258,6 +301,9 @@ class DocumentService:
             for field in document.get("fields") or [] if field.get("name") in (row.get("data_json") or {})}
         render_row = {**row, **document_values, **resolved_context_extra}
         filename = self.build_filename_for_document(document, render_row, document_id)
+        if revision_metadata:
+            filename = (f"{Path(filename).stem}-v{revision_metadata['form_version_id']}"
+                        f"-r{revision_metadata['revision']}.pdf")
         if composite:
             filename = f"{Path(filename).stem}-{submission_id}-{composite['id']}.pdf"
             if document_id not in {DocumentType.DECLARATION, DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
@@ -289,6 +335,8 @@ class DocumentService:
               for field in document.get("fields") or [])]
             if document_id != DocumentType.DECLARATION else list(document.get("fields") or []))
         render_definition = {**form_config, "fields": render_fields}
+        if diagnostic:
+            diagnostic.stage = "context_build"
         context = build_document_pdf_context(
             form_definition=render_definition,
             submission_id=submission_id,
@@ -311,12 +359,19 @@ class DocumentService:
                 if field.get("type") == "training_selection":
                     selected = parse_training_snapshots(render_row.get(field["name"]))
                     context["selected_trainings"] = context["selected_trainings_normalized"] = selected
+        if diagnostic:
+            diagnostic.stage = "template_load"
+        template_html = self.resolve_document_template(document)
+        if diagnostic:
+            diagnostic.stage = "pdf_conversion"
         document_bytes = self.pdf_render_service.render_document_pdf_bytes(
             app=current_app._get_current_object(),
             template_name="declaration_template.html",
-            template_html=self.resolve_document_template(document),
+            template_html=template_html,
             context=context,
         )
+        if diagnostic:
+            diagnostic.stage = "storage_write"
         with self.document_storage_service.transactional_pdf_write(
             storage=self.storage,
             slug=slug,
@@ -325,6 +380,8 @@ class DocumentService:
             document_type=self._storage_document_type(document_id),
             signed=False,
         ) as storage_path:
+            if diagnostic:
+                diagnostic.stage = "metadata_write"
             recorded = self.submission_document_service.record_generated_document(
                 submission_id=submission_id,
                 form_slug=slug,
@@ -336,8 +393,11 @@ class DocumentService:
                 workflow_step_at_upload=composite["id"] if composite else "",
                 storage_path=storage_path,
                 storage=self.storage,
+                revision_metadata=revision_metadata,
             )
             self._require_metadata_record(recorded, filename)
+            if diagnostic:
+                diagnostic.stage = "storage_write"
         self._log_document_write(
             submission,
             filename=filename,
@@ -348,9 +408,15 @@ class DocumentService:
         updates = self._generated_updates(document_id, filename)
         if document_id == DocumentType.AGREEMENT:
             updates["agreement_generated_at"] = resolved_context_extra["generated_date"]
-        if updates:
+        if updates and not revision_metadata:
+            if diagnostic:
+                diagnostic.stage = "workflow_update"
             self._update_submission(submission, updates)
-        self._audit("DOCUMENT_GENERATED", submission, metadata={"document_id": document_id, "filename": filename})
+        if diagnostic:
+            diagnostic.document_status = "generated"
+        self._audit("DOCUMENT_GENERATED", submission, metadata={"document_id": document_id, "filename": filename,
+            **({"revision": revision_metadata["revision"], "form_version_id": revision_metadata["form_version_id"]}
+               if revision_metadata else {})})
         return {
             "enabled": True,
             "document_id": document_id,
@@ -361,17 +427,19 @@ class DocumentService:
             "document": document,
         }
 
-    def _version_gap_entry(self, submission, form_config, document_id):
+    def _version_gap_entry(self, submission, form_config, document_id, training_key=""):
         from services.documents.document_workflow_service import has_document_workflow, step_documents
         row = self._row(submission)
         marker = ((row.get("data_json") or {}).get("_form_version_upgrade") or {}).get("missing_documents") or []
-        item = next((item for item in marker if item.get("document_id") == document_id), None)
+        item = next((item for item in marker if item.get("document_id") == document_id
+                     and str(item.get("training_key") or "") == str(training_key or "")), None)
         if not item:
             raise ValueError("Dokument nie jest wymagany do uzupełnienia.")
         step = next((step for step in (form_config.get("workflow") or {}).get("steps") or []
                      if step.get("id") == item.get("step_id") and has_document_workflow(form_config, step)), None)
-        if not step or not any(document.get("id") == document_id and document.get("required", True)
-                           for document in step_documents(form_config, step)):
+        configured = any(document.get("id") == document_id and document.get("required", True)
+                         for document in step_documents(form_config, step)) if step else False
+        if not configured and not (item.get("revision_version_id") and self.get_document_by_id(form_config, document_id)):
             raise ValueError("Dokument nie należy do aktualnej wersji formularza.")
         return item
 
@@ -383,9 +451,12 @@ class DocumentService:
         collection_field: str,
         item_alias: str,
         context_extra: dict | None = None,
+        revision_metadata: dict | None = None,
+        revision_step_id: str = "",
     ) -> list[dict]:
-        self._require_version_completion(submission)
-        self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
+        if not revision_metadata:
+            self._require_version_completion(submission)
+            self.require_workflow_document_action(submission, document_id, "generate_document", form_config)
         document = self.get_document_by_id(form_config, document_id)
         if not document:
             raise ValueError(f"Unknown document_id: {document_id}")
@@ -393,10 +464,12 @@ class DocumentService:
         slug = self._slug(submission)
         submission_id = self._submission_id(submission)
         items = parse_training_snapshots(row.get(collection_field)) or normalize_selected_items(row.get(collection_field))
-        composite = self.composite_step(row, form_config)
+        composite = {"id": revision_step_id} if revision_step_id else self.composite_step(row, form_config)
         existing_files = {str(f.get("training_key")): f for f in self.submission_document_service.list_documents(submission_id)
             if composite and f.get("workflow_step_at_upload") == composite["id"] and f.get("document_id") == document_id
-            and not f.get("signed") and f.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}}
+            and not f.get("signed") and f.get("status") not in {"superseded", "rejected", "rejected_no_capacity"}
+            and (not revision_metadata or (f.get("signature_validation_result") or {}).get("form_version_id") ==
+                 revision_metadata["form_version_id"])}
         previous_agreements = normalize_selected_items(row.get("training_agreements"))
         previous_by_id = {str(item.get("id")): item for item in previous_agreements}
         if not items:
@@ -420,6 +493,8 @@ class DocumentService:
                 sequence=sequence,
                 generated_date=generated_date,
             )
+            if revision_metadata:
+                agreement_number = f"{agreement_number}/R{revision_metadata['revision']}"
             render_row = {
                 **row,
                 **(context_extra or {}),
@@ -494,6 +569,9 @@ class DocumentService:
                 continue
             if composite:
                 filename = f"{Path(filename).stem}-{submission_id}-{composite['id']}.pdf"
+            if revision_metadata:
+                filename = (f"{Path(filename).stem}-v{revision_metadata['form_version_id']}"
+                            f"-r{revision_metadata['revision']}.pdf")
             if not composite:
                 filename = build_available_storage_filename(
                     storage_service=self.document_storage_service,
@@ -548,9 +626,10 @@ class DocumentService:
                     document_type=self._document_metadata_type(document_id, signed=False),
                     agreement_number=record["agreement_number"],
                     training_key=str(item_id),
-                    workflow_step_at_upload=(self.composite_step(row, form_config) or {}).get("id", ""),
+                    workflow_step_at_upload=(composite or {}).get("id", ""),
                     storage_path=storage_path,
                     storage=self.storage,
+                    revision_metadata=revision_metadata,
                 )
                 self._require_metadata_record(recorded, filename)
             self._log_document_write(
@@ -572,11 +651,14 @@ class DocumentService:
             ]),
             "process_status": ProcessStatus.AGREEMENT_WAITING_FOR_BENEFICIARY_SIGNATURE.value,
         }
-        self._update_submission(submission, updates)
+        if not revision_metadata:
+            self._update_submission(submission, updates)
         self._audit(
             "DOCUMENT_GENERATED",
             submission,
-            metadata={"document_id": document_id, "count": len(generated_documents)},
+            metadata={"document_id": document_id, "count": len(generated_documents),
+                **({"revision": revision_metadata["revision"], "form_version_id": revision_metadata["form_version_id"]}
+                   if revision_metadata else {})},
         )
         return generated_documents
 

@@ -3234,7 +3234,7 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             if isinstance(exc, SQLAlchemyError):
                 current_app.logger.error("officer_decision_automatic_workflow_failed frames=%s", _decision_error_frames(exc), extra=context)
             else:
-                current_app.logger.exception("officer_decision_automatic_workflow_failed", extra=context)
+                current_app.logger.error("officer_decision_automatic_workflow_failed", extra=context)
 
     mail_result = None
     mail_warning = False

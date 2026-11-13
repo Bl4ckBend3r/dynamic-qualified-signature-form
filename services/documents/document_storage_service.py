@@ -67,10 +67,17 @@ class DocumentStorageService:
             try:
                 self.rollback_pdf_write(storage=storage, receipt=receipt)
             except Exception:
-                logger.exception(
-                    "Nie udalo sie wycofac zapisu PDF po bledzie dalszego etapu: %s.",
-                    receipt.storage_path,
-                )
+                from services.observability import declaration_trace
+                if declaration_trace():
+                    logger.error("declaration_storage_rollback_failed", extra={
+                        "event": "declaration_storage_rollback_failed",
+                        "stage": "storage_write", "reason_code": "DOCUMENT_STORAGE_ROLLBACK_FAILED",
+                    })
+                else:
+                    logger.exception(
+                        "Nie udalo sie wycofac zapisu PDF po bledzie dalszego etapu: %s.",
+                        receipt.storage_path,
+                    )
             raise
 
     def save_pdf_recoverable(

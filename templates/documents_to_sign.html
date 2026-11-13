@@ -44,7 +44,7 @@
         <p>Uzupełnij te dokumenty, aby kontynuować zgłoszenie. Pozostałe podpisane pliki są zachowane.</p>
         {% for item in version_gap_documents %}
         <div class="composite-document-file">
-            <h4>{{ item.label }}</h4>
+            <h4>{{ item.label }}{% if item.training_name %} — {{ item.training_name }}{% endif %}</h4>
             {% if item.kind == 'generated_pdf' and not item.generated_filename %}
             <form method="post" action="{{ url_for('documents.generate_version_document', slug=submission.form_slug, submission_id=initial_submission_id, document_id=item.document_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ participant_access_token }}">
@@ -55,6 +55,7 @@
             {% if item.kind == 'uploaded_file' or item.generated_filename and item.signature_required %}
             <form method="post" enctype="multipart/form-data" action="{{ url_for('documents.upload_version_document', slug=submission.form_slug, submission_id=initial_submission_id, document_id=item.document_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}"><input type="hidden" name="access_token" value="{{ participant_access_token }}">
+                <input type="hidden" name="training_key" value="{{ item.training_key|default('') }}">
                 <label>{{ 'Wgraj podpisany PDF' if item.signature_required else 'Wgraj dokument' }}
                     <input type="file" name="document_pdf" accept="{{ '.pdf,application/pdf' if item.signature_required else '.pdf,.doc,.docx,.png,.jpg,.jpeg' }}" required>
                 </label>

@@ -277,23 +277,54 @@
                     </details>
                     {% endif %}
                 </div>
-                {% if show_archived and can_edit_catalog and training.in_catalog and training.get('archived') %}
-                <form method="post"
-                      action="{{ url_for('admin.training_catalog_restore', form_id=form.id, training_id=training.id) }}"
-                      data-admin-confirm-message="Czy na pewno chcesz przywrócić szkolenie „{{ training.name }}” do aktualnej oferty?">
-                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
-                        <button class="admin-button" type="submit">
-                            Przywróć szkolenie
-                        </button>
-                    </form>
-                    {% endif %}
+                
+{% if show_archived and (
+    is_super_admin or (
+        can_edit_catalog
+        and training.in_catalog
+        and training.get('archived')
+    )
+) %}
+<form method="post"
+      action="{{ url_for(
+          'admin.training_catalog_restore',
+          form_id=form.id,
+          training_id=training.id
+      ) }}"
+      data-admin-confirm-message="Czy na pewno przywrócić szkolenie „{{ training.name }}” do aktualnej oferty?">
 
-                    {# NOWY PRZYCISK USUWANIA ARCHIWALNEGO SZKOLENIA #}
-                    {% if show_archived and is_super_admin
-                        and training.in_catalog
-                        and training.get('archived') %}
-                        <!-- tutaj wstawiony formularz usuwania -->
-                    {% endif %}
+    <input type="hidden"
+           name="csrf_token"
+           value="{{ admin_csrf_token() }}">
+
+    <button class="admin-button" type="submit">
+        Przywróć szkolenie
+    </button>
+</form>
+{% endif %}
+
+{% if show_archived
+      and is_super_admin
+      and training.in_catalog
+      and training.get('archived') %}
+<form method="post"
+      action="{{ url_for(
+          'admin.training_catalog_delete_inline',
+          form_id=form.id,
+          training_id=training.id
+      ) }}"
+      data-admin-confirm-message="Czy na pewno usunąć szkolenie „{{ training.name }}” z katalogu? Dane uczestników pozostaną zachowane.">
+
+    <input type="hidden"
+           name="csrf_token"
+           value="{{ admin_csrf_token() }}">
+
+    <button class="admin-button-danger" type="submit">
+        Usuń szkolenie
+    </button>
+</form>
+{% endif %}
+
 
 {% endif %}
             </div>

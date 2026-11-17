@@ -615,7 +615,7 @@ def test_training_catalog_historical_entry_has_no_delete_action(admin_app, admin
     assert page.status_code == 200
     assert "Excel historyczny" in page.get_data(as_text=True)
     assert 'class="training-section-actions"' not in page.get_data(as_text=True)
-    assert "Przywróć szkolenie" not in page.get_data(as_text=True)
+    assert "Przywróć szkolenie" in page.get_data(as_text=True)
 
 
 def test_training_catalog_new_training_reopens_empty_offer(admin_app, admin_client):

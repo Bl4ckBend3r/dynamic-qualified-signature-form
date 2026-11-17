@@ -453,9 +453,23 @@ def training_catalog_restore(form_id: int, training_id: str):
         form = ensure_form_access(db, form_id, permission="can_edit_form")
         db.refresh(form, with_for_update=True)
         try:
+            historical = _training_service().require_training(
+                db, form, training_id
+            )
+
+            if (
+                not historical["in_catalog"]
+                and g.admin_user.role != "super_admin"
+            ):
+                abort(403)
+
             updated_definition, actions = TrainingCatalogService().restore_archived_training(
-                deepcopy(form.definition_json or {}), training_id,
+                deepcopy(form.definition_json or {}),
+                training_id,
                 actor_id=g.admin_user.id,
+                historical_training=(
+                    historical if not historical["in_catalog"] else None
+                ),
             )
             _save_training_catalog_with_draft(db, form, updated_definition)
             _record_catalog_history(db, form, actions)

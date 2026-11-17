@@ -237,6 +237,7 @@ class TrainingCatalogService:
                         )
         return errors
 
+    
     def restore_archived_training(
         self,
         current_definition: Mapping[str, Any],
@@ -244,35 +245,115 @@ class TrainingCatalogService:
         *,
         actor_id: int | None = None,
         now: datetime | None = None,
+        historical_training: Mapping[str, Any] | None = None,
     ) -> tuple[dict, list[dict]]:
-        """Restore one catalog entry only through the explicit admin action."""
+        """Restore an archived catalog item or a historical training snapshot."""
         definition = deepcopy(dict(current_definition))
         field = self.get_training_field(definition)
+
         if field is None:
             raise ValueError("Brak katalogu szkoleń w formularzu.")
-        catalog = list(field.get("catalog") or [])
-        matches = [item for item in catalog if isinstance(item, Mapping)
-                   and str(item.get("id") or "").strip() == training_id]
-        if len(matches) != 1 or not matches[0].get("archived"):
-            raise ValueError("Nie znaleziono archiwalnego szkolenia w bieżącym katalogu.")
 
-        old = dict(matches[0])
-        restored = dict(old)
-        for key in ("archived", "archived_at", "archived_by_id", "archive_reason", "was_used"):
+        training_id = str(training_id).strip()
+        catalog = list(field.get("catalog") or [])
+
+        matches = [
+            item for item in catalog
+            if isinstance(item, Mapping)
+            and str(item.get("id") or "").strip() == training_id
+        ]
+
+        if len(matches) > 1:
+            raise ValueError("W katalogu występuje zduplikowane ID szkolenia.")
+
+        from_history = not matches
+
+        if matches:
+            old = dict(matches[0])
+
+            if not old.get("archived"):
+                raise ValueError("Szkolenie nie jest archiwalne.")
+        else:
+            if (
+                historical_training is None
+                or historical_training.get("in_catalog") is not False
+                or historical_training.get("status") != "archived"
+                or str(historical_training.get("id") or "").strip()
+                != training_id
+            ):
+                raise ValueError(
+                    "Nie znaleziono szkolenia możliwego do przywrócenia."
+                )
+
+            operational_keys = {
+                "in_catalog",
+                "status",
+                "date",
+                "participant_count",
+                "active_count",
+                "cancelled_count",
+                "signed_agreement_count",
+                "present_count",
+                "available_seats",
+            }
+
+            old = {
+                key: deepcopy(value)
+                for key, value in historical_training.items()
+                if key not in operational_keys
+            }
+
+            old["id"] = training_id
+            old["archived"] = True
+            old["active"] = False
+            old["was_used"] = True
+
+        restored = deepcopy(old)
+
+        for key in (
+            "archived",
+            "archived_at",
+            "archived_by_id",
+            "archive_reason",
+            "was_used",
+        ):
             restored.pop(key, None)
+
         timestamp = (now or datetime.now(timezone.utc)).isoformat()
-        restored.update(active=True, version=self._version(old) + 1,
-                        restored_at=timestamp, restored_by_id=actor_id)
-        field["catalog"] = [restored if item is matches[0] else item for item in catalog]
+
+        restored.update(
+            active=True,
+            version=self._version(old) + 1,
+            restored_at=timestamp,
+            restored_by_id=actor_id,
+        )
+
+        if from_history:
+            field["catalog"] = [*catalog, restored]
+        else:
+            field["catalog"] = [
+                restored if item is matches[0] else item
+                for item in catalog
+            ]
+
         field["enabled"] = True
         self._replace_training_field(definition, field)
+
         errors = self.validate_field(field)
         if errors:
             raise ValueError(" ".join(errors))
-        return definition, [self._lifecycle_action(
-            "restored", old, restored, "Przywrócenie szkolenia z archiwum.",
-            bool(old.get("was_used")), actor_id, timestamp,
-        )]
+
+        return definition, [
+            self._lifecycle_action(
+                "restored",
+                old,
+                restored,
+                "Przywrócenie szkolenia z archiwum.",
+                bool(old.get("was_used")),
+                actor_id,
+                timestamp,
+            )
+        ]
 
     def reconcile_definition(
         self,

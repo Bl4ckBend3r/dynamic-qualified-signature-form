@@ -345,7 +345,7 @@ def test_only_explicit_restore_revives_archived_training_with_same_id():
     assert service.get_trainings_for_field(field) == service.get_trainings_for_field(field, active_only=False)
 
     import pytest
-    with pytest.raises(ValueError, match="archiwalnego szkolenia"):
+    with pytest.raises(ValueError, match="nie jest archiwalne"):
         service.restore_archived_training(restored, "stable")
     with pytest.raises(ValueError, match="archiwalnego szkolenia"):
         service.restore_archived_training(archived, "historical-only")

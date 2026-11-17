@@ -232,7 +232,7 @@ def test_catalog_validation_rejects_invalid_limit_price_and_active_name():
     assert any("musi być liczbą nieujemną" in error for error in errors)
 
 
-def test_catalog_validation_requires_an_active_training():
+def test_catalog_validation_allows_no_active_training():
     errors = TrainingCatalogService().validate_field(
         training_field(
             catalog=[
@@ -246,10 +246,7 @@ def test_catalog_validation_requires_an_active_training():
         )
     )
 
-    assert (
-        "Skonfiguruj co najmniej jedno aktywne szkolenie dla publicznego etapu wyboru."
-        in errors
-    )
+    assert errors == []
 
 
 def definition_with_catalog(catalog):
@@ -300,6 +297,61 @@ def test_used_training_is_archived_instead_of_deleted_with_audit_data():
     assert actions[0]["action"] == "archived"
     assert actions[0]["was_used"] is True
     assert actions[0]["reason"] == "Zakończenie naboru."
+
+
+def test_bulk_removal_is_repeatable_and_retains_only_used_archive():
+    used = {"id": "used", "name": "Używane", "price": "100", "active": True}
+    unused = {"id": "unused", "name": "Nieużywane", "price": "200", "active": False}
+    service = TrainingCatalogService()
+    original = definition_with_catalog([used, unused])
+    empty = definition_with_catalog([])
+
+    removed, actions = service.reconcile_definition(
+        original, empty, used_training_ids={"used"}, actor_id=7,
+    )
+    field = service.get_training_field(removed)
+    assert field["enabled"] is False
+    assert [(item["id"], item["archived"]) for item in field["catalog"]] == [("used", True)]
+    assert {action["action"] for action in actions} == {"archived", "deleted"}
+    repeated, repeat_actions = service.reconcile_definition(
+        removed, empty, used_training_ids={"used"}, actor_id=7,
+    )
+    assert service.get_training_field(repeated) == field
+    assert repeat_actions == []
+
+
+def test_only_explicit_restore_revives_archived_training_with_same_id():
+    service = TrainingCatalogService()
+    old = {"id": "stable", "name": "Excel", "price": "100", "capacity": 10,
+           "active": False, "archived": True, "version": 3, "was_used": True}
+    archived = definition_with_catalog([old])
+    ordinary, ordinary_actions = service.reconcile_definition(
+        archived, definition_with_catalog([{**old, "active": True, "archived": False}]),
+        used_training_ids={"stable"},
+    )
+    assert service.get_training_field(ordinary)["catalog"][0]["archived"] is True
+    assert ordinary_actions == []
+
+    restored, actions = service.restore_archived_training(archived, "stable", actor_id=9)
+    field = service.get_training_field(restored)
+    assert field["enabled"] is True
+    assert len(field["catalog"]) == 1
+    assert field["catalog"][0]["id"] == "stable"
+    assert field["catalog"][0]["active"] is True
+    assert "archived" not in field["catalog"][0]
+    assert field["catalog"][0]["version"] == 4
+    assert actions[0]["action"] == "restored"
+    assert actions[0]["actor_id"] == 9
+    assert service.get_trainings_for_field(field) == service.get_trainings_for_field(field, active_only=False)
+
+    import pytest
+    with pytest.raises(ValueError, match="archiwalnego szkolenia"):
+        service.restore_archived_training(restored, "stable")
+    with pytest.raises(ValueError, match="archiwalnego szkolenia"):
+        service.restore_archived_training(archived, "historical-only")
+    invalid = definition_with_catalog([{**old, "price": "-1"}])
+    with pytest.raises(ValueError, match="ujemna"):
+        service.restore_archived_training(invalid, "stable")
 
 
 def test_unused_training_can_be_physically_deleted():
@@ -411,7 +463,7 @@ def test_archived_training_is_history_only_and_not_a_public_choice():
     assert history_catalog[0]["id"] == "archived"
     assert history_catalog[0]["active"] is False
     assert history_catalog[0]["archive_reason"] == "Zakończona edycja."
-    assert any("co najmniej jedno aktywne szkolenie" in error for error in errors)
+    assert errors == []
 
 
 def test_deactivation_creates_audit_action_with_reason_and_usage_flag():

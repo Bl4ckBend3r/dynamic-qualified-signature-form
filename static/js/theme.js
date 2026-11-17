@@ -68,4 +68,10 @@
     } else {
         bindToggles();
     }
+
+    window.addEventListener("storage", (event) => {
+        if (event.key === STORAGE_KEY || event.key === null) {
+            applyTheme(storedTheme() || preferredTheme());
+        }
+    });
 })();

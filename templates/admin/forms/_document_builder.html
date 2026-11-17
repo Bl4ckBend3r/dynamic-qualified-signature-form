@@ -28,6 +28,7 @@
     <header class="agreement-builder__header">
         <div><h1>{{ document_builder_title }}: {{ form.title or form.name }}</h1><p>{{ document_builder_description }}</p></div>
         <div class="agreement-builder__header-actions">
+            {% if document_builder_standalone|default(false) %}<button class="theme-toggle" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw" aria-pressed="false"><span class="theme-toggle__track" aria-hidden="true"><span class="theme-toggle__sun">☀</span><span class="theme-toggle__moon">☾</span><span class="theme-toggle__thumb"></span></span></button>{% endif %}
             <span class="agreement-builder__status" data-agreement-builder-status role="status">Gotowy</span>
             <button type="button" class="builder-button builder-button--primary" data-builder-save="draft">Zapisz</button>
             <button type="button" class="builder-button builder-button--success" data-builder-save="activate">Aktywuj</button>

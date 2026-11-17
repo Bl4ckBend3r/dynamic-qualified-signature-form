@@ -435,7 +435,17 @@ def decision_type_assign(decision_type_id: int):
                 sort_order=parse_int(request.form.get("sort_order"), definition.sort_order),
                 scope=request.form.get("scope", "both"), remove=request.form.get("action") == "remove",
             )
-            current_app.extensions["services"].form_version_service.apply_to_legacy_editor(db, form, draft.definition_json)
+            from copy import deepcopy
+
+            version_service = current_app.extensions["services"].form_version_service
+
+            safe_definition = version_service._preserve_live_training_catalog(
+                form,
+                deepcopy(draft.definition_json or {}),
+            )
+
+            version_service.update_definition(draft, safe_definition)
+            version_service.apply_to_legacy_editor(db, form, safe_definition)
             db.commit()
             flash("Przypisano decyzję do wersji roboczej formularza.", "success")
         except DecisionDefinitionError as exc:

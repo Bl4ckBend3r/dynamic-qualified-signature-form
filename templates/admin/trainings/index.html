@@ -22,21 +22,41 @@
 <div class="admin-page-title training-page-title">
     <div>
         <p class="admin-eyebrow">Operacje · {{ form.name }}</p>
-        <h1>Szkolenia</h1>
+        <h1>{{ 'Szkolenia archiwalne' if show_archived else 'Szkolenia aktualne' }}</h1>
         <p class="admin-help">Przeglądaj szkolenia i terminy. Wybierz „Szczegóły”, aby edytować szkolenie, lub „Zarządzaj”, aby obsługiwać uczestników, obecność, ankiety i historię.</p>
     </div>
     <div class="training-page-actions">
-        {% if can_edit_catalog %}
+        <a class="admin-button-secondary"
+           href="{{ url_for('admin.training_management', form_id=form.id, archived=0 if show_archived else 1) }}">
+            {{ 'Szkolenia aktualne' if show_archived else 'Pokaż archiwalne' }}{% if show_archived %} ({{ current_count }}){% else %} ({{ archived_count }}){% endif %}
+        </a>
+        {% if can_edit_catalog and not show_archived %}
             <button class="admin-button" type="button"
                     aria-expanded="{{ 'true' if open_create else 'false' }}"
                     aria-controls="training-create-panel"
                     data-training-create-toggle>+ Dodaj szkolenie</button>
+            {% if current_count %}
+            <form method="post" action="{{ url_for('admin.training_catalog_delete_all', form_id=form.id) }}"
+                  data-admin-confirm-message="Czy na pewno chcesz usunąć wszystkie szkolenia z aktualnej oferty? Używane szkolenia zostaną zarchiwizowane.">
+                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                <button class="admin-button-danger" type="submit">Usuń wszystkie szkolenia</button>
+            </form>
+            {% endif %}
         {% endif %}
         <a class="admin-button-secondary" href="{{ url_for('admin.forms_list') }}">Formularze</a>
     </div>
 </div>
 
-{% if can_edit_catalog %}
+{% if catalog_locked %}
+<p class="admin-alert admin-alert-warning">
+    Aby zmieniac katalog szkolen, najpierw utworz wersje robocza formularza.
+    <a href="{{ url_for('admin.form_versions', form_id=form.id) }}">
+        Przejdz do wersji formularza
+    </a>.
+</p>
+{% endif %}
+
+{% if can_edit_catalog and not show_archived %}
 <section class="training-create-panel" id="training-create-panel"
          {% if not open_create %}hidden{% endif %} data-training-create-panel>
     <div class="training-section-heading">
@@ -141,6 +161,10 @@
                     </button>
                     <a class="admin-button compact training-card__manage"
                        href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}">Zarządzaj</a>
+                    {% if show_archived %}
+                    <a class="admin-button-secondary compact"
+                       href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}#history">Historia zmian</a>
+                    {% endif %}
                 </div>
             </div>
 
@@ -246,16 +270,44 @@
                         {% endfor %}
                     </ul>
                     {% endif %}
+                    {% if show_archived and training.get('archived_at') %}
+                    <details>
+                        <summary>Historia zmian</summary>
+                        <p>Archiwizacja: {{ training.archived_at }}{% if training.archive_reason %} · {{ training.archive_reason }}{% endif %}</p>
+                    </details>
+                    {% endif %}
                 </div>
-                {% endif %}
+                {% if show_archived and can_edit_catalog and training.in_catalog and training.get('archived') %}
+                <form method="post"
+                      action="{{ url_for('admin.training_catalog_restore', form_id=form.id, training_id=training.id) }}"
+                      data-admin-confirm-message="Czy na pewno chcesz przywrócić szkolenie „{{ training.name }}” do aktualnej oferty?">
+                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                        <button class="admin-button" type="submit">
+                            Przywróć szkolenie
+                        </button>
+                    </form>
+                    {% endif %}
+
+                    {# NOWY PRZYCISK USUWANIA ARCHIWALNEGO SZKOLENIA #}
+                    {% if show_archived and is_super_admin
+                        and training.in_catalog
+                        and training.get('archived') %}
+                        <!-- tutaj wstawiony formularz usuwania -->
+                    {% endif %}
+
+{% endif %}
             </div>
         </article>
     {% endfor %}
 </div>
 {% else %}
 <div class="admin-empty-state">
-    <h2>Brak szkoleń</h2>
-    <p>Formularz nie ma katalogu ani historycznych zapisów szkoleniowych.</p>
+    {% if show_archived %}
+    <h2>Brak szkoleń archiwalnych</h2>
+    {% else %}
+    <h2>Brak aktualnych szkoleń</h2>
+    <p>Brak aktualnych szkoleń. Możesz dodać nowe szkolenie lub przywrócić szkolenie z archiwum.</p>
+    {% endif %}
 </div>
 {% endif %}
 

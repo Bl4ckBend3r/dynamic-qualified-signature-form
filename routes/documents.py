@@ -681,6 +681,18 @@ def declaration_form(slug: str, submission_id: str):
         form_definition=flow_result.declaration_definition,
         action_url=url_for("documents.declaration_form", slug=slug, submission_id=submission_id, token=access.credential),
         errors=flow_result.errors,
+        completion_url=url_for(
+            "public_forms.complete_version_upgrade",
+            slug=slug,
+            submission_id=submission_id,
+            token=access.credential,
+        ) if flow_result.error_code == "incomplete_submission" and any(
+            name not in {
+                str(field.get("name") or "")
+                for field in flow_result.declaration_definition.get("fields") or []
+            }
+            for name in flow_result.errors
+        ) else None,
         values=values_for_rerender(
             flow_result.declaration_definition, request.form, saved_values=flow_result.values,
         ) if request.method == "POST" and flow_result.errors else flow_result.values,
@@ -1281,6 +1293,48 @@ def _render_document_fields(submission, document_step, credential, *, values=Non
         document_back_url=documents_to_sign_url(submission["submission_id"], credential),
         values=field_values, errors=errors or {}, form_error="Popraw wskazane pola." if errors else "")
 
+
+@bp.get("/document-steps/<slug>/<submission_id>/<step_id>/fields")
+def document_step_fields(slug, submission_id, step_id):
+    access = require_participant_submission_access(
+        submission_id, slug=slug
+    )
+    definition = get_form_config(slug, submission_id) or {}
+    row = access.submission["row"]
+
+    current_step = (
+        row.get("workflow_step")
+        or row.get("workflow_stage")
+    )
+
+    if current_step != step_id:
+        abort(404)
+
+    service = get_services().document_service.document_workflow
+    view = service.view(row, definition)
+
+    if (
+        not view
+        or view.get("step_id") != step_id
+        or not view.get("form_definition")
+    ):
+        abort(404)
+
+    document_id = str(
+        request.args.get("document_id") or ""
+    ).strip()
+
+    if (
+        document_id
+        and document_id != view.get("form_document_id")
+    ):
+        abort(404)
+
+    return _render_document_fields(
+        access.submission,
+        view,
+        access.credential,
+    )
 
 @bp.post("/document-steps/<slug>/<submission_id>/<step_id>/fields")
 def save_document_step_fields(slug, submission_id, step_id):

@@ -1158,6 +1158,74 @@ def test_declaration_flow_generates_pdf_without_training_selection():
     assert repository.updated[0][1].get("selected_trainings") is None
 
 
+@pytest.mark.parametrize("failure", ["refresh", "generator", "empty_result"])
+def test_declaration_flow_never_reports_generation_success_without_pdf(failure):
+    repository = DummyRepository(metadata=None)
+    generated = []
+
+    def generate_document(*_args, **_kwargs):
+        generated.append(True)
+        if failure == "generator":
+            raise RuntimeError("PDF conversion failed")
+        return {} if failure == "empty_result" else {"filename": "declaration.pdf"}
+
+    result = DeclarationFlowService().handle_declaration_post(
+        submission_id="synthetic", submission={"row": {"form_slug": "sample", "data_json": {}}},
+        form_config={"fields": []}, declaration_config={"id": "declaration", "fields": []},
+        form_data={}, rules_service=SimpleNamespace(apply_rules=lambda *_args: {}),
+        submission_repository=repository,
+        document_service=SimpleNamespace(generate_document=generate_document),
+        refresh_submission=lambda _id: None if failure == "refresh" else {"row": {"data_json": {}}},
+    )
+    assert result.success is False
+    assert result.generated is None
+    assert result.error_code == ("submission_refresh_failed" if failure == "refresh" else "generation_failed")
+    assert len(generated) == (0 if failure == "refresh" else 1)
+
+
+@pytest.mark.parametrize("submitted_value, force_expected", [("unchanged", False), ("changed", True)])
+def test_declaration_flow_reuses_pdf_only_when_submitted_values_are_unchanged(
+    submitted_value, force_expected
+):
+    calls = []
+    row = {"form_slug": "sample", "data_json": {"answer": "unchanged"},
+           "declaration_generated": "Tak", "declaration_filename": "existing.pdf"}
+    result = DeclarationFlowService().handle_declaration_post(
+        submission_id="synthetic", submission={"row": row}, form_config={"fields": []},
+        declaration_config={"id": "declaration", "fields": [
+            {"name": "answer", "label": "Odpowiedź", "type": "text", "required": True},
+        ]}, form_data={"answer": submitted_value},
+        rules_service=SimpleNamespace(apply_rules=lambda *_args: {}),
+        submission_repository=DummyRepository(metadata=None),
+        document_service=SimpleNamespace(generate_document=lambda *_args, **kwargs:
+                                         calls.append(kwargs) or {"filename": "existing.pdf", "created": force_expected}),
+        refresh_submission=lambda _id: {"row": dict(row)},
+    )
+    assert result.success is True
+    assert calls[0]["force"] is force_expected
+
+
+def test_declaration_form_uses_saved_values_for_conditional_validation():
+    flow = DeclarationFlowService()
+    row = {"form_slug": "sample", "data_json": {"choice": "yes", "answer": "saved"}}
+    document = {"id": "declaration", "fields": [{"name": "answer", "label": "Odpowiedź",
+                "type": "text", "required_if": {"field": "choice", "operator": "equals", "value": "yes"}}]}
+    prepared = flow.prepare_declaration_form(submission={"row": row}, form_config={"fields": []},
+                                             declaration_config=document)
+    assert prepared.values["answer"] == "saved"
+    generated = []
+    result = flow.handle_declaration_post(
+        submission_id="synthetic", submission={"row": row}, form_config={"fields": []},
+        declaration_config=document, form_data={"answer": ""},
+        rules_service=SimpleNamespace(apply_rules=lambda *_args: {}),
+        submission_repository=DummyRepository(metadata=None),
+        document_service=SimpleNamespace(generate_document=lambda *_args, **_kwargs: generated.append(True)),
+        refresh_submission=lambda _id: {"row": dict(row)},
+    )
+    assert "answer" in result.errors
+    assert generated == []
+
+
 @pytest.mark.parametrize("answer", ["Tak", "Nie"])
 def test_legacy_declaration_qualification_runs_after_save_and_preserves_history(answer):
     from services.submission_service import SubmissionService

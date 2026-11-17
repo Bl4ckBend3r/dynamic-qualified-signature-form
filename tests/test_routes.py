@@ -968,6 +968,71 @@ def test_additional_fields_unlock_declaration_download(client, app):
     assert "Pobierz deklarację" in html
 
 
+def test_completed_declaration_creates_downloadable_pdf(client, app, monkeypatch):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [],
+        "documents": {"declaration": {
+            "enabled": True,
+            "template_html": "<main class='document'>Deklaracja testowa</main>",
+            "filename_pattern": "deklaracja.pdf",
+        }},
+    }
+    row = {"submission_id": "declaration-pdf", "form_slug": "formularz_zgloszeniowy",
+           "form_name": "Formularz", "access_token": "secret-token", "officer_decision": "TAK",
+           "declaration_required": "Tak", "process_status": "additional_fields_completed",
+           "data_json": {}}
+    app.testing_storage.csv_rows = [row]
+    services = app.extensions["services"]
+    monkeypatch.setattr(services.document_service.pdf_render_service, "render_document_pdf_bytes",
+                        lambda **_kwargs: b"%PDF-1.4\nsynthetic declaration\n%%EOF")
+
+    path = "/declaration/formularz_zgloszeniowy/declaration-pdf?token=secret-token"
+    form_response = client.get(path)
+    assert form_response.status_code == 200
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', form_response.get_data(as_text=True)).group(1)
+    response = client.post(path, data={"csrf_token": csrf_token})
+    assert response.status_code == 302
+    assert row["declaration_generated"] == "Tak"
+    filename = row["declaration_filename"]
+    assert app.testing_storage.get_pdf_bytes("formularz_zgloszeniowy", filename).startswith(b"%PDF-1.4")
+    page = client.get("/do-podpisania?submission_id=declaration-pdf&token=secret-token")
+    html = page.get_data(as_text=True)
+    download_url = f"/downloads/pdfs/formularz_zgloszeniowy/{filename}?token=secret-token"
+    assert download_url.replace("&", "&amp;") in html
+    downloaded = client.get(download_url)
+    assert downloaded.status_code == 200
+    assert downloaded.data.startswith(b"%PDF-1.4")
+    stored_pdfs = dict(app.testing_storage.saved_pdfs)
+    client.post(path, data={"csrf_token": csrf_token})
+    assert app.testing_storage.saved_pdfs == stored_pdfs
+
+
+def test_declaration_form_names_missing_required_field_without_generating_pdf(client, app):
+    app.testing_storage.form_definition = {
+        **app.testing_storage.form_definition,
+        "fields": [],
+        "documents": {"declaration": {"enabled": True, "fields": [
+            {"name": "confirmation", "label": "Potwierdzenie danych", "type": "text", "required": True},
+        ]}},
+    }
+    app.testing_storage.csv_rows = [{
+        "submission_id": "declaration-missing", "form_slug": "formularz_zgloszeniowy",
+        "form_name": "Formularz", "access_token": "secret-token", "officer_decision": "TAK",
+        "declaration_required": "Tak", "process_status": "additional_fields_completed", "data_json": {},
+    }]
+    path = "/declaration/formularz_zgloszeniowy/declaration-missing?token=secret-token"
+    form_html = client.get(path).get_data(as_text=True)
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', form_html).group(1)
+    response = client.post(path, data={"csrf_token": csrf_token})
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "Potwierdzenie danych" in html
+    assert "jest wymagane" in html
+    assert 'class="form-row width-full has-error"' in html
+    assert app.testing_storage.saved_pdfs == {}
+
+
 def test_generate_agreements_uses_today_and_redirects_to_current_submission(client, app, monkeypatch):
     from datetime import date
 

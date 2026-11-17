@@ -18,6 +18,15 @@ endblock %} {% block content %}
 
   <form method="post" action="{{ action_url }}" novalidate class="dynamic-form">
     <input type="hidden" name="csrf_token" value="{{ public_csrf_token() }}" />
+    {% if errors and not errors.get('compliance') %}
+    <div class="form-errors" role="alert">
+      <p>Popraw wskazane dane przed wygenerowaniem deklaracji:</p>
+      <ul>{% for message in errors.values() %}<li>{{ message }}</li>{% endfor %}</ul>
+      {% if completion_url %}
+      <p><a href="{{ completion_url }}">Uzupełnij dane z wcześniejszego etapu</a></p>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if errors.get('compliance') %}
     <div class="form-errors" role="alert">
       <p>{{ errors.get('compliance') }}</p>

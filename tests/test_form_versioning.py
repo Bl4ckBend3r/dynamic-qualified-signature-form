@@ -99,6 +99,54 @@ def _seed_active_versioned_submission(db, service, *, status="SUBMITTED"):
     return form, first, submission
 
 
+@pytest.mark.parametrize("was_used", [False, True])
+def test_removed_training_stays_out_after_editor_mirror_and_publication(tmp_path, was_used):
+    from routes.admin.training_management import _save_training_catalog_with_draft
+
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    catalog = [{"id": "training-old", "name": "Stare", "price": "100",
+                "capacity": 10, "active": True}]
+    app = Flask(__name__)
+    app.extensions["services"] = SimpleNamespace(form_version_service=service)
+    with app.app_context(), Session.begin() as db:
+        form = _form_with_field(db, slug="catalog-publish")
+        definition = deepcopy(form.definition_json)
+        definition["documents"] = [{"id": "declaration", "kind": "generated_pdf",
+            "template_html": "<p>Deklaracja</p>", "fields": [{
+            "type": "training_selection", "name": "selected_trainings",
+            "enabled": True, "currency": "PLN", "max_total_amount": "5000",
+            "catalog": catalog,
+        }]}]
+        form.definition_json = definition
+        published = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        old_published = deepcopy(published.definition_json)
+        draft = service.clone_to_draft(db, form, published, actor_id=None)
+        updated, actions = TrainingCatalogService().reconcile_definition(
+            definition, {**deepcopy(definition), "documents": [{"id": "declaration",
+                "kind": "generated_pdf", "template_html": "<p>Deklaracja</p>", "fields": [{
+                **TrainingCatalogService.get_training_field(definition), "catalog": [],
+            }]}]}, used_training_ids={"training-old"} if was_used else set(),
+        )
+        assert actions[0]["action"] == ("archived" if was_used else "deleted")
+        _save_training_catalog_with_draft(db, form, updated)
+        db.flush()
+        assert TrainingCatalogService.get_trainings_for_field(
+            TrainingCatalogService.get_training_field(draft.definition_json)) == []
+        service.materialize_editor_mirror(db, form, draft)
+        assert TrainingCatalogService.get_trainings_for_field(
+            TrainingCatalogService.get_training_field(form)) == []
+        from services.admin_form_service import validate_admin_form_config
+        assert validate_admin_form_config(draft.definition_json) == []
+        service.publish(db, form, draft, actor_id=None, synchronize_submissions=False)
+        assert TrainingCatalogService.get_trainings_for_field(
+            TrainingCatalogService.get_training_field(draft.definition_json)) == []
+        assert TrainingCatalogService.get_trainings_for_field(
+            TrainingCatalogService.get_training_field(form)) == []
+        assert len(TrainingCatalogService.get_training_field(form)["catalog"]) == int(was_used)
+        assert published.definition_json == old_published
+
+
 def test_publishing_freezes_mail_footer_per_form_version(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
@@ -646,6 +694,142 @@ def test_required_field_at_future_step_does_not_block_current_step(tmp_path):
         service.upgrade_submission(db, submission, draft)
         assert "later_answer" not in submission.data_json["_form_version_upgrade"]["missing_fields"]
         assert "later_answer" in service.submission_data_errors(submission, changed, step="later")
+
+
+@pytest.mark.parametrize("earlier_value, expected_error", [("complete", None), ("", "earlier")])
+def test_declaration_validates_resolved_stage_and_saved_data(tmp_path, earlier_value, expected_error):
+    from services.documents.declaration_flow_service import DeclarationFlowService
+
+    _url, Session = _database(tmp_path)
+    definition = {
+        "title": "Test deklaracji",
+        "fields": [
+            {"name": "earlier", "label": "Dane wcześniejsze", "type": "text", "required": True,
+             "availability": [{"step": "start", "visible": True, "editable": True, "required": True}]},
+            {"name": "current", "label": "Dane deklaracji", "type": "text", "required": True,
+             "availability": [{"step": "declaration", "visible": True, "editable": True, "required": True}]},
+            {"name": "future", "label": "Dane późniejsze", "type": "text", "required": True,
+             "availability": [{"step": "future", "visible": True, "editable": True, "required": True}]},
+        ],
+        "workflow": {"initial_step": "start", "steps": [
+            {"id": "start"}, {"id": "declaration"}, {"id": "future"},
+        ]},
+    }
+    with Session.begin() as db:
+        form = Form(slug="declaration-stage", name="Test", title="Test", definition_json=definition)
+        db.add(form)
+        db.flush()
+        version = FormVersion(form_id=form.id, version_major=1, version_minor=0,
+                              version_label="1.0", status=FORM_VERSION_PUBLISHED,
+                              definition_json=definition)
+        db.add(version)
+        db.flush()
+        record = FormSubmission(submission_id="stage-submission", form_slug=form.slug,
+                                form_version_id=version.id, workflow_step="OLD_ACCEPTED",
+                                workflow_stage="declaration", data_json={"earlier": earlier_value})
+        db.add(record)
+        due_names = {field["name"] for field in FormVersionService()
+                     .completion_form_definition(record, definition)["fields"] if field.get("name")}
+        assert due_names == {"earlier", "current"}
+
+    row = {"form_slug": "declaration-stage", "workflow_step": "OLD_ACCEPTED",
+           "workflow_stage": "declaration", "data_json": {"earlier": earlier_value}}
+    generated = []
+    document_service = SimpleNamespace(generate_document=lambda *args, **kwargs:
+                                       generated.append((args, kwargs)) or {"filename": "deklaracja.pdf"})
+    result = DeclarationFlowService().handle_declaration_post(
+        submission_id="stage-submission", submission={"row": row}, form_config=definition,
+        declaration_config={"id": "declaration", "enabled": True, "fields": []},
+        form_data={"current": "complete"},
+        rules_service=SimpleNamespace(apply_rules=lambda *_args: {}),
+        submission_repository=SimpleNamespace(session_factory=Session, update=lambda *_args: True),
+        document_service=document_service,
+        refresh_submission=lambda _id: {"row": dict(row)},
+    )
+    assert set(result.errors) == ({expected_error} if expected_error else set())
+    assert result.success is (expected_error is None)
+    assert bool(generated) is (expected_error is None)
+    if result.success:
+        assert result.generated["filename"] == "deklaracja.pdf"
+
+
+def test_declaration_due_validation_keeps_conditions_consent_and_attachment(tmp_path):
+    _url, Session = _database(tmp_path)
+    definition = {"workflow": {"initial_step": "start", "steps": [
+        {"id": "start"}, {"id": "declaration"}, {"id": "future"},
+    ]}, "fields": [
+        {"name": "choice", "label": "Wybór", "type": "text", "required": True,
+         "availability": [{"step": "start", "visible": True, "editable": True, "required": True}]},
+        {"name": "details", "label": "Szczegóły", "type": "text", "required_if":
+         {"field": "choice", "operator": "equals", "value": "yes"},
+         "availability": [{"step": "declaration", "visible": True, "editable": True, "required": False}]},
+        {"name": "consent", "label": "Zgoda", "type": "checkbox", "required": True,
+         "availability": [{"step": "declaration", "visible": True, "editable": True, "required": True}]},
+        {"name": "proof", "label": "Załącznik", "type": "file", "required_if":
+         {"field": "choice", "operator": "equals", "value": "yes"},
+         "availability": [{"step": "declaration", "visible": True, "editable": True, "required": False}]},
+        {"name": "conditional_hidden", "label": "Ukryte", "type": "text", "required": True,
+         "visible_if": {"field": "choice", "operator": "equals", "value": "no"},
+         "availability": [{"step": "declaration", "visible": True, "editable": True, "required": True}]},
+        {"name": "later", "label": "Późniejsze", "type": "text", "required": True,
+         "availability": [{"step": "future", "visible": True, "editable": True, "required": True}]},
+    ]}
+    with Session.begin() as db:
+        submission = FormSubmission(submission_id="conditional-declaration", form_slug="test",
+                                    workflow_step="declaration", data_json={"choice": "yes"})
+        db.add(submission)
+        db.flush()
+        service = FormVersionService()
+        assert set(service.submission_data_errors(submission, definition, step="declaration", db=db)) == {
+            "details", "consent", "proof",
+        }
+        assert "Załącznik" in service.submission_data_errors(
+            submission, definition, step="declaration", db=db,
+        )["proof"]
+        db.add(SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
+                              form_slug=submission.form_slug, filename="proof.pdf", storage_path="test/proof.pdf",
+                              field_key="proof", status="active"))
+        db.flush()
+        assert service.submission_data_errors(submission, definition, step="declaration", db=db,
+                                              values={"choice": "yes", "details": "complete", "consent": "Tak"}) == {}
+
+
+def test_declaration_without_matching_published_version_does_not_generate(tmp_path):
+    from services.documents.declaration_flow_service import DeclarationFlowService
+
+    _url, Session = _database(tmp_path)
+    definition = {"fields": [], "workflow": {"initial_step": "declaration", "steps": [{"id": "declaration"}]}}
+    with Session.begin() as db:
+        db.add(Form(slug="missing-version", name="Test", title="Test", definition_json=definition))
+        db.add(FormSubmission(submission_id="missing-version-submission", form_slug="missing-version",
+                              workflow_step="declaration", data_json={}))
+    generated = []
+    result = DeclarationFlowService().handle_declaration_post(
+        submission_id="missing-version-submission",
+        submission={"row": {"form_slug": "missing-version", "workflow_step": "declaration", "data_json": {}}},
+        form_config=definition, declaration_config={"id": "declaration", "fields": []},
+        form_data={}, rules_service=SimpleNamespace(apply_rules=lambda *_args: {}),
+        submission_repository=SimpleNamespace(session_factory=Session, update=lambda *_args: True),
+        document_service=SimpleNamespace(generate_document=lambda *_args, **_kwargs: generated.append(True)),
+        refresh_submission=lambda _id: None,
+    )
+    assert result.success is False
+    assert result.error_code == "version_mismatch"
+    assert generated == []
+
+
+def test_required_single_checkbox_reads_legacy_boolean_column():
+    service = FormVersionService()
+    definition = {"workflow": {"initial_step": "declaration", "steps": [{"id": "declaration"}]},
+                  "fields": [{"name": "osw_regulamin", "label": "Zgoda na regulamin", "type": "checkbox",
+                              "required": True, "availability": [{"step": "declaration", "visible": True,
+                                                                  "editable": True, "required": True}]}]}
+    submission = FormSubmission(submission_id="legacy-consent", form_slug="test",
+                                workflow_step="declaration", data_json={}, osw_regulamin=True)
+    assert service.submission_values(submission, definition)["osw_regulamin"] == "Tak"
+    assert service.submission_data_errors(submission, definition, step="declaration") == {}
+    submission.osw_regulamin = False
+    assert "osw_regulamin" in service.submission_data_errors(submission, definition, step="declaration")
 
 
 def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypatch):

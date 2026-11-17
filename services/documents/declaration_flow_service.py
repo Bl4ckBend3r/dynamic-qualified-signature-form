@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -25,6 +26,9 @@ from services.training_service import (
 )
 
 
+logger = logging.getLogger("declaration_generation")
+
+
 @dataclass
 class DeclarationFlowResult:
     success: bool
@@ -37,6 +41,16 @@ class DeclarationFlowResult:
 
 
 class DeclarationFlowService:
+    @staticmethod
+    def _stored_row_values(row: Mapping[str, Any]) -> dict[str, Any]:
+        data = row.get("data_json") or {}
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                data = {}
+        return {**row, **data} if isinstance(data, dict) else dict(row)
+
     @staticmethod
     def submission_document_fields(document: Mapping[str, Any], form_definition: Mapping[str, Any]) -> list[dict]:
         """Resolve the declaration's versioned fields for both its form and PDF."""
@@ -276,7 +290,7 @@ class DeclarationFlowService:
         declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
         return DeclarationFlowResult(
             success=True,
-            values=dict(submission["row"]),
+            values=self._stored_row_values(submission["row"]),
             declaration_definition=declaration_definition,
         )
 
@@ -299,10 +313,16 @@ class DeclarationFlowService:
         declaration_definition = self.build_declaration_form_definition(declaration_config, form_config, step)
         declaration_data = extract_submission_data(declaration_definition, form_data)
         declaration_data = apply_pesel_derived_values(declaration_definition, declaration_data)
-        values = {**submission["row"], **declaration_data}
+        values = {**self._stored_row_values(submission["row"]), **declaration_data}
         errors = validate_submission(declaration_definition, values)
 
         if errors:
+            logger.warning("declaration_generation_validation_failed", extra={
+                "event": "declaration_generation_validation_failed",
+                "reason_code": "FORM_FIELD_VALIDATION_FAILED",
+                "workflow_step": step,
+                "error_count": len(errors),
+            })
             return DeclarationFlowResult(
                 success=False,
                 message="Deklaracja zawiera bledy. Popraw wskazane pola.",
@@ -324,16 +344,52 @@ class DeclarationFlowService:
             with session_factory() as db:
                 record = db.execute(select(FormSubmission).where(
                     FormSubmission.submission_id == submission_id,
-                )).scalar_one()
+                )).scalar_one_or_none()
                 version_service = FormVersionService()
-                version = version_service.resolve_for_submission(db, record)
+                version = version_service.resolve_for_submission(db, record) if record else None
+                if record is None or version is None or record.form_slug != submission["row"].get("form_slug"):
+                    logger.warning("declaration_generation_validation_failed", extra={
+                        "event": "declaration_generation_validation_failed",
+                        "reason_code": "FORM_VERSION_MISMATCH",
+                        "workflow_step": step,
+                        "error_count": 0,
+                    })
+                    return DeclarationFlowResult(
+                        success=False,
+                        message="Nie można potwierdzić wersji formularza dla tego zgłoszenia. Spróbuj ponownie później.",
+                        values=values,
+                        declaration_definition=declaration_definition,
+                        error_code="version_mismatch",
+                    )
+                version_steps = FieldAvailabilityService().step_ids(version.definition_json or {})
+                if version_steps and step not in version_steps:
+                    logger.warning("declaration_generation_validation_failed", extra={
+                        "event": "declaration_generation_validation_failed",
+                        "reason_code": "FIELD_AVAILABILITY_MISMATCH",
+                        "workflow_step": step,
+                        "error_count": 0,
+                    })
+                    return DeclarationFlowResult(
+                        success=False,
+                        message="Nie można ustalić bieżącego etapu deklaracji. Spróbuj ponownie później.",
+                        values=values,
+                        declaration_definition=declaration_definition,
+                        error_code="stage_mismatch",
+                    )
                 due_errors = version_service.submission_data_errors(
                     record,
                     version.definition_json or {},
+                    step=step,
                     db=db,
                     values={**version_service.submission_values(record, version.definition_json or {}), **declaration_data},
                 )
             if due_errors:
+                logger.warning("declaration_generation_validation_failed", extra={
+                    "event": "declaration_generation_validation_failed",
+                    "reason_code": "REQUIRED_FIELD_MISSING",
+                    "workflow_step": step,
+                    "error_count": len(due_errors),
+                })
                 return DeclarationFlowResult(
                     success=False,
                     message="Uzupełnij wszystkie wymagane dane przed wygenerowaniem deklaracji.",
@@ -372,6 +428,12 @@ class DeclarationFlowService:
                 stored_data = {}
         if not isinstance(stored_data, dict):
             stored_data = {}
+        reuse_existing = (
+            str(submission["row"].get("declaration_generated") or "").strip().lower() == "tak"
+            and bool(str(submission["row"].get("declaration_filename") or "").strip())
+            and all(stored_data.get(key) == value for key, value in declaration_data.items())
+            and all(submission["row"].get(key) == value for key, value in rule_updates.items())
+        )
         updates = {**declaration_data, **rule_updates,
                    "data_json": {**stored_data, **declaration_data}}
         if not submission_repository.update(submission_id, updates):
@@ -384,15 +446,54 @@ class DeclarationFlowService:
                 return DeclarationFlowResult(success=True, message="Dane deklaracji zostały zapisane.",
                                              values=values, declaration_definition=declaration_definition)
         refreshed_submission = refresh_submission(submission_id)
-        generated = None
-        if refreshed_submission:
-            refreshed_submission["row"].update({key: value for key, value in updates.items() if key != "data_json"})
+        if not refreshed_submission:
+            logger.error("declaration_generation_failed", extra={
+                "event": "declaration_generation_failed",
+                "reason_code": "SUBMISSION_REFRESH_FAILED",
+                "workflow_step": step,
+            })
+            return DeclarationFlowResult(
+                success=False,
+                message="Dane zapisano, ale nie udało się przygotować deklaracji. Spróbuj ponownie.",
+                values=values,
+                declaration_definition=declaration_definition,
+                error_code="submission_refresh_failed",
+            )
+        refreshed_submission["row"].update({key: value for key, value in updates.items() if key != "data_json"})
+        try:
             generated = document_service.generate_document(
                 refreshed_submission,
                 form_config,
                 DocumentType.DECLARATION,
                 context_extra=updates,
-                force=True,
+                force=not reuse_existing,
+            )
+        except Exception:
+            # DocumentService logs the failed stage and compensates a partial storage write.
+            logger.exception("declaration_flow_generate_document_failed", extra={
+                "event": "declaration_flow_generate_document_failed",
+                "reason_code": "PDF_GENERATION_FAILED",
+                "workflow_step": step,
+            })
+            return DeclarationFlowResult(
+                success=False,
+                message="Dane zapisano, ale nie udało się wygenerować deklaracji. Spróbuj ponownie.",
+                values=values,
+                declaration_definition=declaration_definition,
+                error_code="generation_failed",
+            )
+        if not generated or not generated.get("filename"):
+            logger.error("declaration_generation_failed", extra={
+                "event": "declaration_generation_failed",
+                "reason_code": "PDF_GENERATION_FAILED",
+                "workflow_step": step,
+            })
+            return DeclarationFlowResult(
+                success=False,
+                message="Dane zapisano, ale deklaracja nie została utworzona. Spróbuj ponownie.",
+                values=values,
+                declaration_definition=declaration_definition,
+                error_code="generation_failed",
             )
         return DeclarationFlowResult(
             success=True,

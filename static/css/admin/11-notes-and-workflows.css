@@ -12,18 +12,28 @@
   .agreement-preview-viewport::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: #8d99ad;
+  background: var(--color-border-strong);
   background-clip: padding-box;
+}
+.agreement-builder--standalone {
+  scrollbar-color: var(--color-border-strong) var(--color-surface-muted);
+}
+.agreement-builder--standalone .agreement-builder__editor,
+.agreement-builder--standalone .agreement-builder__variables,
+.agreement-builder--standalone .agreement-preview-viewport {
+  scrollbar-color: var(--color-border-strong) var(--color-surface-muted);
 }
 .agreement-builder-close-dialog {
   width: min(34rem, calc(100vw - 2rem));
   padding: 1.25rem;
   border: 0;
   border-radius: 12px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3);
 }
 .agreement-builder-close-dialog::backdrop {
-  background: rgba(18, 27, 48, 0.55);
+  background: var(--color-overlay);
 }
 .agreement-builder-close-dialog h2 {
   margin-top: 0;
@@ -63,6 +73,19 @@
     padding-left: 0;
     border-top: 1px solid var(--color-border);
     border-left: 0;
+  }
+}
+@media (max-width: 700px) {
+  .agreement-builder--standalone .agreement-builder__header {
+    flex-direction: column;
+  }
+  .agreement-builder--standalone .agreement-builder__header > div:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .agreement-builder--standalone .agreement-builder__header-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 .admin-internal-notes {

@@ -1,6 +1,7 @@
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from html.parser import HTMLParser
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
@@ -24,6 +25,27 @@ from services.public_submission_status_service import build_public_submission_st
 from services.workflow_service import WorkflowTransitionError
 from test_admin_panel import admin_app, create_form, create_user, login
 from test_signature_verifier import certificate_chain_signed_pdf_factory, signed_pdf_factory
+
+
+
+class _DocumentCSRFParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.token = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "input":
+            return
+        attributes = dict(attrs)
+        if attributes.get("name") == "csrf_token":
+            self.token = attributes.get("value")
+
+
+def get_csrf_from_html(html):
+    parser = _DocumentCSRFParser()
+    parser.feed(html)
+    assert parser.token, "Nie znaleziono tokenu CSRF w formularzu"
+    return parser.token
 
 
 @pytest.fixture
@@ -455,16 +477,26 @@ def test_declaration_with_other_documents_collects_generates_downloads_and_waits
     page = client.get(page_url)
     assert page.status_code == 200
     assert "declaration_answer" in page.text and "other_answer" not in page.text
-    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
-    incomplete_data = dict(env.row()["data_json"])
-    incomplete_data["_form_version_upgrade"] = {
-        "missing_fields": ["declaration_answer"],
-        "invalid_training_ids": [],
-        "missing_documents": [],
-    }
-    env.repo.update(env.public_id, {"data_json": incomplete_data})
+    fields_page = client.get(
+        f"/document-steps/{row['form_slug']}/{env.public_id}/paper/fields"
+        f"?document_id=declaration&token={row['access_token']}"
+    )
+
+    assert fields_page.status_code == 200
+    assert 'name="declaration_answer"' in fields_page.text
+    assert 'name="other_answer"' not in fields_page.text
+
+    csrf = get_csrf_from_html(fields_page.text)
     fields_url = (f"/document-steps/{row['form_slug']}/{env.public_id}/paper/fields"
                   f"?document_id=declaration&token={row['access_token']}")
+    fields_page = client.get(fields_url)
+    assert fields_page.status_code == 200
+    assert "declaration_answer" in fields_page.text
+    assert "other_answer" not in fields_page.text
+
+    csrf = fields_page.text.split(
+        'name="csrf_token" value="', 1
+    )[1].split('"', 1)[0]
     wrong = client.post(fields_url.replace("document_id=declaration", "document_id=other_step"),
                         data={"csrf_token": csrf, "declaration_answer": "Tak"})
     assert wrong.status_code == 404
@@ -649,8 +681,18 @@ def test_document_cards_fit_mobile_and_both_themes(composite_env, tmp_path):
         page = browser.new_page()
         page.route("**/*", lambda route: route.abort())
         page.set_content(html)
-        for name in ("style.css", "documents_to_sign.css"):
-            page.add_style_tag(content=(css_root / name).read_text(encoding="utf-8"))
+        
+        for css_file in sorted((css_root / "public").glob("*.css")):
+            page.add_style_tag(
+                content=css_file.read_text(encoding="utf-8")
+            )
+
+        page.add_style_tag(
+            content=(css_root / "documents_to_sign.css").read_text(
+                encoding="utf-8"
+            )
+        )
+
         for theme in ("light", "dark"):
             page.locator("html").evaluate("(element, value) => element.setAttribute('data-theme', value)", theme)
             for width in (390, 1280):
@@ -1034,7 +1076,12 @@ def test_document_fields_collect_save_generate_refresh(composite_env):
     assert 'name="wybor_szkolen"' not in page.text
     assert 'Wybierz szkolenia' not in page.text
     assert '/paper/download/' not in page.text and 'data-document-upload' not in page.text
-    csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+    fields_page = client.get(fields_url)
+
+    assert fields_page.status_code == 200
+    assert 'name="deklaracja_18_lat"' in fields_page.text
+
+    csrf = get_csrf_from_html(fields_page.text)
     assert client.post(fields_url, data={}).status_code == 400
     assert client.post(fields_url.split('?')[0], data={'csrf_token': csrf}).status_code in {403, 404}
     result = client.post(fields_url, data={'csrf_token': csrf})

@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
+from copy import deepcopy
 
 import pytest
 from docx import Document
@@ -281,7 +282,8 @@ def test_training_catalog_top_action_toggles_active_state(admin_app, admin_clien
         assert field["enabled"] is False
     page = admin_client.get(f"/admin/forms/{form_id}/training-management").get_data(as_text=True)
     assert "Nieaktywne" in page
-    assert 'name="training_item_active" value="0" form="training-edit-form-1"' in page
+    active = lxml_html.fromstring(page).xpath('//input[@name="training_item_active" and @form="training-edit-form-1"]')
+    assert len(active) == 1 and active[0].get("checked") is None
     payload["training_item_active"] = "0"
     assert admin_client.post(path, data=payload).status_code == 302
     with factory() as db:
@@ -317,9 +319,11 @@ def test_training_catalog_delete_unused_keeps_versions_and_audits(admin_app, adm
     with factory() as db:
         version = FormVersion(form_id=form_id, version_major=1, version_minor=0,
             version_label="1.0", status="published", definition_json=definition)
-        db.add(version)
+        draft = FormVersion(form_id=form_id, version_major=1, version_minor=1,
+            version_label="1.1", status="draft", definition_json=json.loads(json.dumps(definition)))
+        db.add_all([version, draft])
         db.commit()
-        version_id = version.id
+        version_id, draft_id = version.id, draft.id
     captured = []
     monkeypatch.setattr(admin_app.extensions["services"].audit_log_service, "log_event",
         lambda *args, **kwargs: captured.append((args, kwargs)))
@@ -335,6 +339,7 @@ def test_training_catalog_delete_unused_keeps_versions_and_audits(admin_app, adm
         assert field["catalog"] == []
         assert field["enabled"] is False
         assert db.get(FormVersion, version_id).definition_json == definition
+        assert TrainingCatalogService.get_training_field(db.get(FormVersion, draft_id).definition_json)["catalog"] == []
     assert captured[0][0][0] == "TRAINING_DELETED"
     metadata = captured[0][1]["metadata"]
     assert metadata["training_id"] == "excel"
@@ -347,60 +352,246 @@ def test_training_catalog_delete_unused_keeps_versions_and_audits(admin_app, adm
     assert "Szkolenie zostało usunięte." in page_html
 
 
-def test_training_catalog_delete_used_archives_and_preserves_history(admin_app, admin_client, monkeypatch):
+
+def test_super_admin_deletes_used_training_and_preserves_history(
+    admin_app, admin_client, monkeypatch
+):
     actor_id = create_user(admin_app)
-    form_id = create_form(admin_app, slug="training_delete_used", definition_json=_training_management_definition())
+    form_id = create_form(
+        admin_app,
+        slug="training_delete_used",
+        definition_json=_training_management_definition(),
+    )
+
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="training-delete-used",
+            form_slug="training_delete_used",
+            selected_trainings=json.dumps([
+                {"id": "excel", "name": "Excel", "price": "1000.00"}
+            ]),
+            training_agreements=json.dumps([
+                {"training_id": "excel", "filename": "agreement.pdf"}
+            ]),
+        )
+        db.add(submission)
+        db.flush()
+
+        training = SubmissionTraining(
+            submission_id=submission.id,
+            training_id="excel",
+            training_name_snapshot="Excel",
+            training_price_snapshot="1000.00",
+            training_snapshot={
+                "id": "excel",
+                "name": "Excel",
+                "price": "1000.00",
+                "dates": [{"start_date": "2026-10-12"}],
+            },
+            status="selected",
+        )
+
+        file = SubmissionFile(
+            submission_id=submission.id,
+            public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug,
+            document_type="training_agreement",
+            training_key="excel",
+            filename="agreement.pdf",
+            storage_path="output/agreement.pdf",
+            signed=True,
+            status="signed",
+        )
+
+        db.add_all([training, file])
+        db.commit()
+
+        training_pk = training.id
+        file_pk = file.id
+        submission_pk = submission.id
+
+    captured = []
+
+    monkeypatch.setattr(
+        admin_app.extensions["services"].audit_log_service,
+        "log_event",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    login(admin_client)
+
+    path = f"/admin/forms/{form_id}/training-management/excel/delete"
+
+    response = admin_client.post(
+        path,
+        data={
+            "csrf_token": admin_csrf(admin_client),
+            "training_item_change_reason": "Kurs wycofany",
+        },
+    )
+
+    assert response.status_code == 302
+
+    # Szkolenie zostało usunięte z katalogu.
+    with factory() as db:
+        form = db.get(Form, form_id)
+        field = TrainingCatalogService.get_training_field(form)
+
+        assert not any(
+            item.get("id") == "excel"
+            for item in field["catalog"]
+        )
+        assert field["enabled"] is False
+
+        # Historia uczestnika pozostaje zachowana.
+        saved_training = db.get(SubmissionTraining, training_pk)
+        assert saved_training is not None
+        assert saved_training.training_snapshot["dates"][0][
+            "start_date"
+        ] == "2026-10-12"
+
+        # Podpisany dokument nie został usunięty.
+        saved_file = db.get(SubmissionFile, file_pk)
+        assert saved_file is not None
+        assert saved_file.status == "signed"
+
+        # Zgłoszenie i umowa pozostają w bazie danych.
+        saved_submission = db.get(FormSubmission, submission_pk)
+        assert saved_submission is not None
+        assert "agreement.pdf" in saved_submission.training_agreements
+        assert "Excel" in saved_submission.selected_trainings
+
+    # Operacja została zarejestrowana w audycie.
+    assert captured
+    assert captured[0][0][0] == "TRAINING_DELETED"
+
+    metadata = captured[0][1]["metadata"]
+
+    assert metadata["training_id"] == "excel"
+    assert metadata["was_used"] is True
+    assert metadata["reason"] == "Kurs wycofany"
+    assert metadata["actor_id"] == actor_id
+
+    # Potwierdzenie usunięcia w panelu.
+    page = admin_client.get(
+        f"/admin/forms/{form_id}/training-management?archived=1"
+    )
+
+    assert page.status_code == 200
+
+    page_html = page.get_data(as_text=True)
+
+    assert "Szkolenie zostało usunięte." in page_html
+
+    # Ponowne usunięcie nieistniejącego wpisu jest odrzucane.
+    second_response = admin_client.post(
+        path,
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+
+    assert second_response.status_code == 404
+
+
+def test_training_catalog_delete_all_and_restore_keep_draft_and_history(admin_app, admin_client, monkeypatch):
+    actor_id = create_user(admin_app)
+    definition = _training_management_definition()
+    field = definition["documents"][0]["fields"][0]
+    field["catalog"].extend([
+        {"id": "unused", "name": "Nieużywane", "price": "200", "capacity": 3, "active": True},
+        {"id": "inactive", "name": "Nieaktywne", "price": "300", "capacity": 3, "active": False},
+    ])
+    form_id = create_form(admin_app, slug="training_bulk_restore", definition_json=definition)
     factory = create_session_factory(admin_app.config["DATABASE_URL"])
     with factory() as db:
-        submission = FormSubmission(submission_id="training-delete-used", form_slug="training_delete_used",
-            selected_trainings=json.dumps([{"id": "excel", "name": "Excel", "price": "1000.00"}]),
-            training_agreements=json.dumps([{"training_id": "excel", "filename": "agreement.pdf"}]))
+        published = FormVersion(form_id=form_id, version_major=1, version_minor=0,
+            version_label="1.0", status="published", definition_json=json.loads(json.dumps(definition)))
+        draft = FormVersion(form_id=form_id, version_major=1, version_minor=1,
+            version_label="1.1", status="draft", definition_json=json.loads(json.dumps(definition)))
+        db.add_all([published, draft])
+        submission = FormSubmission(submission_id="bulk-history", form_slug="training_bulk_restore")
         db.add(submission)
         db.flush()
         training = SubmissionTraining(submission_id=submission.id, training_id="excel",
             training_name_snapshot="Excel", training_price_snapshot="1000.00",
-            training_snapshot={"id": "excel", "name": "Excel", "price": "1000.00",
-                               "dates": [{"start_date": "2026-10-12"}]}, status="selected")
-        file = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
+            training_snapshot={"id": "excel", "name": "Excel", "price": "1000.00"}, status="selected")
+        signed = SubmissionFile(submission_id=submission.id, public_submission_id=submission.submission_id,
             form_slug=submission.form_slug, document_type="training_agreement", training_key="excel",
-            filename="agreement.pdf", storage_path="output/agreement.pdf", signed=True, status="signed")
-        db.add_all([training, file])
+            filename="signed.pdf", storage_path="output/signed.pdf", signed=True, status="signed")
+        db.add_all([training, signed])
         db.commit()
-        training_pk, file_pk, submission_pk = training.id, file.id, submission.id
+        published_id, draft_id, training_pk, signed_pk = published.id, draft.id, training.id, signed.id
     captured = []
     monkeypatch.setattr(admin_app.extensions["services"].audit_log_service, "log_event",
         lambda *args, **kwargs: captured.append((args, kwargs)))
     login(admin_client)
-    path = f"/admin/forms/{form_id}/training-management/excel/delete"
-    response = admin_client.post(path, data={"csrf_token": admin_csrf(admin_client),
-        "training_item_change_reason": "Kurs wycofany"})
-    assert response.status_code == 302
+    page_url = f"/admin/forms/{form_id}/training-management"
+    assert "Usuń wszystkie szkolenia" in admin_client.get(page_url).get_data(as_text=True)
+    bulk_url = f"{page_url}/delete-all"
+    assert admin_client.post(bulk_url, data={}).status_code == 400
+    assert admin_client.post(bulk_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert admin_client.post(bulk_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
     with factory() as db:
         form = db.get(Form, form_id)
-        field = TrainingCatalogService.get_training_field(form)
-        archived = field["catalog"][0]
-        assert archived["id"] == "excel"
-        assert archived["active"] is False
-        assert archived["archived"] is True
-        assert archived["was_used"] is True
-        assert archived["archived_by_id"] == actor_id
-        assert archived["archive_reason"] == "Kurs wycofany"
-        assert archived["archived_at"]
-        assert field["enabled"] is False
-        assert db.get(SubmissionTraining, training_pk).training_snapshot["dates"][0]["start_date"] == "2026-10-12"
-        assert db.get(SubmissionFile, file_pk).status == "signed"
-        saved = db.get(FormSubmission, submission_pk)
-        assert "agreement.pdf" in saved.training_agreements
-        assert "Excel" in saved.selected_trainings
-    assert captured[0][0][0] == "TRAINING_ARCHIVED"
-    metadata = captured[0][1]["metadata"]
-    assert metadata["training_id"] == "excel" and metadata["was_used"] is True
-    assert metadata["reason"] == "Kurs wycofany" and metadata["actor_id"] == actor_id
-    page = admin_client.get(f"/admin/forms/{form_id}/training-management")
-    assert "Archiwalne" in page.get_data(as_text=True)
-    assert 'class="training-section-actions"' not in page.get_data(as_text=True)
-    assert "Szkolenie było używane w zgłoszeniach i zostało zarchiwizowane." in page.get_data(as_text=True)
-    assert admin_client.post(path, data={"csrf_token": admin_csrf(admin_client)}).status_code == 409
+        current = TrainingCatalogService.get_training_field(form)
+        draft_field = TrainingCatalogService.get_training_field(db.get(FormVersion, draft_id).definition_json)
+        assert current == draft_field
+        assert current["enabled"] is False
+        assert [(item["id"], item["archived"]) for item in current["catalog"]] == [("excel", True)]
+        assert db.get(FormVersion, published_id).definition_json == definition
+        assert db.get(SubmissionTraining, training_pk).training_snapshot["name"] == "Excel"
+        assert db.get(SubmissionFile, signed_pk).status == "signed"
+        history = db.execute(select(TrainingParticipantActionHistory).where(
+            TrainingParticipantActionHistory.form_id == form_id,
+        )).scalars().all()
+        assert {item.action for item in history} == {"catalog_archived", "catalog_deleted"}
+    assert [item[0][0] for item in captured] == ["TRAINING_ARCHIVED", "TRAINING_DELETED", "TRAINING_DELETED"]
+    current_html = admin_client.get(page_url).get_data(as_text=True)
+    assert "Brak aktualnych szkoleń. Możesz dodać nowe szkolenie lub przywrócić szkolenie z archiwum" in current_html
+    assert "Excel</h2>" not in current_html
+    archive_html = admin_client.get(f"{page_url}?archived=1").get_data(as_text=True)
+    assert "Szkolenia archiwalne" in archive_html and "Przywróć szkolenie" in archive_html
+    assert "Historia zmian" in archive_html
+    restore_url = f"{page_url}/excel/restore"
+    assert admin_client.post(restore_url, data={}).status_code == 400
+    assert admin_client.post(restore_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with factory() as db:
+        restored = TrainingCatalogService.get_training_field(db.get(Form, form_id))
+        assert restored == TrainingCatalogService.get_training_field(db.get(FormVersion, draft_id).definition_json)
+        assert restored["enabled"] is True
+        assert len(restored["catalog"]) == 1
+        assert restored["catalog"][0]["id"] == "excel"
+        assert restored["catalog"][0]["active"] is True
+        assert not restored["catalog"][0].get("archived")
+        assert db.get(FormVersion, published_id).definition_json == definition
+        assert db.get(SubmissionFile, signed_pk).status == "signed"
+        history = db.execute(select(TrainingParticipantActionHistory).where(
+            TrainingParticipantActionHistory.form_id == form_id,
+            TrainingParticipantActionHistory.training_id == "excel",
+        )).scalars().all()
+        assert {item.action for item in history} == {"catalog_archived", "catalog_restored"}
+    assert captured[-1][0][0] == "TRAINING_RESTORED"
+    assert captured[-1][1]["metadata"]["actor_id"] == actor_id
+    assert "Excel</h2>" in admin_client.get(page_url).get_data(as_text=True)
+    assert admin_client.post(restore_url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    assert [item[0][0] for item in captured].count("TRAINING_RESTORED") == 1
+
+
+def test_training_catalog_bulk_and_restore_require_edit_permission(admin_app, admin_client):
+    viewer_id = create_user(admin_app, email="training-catalog-viewer@example.com", role="form_manager")
+    definition = _training_management_definition()
+    item = definition["documents"][0]["fields"][0]["catalog"][0]
+    item.update(active=False, archived=True)
+    form_id = create_form(admin_app, slug="training_catalog_rbac", definition_json=definition)
+    grant_rbac(admin_app, viewer_id, ["can_view_submissions"], form_id=form_id)
+    login(admin_client, email="training-catalog-viewer@example.com")
+    base = f"/admin/forms/{form_id}/training-management"
+    assert "Usuń wszystkie szkolenia" not in admin_client.get(base).get_data(as_text=True)
+    assert "Przywróć szkolenie" not in admin_client.get(f"{base}?archived=1").get_data(as_text=True)
+    token = admin_csrf(admin_client)
+    assert admin_client.post(f"{base}/delete-all", data={"csrf_token": token}).status_code == 403
+    assert admin_client.post(f"{base}/excel/restore", data={"csrf_token": token}).status_code == 403
 
 
 def test_training_catalog_historical_entry_has_no_delete_action(admin_app, admin_client):
@@ -420,13 +611,34 @@ def test_training_catalog_historical_entry_has_no_delete_action(admin_app, admin
             training_snapshot={"id": "excel", "name": "Excel historyczny", "price": "1000.00"}))
         db.commit()
     login(admin_client)
-    page = admin_client.get(f"/admin/forms/{form_id}/training-management")
+    page = admin_client.get(f"/admin/forms/{form_id}/training-management?archived=1")
     assert page.status_code == 200
     assert "Excel historyczny" in page.get_data(as_text=True)
     assert 'class="training-section-actions"' not in page.get_data(as_text=True)
+    assert "Przywróć szkolenie" not in page.get_data(as_text=True)
 
 
-def test_training_catalog_can_be_created_without_changing_form_version(admin_app, admin_client):
+def test_training_catalog_new_training_reopens_empty_offer(admin_app, admin_client):
+    create_user(admin_app)
+    definition = _training_management_definition()
+    field = definition["documents"][0]["fields"][0]
+    field["catalog"] = []
+    field["enabled"] = False
+    form_id = create_form(admin_app, slug="training_reopen_empty", definition_json=definition)
+    login(admin_client)
+    response = admin_client.post(f"/admin/forms/{form_id}/training-management/catalog",
+        data=_inline_training_payload(csrf_token=admin_csrf(admin_client),
+                                      training_item_id="", training_item_name="Nowe szkolenie"))
+    assert response.status_code == 302
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        current = TrainingCatalogService.get_training_field(db.get(Form, form_id))
+        assert current["enabled"] is True
+        assert len(current["catalog"]) == 1
+        assert current["catalog"][0]["name"] == "Nowe szkolenie"
+
+
+def test_super_admin_can_manage_catalog_without_draft_and_preserves_published_version(admin_app, admin_client):
     user_id = create_user(admin_app)
     definition = _training_management_definition()
     form_id = create_form(
@@ -463,13 +675,54 @@ def test_training_catalog_can_be_created_without_changing_form_version(admin_app
         version_definition = json.loads(json.dumps(version.definition_json))
     login(admin_client)
 
+    create_path = f"/admin/forms/{form_id}/training-management/catalog"
+    create_data = _inline_training_payload(
+        csrf_token=admin_csrf(admin_client), training_item_id="", training_item_name="Nowe szkolenie",
+    )
+    created_without_draft = admin_client.post(
+        create_path,
+        data=create_data,
+    )
+    assert created_without_draft.status_code == 302
+
+    with factory() as db:
+        form = db.get(Form, form_id)
+        catalog = TrainingCatalogService.get_training_field(form)["catalog"]
+
+        assert len(catalog) == 2
+        assert any(
+            item["name"] == "Nowe szkolenie"
+            for item in catalog
+        )
+
+        assert db.get(
+            FormVersion, version_id
+        ).definition_json == version_definition
+
+    deleted_without_draft = admin_client.post(
+        f"/admin/forms/{form_id}/training-management/delete-all",
+        data={"csrf_token": admin_csrf(admin_client)},
+    )
+    assert deleted_without_draft.status_code == 302
+
+    with factory() as db:
+        form = db.get(Form, form_id)
+        catalog = TrainingCatalogService.get_training_field(form)["catalog"]
+
+        assert catalog == []
+
+        assert db.get(
+            FormVersion, version_id
+        ).definition_json == version_definition
+        draft = FormVersion(form_id=form_id, version_major=1, version_minor=1,
+            version_label="1.1", status="draft", definition_json=json.loads(json.dumps(definition)))
+        db.add(draft)
+        db.commit()
+        draft_id = draft.id
+
     response = admin_client.post(
-        f"/admin/forms/{form_id}/training-management/catalog",
-        data=_inline_training_payload(
-            csrf_token=admin_csrf(admin_client),
-            training_item_id="",
-            training_item_name="Nowe szkolenie",
-        ),
+        create_path,
+        data=create_data,
     )
 
     assert response.status_code == 302
@@ -482,7 +735,9 @@ def test_training_catalog_can_be_created_without_changing_form_version(admin_app
         created = next(item for item in catalog if item["id"] == stable_id)
         assert created["name"] == "Nowe szkolenie"
         assert db.get(FormVersion, version_id).definition_json == version_definition
-        assert db.execute(select(FormVersion).where(FormVersion.form_id == form_id)).scalars().all() == [db.get(FormVersion, version_id)]
+        assert any(item["id"] == stable_id for item in
+            TrainingCatalogService.get_training_field(db.get(FormVersion, draft_id).definition_json)["catalog"])
+        assert len(db.execute(select(FormVersion).where(FormVersion.form_id == form_id)).scalars().all()) == 2
 
     page = admin_client.get(f"/admin/forms/{form_id}/training-management")
     assert "Nowe szkolenie" in page.get_data(as_text=True)
@@ -4625,7 +4880,7 @@ def test_form_manager_can_edit_arbitrary_instruction_stages(admin_app, admin_cli
         db.commit()
     login(admin_client)
     edit_html = admin_client.get(f"/admin/forms/{form_id}/edit").get_data(as_text=True)
-    token = edit_html.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    token = admin_csrf(admin_client)
     assert "Instrukcja dalszego postępowania" in edit_html
     assert "Dodaj etap" in edit_html
     assert "Lista zawiera wyłącznie etapy użyte w aktualnym workflow" in edit_html
@@ -7038,6 +7293,9 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
                 "sort_order": 2,
             },
         ]
+
+
+
         db.add(
             FormSubmission(
                 submission_id="training-declaration-1",
@@ -7076,6 +7334,40 @@ def test_training_settings_stay_in_form_editor_and_catalog_is_managed_standalone
     assert 'name="training_item_currency"' not in edit_html
     assert "Dostępne szkolenia" not in edit_html
     assert "Przejdź do zarządzania szkoleniami" in edit_html
+    
+    # Przygotowanie opublikowanej wersji przed testem dostępu uczestnika.
+    with create_session_factory(admin_app.config["DATABASE_URL"])() as db:
+        form = db.get(Form, form_id)
+
+        published_version = FormVersion(
+            form_id=form_id,
+            version_major=1,
+            version_minor=0,
+            version_label="1.0",
+            status="published",
+            definition_json=deepcopy(form.definition_json or {}),
+        )
+
+        db.add(published_version)
+        db.flush()
+
+        submissions = db.execute(
+            select(FormSubmission).where(
+                FormSubmission.form_slug == "training_form",
+                FormSubmission.submission_id.in_([
+                    "training-declaration-1",
+                    "training-declaration-other",
+                ]),
+            )
+        ).scalars().all()
+
+        assert len(submissions) == 2
+
+        for submission in submissions:
+            submission.form_version_id = published_version.id
+
+        db.commit()
+
 
     declaration_response = admin_client.get(
         "/declaration/training_form/training-declaration-1?token=training-secret"
@@ -9758,7 +10050,29 @@ def test_agreement_template_test_selects_training_and_opens_preview_in_browser(a
         page.route("https://preview.test/**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "html": "<main class='document'>Kadry</main>"})))
         page.set_content(html, wait_until="domcontentloaded")
         assert page_errors == []
-        page.add_style_tag(path=str(Path(__file__).resolve().parents[1] / "static" / "css" / "admin.css"))
+        
+        static_root = Path(__file__).resolve().parents[1] / "static"
+
+        stylesheets = page.locator(
+            'link[rel="stylesheet"]'
+        ).evaluate_all(
+            "elements => elements.map(e => e.getAttribute('href')).filter(Boolean)"
+        )
+
+        for href in stylesheets:
+            if "/static/" not in href:
+                continue
+
+            relative_path = (
+                href.split("/static/", 1)[1]
+                .split("?", 1)[0]
+                .split("#", 1)[0]
+            )
+
+            css_path = static_root / relative_path
+
+            if css_path.is_file() and css_path.suffix == ".css":
+                page.add_style_tag(path=str(css_path))
         page.locator("[data-agreement-template-test]").evaluate("element => { element.dataset.previewUrl = 'https://preview.test/preview'; element.dataset.pdfUrl = 'https://preview.test/example.pdf'; }")
         assert page.locator("[data-agreement-preview-training-field]").is_hidden()
         assert page.locator("[data-agreement-preview-open]").is_enabled()
@@ -10428,6 +10742,7 @@ def test_agreement_builder_initialization_prefers_backend_and_handles_local_draf
         lambda _match: f"<script>{script}</script>",
         html,
     )
+    theme_script = (Path(__file__).resolve().parents[1] / "static" / "js" / "theme.js").read_text(encoding="utf-8")
     storage_key = f"document-builder:agreement:form:{form_id}:v1"
     legacy_key = f"document-builder-agreement-draft-{form_id}"
     preview_response = {"status": 200, "payload": {"ok": True, "html": "<main>Podgląd działa</main>"}}
@@ -10436,6 +10751,9 @@ def test_agreement_builder_initialization_prefers_backend_and_handles_local_draf
     console_errors = []
 
     def route_request(route):
+        if route.request.url.endswith("/js/theme.js"):
+            route.fulfill(status=200, content_type="application/javascript", body=theme_script)
+            return
         if route.request.url.endswith("/documents/agreement/preview"):
             preview_requests.append(route.request)
             route.fulfill(
@@ -10586,8 +10904,12 @@ def test_agreement_builder_browser_keeps_long_document_inside_independent_scroll
     project_root = Path(__file__).resolve().parents[1]
     html = admin_client.get(f"/admin/forms/{form_id}/documents/agreement/builder").get_data(as_text=True)
     styles = "\n".join(
-        (project_root / path).read_text(encoding="utf-8")
-        for path in ("static/css/style.css", "static/css/admin.css")
+        (project_root / "static" / "css" / css_path).read_text(encoding="utf-8")
+        for manifest in ("style.css", "admin.css")
+        for css_path in re.findall(
+            r'@import url\("([^\"]+)"\)',
+            (project_root / "static" / "css" / manifest).read_text(encoding="utf-8"),
+        )
     )
     script = (project_root / "static" / "js" / "agreement_builder.js").read_text(encoding="utf-8")
     html = html.replace("<head>", '<head><base href="https://preview.test/">').replace("</head>", f"<style>{styles}</style></head>").replace("</body>", f"<script>{script}</script></body>")

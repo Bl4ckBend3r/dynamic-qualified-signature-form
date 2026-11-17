@@ -120,8 +120,8 @@
   padding: 0.55rem;
   border: 1px solid var(--builder-border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 4px 16px rgba(29, 46, 91, 0.08);
+  background: var(--color-surface-raised);
+  box-shadow: 0 4px 16px var(--shadow-color);
 }
 .builder-button {
   display: inline-flex;
@@ -257,7 +257,7 @@
 .agreement-builder-block:focus-within,
 .agreement-builder-block.is-selected {
   border-color: var(--color-focus);
-  box-shadow: 0 0 0 3px rgba(77, 99, 153, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 22%, transparent);
 }
 .agreement-builder-block > header {
   align-items: center;
@@ -451,7 +451,7 @@
   min-height: 0;
   overflow: auto;
   padding: 0.75rem;
-  background: #dfe3ea;
+  background: var(--color-bg-subtle);
   scrollbar-gutter: stable;
 }
 .agreement-preview-canvas {
@@ -553,8 +553,8 @@
   padding: 0.65rem;
   border: 1px solid var(--builder-border);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 -3px 14px rgba(29, 46, 91, 0.08);
+  background: var(--color-surface-raised);
+  box-shadow: 0 -3px 14px var(--shadow-color);
 }
 
 @media (max-width: 1450px) {
@@ -690,6 +690,10 @@ body.agreement-builder-window {
   display: flex;
   align-items: center;
   gap: 0.45rem;
+}
+.agreement-builder--standalone .theme-toggle {
+  min-width: 44px;
+  min-height: 44px;
 }
 .agreement-builder--standalone .agreement-builder__toolbar {
   position: relative;
@@ -828,7 +832,7 @@ body.agreement-builder-window {
   margin: -0.75rem -0.75rem 0.65rem;
   padding: 0.65rem 0.75rem;
   border-bottom: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.97);
+  background: var(--color-surface-raised);
 }
 .agreement-builder--standalone
   .agreement-builder__preview
@@ -863,8 +867,8 @@ body.agreement-builder-window {
   margin: 0 auto;
   padding: 0.65rem 1rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 2px 10px rgba(23, 34, 61, 0.16);
+  background: var(--color-surface-raised);
+  box-shadow: 0 2px 10px var(--shadow-color);
 }
 .agreement-builder--standalone .agreement-builder__footer {
   display: flex;

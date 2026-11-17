@@ -73,7 +73,7 @@ class OfficeSignedAgreementService:
         from services.documents.document_workflow_service import is_document_step
         version = getattr(submission, "form_version", None)
         definition = (version.definition_json if version else {}) or {}
-        current = getattr(submission, "workflow_stage", None) or getattr(submission, "workflow_step", None)
+        current = getattr(submission, "workflow_step", None) or getattr(submission, "workflow_stage", None)
         if any(step.get("id") == current and is_document_step(step) for step in definition.get("workflow", {}).get("steps", [])):
             raise OfficeSignedAgreementError("Wgraj podpis urzędu w bieżącym etapie dokumentowym.")
         folder = self._folder(form)

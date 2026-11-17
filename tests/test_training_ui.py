@@ -1,4 +1,31 @@
 from pathlib import Path
+
+
+def _read_css_with_imports(path, visited=None):
+    import re
+
+    path = Path(path).resolve()
+    visited = set() if visited is None else visited
+
+    if path in visited:
+        return ""
+
+    visited.add(path)
+    content = path.read_text(encoding="utf-8")
+
+    imports = re.findall(
+        r'@import\s+url\(["\']([^"\']+)["\']\)',
+        content,
+    )
+
+    parts = [content]
+    for relative in imports:
+        imported = path.parent / relative
+        parts.append(_read_css_with_imports(imported, visited))
+
+    return "\n".join(parts)
+
+
 from types import SimpleNamespace
 
 from flask import render_template
@@ -66,7 +93,7 @@ def test_training_picker_styles_are_wide_and_responsive():
 
 def test_attendance_confirmation_uses_public_design_system_and_mobile_layout():
     template = Path("templates/training_attendance_public.html").read_text(encoding="utf-8")
-    stylesheet = Path("static/css/style.css").read_text(encoding="utf-8")
+    stylesheet = _read_css_with_imports(Path("static/css/style.css"))
 
     assert 'class="attendance-confirmation__card card"' in template
     assert '<button class="btn-primary" type="submit">Potwierdź obecność</button>' in template
@@ -201,7 +228,7 @@ def test_status_training_picker_is_collapsed_with_accessible_toggle():
 
 def test_admin_training_editor_contains_only_selection_stage_settings():
     template = Path("templates/admin/forms/edit.html").read_text(encoding="utf-8")
-    stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
+    stylesheet = _read_css_with_imports(Path("static/css/admin.css"))
 
     assert 'name="training_item_code"' not in template
     assert "RRRR-MM-DD|" not in template
@@ -277,7 +304,7 @@ def test_admin_training_detail_has_operational_cards_and_one_initial_survey_ques
 
 
 def test_admin_training_module_styles_cover_desktop_and_mobile_layouts():
-    stylesheet = Path("static/css/admin.css").read_text(encoding="utf-8")
+    stylesheet = _read_css_with_imports(Path("static/css/admin.css"))
 
     for selector in (
         ".training-list",

@@ -10,6 +10,7 @@ STYLE_CSS = PROJECT_ROOT / "static" / "css" / "style.css"
 FORM_BUILDER_CSS = PROJECT_ROOT / "static" / "css" / "form_builder.css"
 FORM_BUILDER_PROPERTIES_JS = PROJECT_ROOT / "static" / "js" / "form_builder" / "properties-panel.js"
 AGREEMENT_BUILDER_JS = PROJECT_ROOT / "static" / "js" / "agreement_builder.js"
+AGREEMENT_BUILDER_CSS = PROJECT_ROOT / "static" / "css" / "admin" / "10-agreement-builder.css"
 AGREEMENT_BUILDER_TEMPLATE = PROJECT_ROOT / "templates" / "admin" / "forms" / "_agreement_builder.html"
 ADMIN_TEMPLATES = PROJECT_ROOT / "templates" / "admin"
 
@@ -416,7 +417,7 @@ def test_static_admin_preview_layout_is_class_based():
 
 
 def test_standalone_agreement_builder_has_bounded_panels_and_a4_viewport():
-    css = ADMIN_CSS.read_text(encoding="utf-8")
+    css = AGREEMENT_BUILDER_CSS.read_text(encoding="utf-8")
     template = AGREEMENT_BUILDER_TEMPLATE.read_text(encoding="utf-8")
 
     assert "grid-template-rows: auto auto auto minmax(0, 1fr);" in css
@@ -454,7 +455,7 @@ def test_agreement_builder_uses_one_ui_state_for_modes_panels_and_zoom():
 
 
 def test_agreement_builder_buttons_use_shared_classes_and_toolbar_groups():
-    css = ADMIN_CSS.read_text(encoding="utf-8")
+    css = AGREEMENT_BUILDER_CSS.read_text(encoding="utf-8")
     script = AGREEMENT_BUILDER_JS.read_text(encoding="utf-8")
     template = AGREEMENT_BUILDER_TEMPLATE.read_text(encoding="utf-8")
 

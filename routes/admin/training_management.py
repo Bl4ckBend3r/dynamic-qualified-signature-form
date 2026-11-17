@@ -60,6 +60,74 @@ def _training_service():
     return current_app.extensions["services"].training_management_service
 
 
+def _record_catalog_history(db, form, actions):
+    def state(item):
+        if item is None:
+            return "deleted"
+        if item.get("archived"):
+            return "archived"
+        return "active" if TrainingCatalogService._is_active(item) else "inactive"
+
+    for action in actions:
+        db.add(TrainingParticipantActionHistory(
+            form_id=form.id,
+            training_id=action["training_id"],
+            action=f"catalog_{action['action']}",
+            previous_value=state(action.get("old_value")),
+            new_value=state(action.get("new_value")),
+            reason=action.get("reason") or "",
+            metadata_json={"was_used": bool(action.get("was_used"))},
+            actor_user_id=action.get("actor_id"),
+        ))
+
+
+
+def _save_training_catalog_with_draft(db, form, updated_definition):
+    """Persist a catalog change in the editor mirror and editable version."""
+    from models import FormVersion
+
+    version_service = current_app.extensions["services"].form_version_service
+    draft = version_service.editable_draft(db, form.id)
+
+    if draft is None:
+        if (
+            version_service.has_versions(db, form.id)
+            and g.admin_user.role != "super_admin"
+        ):
+            raise ValueError(
+                "Przed zmiana katalogu szkolen utworz wersje robocza formularza."
+            )
+        form.definition_json = updated_definition
+        return
+
+    draft = db.execute(
+        select(FormVersion)
+        .where(FormVersion.id == draft.id)
+        .with_for_update()
+    ).scalar_one()
+
+    draft_definition = deepcopy(draft.definition_json or {})
+    draft_field = TrainingCatalogService.get_training_field(draft_definition)
+    updated_field = TrainingCatalogService.get_training_field(updated_definition)
+
+    if draft_field is None or updated_field is None:
+        raise ValueError(
+            "Brak etapu wyboru szkolen w wersji roboczej. "
+            "Sprawdz konfiguracje formularza."
+        )
+
+    draft_field["catalog"] = deepcopy(updated_field.get("catalog") or [])
+    draft_field["enabled"] = updated_field.get(
+        "enabled", draft_field.get("enabled", True)
+    )
+    TrainingCatalogService._replace_training_field(
+        draft_definition, draft_field
+    )
+
+    version_service.update_definition(draft, draft_definition)
+    form.definition_json = updated_definition
+
+
 def _require_permission(db, form, permission: str) -> None:
     if not has_permission(db, permission, form=form):
         abort(403)
@@ -108,7 +176,17 @@ def _test_questions_from_request(survey_type: str) -> list[dict]:
 def training_management(form_id: int):
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, permission="can_view_submissions")
-        trainings = _training_service().list_trainings(db, form)
+        all_trainings = _training_service().list_trainings(db, form)
+        show_archived = request.args.get("archived") == "1"
+        trainings = [item for item in all_trainings
+                     if (item.get("status") == "archived") == show_archived]
+        current_count = sum(item.get("status") != "archived" for item in all_trainings)
+        archived_count = len(all_trainings) - current_count
+        version_service = current_app.extensions["services"].form_version_service
+        catalog_locked = (
+            version_service.has_versions(db, form.id)
+            and version_service.editable_draft(db, form.id) is None
+        )
         training_field = TrainingCatalogService.get_training_field(form)
         return render_template(
             "admin/trainings/index.html",
@@ -116,7 +194,18 @@ def training_management(form_id: int):
             trainings=trainings,
             training_field=training_field,
             selection_groups=TrainingCatalogService.selection_groups(training_field),
-            can_edit_catalog=has_permission(db, "can_edit_form", form=form),
+            can_edit_catalog=(
+                has_permission(db, "can_edit_form", form=form)
+                and (
+                    not catalog_locked
+                    or g.admin_user.role == "super_admin"
+                )
+            ),
+            is_super_admin=g.admin_user.role == "super_admin",
+            catalog_locked=catalog_locked,
+            show_archived=show_archived,
+            current_count=current_count,
+            archived_count=archived_count,
             open_training_id=str(request.args.get("open") or "").strip(),
             open_create=request.args.get("create") == "1",
         )
@@ -128,6 +217,7 @@ def training_catalog_create_inline(form_id: int):
     validate_csrf()
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, permission="can_edit_form")
+        db.refresh(form, with_for_update=True)
         current_definition = deepcopy(form.definition_json or {})
         current_field = TrainingCatalogService.get_training_field(current_definition)
         if current_field is None:
@@ -146,6 +236,8 @@ def training_catalog_create_inline(form_id: int):
                 raise ValueError("Techniczny identyfikator szkolenia jest już używany.")
             updated_field = deepcopy(current_field)
             updated_field["catalog"] = [*current_catalog, parsed[0]]
+            if parsed[0].get("active", True):
+                updated_field["enabled"] = True
             updated_definition = deepcopy(current_definition)
             TrainingCatalogService._replace_training_field(updated_definition, updated_field)
             updated_definition, actions = TrainingCatalogService().reconcile_definition(
@@ -159,7 +251,8 @@ def training_catalog_create_inline(form_id: int):
             )
             if errors:
                 raise ValueError(" ".join(errors))
-            form.definition_json = updated_definition
+            _save_training_catalog_with_draft(db, form, updated_definition)
+            _record_catalog_history(db, form, actions)
             db.commit()
             _audit_training_catalog_actions(form.slug, actions)
             flash("Dodano szkolenie.", "success")
@@ -187,6 +280,7 @@ def training_catalog_update_inline(form_id: int, training_id: str):
     )
     with db_session_factory()() as db:
         form = ensure_form_access(db, form_id, permission="can_edit_form")
+        db.refresh(form, with_for_update=True)
         current_definition = deepcopy(form.definition_json or {})
         current_field = TrainingCatalogService.get_training_field(current_definition)
         current_catalog = list((current_field or {}).get("catalog") or [])
@@ -201,7 +295,7 @@ def training_catalog_update_inline(form_id: int, training_id: str):
         )
         if current_item is None:
             abort(404)
-        if current_item.get("archived"):
+        if current_item.get("archived") and g.admin_user.role != "super_admin":
             abort(409, description="Archiwalne szkolenie jest tylko do odczytu.")
         try:
             parsed = parse_training_catalog(request.form)
@@ -237,7 +331,8 @@ def training_catalog_update_inline(form_id: int, training_id: str):
             )
             if errors:
                 raise ValueError(" ".join(errors))
-            form.definition_json = updated_definition
+            _save_training_catalog_with_draft(db, form, updated_definition)
+            _record_catalog_history(db, form, actions)
             occupied = TrainingAvailabilityService(
                 current_app.extensions["services"].submission_repository
             ).occupied_counts(form_slug=form.slug).get(training_id, 0)
@@ -289,6 +384,11 @@ def training_catalog_delete_inline(form_id: int, training_id: str):
                 used_training_ids=_used_training_ids_for_form(db, form.slug),
                 removal_reasons={training_id: reason} if reason else {},
                 actor_id=g.admin_user.id,
+                force_delete_ids=(
+                    {training_id}
+                    if g.admin_user.role == "super_admin"
+                    else set()
+                ),
             )
             action = next((item for item in actions if item.get("training_id") == training_id
                            and item.get("action") in {"deleted", "archived"}), None)
@@ -297,7 +397,8 @@ def training_catalog_delete_inline(form_id: int, training_id: str):
             errors = catalog_service.validate_field(catalog_service.get_training_field(updated_definition))
             if errors:
                 raise ValueError(" ".join(errors))
-            form.definition_json = updated_definition
+            _save_training_catalog_with_draft(db, form, updated_definition)
+            _record_catalog_history(db, form, actions)
             db.commit()
             _audit_training_catalog_actions(form.slug, actions)
             flash(("Szkolenie było używane w zgłoszeniach i zostało zarchiwizowane."
@@ -305,6 +406,65 @@ def training_catalog_delete_inline(form_id: int, training_id: str):
         except (TrainingManagementError, ValueError) as exc:
             db.rollback()
             flash(str(exc) or "Nie udało się usunąć szkolenia.", "error")
+    return redirect(url_for("admin.training_management", form_id=form_id))
+
+
+@bp.post("/forms/<int:form_id>/training-management/delete-all")
+@login_required
+def training_catalog_delete_all(form_id: int):
+    validate_csrf()
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_edit_form")
+        db.refresh(form, with_for_update=True)
+        current_definition = deepcopy(form.definition_json or {})
+        field = TrainingCatalogService.get_training_field(current_definition)
+        if field is None:
+            abort(404)
+        updated_field = deepcopy(field)
+        updated_field["catalog"] = []
+        updated_definition = deepcopy(current_definition)
+        TrainingCatalogService._replace_training_field(updated_definition, updated_field)
+        try:
+            service = TrainingCatalogService()
+            updated_definition, actions = service.reconcile_definition(
+                current_definition, updated_definition,
+                used_training_ids=_used_training_ids_for_form(db, form.slug),
+                actor_id=g.admin_user.id,
+            )
+            errors = service.validate_field(service.get_training_field(updated_definition))
+            if errors:
+                raise ValueError(" ".join(errors))
+            _save_training_catalog_with_draft(db, form, updated_definition)
+            _record_catalog_history(db, form, actions)
+            db.commit()
+            _audit_training_catalog_actions(form.slug, actions)
+            flash("Usunięto szkolenia z aktualnej oferty.", "success")
+        except (TrainingManagementError, ValueError) as exc:
+            db.rollback()
+            flash(str(exc) or "Nie udało się usunąć szkoleń.", "error")
+    return redirect(url_for("admin.training_management", form_id=form_id))
+
+
+@bp.post("/forms/<int:form_id>/training-management/<training_id>/restore")
+@login_required
+def training_catalog_restore(form_id: int, training_id: str):
+    validate_csrf()
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_edit_form")
+        db.refresh(form, with_for_update=True)
+        try:
+            updated_definition, actions = TrainingCatalogService().restore_archived_training(
+                deepcopy(form.definition_json or {}), training_id,
+                actor_id=g.admin_user.id,
+            )
+            _save_training_catalog_with_draft(db, form, updated_definition)
+            _record_catalog_history(db, form, actions)
+            db.commit()
+            _audit_training_catalog_actions(form.slug, actions)
+            flash("Przywrócono szkolenie do aktualnej oferty.", "success")
+        except (TrainingManagementError, ValueError) as exc:
+            db.rollback()
+            flash(str(exc) or "Nie udało się przywrócić szkolenia.", "error")
     return redirect(url_for("admin.training_management", form_id=form_id))
 
 

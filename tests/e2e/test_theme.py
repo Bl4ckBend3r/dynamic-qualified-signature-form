@@ -207,3 +207,93 @@ def test_form_builder_uses_dark_theme_for_all_workspaces(
         print(f"Form builder theme screenshots: {screenshot_dir}")
     finally:
         context.close()
+
+
+def test_agreement_builder_tracks_shared_theme_and_keeps_a4_white(
+    chromium_browser, live_server, e2e_environment
+):
+    with e2e_environment.session_factory() as db:
+        form_id = db.query(Form).filter(Form.slug == "participant-e2e").one().id
+        db.add(User(
+            email="agreement-theme@example.invalid",
+            password_hash=generate_password_hash("theme-test-secret"),
+            role="super_admin",
+            is_active=True,
+            is_blocked=False,
+        ))
+        db.commit()
+
+    context, admin_page = _new_page(
+        chromium_browser, color_scheme="light", storage_value="dark"
+    )
+    try:
+        admin_page.goto(f"{live_server}/admin/")
+        admin_page.locator('[name="email"]').fill("agreement-theme@example.invalid")
+        admin_page.locator('[name="password"]').fill("theme-test-secret")
+        admin_page.locator('button[type="submit"]').click()
+
+        builder = context.new_page()
+        response = builder.goto(
+            f"{live_server}/admin/forms/{form_id}/documents/agreement/builder"
+        )
+        assert response.status == 200
+        assert builder.locator("html").get_attribute("data-theme") == "dark"
+        assert builder.locator("[data-theme-toggle]").count() == 1
+
+        def background(selector):
+            return builder.locator(selector).first.evaluate(
+                "element => getComputedStyle(element).backgroundColor"
+            )
+
+        dark_surfaces = (
+            ".agreement-builder__header",
+            ".agreement-builder__toolbar",
+            ".agreement-builder__editor",
+            ".agreement-builder__variables",
+            ".agreement-preview-viewport",
+            ".agreement-builder-block",
+        )
+        builder.locator('[data-builder-add="ordered_list"]').first.click()
+        builder.locator(".agreement-builder-list-config-collapse summary").last.click()
+        assert background(".agreement-builder-list-config > div") != "rgb(255, 255, 255)"
+        for selector in (
+            ".builder-button--secondary",
+            '.builder-button[aria-pressed="true"]',
+            "[data-builder-list-marker]",
+            "[data-builder-list-indent]",
+            "[data-builder-variable-search]",
+            ".agreement-builder__variable",
+        ):
+            assert background(selector) != "rgb(255, 255, 255)", selector
+        for selector in dark_surfaces:
+            assert background(selector) != "rgb(255, 255, 255)", selector
+        dark_toolbar = background(".agreement-builder__toolbar")
+        assert background(".agreement-preview-page") == "rgb(255, 255, 255)"
+        assert background(".agreement-preview-page iframe") == "rgb(255, 255, 255)"
+
+        builder.locator("[data-builder-list-item]").last.fill("Przykładowy punkt")
+        builder.locator("[data-builder-close]").click()
+        assert builder.locator("[data-builder-close-dialog]").is_visible()
+        assert background("[data-builder-close-dialog]") != "rgb(255, 255, 255)"
+        builder.locator("[data-builder-close-cancel]").click()
+
+        builder.locator("[data-theme-toggle]").click()
+        assert builder.locator("html").get_attribute("data-theme") == "light"
+        assert background(".agreement-builder__toolbar") != dark_toolbar
+        assert background(".agreement-preview-page") == "rgb(255, 255, 255)"
+        admin_page.wait_for_function(
+            "document.documentElement.dataset.theme === 'light'"
+        )
+
+        admin_page.locator("[data-theme-toggle]").click()
+        builder.wait_for_function(
+            "document.documentElement.dataset.theme === 'dark'"
+        )
+        assert builder.locator(".agreement-builder-list-config-collapse").last.is_visible()
+        assert builder.locator("[data-builder-list-item]").last.inner_text() == "Przykładowy punkt"
+        for width in (1366, 390):
+            builder.set_viewport_size({"width": width, "height": 900})
+            assert builder.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            assert background(".agreement-preview-page") == "rgb(255, 255, 255)"
+    finally:
+        context.close()

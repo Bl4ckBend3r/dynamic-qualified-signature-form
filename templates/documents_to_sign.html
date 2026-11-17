@@ -175,6 +175,23 @@
         <section class="result-box" data-composite-document data-substate="{{ document.substate }}">
             <div id="submission-status-tiles" aria-live="polite">{{ current_status_tile(document.status.title, document.status.message) }}</div>
             {% if document.group %}
+
+                {% if document.form_definition and document.form_document_id %}
+                    <p>
+                        <a class="btn-primary"
+                        href="{{ url_for(
+                            'documents.document_step_fields',
+                            slug=result.form_slug,
+                            submission_id=result.submission_id,
+                            step_id=document.step_id,
+                            document_id=document.form_document_id,
+                            token=result.access_token
+                        ) }}">
+                            Uzupełnij dane dokumentu
+                        </a>
+                    </p>
+                {% endif %}
+
             <h3>Dokumenty na tym etapie</h3>
             <p>{{ document.ready_count }} z {{ document.required_count }} wymaganych dokumentów ukończone.</p>
             {% for action in document.generation_actions or [] %}

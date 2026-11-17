@@ -84,6 +84,38 @@ def test_forced_declaration_generation_preserves_existing_pdf_bytes(monkeypatch)
     assert recorded[0]["storage_path"] != old_path
 
 
+@pytest.mark.parametrize("failure", ["storage", "metadata"])
+def test_declaration_generation_failure_does_not_publish_partial_pdf(monkeypatch, failure):
+    storage = InMemoryStorage({})
+    metadata_calls = []
+    service = DocumentService(
+        storage=storage,
+        submission_repository=SimpleNamespace(supports_file_metadata=True),
+        pdf_render_service=SimpleNamespace(render_document_pdf_bytes=lambda **_kwargs: b"%PDF-1.4\n"),
+        submission_document_service=SimpleNamespace(
+            record_generated_document=lambda **kwargs: metadata_calls.append(kwargs) or failure != "metadata",
+        ),
+    )
+    monkeypatch.setattr(service, "get_document_by_id", lambda *_args: {"id": "declaration", "enabled": True, "fields": []})
+    monkeypatch.setattr(service, "build_filename_for_document", lambda *_args: "declaration.pdf")
+    monkeypatch.setattr(service, "resolve_document_template", lambda *_args: "<p>Declaration</p>")
+    monkeypatch.setattr(service, "resolve_pdf_image_url", lambda *_args: None)
+    monkeypatch.setattr("services.document_service.build_document_pdf_context", lambda **_kwargs: {})
+    monkeypatch.setattr("services.document_service.build_declaration_render_context", lambda context, **_kwargs: context)
+    if failure == "storage":
+        monkeypatch.setattr(storage, "save_pdf", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("storage failed")))
+    submission = {"submission_id": "SUB1", "form_slug": "form", "row": {
+        "submission_id": "SUB1", "form_slug": "form", "data_json": {},
+    }}
+
+    with Flask(__name__).app_context(), pytest.raises(Exception):
+        service.generate_document(submission, {"fields": []}, "declaration")
+
+    assert storage.saved_pdfs == {}
+    assert submission["row"].get("declaration_generated") != "Tak"
+    assert len(metadata_calls) == (0 if failure == "storage" else 1)
+
+
 @pytest.mark.parametrize("source,document,expected", [
     ("html", {"template_source": "html", "template_html": "<p>Fresh HTML</p>"}, "Fresh HTML"),
     ("builder", {"template_source": "builder", "builder_document": {"version": 1,

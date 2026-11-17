@@ -178,7 +178,6 @@ class TrainingCatalogService:
                 "Limit finansowania szkoleń musi być liczbą większą od zera."
             )
         catalog_items = list(field.get("catalog") or [])
-        has_active_training = False
         training_ids: set[str] = set()
         field_currency = str(field.get("currency") or "PLN").strip().upper()
         if not re.fullmatch(r"[A-Z]{3}", field_currency):
@@ -196,7 +195,6 @@ class TrainingCatalogService:
             )
             if training.get("archived"):
                 is_active = False
-            has_active_training = has_active_training or is_active
             name = str(training.get("name") or "").strip()
             training_id = str(training.get("id") or "").strip()
             if not training_id:
@@ -237,11 +235,44 @@ class TrainingCatalogService:
                         errors.append(
                             f"Limit miejsc szkolenia „{name or index}” nie może być ujemny."
                         )
-        if catalog_items and not has_active_training:
-            errors.append(
-                "Skonfiguruj co najmniej jedno aktywne szkolenie dla publicznego etapu wyboru."
-            )
         return errors
+
+    def restore_archived_training(
+        self,
+        current_definition: Mapping[str, Any],
+        training_id: str,
+        *,
+        actor_id: int | None = None,
+        now: datetime | None = None,
+    ) -> tuple[dict, list[dict]]:
+        """Restore one catalog entry only through the explicit admin action."""
+        definition = deepcopy(dict(current_definition))
+        field = self.get_training_field(definition)
+        if field is None:
+            raise ValueError("Brak katalogu szkoleń w formularzu.")
+        catalog = list(field.get("catalog") or [])
+        matches = [item for item in catalog if isinstance(item, Mapping)
+                   and str(item.get("id") or "").strip() == training_id]
+        if len(matches) != 1 or not matches[0].get("archived"):
+            raise ValueError("Nie znaleziono archiwalnego szkolenia w bieżącym katalogu.")
+
+        old = dict(matches[0])
+        restored = dict(old)
+        for key in ("archived", "archived_at", "archived_by_id", "archive_reason", "was_used"):
+            restored.pop(key, None)
+        timestamp = (now or datetime.now(timezone.utc)).isoformat()
+        restored.update(active=True, version=self._version(old) + 1,
+                        restored_at=timestamp, restored_by_id=actor_id)
+        field["catalog"] = [restored if item is matches[0] else item for item in catalog]
+        field["enabled"] = True
+        self._replace_training_field(definition, field)
+        errors = self.validate_field(field)
+        if errors:
+            raise ValueError(" ".join(errors))
+        return definition, [self._lifecycle_action(
+            "restored", old, restored, "Przywrócenie szkolenia z archiwum.",
+            bool(old.get("was_used")), actor_id, timestamp,
+        )]
 
     def reconcile_definition(
         self,
@@ -249,6 +280,7 @@ class TrainingCatalogService:
         updated_definition: Mapping[str, Any],
         *,
         used_training_ids: set[str],
+        force_delete_ids: set[str] | None = None,
         removal_reasons: Mapping[str, str] | None = None,
         actor_id: int | None = None,
         now: datetime | None = None,
@@ -294,6 +326,7 @@ class TrainingCatalogService:
             for item in submitted_items
             if str(item.get("id") or "").strip()
         }
+        forced_ids = {str(item) for item in (force_delete_ids or set())}
         actions: list[dict] = []
         result: list[dict] = []
 
@@ -336,7 +369,7 @@ class TrainingCatalogService:
         for training_id, old in current_items.items():
             if training_id in submitted_by_id:
                 continue
-            if old.get("archived"):
+            if old.get("archived") and training_id not in forced_ids:
                 result.append(dict(old))
                 continue
             reason = reasons.get(
@@ -344,7 +377,7 @@ class TrainingCatalogService:
                 "Usunięcie szkolenia w panelu administratora.",
             )
             was_used = training_id in used_training_ids
-            if was_used:
+            if was_used and training_id not in forced_ids:
                 archived = {
                     **old,
                     "active": False,
@@ -374,7 +407,7 @@ class TrainingCatalogService:
                         old,
                         None,
                         reason,
-                        False,
+                        was_used,
                         actor_id,
                         timestamp,
                     )

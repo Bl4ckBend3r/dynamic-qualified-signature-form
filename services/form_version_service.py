@@ -74,9 +74,16 @@ class FormVersionService:
 
     def materialize_editor_mirror(self, db, form: Form, version: FormVersion) -> None:
         """Load one exact draft into the legacy Form/FormField editor adapter."""
+        db.refresh(form, with_for_update=True)
+        db.refresh(version, with_for_update=True)
         if version.form_id != form.id or version.status != FORM_VERSION_DRAFT:
             raise FormVersionError("Edytor może załadować wyłącznie wskazaną wersję roboczą formularza.")
-        self.apply_to_legacy_editor(db, form, deepcopy(version.definition_json or {}))
+        definition = self._preserve_live_training_catalog(
+            form,
+            deepcopy(version.definition_json or {}),
+        )
+        self.update_definition(version, definition)
+        self.apply_to_legacy_editor(db, form, definition)
 
     def resolve_published(self, db, form_id: int) -> FormVersion | None:
         return db.execute(
@@ -297,6 +304,28 @@ class FormVersionService:
         version.updated_at = datetime.now(timezone.utc)
         if change_summary is not None:
             version.change_summary = str(change_summary).strip()
+            
+    @staticmethod
+    def _preserve_live_training_catalog(form: Form, definition: dict) -> dict:
+        from services.training_catalog_service import TrainingCatalogService
+
+        live_field = TrainingCatalogService.get_training_field(
+            form.definition_json or {}
+        )
+        target_field = TrainingCatalogService.get_training_field(definition)
+
+        if live_field is None or target_field is None:
+            return definition
+
+        target_field["catalog"] = deepcopy(
+            live_field.get("catalog") or []
+        )
+        target_field["enabled"] = live_field.get("enabled", True)
+
+        TrainingCatalogService._replace_training_field(
+            definition, target_field
+        )
+        return definition
 
     def clone_to_draft(
         self,
@@ -322,13 +351,17 @@ class FormVersionService:
             major, minor = highest[0], highest[1] + 1
         else:
             raise FormVersionError("Wybierz zmianę podrzędną albo nową wersję główną.")
+        draft_definition = self._preserve_live_training_catalog(
+            form,
+            deepcopy(source_version.definition_json or {}),
+        )
         draft = FormVersion(
             form_id=form.id,
             version_major=major,
             version_minor=minor,
             version_label=f"{major}.{minor}",
             status=FORM_VERSION_DRAFT,
-            definition_json=deepcopy(source_version.definition_json or {}),
+            definition_json=draft_definition,
             created_by_id=actor_id,
             source_version_id=source_version.id,
             change_summary="",
@@ -355,9 +388,21 @@ class FormVersionService:
         version = db.execute(
             select(FormVersion).where(FormVersion.id == version.id).with_for_update()
         ).scalar_one()
+        
         if version.form_id != form.id or version.status != FORM_VERSION_DRAFT:
             raise FormVersionError("Można opublikować wyłącznie wersję roboczą tego formularza.")
+
+        # Zachowaj aktualny katalog szkoleń podczas publikacji.
+        # Nie przywracaj szkoleń usuniętych z bieżącego katalogu.
+        safe_definition = self._preserve_live_training_catalog(
+            form,
+            deepcopy(version.definition_json or {}),
+        )
+
+        self.update_definition(version, safe_definition)
+
         expected_label = f"{version.version_major}.{version.version_minor}"
+
         if version.version_label != expected_label:
             raise FormVersionError("Etykieta wersji musi odpowiadać numerowi major/minor.")
         errors = validate_admin_form_config(version.definition_json or {})
@@ -951,8 +996,13 @@ class FormVersionService:
         normalized = normalize_form_definition(dict(definition))
         availability = FieldAvailabilityService()
         steps = availability.step_ids(normalized)
+        selected_step = step or submission.workflow_step
+        if (not step and selected_step not in steps
+                and (normalized.get("workflow") or {}).get("flow_mode") != "explicit"
+                and submission.workflow_stage in steps):
+            selected_step = submission.workflow_stage
         current = availability.resolve_step(normalized, current_workflow_step(
-            {"workflow_step": step or submission.workflow_step, "data_json": submission.data_json}, normalized))
+            {"workflow_step": selected_step, "data_json": submission.data_json}, normalized))
         due = (
             steps[:steps.index(current) + 1]
             if current in steps
@@ -990,6 +1040,9 @@ class FormVersionService:
                 value = getattr(submission, column)
                 if value is not None:
                     values[name] = value.isoformat() if hasattr(value, "isoformat") else value
+            if (name in values and field.get("type") == "checkbox"
+                    and len(field.get("options") or []) <= 1 and isinstance(values[name], bool)):
+                values[name] = "Tak" if values[name] else "Nie"
         return values
 
     def submission_data_errors(self, submission: FormSubmission, definition: Mapping, *, step: str | None = None,
@@ -1024,7 +1077,8 @@ class FormVersionService:
                     SubmissionFile.status.in_(CURRENT_ATTACHMENT_STATUSES),
                 ).limit(1)).scalar_one_or_none()
                 if not attached:
-                    errors[name] = "Wymagany załącznik należy uzupełnić."
+                    label = str(raw.get("label") or name)
+                    errors[name] = f"Wymagany załącznik „{label}” należy uzupełnić."
         return errors
 
     @staticmethod

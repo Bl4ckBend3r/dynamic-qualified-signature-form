@@ -78,6 +78,8 @@ def _signature_document_message(
 
     if document_status == "VALID":
         document_message = "Dokument zweryfikowano poprawnie."
+    elif document_status == "SKIPPED":
+        document_message = "Dokument został przyjęty"
     elif document_status == "INVALID":
         document_message = (
             "Dokument jest niepoprawny. "

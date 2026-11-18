@@ -447,7 +447,8 @@ def decision_type_assign(decision_type_id: int):
             )
 
             version_service.update_definition(draft, safe_definition)
-            version_service.apply_to_legacy_editor(db, form, safe_definition)
+            version_service.apply_to_legacy_editor(
+                db, form, safe_definition, preserve_operational_catalog=True)
             db.commit()
             flash("Przypisano decyzję do wersji roboczej formularza.", "success")
         except DecisionDefinitionError as exc:
@@ -1106,6 +1107,8 @@ def form_edit(form_id: int):
             form.name = request.form.get("name", "").strip() or form.name
             form.title = request.form.get("title", "").strip() or form.title
             new_slug = normalize_slug(request.form.get("slug", form.slug))
+            if editable_version and new_slug != form.slug:
+                abort(409, description="Adres opublikowanego formularza jest stały podczas edycji wersji roboczej.")
             if new_slug != form.slug and db.execute(select(Form).where(Form.slug == new_slug)).scalar_one_or_none():
                 flash("Formularz o takim slugu już istnieje.", "error")
                 assigned_user_ids = {permission.user_id for permission in form.permissions}
@@ -1131,10 +1134,8 @@ def form_edit(form_id: int):
             form.user_instruction_config = instruction_config
             form.slug = new_slug
             form.description = request.form.get("description", "").strip()
-            apply_form_access_mode(
-                form,
-                request.form.get("access_mode"),
-            )
+            if not editable_version:
+                apply_form_access_mode(form, request.form.get("access_mode"))
             form.label_text = request.form.get("label_text", "").strip()
             form.label_variant = request.form.get("label_variant", "").strip() or "project"
             form.label_color = request.form.get("label_color", "").strip() or "#b38d45"
@@ -1143,7 +1144,10 @@ def form_edit(form_id: int):
             form.logo_alignment = logo_alignment if logo_alignment in LOGO_ALIGNMENTS else "left"
             form.sort_order = parse_int(request.form.get("sort_order"), 0)
             current_app.extensions["services"].mail_settings_service.update_form(form, request.form)
-            form.definition_json = updated_definition
+            form.definition_json = (
+                version_service.with_operational_catalog(form, updated_definition)
+                if editable_version else updated_definition
+            )
             occupied_counts = TrainingAvailabilityService(
                 current_app.extensions["services"].submission_repository
             ).occupied_counts(form_slug=form.slug)
@@ -1230,7 +1234,9 @@ def form_edit(form_id: int):
             ))
         assigned_user_ids = {permission.user_id for permission in form.permissions}
         fields = active_fields_for_form(db, form.id)
-        form.definition_json = normalize_admin_form_definition(current_definition)
+        form.definition_json = version_service.with_operational_catalog(
+            form, normalize_admin_form_definition(current_definition)
+        ) if editable_version else normalize_admin_form_definition(current_definition)
         return render_template(
             "admin/forms/edit.html",
             form=form,

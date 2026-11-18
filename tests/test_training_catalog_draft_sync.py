@@ -2,7 +2,6 @@ from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
 from flask import Flask
 
 from routes.admin.training_management import _save_training_catalog_with_draft
@@ -68,7 +67,7 @@ def test_deleted_training_does_not_return_from_draft():
     assert form.definition_json["title"] == "Form"
 
 
-def test_catalog_change_requires_draft_for_versioned_form():
+def test_catalog_change_without_draft_updates_operational_form_only():
     form = SimpleNamespace(id=1, definition_json=definition([], "Form"))
     service = Mock()
     service.editable_draft.return_value = None
@@ -79,10 +78,9 @@ def test_catalog_change_requires_draft_for_versioned_form():
         form_version_service=service
     )
 
+    updated = definition([{"id": "new", "name": "Nowe"}], "Form")
     with app.app_context():
-        with pytest.raises(ValueError, match="wersje robocza"):
-            _save_training_catalog_with_draft(
-                Mock(), form, definition([], "Form")
-            )
+        _save_training_catalog_with_draft(Mock(), form, updated)
 
     service.update_definition.assert_not_called()
+    assert TrainingCatalogService.get_training_field(form)["catalog"] == updated["documents"][0]["fields"][0]["catalog"]

@@ -58,7 +58,10 @@ class TrainingSelectionError(ValueError):
 class SubmissionTrainingService:
     @staticmethod
     def open_selection_stage(db, form, submission) -> bool:
-        field = TrainingCatalogService.get_training_field(form)
+        from services.form_version_service import FormVersionService
+
+        definition = FormVersionService().public_definition_for_submission(db, form, submission)
+        field = SubmissionTrainingService.selection_field(form, definition) if definition is not None else None
         if not field or not field.get("enabled", True):
             return False
         submission.process_status = ProcessStatus.TRAINING_SELECTION_OPEN.value
@@ -66,12 +69,26 @@ class SubmissionTrainingService:
         return True
 
     @staticmethod
+    def selection_definition(form, submission):
+        """Read rules from the immutable version, with legacy-only fallback."""
+        version = getattr(submission, "form_version", None)
+        if getattr(submission, "form_version_id", None):
+            if (version is None or getattr(version, "status", None) not in {"published", "archived"}
+                    or getattr(version, "form_id", None) != getattr(form, "id", None)):
+                return None
+            return version.definition_json or {}
+        versions = getattr(form, "versions", None) or []
+        if versions:
+            eligible = [item for item in versions if item.status in {"published", "archived"}]
+            return eligible[0].definition_json or {} if len(eligible) == 1 else None
+        return form.definition_json or {}
+
+    @staticmethod
     def is_training_selection_unlocked(form, submission) -> bool:
         """Keep public selection closed until a required declaration is verified."""
-        version = getattr(submission, "form_version", None)
-        if getattr(submission, "form_version_id", None) and version is None:
+        definition = SubmissionTrainingService.selection_definition(form, submission)
+        if definition is None:
             return False
-        definition = (version.definition_json if version else form.definition_json) or {}
         documents = definition.get("documents") or []
         declaration = (
             documents.get("declaration") if isinstance(documents, dict)
@@ -85,9 +102,11 @@ class SubmissionTrainingService:
 
     @classmethod
     def can_select(cls, form, submission, field=None, *, document_collection=False) -> bool:
+        definition = cls.selection_definition(form, submission)
+        if definition is None:
+            return False
         if field is None:
-            version = getattr(submission, "form_version", None)
-            field = TrainingCatalogService.get_training_field(version or form)
+            field = cls.selection_field(form, definition)
         upgrade_needs_correction = bool(((submission.data_json or {}).get("_form_version_upgrade") or {}).get("invalid_training_ids"))
         return bool(field and field.get("enabled", True) and (form.training_selection_open or upgrade_needs_correction)
                     and (document_collection or cls.is_training_selection_unlocked(form, submission)))
@@ -101,6 +120,7 @@ class SubmissionTrainingService:
         field = deepcopy(field)
         current = TrainingCatalogService.get_training_field(form)
         field["catalog"] = deepcopy((current or {}).get("catalog") or [])
+        field["enabled"] = bool(field.get("enabled", True) and (current or {}).get("enabled", True))
         return field
 
     def public_view(self, db, form, submission, field, availability):
@@ -163,7 +183,7 @@ class SubmissionTrainingService:
                 agreement.get("training_id") or agreement.get("id") or ""
             ).strip()
             row = rows.get(training_id)
-            if row is None or row.is_locked:
+            if row is None or row.is_locked or row.status == "removed":
                 continue
             row.status = "agreement_uploaded_by_beneficiary"
             row.is_locked = True
@@ -284,11 +304,8 @@ class SubmissionTrainingService:
         form=None,
     ) -> dict[str, Any]:
         catalog_service = TrainingCatalogService()
-        configured_field = (
-            catalog_service.get_training_field(form) if form is not None else None
-        )
-        if configured_field is not None:
-            field = configured_field
+        if form is not None:
+            field = self.selection_field(form, {"id": "declaration", "fields": [field]}) or field
         summary = self.summary(db, submission, field)
         rows = {
             row.training_id: row
@@ -297,13 +314,7 @@ class SubmissionTrainingService:
             .all()
         }
         catalog = (
-            catalog_service.get_available_trainings_for_form(
-                form,
-                availability,
-                active_only=True,
-            )
-            if form is not None
-            else catalog_service.get_trainings_for_field(
+            catalog_service.get_trainings_for_field(
                 field,
                 availability,
                 active_only=True,
@@ -378,6 +389,8 @@ class SubmissionTrainingService:
         }
         selected = {str(item).strip() for item in selected_ids if str(item).strip()}
         rows = {row.training_id: row for row in db.query(SubmissionTraining).filter(SubmissionTraining.submission_id == submission.id).all()}
+        if any(key in selected and row.status == "removed" for key, row in rows.items()):
+            raise TrainingSelectionError("Szkolenie zostało usunięte przez administratora i nie może zostać ponownie wybrane.")
         locked = {key for key, row in rows.items() if row.is_locked or row.status in LOCKING_STATUSES}
         historical = {
             key
@@ -600,6 +613,8 @@ class SubmissionTrainingService:
             row.training_snapshot = TrainingCatalogService.build_snapshot(
                 training
             )
+        if row.status == "removed":
+            raise TrainingSelectionError("Uczestnik został usunięty z tego szkolenia. Skontaktuj się z administratorem.")
         if row.is_locked:
             return True
         capacity = (row.training_snapshot or {}).get("capacity")

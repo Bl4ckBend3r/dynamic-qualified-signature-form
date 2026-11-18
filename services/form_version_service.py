@@ -84,7 +84,7 @@ class FormVersionService:
             version.source_version.definition_json if version.source_version else None,
         )
         self.update_definition(version, definition)
-        self.apply_to_legacy_editor(db, form, definition)
+        self.apply_to_legacy_editor(db, form, definition, preserve_operational_catalog=True)
 
     def resolve_published(self, db, form_id: int) -> FormVersion | None:
         return db.execute(
@@ -115,6 +115,17 @@ class FormVersionService:
             FormVersion.status.in_((FORM_VERSION_PUBLISHED, FORM_VERSION_ARCHIVED)),
         ).limit(2)).scalars().all()
         return versions[0] if len(versions) == 1 else None
+
+    def public_definition_for_submission(self, db, form: Form, submission: FormSubmission) -> dict | None:
+        """Never use the mutable editor mirror when a versioned submission is unresolved."""
+        if submission.form_slug != form.slug:
+            return None
+        version = self.resolve_for_submission(db, submission)
+        if version is not None and version.form_id == form.id:
+            return deepcopy(version.definition_json or {})
+        if submission.form_version_id or self.has_versions(db, form.id):
+            return None
+        return deepcopy(form.definition_json or {})
 
 
     def resolve_rendered_version(self, db, form: Form, version_id: int) -> FormVersion | None:
@@ -206,8 +217,27 @@ class FormVersionService:
             "logo_alignment", "logo_width", "logo_height", "logo_position",
         )}
 
-    def apply_to_legacy_editor(self, db, form: Form, definition: dict) -> None:
+    @staticmethod
+    def with_operational_catalog(form: Form, definition: dict) -> dict:
+        """Keep the live catalog in the Form editor mirror during draft edits."""
+        from services.training_catalog_service import TrainingCatalogService
+
         snapshot = deepcopy(definition or {})
+        live = TrainingCatalogService.get_training_field(form.definition_json or {})
+        target = TrainingCatalogService.get_training_field(snapshot)
+        if live is not None:
+            if target is None:
+                target = deepcopy(live)
+            else:
+                target["catalog"] = deepcopy(live.get("catalog") or [])
+                target["enabled"] = live.get("enabled", True)
+            TrainingCatalogService._replace_training_field(snapshot, target)
+        return snapshot
+
+    def apply_to_legacy_editor(self, db, form: Form, definition: dict, *,
+                               preserve_operational_catalog: bool = False) -> None:
+        snapshot = (self.with_operational_catalog(form, definition)
+                    if preserve_operational_catalog else deepcopy(definition or {}))
         metadata = snapshot.get("_form_metadata") if isinstance(snapshot.get("_form_metadata"), dict) else {}
         def snapshot_value(key: str, fallback):
             if key in metadata:
@@ -395,7 +425,7 @@ class FormVersionService:
         )
         db.add(draft)
         db.flush()
-        self.apply_to_legacy_editor(db, form, draft.definition_json)
+        self.apply_to_legacy_editor(db, form, draft.definition_json, preserve_operational_catalog=True)
         ComplianceService().stage_form_version(db, form, draft, actor_id=actor_id)
         from services.verification_checklist_service import VerificationChecklistService
         VerificationChecklistService().clone_definitions(db, source_version.id, draft)

@@ -23,7 +23,7 @@ from models import (
     TrainingSurveyQuestion,
     TrainingSurveyResponse,
 )
-from services.submission_training_service import ACTIVE_STATUSES, PARTICIPANT_STATUS_LABELS
+from services.submission_training_service import ACTIVE_STATUSES, LOCKING_STATUSES, PARTICIPANT_STATUS_LABELS
 from services.training_catalog_service import TrainingCatalogService
 
 
@@ -82,7 +82,7 @@ class TrainingManagementService:
             item = dict(catalog_by_id.get(training_id) or snapshots.get(training_id) or {})
             participants = grouped.get(training_id, [])
             active = [row for row in participants if row.status in ACTIVE_STATUSES]
-            cancelled = [row for row in participants if row.status in {"cancelled", "removed", "unselected", "cancelled_before_signed_agreement"}]
+            cancelled = [row for row in participants if row.status in {"cancelled", "unselected", "cancelled_before_signed_agreement"}]
             capacity = item.get("capacity")
             occupied = sum(1 for row in participants if row.is_locked)
             available = None if capacity in (None, "") else max(0, int(capacity) - occupied)
@@ -104,7 +104,7 @@ class TrainingManagementService:
                     else ("active" if item.get("active", True) else "inactive")
                 ),
                 "date": (dates[0].get("start_date") if dates and isinstance(dates[0], Mapping) else ""),
-                "participant_count": len(participants),
+                "participant_count": sum(1 for row in participants if row.status != "removed"),
                 "active_count": len(active),
                 "cancelled_count": len(cancelled),
                 "signed_agreement_count": signed,
@@ -150,6 +150,8 @@ class TrainingManagementService:
             survey_sent = participant.id in invited
             if filters.get("status") and participant.status != filters["status"]:
                 continue
+            if not filters.get("status") and participant.status == "removed":
+                continue
             if filters.get("agreement") and agreement != filters["agreement"]:
                 continue
             if filters.get("attendance") and attendance != filters["attendance"]:
@@ -176,6 +178,11 @@ class TrainingManagementService:
                 "survey_sent": survey_sent,
                 "survey_status": "answered" if participant.id in survey_completed else ("sent" if survey_sent else "not_sent"),
                 "is_active": participant.status in ACTIVE_STATUSES,
+                "can_remove": (
+                    participant.status in {"cancelled", "unselected", "cancelled_before_signed_agreement"}
+                    or (participant.status in ACTIVE_STATUSES
+                        and not participant.is_locked and participant.status not in LOCKING_STATUSES)
+                ),
             })
         return result
 
@@ -192,6 +199,118 @@ class TrainingManagementService:
         if row is None:
             raise TrainingManagementError("Nie znaleziono uczestnictwa w tym szkoleniu.")
         return row
+
+    def remove_participation(self, db, form, training_id: str, participant_id: int, *, actor_id: int, reason: str) -> bool:
+        """Hide an enrollment from operational lists, retaining evidence and audit history.
+
+        Active records with signed agreements, locks or confirmed attendance cannot
+        be removed. Previously cancelled/unselected records can be archived without
+        changing the preserved original agreements.
+        """
+        import json
+        from services.training_service import parse_training_snapshots
+
+        reason = str(reason or "").strip()
+        if not reason:
+            raise TrainingManagementError("Podaj powód usunięcia uczestnika ze szkolenia.")
+        if len(reason) > 1000:
+            raise TrainingManagementError("Powód usunięcia jest zbyt długi (maksymalnie 1000 znaków).")
+
+        participant, submission = self.participant(db, form, training_id, participant_id)
+        db.refresh(submission, with_for_update=True)
+        db.refresh(participant, with_for_update=True)
+        if participant.status == "removed":
+            return False
+        inactive_removable = {"cancelled", "unselected", "cancelled_before_signed_agreement"}
+        if participant.status not in ACTIVE_STATUSES | inactive_removable:
+            raise TrainingManagementError("Ten zapis nie może zostać usunięty operacyjnie.")
+        if participant.is_locked:
+            raise TrainingManagementError("Zapis nadal blokuje miejsce. Najpierw unieważnij uczestnictwo.")
+
+        # For active records, do not silently override signatures, contracts or
+        # attendance. A previously cancelled agreement remains preserved as-is.
+        if participant.status in ACTIVE_STATUSES:
+            if participant.status in LOCKING_STATUSES:
+                raise TrainingManagementError(
+                    "Podpisana lub zablokowana umowa wymaga wcześniejszego unieważnienia zapisu."
+                )
+            signed_file = db.execute(
+                select(SubmissionFile.id).where(
+                    SubmissionFile.submission_id == submission.id,
+                    SubmissionFile.training_key == training_id,
+                    SubmissionFile.document_type.like("%agreement%"),
+                    SubmissionFile.signed.is_(True),
+                ).limit(1)
+            ).first()
+            if signed_file:
+                raise TrainingManagementError(
+                    "Istnieje podpisana umowa. Najpierw unieważnij zapis."
+                )
+            raw = submission.training_agreements or "[]"
+            try:
+                agreements = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                agreements = []
+            for agreement in agreements if isinstance(agreements, list) else []:
+                if not isinstance(agreement, Mapping):
+                    continue
+                nested = agreement.get("training") if isinstance(agreement.get("training"), Mapping) else {}
+                agreement_training_id = str(
+                    nested.get("id") or agreement.get("training_id") or agreement.get("id") or ""
+                ).strip()
+                if agreement_training_id == training_id and (agreement.get("signature_valid") or agreement.get("signed")):
+                    raise TrainingManagementError(
+                        "Istnieje historyczna podpisana umowa. Najpierw unieważnij zapis."
+                    )
+            attendance = db.execute(
+                select(TrainingAttendanceRecord.id).where(
+                    TrainingAttendanceRecord.submission_training_id == participant.id,
+                    TrainingAttendanceRecord.status == "present",
+                ).limit(1)
+            ).first()
+            if attendance:
+                raise TrainingManagementError(
+                    "Uczestnik ma potwierdzoną obecność. Wymagana jest osobna procedura korekty."
+                )
+
+        previous_status = participant.status
+        now = _utcnow()
+        participant.status = "removed"
+        participant.is_locked = False
+        participant.unselected_at = now
+        participant.updated_at = now
+
+        previous_selection = parse_training_snapshots(submission.selected_trainings)
+        remaining = [
+            item for item in previous_selection
+            if str(item.get("id") or item.get("training_id") or "").strip() != training_id
+        ]
+        serialized = json.dumps(remaining, ensure_ascii=False)
+        submission.selected_trainings = serialized
+        data = dict(submission.data_json or {})
+        current_field = TrainingCatalogService.get_training_field(form) or {}
+        for key in {"selected_trainings", str(current_field.get("name") or "selected_trainings")}:
+            if key in data:
+                data[key] = remaining if isinstance(data[key], list) else serialized
+        submission.data_json = data
+
+        db.add(TrainingParticipantActionHistory(
+            form_id=form.id,
+            training_id=training_id,
+            submission_training_id=participant.id,
+            action="participant_removed_from_training",
+            previous_value=previous_status,
+            new_value="removed",
+            reason=reason,
+            actor_user_id=actor_id,
+            metadata_json={
+                "public_submission_id": submission.submission_id,
+                "selected_trainings_before": len(previous_selection),
+                "selected_trainings_after": len(remaining),
+                "documents_preserved": True,
+            },
+        ))
+        return True
 
     def cancel_participation(self, db, form, training_id: str, participant_id: int, *, actor_id: int, reason: str):
         reason = str(reason or "").strip()

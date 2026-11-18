@@ -55,6 +55,7 @@
                     type="radio"
                     name="access_mode"
                     value="public"
+                    {% if form.editable_version_id %}disabled{% endif %}
                     {% if form.is_active and form.is_public and form.is_listed %}checked{% endif %}
                 >
                 <span>
@@ -70,6 +71,7 @@
                     type="radio"
                     name="access_mode"
                     value="unlisted"
+                    {% if form.editable_version_id %}disabled{% endif %}
                     {% if form.is_active and form.is_public and not form.is_listed %}checked{% endif %}
                 >
                 <span>
@@ -85,6 +87,7 @@
                     type="radio"
                     name="access_mode"
                     value="disabled"
+                    {% if form.editable_version_id %}disabled{% endif %}
                     {% if not form.is_active %}checked{% endif %}
                 >
                 <span>
@@ -96,6 +99,9 @@
             </label>
 
         </div>
+        {% if form.editable_version_id %}
+        <p class="admin-help">Dostępność opublikowanego formularza jest zarządzana niezależnie od wersji roboczej.</p>
+        {% endif %}
     </fieldset>
 
 
@@ -191,6 +197,7 @@
             <input
                 name="slug"
                 value="{{ form.slug }}"
+                {% if form.editable_version_id %}readonly{% endif %}
                 required
                 aria-required="true"
             >

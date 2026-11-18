@@ -131,7 +131,23 @@
                                     <button class="admin-button-danger compact" type="submit">Potwierdź unieważnienie</button>
                                 </form>
                             </details>
-                            {% else %}<span class="training-no-action">—</span>{% endif %}
+                            {% endif %}
+                            {% if permissions.can_manage_documents and participant.can_remove %}
+                            <details class="training-cancel-disclosure">
+                                <summary>Usuń ze szkolenia</summary>
+                                <form class="training-cancel-form" method="post"
+                                      action="{{ url_for('admin.training_participant_remove', form_id=form.id, training_id=training.id, participant_id=participant.id) }}"
+                                      data-admin-confirm-message="Usunąć uczestnika z tego szkolenia? Zgłoszenie, dokumenty i historia pozostaną w systemie.">
+                                    <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                                    <label>
+                                        <span>Powód usunięcia</span>
+                                        <input name="reason" maxlength="1000" required placeholder="Wpisz powód">
+                                    </label>
+                                    <button class="admin-button-danger compact" type="submit">Potwierdź usunięcie</button>
+                                </form>
+                            </details>
+                            {% endif %}
+                            {% if not (permissions.can_manage_documents and participant.is_active) and not (permissions.can_manage_documents and participant.can_remove) %}<span class="training-no-action">—</span>{% endif %}
                         </td>
                     </tr>
                     {% else %}

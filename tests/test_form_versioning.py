@@ -8,6 +8,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from pypdf import PdfWriter
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -31,6 +32,14 @@ from services.form_version_service import (
 )
 from services.training_catalog_service import TrainingCatalogService
 from test_admin_panel import admin_app
+
+
+def _valid_pdf_bytes() -> bytes:
+    output = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.write(output)
+    return output.getvalue()
 
 
 def _definition(field_name: str = "email", title: str = "Formularz") -> dict:
@@ -1447,7 +1456,7 @@ def test_publication_generates_new_declaration_revision_without_touching_signed_
         rendered.append(kwargs["template_html"])
         if attempts == 1:
             raise RuntimeError("temporary renderer failure")
-        return b"%PDF-1.4\nnew declaration\n%%EOF"
+        return _valid_pdf_bytes()
 
     monkeypatch.setattr(document_service.pdf_render_service, "render_document_pdf_bytes", render)
     with admin_app.app_context():
@@ -1546,7 +1555,7 @@ def test_publication_generates_current_contract_for_each_training(admin_app, mon
 
     def render(**kwargs):
         templates.append(kwargs["template_html"])
-        return b"%PDF-1.4\nnew agreement\n%%EOF"
+        return _valid_pdf_bytes()
 
     monkeypatch.setattr(document_service.pdf_render_service, "render_document_pdf_bytes", render)
     with admin_app.app_context():

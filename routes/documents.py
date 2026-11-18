@@ -480,8 +480,9 @@ def training_selection(submission_id: str):
             db.refresh(form, with_for_update=True)
             db.refresh(submission, with_for_update=True)
         services = get_services()
-        version = services.form_version_service.resolve_for_submission(db, submission)
-        definition = version.definition_json if version else form.definition_json
+        definition = services.form_version_service.public_definition_for_submission(db, form, submission)
+        if definition is None:
+            abort(404)
         field = services.submission_training_service.selection_field(form, definition or {})
         if field is None:
             abort(404)
@@ -543,8 +544,10 @@ def _public_training_picker(submission_id, credential):
         form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
         if form is None:
             return None
-        version = services.form_version_service.resolve_for_submission(db, submission)
-        field = services.submission_training_service.selection_field(form, version.definition_json if version else form.definition_json)
+        definition = services.form_version_service.public_definition_for_submission(db, form, submission)
+        if definition is None:
+            return None
+        field = services.submission_training_service.selection_field(form, definition)
         if field is None:
             return None
         if not services.submission_training_service.is_training_selection_unlocked(form, submission):

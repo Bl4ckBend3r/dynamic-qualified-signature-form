@@ -164,13 +164,6 @@ def _save_training_catalog_with_draft(db, form, updated_definition):
     draft = version_service.editable_draft(db, form.id)
 
     if draft is None:
-        if (
-            version_service.has_versions(db, form.id)
-            and g.admin_user.role != "super_admin"
-        ):
-            raise ValueError(
-                "Przed zmiana katalogu szkolen utworz wersje robocza formularza."
-            )
         form.definition_json = updated_definition
         return
 
@@ -184,11 +177,11 @@ def _save_training_catalog_with_draft(db, form, updated_definition):
     draft_field = TrainingCatalogService.get_training_field(draft_definition)
     updated_field = TrainingCatalogService.get_training_field(updated_definition)
 
-    if draft_field is None or updated_field is None:
-        raise ValueError(
-            "Brak etapu wyboru szkolen w wersji roboczej. "
-            "Sprawdz konfiguracje formularza."
-        )
+    if updated_field is None:
+        raise ValueError("Brak operacyjnego katalogu szkoleń.")
+    if draft_field is None:
+        form.definition_json = updated_definition
+        return
 
     draft_field["catalog"] = deepcopy(updated_field.get("catalog") or [])
     draft_field["enabled"] = updated_field.get(
@@ -616,6 +609,30 @@ def training_management_detail(form_id: int, training_id: str):
         templates = db.execute(select(MailTemplate).where(MailTemplate.form_id == form.id, MailTemplate.is_active.is_(True)).order_by(MailTemplate.name)).scalars().all()
         permissions = {key: has_permission(db, key, form=form) for key in ("can_view_sensitive_data", "can_send_email", "can_manage_documents", "can_export_data")}
         return render_template("admin/trainings/detail.html", form=form, training=training, participants=participants, sessions=sessions, attendance_records=attendance_records, surveys=satisfaction_surveys, knowledge_tests=knowledge_tests, test_kpis=test_kpis, comparison=comparison, history=history, templates=templates, permissions=permissions)
+
+
+@bp.post("/forms/<int:form_id>/training-management/<training_id>/participants/<int:participant_id>/remove")
+@login_required
+def training_participant_remove(form_id: int, training_id: str, participant_id: int):
+    validate_csrf()
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_manage_documents")
+        try:
+            removed = _training_service().remove_participation(
+                db, form, training_id, participant_id,
+                actor_id=g.admin_user.id, reason=request.form.get("reason", ""),
+            )
+            db.commit()
+            flash(
+                "Uczestnik został usunięty ze szkolenia. Zgłoszenie, dokumenty i historia zostały zachowane."
+                if removed else "Uczestnik został już wcześniej usunięty ze szkolenia.",
+                "success" if removed else "info",
+            )
+        except TrainingManagementError as exc:
+            db.rollback()
+            flash(str(exc), "error")
+    return redirect(url_for("admin.training_management_detail", form_id=form_id, training_id=training_id))
 
 
 @bp.post("/forms/<int:form_id>/training-management/<training_id>/participants/<int:participant_id>/cancel")

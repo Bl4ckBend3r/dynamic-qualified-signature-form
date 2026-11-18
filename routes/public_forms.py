@@ -505,9 +505,11 @@ def _resolve_form_draft(slug: str, token: str):
 def _definition_for_draft(db, form: Form, draft: FormDraft) -> dict:
     if draft.form_version_id:
         version = db.get(FormVersion, draft.form_version_id)
-        if not version or version.form_id != form.id:
+        if not version or version.form_id != form.id or version.status not in {"published", "archived"}:
             raise FormDraftError("Brak wersji formularza przypisanej do wersji roboczej.")
         return dict(version.definition_json or {})
+    if get_services().form_version_service.has_versions(db, form.id):
+        raise FormDraftError("Nie można ustalić wersji formularza przypisanej do zapisu.")
     fields = db.execute(
         select(FormField).where(FormField.form_id == form.id, FormField.active.is_(True)).order_by(FormField.sort_order, FormField.id)
     ).scalars().all()
@@ -793,6 +795,8 @@ def correct_submission(slug: str, submission_id: str):
         if version:
             form_meta, form_config = version_to_public_form(db, form, version)
         else:
+            if services.form_version_service.has_versions(db, form.id):
+                abort(404)
             fields = db.execute(
                 select(FormField)
                 .where(FormField.form_id == form.id, FormField.active.is_(True))

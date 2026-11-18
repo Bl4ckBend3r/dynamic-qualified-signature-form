@@ -12361,3 +12361,155 @@ def test_system_mail_editor_saves_previews_restores_and_enforces_access(admin_ap
     login(admin_client, email="ordinary@example.com")
     assert admin_client.get(path).status_code == 403
     assert admin_client.post(path, data={**payload, "csrf_token": admin_csrf(admin_client)}).status_code == 403
+
+
+def test_training_participant_remove_keeps_documents_and_other_trainings(admin_app, admin_client):
+    actor_id = create_user(admin_app)
+    definition = _training_management_definition()
+    definition["documents"][0]["fields"][0]["catalog"].append(
+        {"id": "python", "name": "Python", "price": "500.00", "capacity": 5, "active": True}
+    )
+    form_id = create_form(admin_app, slug="participant_remove_test", definition_json=definition)
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    selected = [
+        {"id": "excel", "name": "Excel"},
+        {"id": "python", "name": "Python"},
+    ]
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="participant-remove-1", form_slug="participant_remove_test",
+            selected_trainings=json.dumps(selected), data_json={"selected_trainings": json.dumps(selected)},
+        )
+        db.add(submission)
+        db.flush()
+        excel = SubmissionTraining(
+            submission_id=submission.id, training_id="excel", training_name_snapshot="Excel",
+            training_snapshot={"id": "excel", "name": "Excel"}, status="selected",
+        )
+        python_training = SubmissionTraining(
+            submission_id=submission.id, training_id="python", training_name_snapshot="Python",
+            training_snapshot={"id": "python", "name": "Python"}, status="selected",
+        )
+        document = SubmissionFile(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, document_type="training_agreement",
+            training_key="excel", filename="generated.pdf", storage_path="output/generated.pdf",
+            signed=False, status="generated",
+        )
+        db.add_all([excel, python_training, document])
+        db.commit()
+        excel_id, python_id, document_id, submission_id = excel.id, python_training.id, document.id, submission.id
+
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/training-management/excel/participants/{excel_id}/remove"
+    detail = admin_client.get(f"/admin/forms/{form_id}/training-management/excel").get_data(as_text=True)
+    assert "Usuń ze szkolenia" in detail
+    assert admin_client.post(url, data={"csrf_token": admin_csrf(admin_client)}).status_code == 302
+    with factory() as db:
+        assert db.get(SubmissionTraining, excel_id).status == "selected"
+
+    data = {"csrf_token": admin_csrf(admin_client), "reason": "Rezygnacja uczestnika"}
+    assert admin_client.post(url, data=data).status_code == 302
+    assert admin_client.post(url, data=data).status_code == 302
+    with factory() as db:
+        removed = db.get(SubmissionTraining, excel_id)
+        assert removed.status == "removed" and removed.is_locked is False
+        assert db.get(SubmissionTraining, python_id).status == "selected"
+        assert db.get(SubmissionFile, document_id).status == "generated"
+        submission = db.get(FormSubmission, submission_id)
+        assert [item["id"] for item in json.loads(submission.selected_trainings)] == ["python"]
+        assert [item["id"] for item in json.loads(submission.data_json["selected_trainings"])] == ["python"]
+        history = db.execute(select(TrainingParticipantActionHistory).where(
+            TrainingParticipantActionHistory.submission_training_id == excel_id,
+            TrainingParticipantActionHistory.action == "participant_removed_from_training",
+        )).scalars().all()
+        assert len(history) == 1 and history[0].actor_user_id == actor_id
+    page = admin_client.get(f"/admin/forms/{form_id}/training-management/excel").get_data(as_text=True)
+    assert "Usunięte operacyjnie" not in page
+    hidden_history = admin_client.get(
+        f"/admin/forms/{form_id}/training-management/excel?status=removed"
+    ).get_data(as_text=True)
+    assert "Usunięte operacyjnie" in hidden_history
+
+
+def test_training_participant_remove_rejects_signed_agreement(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(admin_app, slug="participant_remove_signed", definition_json=_training_management_definition())
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    with factory() as db:
+        submission = FormSubmission(submission_id="participant-remove-signed-1", form_slug="participant_remove_signed")
+        db.add(submission)
+        db.flush()
+        participant = SubmissionTraining(
+            submission_id=submission.id, training_id="excel", training_name_snapshot="Excel",
+            training_snapshot={"id": "excel", "name": "Excel"}, status="agreement_signed_by_office",
+            is_locked=True,
+        )
+        db.add(participant)
+        db.commit()
+        participant_id = participant.id
+    login(admin_client)
+    url = f"/admin/forms/{form_id}/training-management/excel/participants/{participant_id}/remove"
+    response = admin_client.post(url, data={"csrf_token": admin_csrf(admin_client), "reason": "Próba usunięcia"}, follow_redirects=True)
+    assert response.status_code == 200
+    assert "Zapis nadal blokuje miejsce. Najpierw unieważnij uczestnictwo." in response.get_data(as_text=True)
+    with factory() as db:
+        assert db.get(SubmissionTraining, participant_id).status == "agreement_signed_by_office"
+        assert not db.execute(select(TrainingParticipantActionHistory).where(
+            TrainingParticipantActionHistory.submission_training_id == participant_id,
+            TrainingParticipantActionHistory.action == "participant_removed_from_training",
+        )).first()
+
+def test_training_participant_remove_cancelled_preserves_original_agreement(admin_app, admin_client):
+    create_user(admin_app)
+    form_id = create_form(
+        admin_app, slug="participant_remove_cancelled", definition_json=_training_management_definition()
+    )
+    factory = create_session_factory(admin_app.config["DATABASE_URL"])
+    chosen = [{"id": "excel", "name": "Excel"}]
+    with factory() as db:
+        submission = FormSubmission(
+            submission_id="participant-remove-cancelled-1",
+            form_slug="participant_remove_cancelled",
+            selected_trainings=json.dumps(chosen),
+            data_json={"selected_trainings": json.dumps(chosen)},
+        )
+        db.add(submission)
+        db.flush()
+        enrolment = SubmissionTraining(
+            submission_id=submission.id, training_id="excel",
+            training_name_snapshot="Excel", training_snapshot=chosen[0],
+            status="cancelled", is_locked=False,
+        )
+        document = SubmissionFile(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, document_type="training_agreement",
+            training_key="excel", filename="signed.pdf", storage_path="output/signed.pdf",
+            signed=True, status="cancelled",
+        )
+        db.add_all([enrolment, document])
+        db.commit()
+        enrolment_id, file_id = enrolment.id, document.id
+
+    login(admin_client)
+    path = f"/admin/forms/{form_id}/training-management/excel"
+    html = admin_client.get(path).get_data(as_text=True)
+    assert "Usuń ze szkolenia" in html
+    url = f"{path}/participants/{enrolment_id}/remove"
+    data = {"csrf_token": admin_csrf(admin_client), "reason": "Usunięcie z bieżącej listy"}
+    assert admin_client.post(url, data=data).status_code == 302
+    assert admin_client.post(url, data=data).status_code == 302
+    with factory() as db:
+        assert db.get(SubmissionTraining, enrolment_id).status == "removed"
+        assert db.get(SubmissionFile, file_id).status == "cancelled"
+        events = db.execute(select(TrainingParticipantActionHistory).where(
+            TrainingParticipantActionHistory.submission_training_id == enrolment_id,
+            TrainingParticipantActionHistory.action == "participant_removed_from_training",
+        )).scalars().all()
+        assert len(events) == 1
+        assert events[0].previous_value == "cancelled"
+    default_page = admin_client.get(path).get_data(as_text=True)
+    assert "participant-remove-cancelled-1" not in default_page
+    history_page = admin_client.get(path + "?status=removed").get_data(as_text=True)
+    assert "participant-remove-cancelled-1" in history_page
+    assert "Usunięte operacyjnie" in history_page

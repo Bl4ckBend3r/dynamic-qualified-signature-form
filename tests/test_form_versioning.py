@@ -192,7 +192,7 @@ def test_conditional_stage_visibility_survives_draft_and_publication(tmp_path):
         assert published["workflow"]["steps"][0]["show_only_when_current"] is True
 
 
-def test_publish_upgrades_active_submissions_and_flags_new_required_data(tmp_path):
+def test_explicit_migration_flags_new_required_data_without_changing_historical_snapshot(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -202,6 +202,10 @@ def test_publish_upgrades_active_submissions_and_flags_new_required_data(tmp_pat
         changed["fields"].append({"name": "city", "label": "Miasto", "type": "text", "required": True})
         service.update_definition(draft, changed)
         service.publish(db, form, draft, actor_id=None)
+        assert submission.form_version_id == old.id
+        assert service.resolve_for_submission(db, submission).id == old.id
+        assert service.submission_data_errors(submission, old.definition_json) == {}
+        assert service.upgrade_submission(db, submission, draft)
         submission_id, old_id, new_id = submission.id, old.id, draft.id
     with Session() as db:
         migrated = db.get(FormSubmission, submission_id)
@@ -409,7 +413,7 @@ def test_reconcile_keeps_removed_values_but_flags_new_option_and_required_field(
         assert "removed" not in [field.get("name") for field in service.completion_form_definition(submission, changed)["fields"]]
 
 
-def test_publish_moves_final_submission_without_changing_its_state(tmp_path):
+def test_explicit_migration_moves_final_submission_without_changing_its_state(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -421,13 +425,16 @@ def test_publish_moves_final_submission_without_changing_its_state(tmp_path):
         db.add(final)
         draft = service.clone_to_draft(db, form, old, actor_id=None)
         service.publish(db, form, draft, actor_id=None)
+        assert active.form_version_id == old.id
+        assert final.form_version_id == old.id
+        assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 2
         assert active.form_version_id == draft.id
         assert final.form_version_id == draft.id
         assert final.process_status == "COMPLETED"
         assert final.workflow_step == "submission"
 
 
-def test_publish_syncs_corrections_and_final_cases_without_changing_history(tmp_path):
+def test_explicit_migration_syncs_corrections_and_final_cases_without_changing_history(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -463,6 +470,8 @@ def test_publish_syncs_corrections_and_final_cases_without_changing_history(tmp_
         from services.admin_form_service import validate_admin_form_config
         assert not (validation_errors := validate_admin_form_config(changed)), validation_errors
         service.publish(db, form, draft, actor_id=None)
+        assert [db.get(FormSubmission, pk).form_version_id for pk in [pending.id, waiting.id, completed.id]] == [old.id] * 3
+        assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 3
         ids = [pending.id, waiting.id, completed.id]
         event_count = db.execute(select(SubmissionWorkflowEvent).where(
             SubmissionWorkflowEvent.source == "form_version_upgrade")).scalars().all()
@@ -620,10 +629,10 @@ def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch)
         new_config = document_routes.get_form_config("named-statement")
     with Session() as db:
         assert db.execute(select(FormSubmission).where(
-            FormSubmission.submission_id == "finished-statement")).scalar_one().form_version_id == new_id
+            FormSubmission.submission_id == "finished-statement")).scalar_one().form_version_id == old_id
         assert db.get(FormVersion, old_id).definition_json["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
         assert db.get(FormVersion, new_id).definition_json["documents"][0]["id"] == "statement"
-    assert old_config["documents"][0]["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
+    assert old_config["documents"][0]["participant_label"] == "Oświadczenie uczestnika"
     assert new_config["documents"][0]["participant_label"] == "Oświadczenie o spełnianiu kryteriów udziału"
     legacy = FormConfigService().normalize_form_config({"process": {"documents": [
         {"id": "statement", "label": "Oświadczenia"}]}})
@@ -637,7 +646,7 @@ def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch)
     assert cleared["documents"][0]["participant_label"] == ""
 
 
-def test_participant_access_lazily_upgrades_missed_active_submission(tmp_path):
+def test_participant_access_preserves_bound_version(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -669,10 +678,10 @@ def test_participant_access_lazily_upgrades_missed_active_submission(tmp_path):
     with app.test_request_context("/test?token=secret"):
         access = resolve_participant_submission_access("submission-submitted", slug="versioned")
         assert access is not None
-        assert access.submission["row"]["data_json"]["_form_version_upgrade"]["new_version_id"] == newer_id
+        assert "_form_version_upgrade" not in access.submission["row"]["data_json"]
     with Session() as db:
         row = db.execute(select(FormSubmission).where(FormSubmission.submission_id == "submission-submitted")).scalar_one()
-        assert row.form_version_id == newer_id
+        assert row.form_version_id == old.id
 
 
 def test_required_field_at_future_step_does_not_block_current_step(tmp_path):
@@ -731,6 +740,19 @@ def test_declaration_validates_resolved_stage_and_saved_data(tmp_path, earlier_v
         due_names = {field["name"] for field in FormVersionService()
                      .completion_form_definition(record, definition)["fields"] if field.get("name")}
         assert due_names == {"earlier", "current"}
+        newer_definition = deepcopy(definition)
+        newer_definition["fields"].append({
+            "name": "new_required", "label": "Nowe wymaganie", "type": "text", "required": True,
+            "availability": [{"step": "declaration", "visible": True, "editable": True, "required": True}],
+        })
+        version.status = FORM_VERSION_ARCHIVED
+        newer = FormVersion(form_id=form.id, version_major=1, version_minor=1,
+                            version_label="1.1", status=FORM_VERSION_PUBLISHED,
+                            definition_json=newer_definition)
+        db.add(newer)
+        form.definition_json = newer_definition
+        db.flush()
+        assert FormVersionService().resolve_for_submission(db, record).id == version.id
 
     row = {"form_slug": "declaration-stage", "workflow_step": "OLD_ACCEPTED",
            "workflow_stage": "declaration", "data_json": {"earlier": earlier_value}}
@@ -843,6 +865,7 @@ def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypa
         changed["fields"].append({"name": "city", "label": "Miasto", "type": "text", "required": True})
         service.update_definition(draft, changed)
         service.publish(db, form, draft, actor_id=None)
+        assert service.upgrade_submission(db, submission, draft)
 
     class SubmissionServiceStub:
         def get_submission_context(self, submission_id, **_kwargs):
@@ -1067,6 +1090,51 @@ def test_training_catalog_changes_only_draft_until_publish_and_keeps_stable_id(t
         assert historical_catalog[0]["price"] == "500.00"
         assert current.status == FORM_VERSION_PUBLISHED
         assert [item["id"] for item in current_catalog] == ["excel-stable", "power-bi"]
+
+
+def test_concurrent_training_catalog_edits_block_publication_without_changing_history(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    catalog_service = TrainingCatalogService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="training-conflict")
+        definition = deepcopy(form.definition_json)
+        definition["documents"] = [{"id": "declaration", "fields": [{
+            "type": "training_selection", "name": "selected_trainings", "enabled": True,
+            "max_total_amount": "5000", "catalog": [{"id": "excel", "name": "Excel", "price": "500"}],
+        }]}]
+        form.definition_json = definition
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        historical = deepcopy(first.definition_json)
+        draft = service.clone_to_draft(db, form, first, actor_id=None)
+        draft_definition = deepcopy(draft.definition_json)
+        draft_field = catalog_service.get_training_field(draft_definition)
+        draft_field["catalog"].append({"id": "power-bi", "name": "Power BI", "price": "600"})
+        catalog_service._replace_training_field(draft_definition, draft_field)
+        service.update_definition(draft, draft_definition)
+        live_definition = deepcopy(form.definition_json)
+        live_field = catalog_service.get_training_field(live_definition)
+        live_field["catalog"] = []
+        catalog_service._replace_training_field(live_definition, live_field)
+        form.definition_json = live_definition
+        with pytest.raises(FormVersionError, match="równolegle"):
+            service.publish(db, form, draft, actor_id=None)
+        assert draft.status == FORM_VERSION_DRAFT
+        assert first.definition_json == historical
+
+
+def test_unbound_submission_is_ambiguous_after_second_publication(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="legacy-unbound")
+        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        submission = FormSubmission(submission_id="unbound", form_slug=form.slug, data_json={})
+        db.add(submission)
+        assert service.resolve_for_submission(db, submission).id == first.id
+        draft = service.clone_to_draft(db, form, first, actor_id=None)
+        service.publish(db, form, draft, actor_id=None)
+        assert service.resolve_for_submission(db, submission) is None
 
 
 def test_archived_and_published_versions_are_immutable(tmp_path):
@@ -1316,7 +1384,7 @@ def test_public_post_rejects_missing_or_tampered_version_token(tmp_path, monkeyp
     assert calls == []
 
 
-def test_document_context_uses_upgraded_submission_version_after_new_publication(tmp_path, monkeypatch):
+def test_document_context_uses_bound_submission_version_after_new_publication(tmp_path, monkeypatch):
     database_url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -1359,9 +1427,9 @@ def test_document_context_uses_upgraded_submission_version_after_new_publication
         historical_config = document_routes.get_form_config("historical-doc", "historical-submission")
         current_config = document_routes.get_form_config("historical-doc")
 
-    assert historical_config["title"] == "Nowy dokument"
+    assert historical_config["title"] == "Formularz"
     assert current_config["title"] == "Nowy dokument"
-    assert "late_required" in {field.get("name") for field in historical_config["fields"]}
+    assert "late_required" not in {field.get("name") for field in historical_config["fields"]}
     assert "late_required" in {field.get("name") for field in current_config["fields"]}
 
 

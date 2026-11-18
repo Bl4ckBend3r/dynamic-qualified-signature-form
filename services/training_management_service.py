@@ -134,7 +134,7 @@ class TrainingManagementService:
         for training_pk, status in db.execute(
                 select(TrainingAttendanceRecord.submission_training_id, TrainingAttendanceRecord.status)
                 .where(TrainingAttendanceRecord.submission_training_id.in_([row.id for row, _ in rows] or [-1]))
-                .order_by(TrainingAttendanceRecord.updated_at.desc())
+                .order_by(TrainingAttendanceRecord.updated_at.desc(), TrainingAttendanceRecord.id.desc())
             ).all():
             attendance_by_training.setdefault(training_pk, status)
         invitation_rows = db.execute(
@@ -165,6 +165,9 @@ class TrainingManagementService:
                 "name": f"{submission.imiona} {submission.nazwisko}".strip() if include_pii else "Dane zastrzeżone",
                 "email": submission.email if include_pii else "",
                 "phone": submission.telefon if include_pii else "",
+                "training_name": participant.training_name_snapshot or (participant.training_snapshot or {}).get("name") or training_id,
+                "training_id": participant.training_id,
+                "training_dates": (participant.training_snapshot or {}).get("dates") or [],
                 "status": participant.status,
                 "status_label": PARTICIPANT_STATUS_LABELS.get(participant.status, participant.status),
                 "agreement_status": agreement,

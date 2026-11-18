@@ -161,6 +161,8 @@
                     </button>
                     <a class="admin-button compact training-card__manage"
                        href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}">Zarządzaj</a>
+                    {% if can_export_participants %}<a class="admin-button-secondary compact"
+                       href="{{ url_for('admin.training_participants_export', form_id=form.id, training_id=training.id, scope='all') }}">Eksportuj uczestników (CSV)</a>{% endif %}
                     {% if show_archived %}
                     <a class="admin-button-secondary compact"
                        href="{{ url_for('admin.training_management_detail', form_id=form.id, training_id=training.id) }}#history">Historia zmian</a>

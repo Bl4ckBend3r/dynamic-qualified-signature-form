@@ -81,6 +81,7 @@ class FormVersionService:
         definition = self._preserve_live_training_catalog(
             form,
             deepcopy(version.definition_json or {}),
+            version.source_version.definition_json if version.source_version else None,
         )
         self.update_definition(version, definition)
         self.apply_to_legacy_editor(db, form, definition)
@@ -98,15 +99,22 @@ class FormVersionService:
         db,
         submission: FormSubmission,
     ) -> FormVersion | None:
-        """Return the published operational version for this submission's form."""
+        """Return the immutable definition bound to this submission."""
         if submission.form_version_id:
             version = db.get(FormVersion, submission.form_version_id)
-            if version is None or version.form.slug != submission.form_slug:
+            if (version is None or version.form.slug != submission.form_slug
+                    or version.status not in {FORM_VERSION_PUBLISHED, FORM_VERSION_ARCHIVED}):
                 return None
-            return self.resolve_published(db, version.form_id)
+            return version
 
         form_id = db.execute(select(Form.id).where(Form.slug == submission.form_slug)).scalar_one_or_none()
-        return self.resolve_published(db, form_id) if form_id is not None else None
+        if form_id is None:
+            return None
+        versions = db.execute(select(FormVersion).where(
+            FormVersion.form_id == form_id,
+            FormVersion.status.in_((FORM_VERSION_PUBLISHED, FORM_VERSION_ARCHIVED)),
+        ).limit(2)).scalars().all()
+        return versions[0] if len(versions) == 1 else None
 
 
     def resolve_rendered_version(self, db, form: Form, version_id: int) -> FormVersion | None:
@@ -306,7 +314,7 @@ class FormVersionService:
             version.change_summary = str(change_summary).strip()
             
     @staticmethod
-    def _preserve_live_training_catalog(form: Form, definition: dict) -> dict:
+    def _preserve_live_training_catalog(form: Form, definition: dict, base_definition: dict | None = None) -> dict:
         from services.training_catalog_service import TrainingCatalogService
 
         live_field = TrainingCatalogService.get_training_field(
@@ -316,16 +324,34 @@ class FormVersionService:
 
         if live_field is None or target_field is None:
             return definition
+        base = TrainingCatalogService.get_training_field(base_definition) if base_definition else None
+        def catalog_state(field: dict) -> tuple:
+            return (field.get("catalog") or [], field.get("enabled", True))
 
-        target_field["catalog"] = deepcopy(
-            live_field.get("catalog") or []
+        live_state = catalog_state(live_field)
+        target_state = catalog_state(target_field)
+        if base is None:
+            # Older drafts have no common ancestor. Never silently discard either edit.
+            if live_state != target_state:
+                raise FormVersionError(
+                    "Katalog szkoleń wersji roboczej różni się od bieżącego. "
+                    "Uzgodnij zmiany przed publikacją."
+                )
+            return definition
+        base_state = catalog_state(base)
+        if target_state == live_state:
+            return definition
+        if live_state == base_state:
+            return definition
+        if target_state == base_state:
+            target_field["catalog"] = deepcopy(live_field.get("catalog") or [])
+            target_field["enabled"] = live_field.get("enabled", True)
+            TrainingCatalogService._replace_training_field(definition, target_field)
+            return definition
+        raise FormVersionError(
+            "Katalog szkoleń zmieniono równolegle w wersji roboczej i bieżącej. "
+            "Uzgodnij zmiany przed publikacją."
         )
-        target_field["enabled"] = live_field.get("enabled", True)
-
-        TrainingCatalogService._replace_training_field(
-            definition, target_field
-        )
-        return definition
 
     def clone_to_draft(
         self,
@@ -351,10 +377,11 @@ class FormVersionService:
             major, minor = highest[0], highest[1] + 1
         else:
             raise FormVersionError("Wybierz zmianę podrzędną albo nową wersję główną.")
-        draft_definition = self._preserve_live_training_catalog(
-            form,
-            deepcopy(source_version.definition_json or {}),
-        )
+        draft_definition = deepcopy(source_version.definition_json or {})
+        from services.training_catalog_service import TrainingCatalogService
+        live_field = TrainingCatalogService.get_training_field(form.definition_json or {})
+        if live_field is not None and TrainingCatalogService.get_training_field(draft_definition) is not None:
+            TrainingCatalogService._replace_training_field(draft_definition, deepcopy(live_field))
         draft = FormVersion(
             form_id=form.id,
             version_major=major,
@@ -382,7 +409,7 @@ class FormVersionService:
         *,
         actor_id: int | None,
         change_summary: str = "",
-        synchronize_submissions: bool = True,
+        synchronize_submissions: bool = False,
     ) -> FormVersion:
         db.execute(select(Form).where(Form.id == form.id).with_for_update()).scalar_one()
         version = db.execute(
@@ -397,6 +424,7 @@ class FormVersionService:
         safe_definition = self._preserve_live_training_catalog(
             form,
             deepcopy(version.definition_json or {}),
+            version.source_version.definition_json if version.source_version else None,
         )
 
         self.update_definition(version, safe_definition)

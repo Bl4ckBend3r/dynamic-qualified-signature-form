@@ -49,6 +49,7 @@ from services.form_builder_service import (
 from services.field_availability_service import FieldAvailabilityService
 from services.form_version_service import (
     FORM_VERSION_DRAFT,
+    FORM_VERSION_PUBLISHED,
     FormVersionError,
     FormVersionValidationError,
 )
@@ -442,6 +443,7 @@ def decision_type_assign(decision_type_id: int):
             safe_definition = version_service._preserve_live_training_catalog(
                 form,
                 deepcopy(draft.definition_json or {}),
+                draft.source_version.definition_json if draft.source_version else None,
             )
 
             version_service.update_definition(draft, safe_definition)
@@ -469,7 +471,7 @@ def form_versions(form_id: int):
             for version in versions
         }
         published = next((item for item in versions if item.status == "published"), None)
-        pending_sync_count = (db.scalar(select(func.count(FormSubmission.id)).where(
+        pending_migration_count = (db.scalar(select(func.count(FormSubmission.id)).where(
             FormSubmission.form_slug == form.slug,
             or_(FormSubmission.form_version_id.is_(None),
                 FormSubmission.form_version_id != published.id),
@@ -479,7 +481,7 @@ def form_versions(form_id: int):
             form=form,
             versions=versions,
             diffs=diffs,
-            pending_sync_count=pending_sync_count,
+            pending_migration_count=pending_migration_count,
             can_manage=can_manage_form(db, g.admin_user, form.id),
         )
 
@@ -613,10 +615,11 @@ def form_version_publish(form_id: int, version_id: int):
         try:
             if version.form_id != form.id:
                 raise FormVersionError("Wersja nie należy do tego formularza.")
-            retry_sync = request.form.get("retry_sync") == "1"
-            if retry_sync and version.status == "published":
-                pass
-            elif not retry_sync and version.status == FORM_VERSION_DRAFT:
+            migrate_submissions = request.form.get("migrate_submissions") == "1"
+            if migrate_submissions and version.status == FORM_VERSION_PUBLISHED:
+                if service.resolve_published(db, form.id).id != version.id:
+                    raise FormVersionError("Migracja wymaga aktualnej wersji opublikowanej.")
+            elif not migrate_submissions and version.status == FORM_VERSION_DRAFT:
                 service.publish(
                     db,
                     form,
@@ -640,19 +643,21 @@ def form_version_publish(form_id: int, version_id: int):
             db.rollback()
             flash(str(exc), "error")
             return redirect(url_for("admin.form_versions", form_id=form.id))
-    try:
-        service.synchronize_published_submissions(
-            db_session_factory(), published_form_id, published_version_id,
-            actor_id=g.admin_user.id, max_batches=1)
-    except Exception:
-        current_app.logger.exception("Nie udało się zsynchronizować zgłoszeń po publikacji wersji %s", published_version_id)
-        flash("Wersję opublikowano, ale synchronizacja zgłoszeń wymaga ponowienia.", "error")
-        return redirect(url_for("admin.form_versions", form_id=form_id))
-    from services.form_version_service import schedule_version_sync
-    schedule_version_sync(current_app._get_current_object(), published_form_id, published_version_id,
-                          actor_id=g.admin_user.id)
-    flash((f"Zsynchronizowano zgłoszenia z wersją {published_label}." if retry_sync
-           else f"Opublikowano wersję {published_label}."), "success")
+    if migrate_submissions:
+        try:
+            migrated = service.synchronize_published_submissions(
+                db_session_factory(), published_form_id, published_version_id,
+                actor_id=g.admin_user.id, max_batches=1)
+        except Exception:
+            current_app.logger.exception("Nie udało się przenieść zgłoszeń do wersji %s", published_version_id)
+            flash("Nie udało się przenieść zgłoszeń. Sprawdź diagnostykę i ponów operację.", "error")
+            return redirect(url_for("admin.form_versions", form_id=form_id))
+        from services.form_version_service import schedule_version_sync
+        schedule_version_sync(current_app._get_current_object(), published_form_id, published_version_id,
+                              actor_id=g.admin_user.id)
+        flash(f"Rozpoczęto jawną migrację zgłoszeń do wersji {published_label}; przetworzono {migrated} w pierwszej partii.", "success")
+    else:
+        flash(f"Opublikowano wersję {published_label}. Istniejące zgłoszenia zachowują swoje wersje.", "success")
     return redirect(url_for("admin.form_versions", form_id=form_id))
 
 

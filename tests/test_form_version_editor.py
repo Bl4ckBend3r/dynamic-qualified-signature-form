@@ -215,7 +215,30 @@ def test_v3_clone_is_an_independent_exact_snapshot_of_v2(version_editor_app):
         assert v2.definition_json["fields"][0]["visible_if"]["all"][0]["value"]["code"] == "yes"
         assert v2.definition_json["fields"][1]["options"][0]["metadata"]["color"] == "blue"
         submission = db.get(FormSubmission, seeded["submission_id"])
-        assert submission.form_version_id == v2.id
+        assert submission.form_version_id == v1.id
+
+
+def test_admin_migration_requires_separate_post_after_publication(version_editor_app, monkeypatch):
+    from services import form_version_service
+
+    admin_id = _create_admin(version_editor_app)
+    seeded = _seed_v1_v2(version_editor_app, user_id=admin_id)
+    session_factory = create_session_factory(version_editor_app.config["DATABASE_URL"])
+    client = version_editor_app.test_client()
+    csrf_token = _login(client)
+    url = f'/admin/forms/{seeded["form_id"]}/versions/{seeded["v2_id"]}/publish'
+    with session_factory() as db:
+        assert db.get(FormSubmission, seeded["submission_id"]).form_version_id == seeded["v1_id"]
+    assert client.post(url, data={"csrf_token": csrf_token}).status_code == 302
+    with session_factory() as db:
+        assert db.get(FormSubmission, seeded["submission_id"]).form_version_id == seeded["v1_id"]
+    monkeypatch.setattr(form_version_service, "schedule_version_sync", lambda *_args, **_kwargs: None)
+    response = client.post(url, data={"csrf_token": csrf_token, "migrate_submissions": "1"})
+    assert response.status_code == 302
+    with session_factory() as db:
+        submission = db.get(FormSubmission, seeded["submission_id"])
+        assert submission.form_version_id == seeded["v2_id"]
+        assert submission.data_json["_original_form_version_id"] == seeded["v1_id"]
 
 
 def test_explicit_draft_id_wins_when_historical_data_contains_two_drafts(version_editor_app):
@@ -594,7 +617,7 @@ def test_published_version_cannot_be_edited_directly(version_editor_app):
         submission = db.get(FormSubmission, seeded["submission_id"])
         assert v1.definition_json == before_v1
         assert v2.definition_json == before_v2
-        assert submission.form_version_id == v2.id
+        assert submission.form_version_id == v1.id
 
 
 def test_workflow_step_migration_accepts_decision_mapping_and_list():

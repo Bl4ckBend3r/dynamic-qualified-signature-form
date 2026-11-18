@@ -615,15 +615,13 @@ def submission_detail(form_id: int, submission_pk: int):
         from services.form_version_service import FormVersionError
 
         version_service = current_app.extensions["services"].form_version_service
-        if submission.form_version_id:
+        if submission.form_version_id or version_service.has_versions(db, form.id):
             try:
-                version_service.upgrade_submission(db, submission)
-                version_service.refresh_submission_completion(db, submission)
-                db.commit()
+                if version_service.resolve_for_submission(db, submission) is None:
+                    raise FormVersionError("Nieprawidłowe powiązanie wersji zgłoszenia.")
             except FormVersionError:
-                db.rollback()
-                current_app.logger.exception("Nieprawidłowe powiązanie wersji zgłoszenia %s", submission_pk)
-                raise
+                current_app.logger.warning("Nieprawidłowe powiązanie wersji zgłoszenia")
+                abort(409, description="Powiązanie wersji zgłoszenia wymaga wyjaśnienia.")
         if request.method == "POST":
             requested_status = request.form.get("process_status", "").strip()
             if requested_status and requested_status != submission.process_status:

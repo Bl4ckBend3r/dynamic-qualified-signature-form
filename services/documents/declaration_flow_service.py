@@ -384,10 +384,6 @@ class DeclarationFlowService:
                     values={**version_service.submission_values(record, version.definition_json or {}), **declaration_data},
                 )
             if due_errors:
-                logger.info(
-                    "declaration_missing_field_keys=%s",
-                    ",".join(sorted(str(key) for key in due_errors)),
-                )
                 logger.warning("declaration_generation_validation_failed", extra={
                     "event": "declaration_generation_validation_failed",
                     "reason_code": "REQUIRED_FIELD_MISSING",

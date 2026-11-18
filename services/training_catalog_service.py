@@ -282,7 +282,7 @@ class TrainingCatalogService:
                 != training_id
             ):
                 raise ValueError(
-                    "Nie znaleziono szkolenia możliwego do przywrócenia."
+                    "Nie znaleziono archiwalnego szkolenia możliwego do przywrócenia."
                 )
 
             operational_keys = {

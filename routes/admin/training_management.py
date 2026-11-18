@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import csv
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO, StringIO
 import json
+import re
+from zoneinfo import ZoneInfo
 
 from flask import abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 from sqlalchemy import select
@@ -35,7 +37,79 @@ from .forms import (
 
 def _csv_safe(value) -> str:
     text = "" if value is None else str(value)
-    return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
+    leading = text.lstrip("".join(chr(code) for code in range(33)) + "\ufeff\u200b\u200c\u200d")
+    return "'" + text if (leading.startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n"))) else text
+
+
+_PARTICIPANT_CSV_HEADERS = (
+    "Lp.", "ID zgłoszenia", "Imię i nazwisko", "Adres e-mail", "Numer telefonu",
+    "Nazwa szkolenia", "ID szkolenia", "Termin szkolenia", "Status uczestnictwa",
+    "Data wyboru szkolenia", "Status umowy", "Status obecności",
+    "Czy wysłano ankietę", "Status ankiety",
+)
+
+
+def _participant_filters(*, include_pii: bool) -> dict[str, str]:
+    return {
+        "status": request.args.get("status", ""),
+        "agreement": request.args.get("agreement", ""),
+        "attendance": request.args.get("attendance", ""),
+        "survey_sent": request.args.get("survey_sent", ""),
+        "query": request.args.get("query", "") if include_pii else "",
+    }
+
+
+def _csv_date(value) -> str:
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%d.%m.%Y")
+    if not value:
+        return ""
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%d.%m.%Y")
+    except ValueError:
+        return ""
+
+
+def _training_dates_csv(dates) -> str:
+    result = []
+    for item in dates if isinstance(dates, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start = _csv_date(item.get("start_date") or item.get("date"))
+        end = _csv_date(item.get("end_date"))
+        if start:
+            result.append(f"{start}–{end}" if end and end != start else start)
+    return ", ".join(result)
+
+
+def _participant_csv_download(participants: list[dict], training_id: str):
+    output = StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(_PARTICIPANT_CSV_HEADERS)
+    agreement_labels = {"signed": "Podpisana", "cancelled": "Anulowana", "pending": "Oczekuje"}
+    attendance_labels = {"present": "Obecny", "absent": "Nieobecny", "excused": "Usprawiedliwiony", "pending": "Oczekuje"}
+    survey_labels = {"answered": "Wypełniona", "sent": "Wysłana", "not_sent": "Niewysłana"}
+    for position, participant in enumerate(participants, start=1):
+        values = (
+            position, participant["submission_id"], participant["name"], participant["email"],
+            participant["phone"], participant["training_name"], participant["training_id"],
+            _training_dates_csv(participant["training_dates"]), participant["status_label"],
+            _csv_date(participant["selected_at"]),
+            agreement_labels.get(participant["agreement_status"], participant["agreement_status"]),
+            attendance_labels.get(participant["attendance"], participant["attendance"]),
+            "Tak" if participant["survey_sent"] else "Nie",
+            survey_labels.get(participant["survey_status"], participant["survey_status"]),
+        )
+        writer.writerow([_csv_safe(value) for value in values])
+    payload = output.getvalue().encode("utf-8-sig")
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", training_id).strip("_") or "szkolenie"
+    filename = f"uczestnicy_szkolenia_{safe_id}_{datetime.now(ZoneInfo('Europe/Warsaw')):%Y%m%d}.csv"
+    response = send_file(BytesIO(payload), mimetype="text/csv; charset=utf-8",
+                         as_attachment=True, download_name=filename)
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def _csv_download(rows, fields: list[str], filename: str):
@@ -200,6 +274,10 @@ def training_management(form_id: int):
                     not catalog_locked
                     or g.admin_user.role == "super_admin"
                 )
+            ),
+            can_export_participants=(
+                has_permission(db, "can_export_data", form=form)
+                and has_permission(db, "can_view_sensitive_data", form=form)
             ),
             is_super_admin=g.admin_user.role == "super_admin",
             catalog_locked=catalog_locked,
@@ -482,6 +560,23 @@ def training_catalog_restore(form_id: int, training_id: str):
     return redirect(url_for("admin.training_management", form_id=form_id))
 
 
+@bp.get("/forms/<int:form_id>/training-management/<training_id>/participants.csv")
+@login_required
+def training_participants_export(form_id: int, training_id: str):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_view_submissions")
+        _require_permission(db, form, "can_export_data")
+        _require_permission(db, form, "can_view_sensitive_data")
+        try:
+            participants = _training_service().participants(
+                db, form, training_id, include_pii=True,
+                filters={} if request.args.get("scope") == "all" else _participant_filters(include_pii=True),
+            )
+        except TrainingManagementError:
+            abort(404)
+        return _participant_csv_download(participants, training_id)
+
+
 @bp.get("/forms/<int:form_id>/training-management/<training_id>")
 @login_required
 def training_management_detail(form_id: int, training_id: str):
@@ -492,13 +587,7 @@ def training_management_detail(form_id: int, training_id: str):
             training = _training_service().require_training(db, form, training_id)
             participants = _training_service().participants(
                 db, form, training_id, include_pii=can_view_pii,
-                filters={
-                    "status": request.args.get("status", ""),
-                    "agreement": request.args.get("agreement", ""),
-                    "attendance": request.args.get("attendance", ""),
-                    "survey_sent": request.args.get("survey_sent", ""),
-                    "query": request.args.get("query", "") if can_view_pii else "",
-                },
+                filters=_participant_filters(include_pii=can_view_pii),
             )
         except TrainingManagementError:
             abort(404)

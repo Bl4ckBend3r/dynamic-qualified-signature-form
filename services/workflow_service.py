@@ -177,7 +177,7 @@ class WorkflowService:
             submission.update(workflow_step=target, workflow_stage=target, process_status=status)
 
     def definition_for(self, submission: dict) -> dict:
-        """Resolve the published operational snapshot for this submission's form."""
+        """Resolve the immutable snapshot bound to this submission."""
         if not getattr(self.submission_repository, "session_factory", None):
             return {}
         with self.submission_repository.session_factory() as db:

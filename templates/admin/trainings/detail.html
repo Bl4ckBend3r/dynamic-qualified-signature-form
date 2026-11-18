@@ -60,7 +60,11 @@
 </nav>
 
     <section class="training-section" id="participants">
-        <div class="training-section-heading"><div><h2>Uczestnicy</h2><p>Filtruj listę i wykonuj operacje na konkretnych zapisach.</p></div></div>
+        <div class="training-section-heading"><div><h2>Uczestnicy</h2><p>Filtruj listę i wykonuj operacje na konkretnych zapisach.</p></div>
+            {% if permissions.can_export_data and permissions.can_view_sensitive_data %}<div class="admin-actions">
+                <a class="admin-button-secondary compact" href="{{ url_for('admin.training_participants_export', form_id=form.id, training_id=training.id, status=request.args.get('status',''), agreement=request.args.get('agreement',''), attendance=request.args.get('attendance',''), survey_sent=request.args.get('survey_sent',''), query=request.args.get('query','')) }}">Eksportuj uczestników (CSV)</a>
+                <a class="admin-button-secondary compact" href="{{ url_for('admin.training_participants_export', form_id=form.id, training_id=training.id, scope='all') }}">Eksportuj całą listę (CSV)</a>
+            </div>{% endif %}</div>
         <form method="get" class="training-filter-grid">
             <label><span>Status</span><select name="status"><option value="">Wszystkie</option>{% for value in ['selected','agreement_generated','agreement_downloaded','agreement_waiting_for_beneficiary_signature','agreement_uploaded_by_beneficiary','agreement_waiting_for_office_signature','agreement_signed_by_office','locked','cancelled','removed','unselected'] %}<option value="{{ value }}" {% if request.args.get('status') == value %}selected{% endif %}>{{ status_labels.get(value, value) }}</option>{% endfor %}</select></label>
             <label><span>Umowa</span><select name="agreement"><option value="">Wszystkie</option><option value="pending" {% if request.args.get('agreement') == 'pending' %}selected{% endif %}>W toku</option><option value="signed" {% if request.args.get('agreement') == 'signed' %}selected{% endif %}>Podpisana</option><option value="cancelled" {% if request.args.get('agreement') == 'cancelled' %}selected{% endif %}>Anulowana</option></select></label>

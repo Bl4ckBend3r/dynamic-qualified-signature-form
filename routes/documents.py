@@ -76,6 +76,11 @@ def get_form_config(slug: str, submission_id: str | None = None) -> dict | None:
                     if version:
                         return services.form_config_service.normalize_form_config(version.definition_json or {})
                     return None
+            published = services.form_version_service.resolve_published(db, form.id)
+            if published:
+                return services.form_config_service.normalize_form_config(published.definition_json or {})
+            if services.form_version_service.has_versions(db, form.id):
+                return None
             return services.form_config_service.normalize_form_config(form.definition_json or {})
     return services.form_config_service.get_form_config(services.storage, slug)
 

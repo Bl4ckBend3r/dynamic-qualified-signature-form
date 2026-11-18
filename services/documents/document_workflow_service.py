@@ -1531,27 +1531,15 @@ class DocumentWorkflowService:
                     else target.get("generated_filename")
                 )
 
-                if original_name:
-                    try:
-                        original = self.documents.read_document_bytes_for_download(
-                            row,
-                            original_name,
-                            signed=(
-                                signer == "office"
-                                and policy["participant_signature"]
-                            ),
+                if original_name or policy["generate"] or signer == "office":
+                    document_valid, document_status, document_reason_code, comparison_method = (
+                        self.documents.compare_signed_revision(
+                            row, original_name, data,
+                            signed=signer == "office" and policy["participant_signature"],
                         )
-
-                        document_valid = data.startswith(original)
-
-                        if not document_valid:
-                            document_status = "INVALID"
-                            document_reason_code = "DOCUMENT_REVISION_MISMATCH"
-
-                    except Exception:
-                        document_valid = False
-                        document_status = "ERROR"
-                        document_reason_code = "DOCUMENT_READ_ERROR"
+                    )
+                    if comparison_method:
+                        verification["document_comparison_method"] = comparison_method
 
                 if (
                     signer == "office"
@@ -1561,6 +1549,15 @@ class DocumentWorkflowService:
                     signature_outcome = "INVALID_SIGNATURE"
                     signature_valid = False
                     verification["reason_code"] = "MISSING_COUNTERSIGNATURE"
+                elif (
+                    signer == "office"
+                    and policy["participant_signature"]
+                    and verification.get("signatures")
+                    and not all(item.get("accepted") is True for item in verification["signatures"])
+                ):
+                    signature_outcome = "INVALID_SIGNATURE"
+                    signature_valid = False
+                    verification["reason_code"] = "INVALID_COUNTERSIGNATURE"
 
                 verification["signature_result_code"] = signature_outcome
                 verification["document_validation_status"] = document_status
@@ -2108,23 +2105,12 @@ class DocumentWorkflowService:
                 verification["reason_code"] = "VERIFIER_EXCEPTION"
 
             if generated:
-                try:
-                    original = self.documents.read_document_bytes_for_download(
-                        row,
-                        generated["filename"],
-                        signed=False,
-                    )
-
-                    document_valid = data.startswith(original)
-
-                    if not document_valid:
-                        document_status = "INVALID"
-                        document_reason_code = "DOCUMENT_REVISION_MISMATCH"
-
-                except Exception:
-                    document_valid = False
-                    document_status = "ERROR"
-                    document_reason_code = "DOCUMENT_READ_ERROR"
+                document_valid, document_status, document_reason_code, comparison_method = (
+                    self.documents.compare_signed_revision(
+                        row, generated["filename"], data, signed=False)
+                )
+                if comparison_method:
+                    verification["document_comparison_method"] = comparison_method
 
             verification["signature_result_code"] = signature_outcome
             verification["document_validation_status"] = document_status

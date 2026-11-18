@@ -10,7 +10,7 @@ import json
 import logging
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy import select
 from werkzeug.datastructures import FileStorage, MultiDict
 
@@ -2192,11 +2192,13 @@ def test_training_agreement_upload_cannot_validate_another_instance(composite_en
 
     result = env.document.upload(env.row(), env.definition, 'paper', env.file(), instance='b')
 
-    assert result['result'] == 'INVALID_SIGNATURE'
+    # The source file was replaced after generation. Its stored checksum must
+    # fail before comparing the uploaded signature with any contract revision.
+    assert result['result'] == 'VERIFICATION_ERROR'
     assert not env.state().get('signatures', {}).get('b', {}).get('participant')
     rejected = [item for item in env.services.submission_document_service.list_documents(env.public_id)
                 if item['status'] == 'rejected']
-    assert rejected[-1]['signature_validation_result']['reason_code'] == 'DOCUMENT_REVISION_MISMATCH'
+    assert rejected[-1]['signature_validation_result']['reason_code'] == 'DOCUMENT_SOURCE_HASH_MISMATCH'
     assert rejected[-1]['signature_validation_result']['cryptographically_valid'] is True
 
 
@@ -2245,6 +2247,158 @@ def test_agreement_uses_trusted_profile_backend_through_shared_upload_pipeline(
     assert verification['document_integrity_valid'] is True
     assert verification['certificate_chain_valid'] is True
     assert verification['provider_allowed'] is True
+
+
+def test_rewritten_mszafir_agreement_uses_exact_generated_revision(
+    composite_env, signed_pdf_factory, monkeypatch,
+):
+    from signature_verifier import verify_signed_pdf
+
+    env = composite_env('agreement', participant_signature=True, upload_required=True)
+    env.enter()
+    source_name = env.state()['generated_filename']
+    source = env.document.download(env.row(), env.definition, 'paper', source_name)
+    writer = PdfWriter()
+    writer.clone_document_from_reader(PdfReader(BytesIO(source)))
+    rewritten = BytesIO()
+    writer.write(rewritten)
+    assert not rewritten.getvalue().startswith(source)
+    signed = signed_pdf_factory(rewritten.getvalue(), 'mszafir')
+    monkeypatch.setattr(env.services.document_signing_service, 'verifier', verify_signed_pdf)
+
+    result = env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(signed), filename='signed.pdf', content_type='application/pdf'))
+
+    assert result['result'] == 'VALID_SIGNATURE'
+    assert env.state()['completed'] and env.row()['workflow_step'] == 'review'
+    signed_file = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                       if file['status'] == 'signed')
+    verification = signed_file['signature_validation_result']
+    assert verification['document_comparison_method'] == 'canonical_pdf'
+    assert verification['cryptographic_valid'] is True
+
+
+def test_multiple_agreement_generations_accept_only_current_revision(composite_env, monkeypatch):
+    env = composite_env('agreement', participant_signature=True, upload_required=True)
+    env.enter()
+    old_pdf = env.pdf
+    old_name = env.state()['generated_filename']
+    configure_document_fields(env)
+    env.definition['documents'][0]['fields'] = [field for field in env.definition['documents'][0]['fields']
+                                                  if field['name'] != 'wybor_szkolen']
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, env.row()['form_version_id']).definition_json = deepcopy(env.definition)
+        db.commit()
+    updated = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=210, height=200)
+    writer.write(updated)
+    new_pdf = updated.getvalue()
+    monkeypatch.setattr(env.services.document_service.pdf_render_service,
+                        'render_document_pdf_bytes', lambda **kwargs: new_pdf)
+    fields = MultiDict({'deklaracja_18_lat': 'Tak', 'declaration_note': 'Wersja druga'})
+    assert env.document.save_fields(env.row(), env.definition, 'paper', fields).success
+    assert env.state()['generated_filename'] != old_name
+    assert env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(old_pdf + b'\n% signature'), filename='old.pdf',
+                    content_type='application/pdf'))['result'] == 'INVALID_SIGNATURE'
+    assert not env.state().get('completed')
+    assert env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(new_pdf + b'\n% signature'), filename='new.pdf',
+                    content_type='application/pdf'))['result'] == 'VALID_SIGNATURE'
+    assert env.state()['completed']
+
+
+def test_real_office_countersignature_keeps_participant_revision(
+    composite_env, signed_pdf_factory, monkeypatch,
+):
+    from signature_verifier import verify_signed_pdf
+
+    env = composite_env('agreement', participant_signature=True,
+                        upload_required=True, office_signature=True)
+    env.enter()
+    participant = signed_pdf_factory(env.pdf, 'mszafir', field_name='Participant')
+    monkeypatch.setattr(env.services.document_signing_service, 'verifier', verify_signed_pdf)
+    first = env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(participant), filename='participant.pdf', content_type='application/pdf'))
+    assert first['result'] == 'VALID_SIGNATURE'
+    assert env.state()['substate'] == 'awaiting_office_signature'
+
+    office = signed_pdf_factory(participant, 'mszafir', field_name='Office')
+    second = env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(office), filename='office.pdf', content_type='application/pdf'),
+        signer='office', actor={'id': 17, 'email': 'office@example.org'})
+    assert second['result'] == 'VALID_SIGNATURE'
+    assert env.state()['completed']
+
+
+def test_invalid_office_countersignature_cannot_reuse_valid_participant_signature(
+    composite_env, monkeypatch,
+):
+    env = composite_env('agreement', participant_signature=True,
+                        upload_required=True, office_signature=True)
+    env.enter()
+    participant = env.pdf + b'\n% participant signature'
+    first = env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(participant), filename='participant.pdf', content_type='application/pdf'))
+    assert first['result'] == 'VALID_SIGNATURE'
+    valid = {'accepted': True, 'integrity_ok': True, 'cryptographically_valid': True,
+             'trusted': True, 'docmdp_ok': True, 'signature_type': 'mszafir'}
+    invalid = {**valid, 'accepted': False, 'cryptographically_valid': False}
+    monkeypatch.setattr(env.services.document_signing_service, 'verifier',
+                        lambda _: {**env.verification, 'signature_count': 2,
+                                   'signatures': [valid, invalid]})
+    second = env.document.upload(env.row(), env.definition, 'paper',
+        FileStorage(stream=BytesIO(participant + b'\n% office signature'),
+                    filename='office.pdf', content_type='application/pdf'),
+        signer='office', actor={'id': 17, 'email': 'office@example.org'})
+    assert second['result'] == 'INVALID_SIGNATURE'
+    assert not env.state()['completed']
+    rejected = [file for file in env.services.submission_document_service.list_documents(env.public_id)
+                if file['status'] == 'rejected']
+    assert rejected[-1]['signature_validation_result']['reason_code'] == 'INVALID_COUNTERSIGNATURE'
+
+
+def test_historical_form_version_bulk_upload_preserves_signed_agreement_status(
+    composite_env, signed_pdf_factory, monkeypatch,
+):
+    from routes.documents import get_form_config
+    from signature_verifier import verify_signed_pdf
+
+    env = composite_env('agreement', participant_signature=True, upload_required=True)
+    env.enter()
+    old_version_id = env.row()['form_version_id']
+    new_definition = deepcopy(env.definition)
+    new_definition['documents'][0]['template_html'] = '<p>New agreement revision</p>'
+    with env.repo.session_factory() as db:
+        db.get(FormVersion, old_version_id).status = 'archived'
+        db.flush()
+        db.add(FormVersion(form_id=env.form_id, version_major=2, version_minor=0,
+                           version_label='2.0', status='published', definition_json=new_definition))
+        db.commit()
+    assert env.row()['form_version_id'] == old_version_id
+    assert get_form_config(env.row()['form_slug'], env.public_id)['documents'][0]['template_html'] != new_definition['documents'][0]['template_html']
+    signed = signed_pdf_factory(env.pdf, 'mszafir')
+    monkeypatch.setattr(env.services.document_signing_service, 'verifier', verify_signed_pdf)
+    env.app.config['PUBLIC_CSRF_ENABLED'] = True
+    client = env.app.test_client()
+    row = env.row()
+    page = client.get(f"/do-podpisania?submission_id={env.public_id}&token={row['access_token']}")
+    csrf = get_csrf_from_html(page.text)
+
+    response = client.post(
+        f"/document-steps/{row['form_slug']}/{env.public_id}/paper/bulk-upload?token={row['access_token']}",
+        data={'csrf_token': csrf, 'access_token': row['access_token'],
+              'document_ids': ['agreement'], 'document_files': [(BytesIO(signed), 'signed.pdf')]},
+        content_type='multipart/form-data',
+    )
+
+    assert response.status_code == 302
+    assert env.row()['workflow_step'] == 'review'
+    assert env.state()['completed']
+    signed_file = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
+                       if file['status'] == 'signed')
+    assert signed_file['signature_validation_result']['document_reason_code'] == 'OK'
 
 
 def test_composite_office_route_permissions_and_csrf(composite_env):

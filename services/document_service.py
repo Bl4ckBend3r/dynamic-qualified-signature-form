@@ -27,6 +27,7 @@ from services.documents.pdf_render_service import (
     generate_document_pdf_bytes as render_document_pdf_bytes,
 )
 from services.documents.signed_document_service import SignedDocumentService
+from services.documents.pdf_revision_service import compare_pdf_revision
 from services.file_metadata import resolve_pdf_storage_path
 from services.process_service import ProcessStatus
 from services.submission_document_service import SubmissionDocumentService, SubmissionDocumentType
@@ -694,23 +695,19 @@ class DocumentService:
         is_signed = bool(verification.get("is_signed"))
         is_valid = verification.get("result") == "VALID_SIGNATURE"
         if is_valid and document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
-            try:
-                original = self.read_document_bytes_for_download(row, source_filename, signed=False)
-            except Exception:
+            matches, document_status, reason_code, method = self.compare_signed_revision(
+                row, source_filename, uploaded_bytes, signed=False)
+            verification["document_validation_status"] = document_status
+            verification["document_reason_code"] = reason_code
+            if method:
+                verification["document_comparison_method"] = method
+            if not matches:
                 verification.update(
-                    validation_status="ERROR",
-                    reason_code="STORAGE_READ_ERROR",
-                    result="VERIFICATION_ERROR",
+                    validation_status="ERROR" if document_status == "ERROR" else "INVALID",
+                    reason_code=reason_code,
+                    result="VERIFICATION_ERROR" if document_status == "ERROR" else "INVALID_SIGNATURE",
                 )
                 is_valid = False
-            else:
-                if uploaded_bytes == original or not uploaded_bytes.startswith(original):
-                    verification.update(
-                        validation_status="INVALID",
-                        reason_code="DOCUMENT_REVISION_MISMATCH",
-                        result="INVALID_SIGNATURE",
-                    )
-                    is_valid = False
         coordinated_training_upload = bool(
             is_valid
             and document_id == DocumentType.TRAINING_AGREEMENT
@@ -832,6 +829,22 @@ class DocumentService:
             submission_id=self._submission_id(submission),
             strict_metadata=self.strict_document_metadata_read,
         )
+
+    def compare_signed_revision(self, submission: dict, filename: str, uploaded: bytes, *, signed: bool):
+        """Bind a signed upload to the exact stored source file and its checksum."""
+        if not filename:
+            return False, "ERROR", "DOCUMENT_SOURCE_MISSING", ""
+        try:
+            source = self.read_document_bytes_for_download(submission, filename, signed=signed)
+            metadata = self._file_metadata(submission, Path(filename).name, signed=signed)
+        except Exception:
+            return False, "ERROR", "DOCUMENT_READ_ERROR", ""
+        expected_hash = (metadata or {}).get("checksum_sha256")
+        if expected_hash and sha256(source).hexdigest() != expected_hash:
+            return False, "ERROR", "DOCUMENT_SOURCE_HASH_MISMATCH", ""
+        matches, reason_code, method = compare_pdf_revision(source, uploaded)
+        status = "VALID" if matches else "ERROR" if reason_code == "DOCUMENT_IDENTITY_UNCONFIRMED" else "INVALID"
+        return matches, status, reason_code, method
 
     def build_documents_view(self, submission: dict, form_config: dict, available_actions: list[dict] | None = None) -> dict:
         row = self._row(submission)

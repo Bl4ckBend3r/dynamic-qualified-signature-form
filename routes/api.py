@@ -117,25 +117,38 @@ def get_form_instruction_context(form_slug: str, form_version_id: int | str | No
     if database_url:
         try:
             from database import create_session_factory
-            from models import Form
+            from models import Form, FormVersion
             from sqlalchemy import select
 
             with create_session_factory(database_url)() as db:
                 form = db.execute(select(Form).where(Form.slug == form_slug)).scalar_one_or_none()
                 if form:
-                    version = services.form_version_service.resolve_published(db, form.id)
+                    version = None
+                    if form_version_id is not None:
+                        try:
+                            requested_id = int(form_version_id)
+                        except (TypeError, ValueError):
+                            requested_id = -1
+                        candidate = db.get(FormVersion, requested_id)
+                        if (candidate is not None and candidate.form_id == form.id
+                                and candidate.status in {"published", "archived"}):
+                            version = candidate
+                    else:
+                        version = services.form_version_service.resolve_published(db, form.id)
                     if version:
                         form_config = services.form_config_service.normalize_form_config(version.definition_json or {})
                         instruction = str(form_config.get("user_instruction") or "").strip()
                         instruction_config = form_config.get("user_instruction_config") or {}
                         updated_at = version.updated_at.isoformat() if version.updated_at else ""
-                    else:
+                    elif form_version_id is None:
                         instruction = str(form.user_instruction or "").strip()
                         instruction_config = form.user_instruction_config or {}
                         updated_at = form.updated_at.isoformat() if form.updated_at else ""
                         form_config = services.form_config_service.normalize_form_config(form.definition_json or {})
         except Exception:
             logger.warning("Nie udało się odczytać instrukcji formularza %s z bazy.", form_slug, exc_info=True)
+    if form_config is None and form_version_id is not None:
+        return {"instruction": "", "instruction_config": {}, "updated_at": "", "form_config": {}}
     if form_config is None:
         try:
             form_config = services.form_config_service.get_form_config(services.storage, form_slug) or {}

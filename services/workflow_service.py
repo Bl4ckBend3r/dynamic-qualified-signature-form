@@ -45,8 +45,9 @@ def current_workflow_step(submission, form_config: dict | None = None) -> str:
         mapped = str(mapping.get(value) or "").strip() if isinstance(mapping, Mapping) else ""
         if mapped in steps:
             return mapped
-        initial = str(workflow.get("initial_step") or "").strip()
-        return initial if initial in steps else step_order[0]
+        # An unmapped historical step needs an explicit reconciliation.  Moving
+        # it to the first step could repeat decisions or skip signed documents.
+        return value
     return value
 
 
@@ -236,6 +237,8 @@ class WorkflowService:
     def run_automatic_steps(
         self, submission: dict, form_config: dict, *, replaces_audit_operation_id: str = "",
     ) -> None:
+        if (submission.get("data_json") or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         if (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
             return
         from services.submission_decision_service import ConditionalApproval
@@ -412,6 +415,8 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
+        if (submission.get("data_json") or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         prior_marker = pending_audit_state(submission)
         replaces_audit_operation_id = str(replaces_audit_operation_id or "")
         can_replace_marker = bool(
@@ -670,6 +675,8 @@ class WorkflowService:
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
         if getattr(submission, "deleted_at", None) is not None:
             raise WorkflowTransitionError("Zgłoszenie jest archiwalne.")
+        if (getattr(submission, "data_json", None) or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         if pending_audit_state({"data_json": getattr(submission, "data_json", {})}):
             raise WorkflowTransitionError(
                 "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."

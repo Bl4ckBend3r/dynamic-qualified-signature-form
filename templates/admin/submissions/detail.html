@@ -47,6 +47,19 @@
         <p>Zgłoszenie zaktualizowano z wersji {{ (event.side_effects or {}).get('old_version_label') or (event.side_effects or {}).get('old_version_id') }} do {{ (event.side_effects or {}).get('new_version_label') or (event.side_effects or {}).get('new_version_id') }}.</p>
         {% endfor %}
         {% if version_upgrade_state.get('missing_fields') or version_upgrade_state.get('invalid_training_ids') %}<p class="admin-alert admin-alert-warning">Zgłoszenie wymaga uzupełnienia danych przez uczestnika.</p>{% endif %}
+        {% if reconciliation_state %}
+        <div class="admin-alert admin-alert-warning">
+            <strong>Aktualizacja wersji wymaga uzgodnienia etapu.</strong>
+            Zachowano dotychczasową wersję i historię sprawy. Poprzedni etap: {{ reconciliation_state.old_step or 'brak' }}.
+            {% if can_edit_workflow and reconciliation_steps %}
+            <form method="post" action="{{ url_for('admin.submission_reconcile_version', form_id=form.id, submission_pk=submission.id) }}" class="admin-form-inline">
+                <input type="hidden" name="csrf_token" value="{{ admin_csrf_token() }}">
+                <label>Etap w aktualnym workflow <select name="target_step" required><option value="">Wybierz po sprawdzeniu historii</option>{% for step in reconciliation_steps %}<option value="{{ step.id }}">{{ step.admin_label or step.id }}</option>{% endfor %}</select></label>
+                <button class="admin-button" type="submit" data-admin-confirm-message="Przenieść sprawę do wskazanego etapu po sprawdzeniu historii i wymagań?">Uzgodnij etap</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
         {% set condition = (submission.data_json or {}).get('_conditional_approval', {}) %}
         {% if condition %}<p class="admin-alert admin-alert-warning">Zatwierdzenie warunkowe: {{ 'rozliczone' if condition.status == 'completed' else 'oczekuje na uzupełnienie' }}. Etap graniczny: {{ condition.deadline_step }}.</p>{% endif %}
         <div class="admin-submission-status-line"><span class="admin-badge admin-submission-status {{ workflow_view.status_badge_class }}">{{ workflow_view.status_label }}</span>

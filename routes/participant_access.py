@@ -90,6 +90,8 @@ def resolve_participant_submission_access(
     session_factory = getattr(getattr(services, "submission_repository", None), "session_factory", None)
     if current_app.config.get("DATABASE_URL") and session_factory and hasattr(services, "form_version_service"):
         try:
+            upgraded = False
+            reconciliation_required = False
             with session_factory.begin() as db:
                 record = db.execute(select(FormSubmission).where(
                     FormSubmission.submission_id == submission_id,
@@ -102,7 +104,14 @@ def resolve_participant_submission_access(
                 form_id = db.execute(select(Form.id).where(Form.slug == actual_slug)).scalar_one_or_none()
                 if (record.form_version_id or (form_id and version_service.has_versions(db, form_id))) and version_service.resolve_for_submission(db, record) is None:
                     raise FormVersionError("Zgłoszenie nie ma jednoznacznej wersji formularza.")
-            if loaded_from_service:
+                latest = version_service.resolve_published(db, form_id) if form_id else None
+                if latest and record.form_version_id != latest.id:
+                    upgraded = version_service.upgrade_submission(db, record, latest)
+                    if not upgraded:
+                        reconciliation_required = True
+            if reconciliation_required:
+                abort(409, description="Etap zgłoszenia wymaga uzgodnienia przez administratora.")
+            if loaded_from_service or upgraded:
                 submission = services.submission_service.get_submission_context(
                     submission_id,
                     form_config_service=services.form_config_service,

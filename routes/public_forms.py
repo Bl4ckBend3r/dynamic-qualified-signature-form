@@ -884,6 +884,15 @@ def complete_version_upgrade(slug: str, submission_id: str):
             abort(404)
 
         service = services.form_version_service
+        latest = service.resolve_published(db, form.id)
+        if latest and submission.form_version_id != latest.id:
+            if request.method == "POST":
+                abort(409, description="Formularz zaktualizowano podczas zapisu. Otwórz uzupełnienie ponownie.")
+            upgraded = service.upgrade_submission(db, submission, latest)
+            db.commit()
+            if not upgraded:
+                abort(409, description="Etap zgłoszenia wymaga uzgodnienia przez administratora.")
+            return redirect(request.url)
 
         historical = service.resolve_for_submission(
             db,
@@ -936,6 +945,10 @@ def complete_version_upgrade(slug: str, submission_id: str):
             db,
             submission,
         )
+        for consent_key in state["errors"]:
+            if any(field.get("name") == consent_key and field.get("type") == "checkbox"
+                   for field in validation_definition.get("fields") or []):
+                saved_values[consent_key] = False
 
         edit_definition = (
             service.missing_fields_form_definition(
@@ -1059,6 +1072,8 @@ def complete_version_upgrade(slug: str, submission_id: str):
             submission,
             values=values,
             pending_files=pending_files,
+            offered_consent_keys={key for key in submitted if key in request.form
+                                  and str(submitted[key]).lower() in {"tak", "true", "1", "on"}},
         )
 
         errors = dict(validation_state["errors"])
@@ -1095,10 +1110,21 @@ def complete_version_upgrade(slug: str, submission_id: str):
                 form_slug=slug, submission_id=submission_id, attachments=attachments,
                 workflow_step=submission.workflow_step, source="participant",
             )
-            db.refresh(submission)
+            submission = db.execute(select(FormSubmission).where(
+                FormSubmission.id == submission.id).with_for_update()
+                .execution_options(populate_existing=True)).scalar_one()
+            if submission.form_version_id != version.id:
+                abort(409, description="Formularz zaktualizowano podczas zapisu. Otwórz uzupełnienie ponownie.")
         data = dict(submission.data_json or {})
         data.update(submitted)
         submission.data_json = data
+        from services.compliance_service import ComplianceService
+        ComplianceService.record_reacceptances(
+            db, submission, version,
+            {key for key in submitted if key in request.form
+             and str(submitted[key]).lower() in {"tak", "true", "1", "on"}},
+            due_fields=edit_definition.get("fields") or [],
+        )
         field_types = {field.get("name"): field.get("type") for field in edit_definition["fields"]}
         for name, value in submitted.items():
             column = FORM_FIELD_MAP.get(name, name)
@@ -1125,6 +1151,22 @@ def complete_version_upgrade(slug: str, submission_id: str):
                               "new_step": submission.workflow_step, "requested_side_effects": []},
             )
         db.commit()
+        if state["complete"] and hasattr(services.submission_service, "evaluate_saved_stage"):
+            services.submission_service.evaluate_saved_stage(
+                submission_id, definition, workflow_step=submission.workflow_step or "")
+        if state["complete"] and not condition_audit and hasattr(services, "workflow_service"):
+            current = services.submission_repository.get_by_id(submission_id) or {}
+            steps = (definition.get("workflow") or {}).get("steps") or []
+            step = next((item for item in steps if item.get("id") == current.get("workflow_step")), {})
+            if current and current.get("process_status") != "AUTO_REJECTED":
+                try:
+                    if step.get("stage_type") == "user_action" and step.get("type") == "form_submit":
+                        services.workflow_service.advance_after_action(current, definition, actor="participant")
+                    else:
+                        services.workflow_service.run_automatic_steps(current, definition)
+                except Exception:
+                    current_app.logger.exception("Nie udało się wznowić workflow po uzupełnieniu danych %s", submission_id)
+                    flash("Dane zapisano. Dalszy etap wymaga sprawdzenia przez administratora.", "warning")
         if condition_audit:
             try:
                 services.audit_log_service.write_pending(condition_audit)

@@ -875,6 +875,8 @@ def submission_detail(form_id: int, submission_pk: int):
                     for key in list(training):
                         if key.endswith("_url"):
                             training[key] = ""
+        reconciliation_state = (submission.data_json or {}).get("_form_version_reconciliation") or {}
+        reconciliation_version = db.get(FormVersion, reconciliation_state.get("target_version_id")) if reconciliation_state else None
         return render_template(
             "admin/submissions/detail.html",
             conditional_missing=(services.form_version_service.submission_data_errors(
@@ -891,6 +893,9 @@ def submission_detail(form_id: int, submission_pk: int):
                                          if submission.form_version and submission.form_version.source_version else ""),
             version_upgrade_events=[item for item in workflow_history.get("events") or [] if item.get("source") == "form_version_upgrade"],
             version_upgrade_state=(submission.data_json or {}).get("_form_version_upgrade") or {},
+            reconciliation_state=reconciliation_state,
+            reconciliation_steps=((reconciliation_version.definition_json or {}).get("workflow") or {}).get("steps") or []
+            if reconciliation_version and reconciliation_version.form_id == form.id else [],
             decision_history=decision_history,
             workflow_view=workflow_view,
             composite_document=services.document_service.document_workflow.view(
@@ -931,6 +936,39 @@ def submission_detail(form_id: int, submission_pk: int):
             can_manage_internal_notes=can_manage_internal_notes,
             deadline_history=deadline_history,
         )
+
+
+@bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/reconcile-version")
+@login_required
+def submission_reconcile_version(form_id: int, submission_pk: int):
+    with db_session_factory()() as db:
+        form = ensure_form_access(db, form_id, permission="can_edit_workflow")
+        submission = db.execute(select(FormSubmission).where(
+            FormSubmission.id == submission_pk, FormSubmission.form_slug == form.slug,
+        ).with_for_update()).scalar_one_or_none() or abort(404)
+        service = current_app.extensions["services"].form_version_service
+        marker = (submission.data_json or {}).get("_form_version_reconciliation") or {}
+        latest = service.resolve_published(db, form.id)
+        target_step = str(request.form.get("target_step") or "").strip()
+        if not marker or not latest or marker.get("target_version_id") != latest.id:
+            abort(409, description="Brak aktualnej sprawy do uzgodnienia.")
+        workflow = (latest.definition_json or {}).get("workflow") or {}
+        steps = {str(item.get("id") or "") for item in workflow.get("steps") or []}
+        if target_step not in steps:
+            abort(400, description="Wybierz etap z aktualnego workflow.")
+        try:
+            if not service.upgrade_submission(db, submission, latest, actor_id=g.admin_user.id,
+                                              target_step=target_step):
+                abort(409, description="Nie udało się uzgodnić etapu zgłoszenia.")
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        from services.form_version_service import schedule_version_sync
+        schedule_version_sync(current_app._get_current_object(), form.id, latest.id,
+                              actor_id=g.admin_user.id, sync_submissions=False)
+    flash("Zgłoszenie uzgodniono z aktualnym workflow.", "success")
+    return redirect(url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk))
 
 
 @bp.post("/forms/<int:form_id>/submissions/<int:submission_pk>/retry-pdf")

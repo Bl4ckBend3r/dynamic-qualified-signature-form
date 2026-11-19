@@ -965,6 +965,77 @@ def test_admin_custom_document_builder_uses_shared_editor(admin_app):
         assert entry["builder_document"]["document_type"] == "document"
 
 
+def test_upgrade_data_completion_advances_into_current_document_workflow(composite_env):
+    from models import Form
+
+    env = composite_env()
+    definition = deepcopy(env.definition)
+    definition["fields"] = [
+        {"name": "email", "label": "E-mail", "type": "email", "required": True},
+        {"name": "city", "label": "Miasto", "type": "text", "required": True},
+    ]
+    definition["workflow"]["steps"][1]["next"] = "confirmation"
+    definition["workflow"]["steps"].insert(2, {
+        "id": "confirmation", "admin_label": "Potwierdzenie", "user_label": "Potwierdzenie",
+        "status": "WAITING_FOR_USER_ACTION", "stage_type": "user_action",
+        "type": "confirmation", "next": "review",
+    })
+    with env.repo.session_factory.begin() as db:
+        model = db.execute(select(FormSubmission).where(
+            FormSubmission.submission_id == env.public_id)).scalar_one()
+        model.data_json = {"email": "saved@example.org", "historical_note": "zachowaj"}
+        old = db.get(FormVersion, model.form_version_id)
+        form = db.get(Form, env.form_id)
+        service = env.services.form_version_service
+        draft = service.clone_to_draft(db, form, old, actor_id=None)
+        service.update_definition(draft, definition)
+        latest = service.publish(db, form, draft, actor_id=None)
+        latest_id = latest.id
+        assert model.form_version_id == old.id
+    assert env.services.form_version_service.synchronize_published_submissions(
+        env.repo.session_factory, env.form_id, latest_id, actor_id=None) == 1
+
+    row = env.row()
+    url = f"/form/{row['form_slug']}/update/{env.public_id}?token={row['access_token']}"
+    client = env.app.test_client()
+    page = client.get(url)
+    assert page.status_code == 200 and "Miasto" in page.text
+    csrf = get_csrf_from_html(page.text)
+    response = client.post(url, data={"csrf_token": csrf, "city": "Kraków",
+                                      "email": "saved@example.org"})
+    assert response.status_code == 302
+    row = env.row()
+    assert int(row["form_version_id"]) == latest_id
+    assert row["data_json"]["email"] == "saved@example.org"
+    assert row["data_json"]["historical_note"] == "zachowaj"
+    assert row["data_json"]["city"] == "Kraków"
+    assert row["workflow_step"] == "paper"
+    assert env.generated
+    uploaded = env.document.upload(row, definition, "paper", env.file())
+    assert uploaded["result"] == "VALID_SIGNATURE"
+    assert env.row()["workflow_step"] == "confirmation"
+    env.services.workflow_service.advance_after_action(env.row(), definition, actor="participant")
+    assert env.row()["workflow_step"] == "review"
+
+    create_user(env.app)
+    login(client)
+    detail = f"/admin/forms/{env.form_id}/submissions/{row['id']}"
+    admin_page = client.get(detail)
+    admin_csrf = get_csrf_from_html(admin_page.text)
+    decision = client.post(detail + "/decision", data={
+        "csrf_token": admin_csrf, "officer_decision": "yes",
+    })
+    assert decision.status_code == 302
+    assert env.row()["workflow_step"] == "done"
+    with env.repo.session_factory() as db:
+        events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.public_submission_id == env.public_id)).scalars().all()
+        assert any(item.source == "form_version_upgrade" for item in events)
+        assert any(item.source == "form_version_data_completed" for item in events)
+        assert any(item.source == "DOCUMENT_STEP_COMPLETED" for item in events)
+        assert any(item.new_step == "done" for item in events)
+
+
 def test_version_gap_upload_keeps_current_workflow_step(composite_env):
     # Given: publication marked a new required file on an already visited step.
     env = composite_env()

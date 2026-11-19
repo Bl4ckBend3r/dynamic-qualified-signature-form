@@ -16,6 +16,7 @@ from models import (
     FormVersion,
     FormVersionConsent,
     SubmissionConsent,
+    SubmissionWorkflowEvent,
 )
 from services.field_availability_service import FieldAvailabilityService
 
@@ -386,17 +387,27 @@ class ComplianceService:
                 if required and not accepted:
                     raise ComplianceError(f"Wymagana zgoda „{version.title}” nie została zaakceptowana.")
                 existing = existing_by_key.get(key)
+                regulation_version = (
+                    form_version.regulation_version
+                    if version.consent_type == "regulation" or "regulamin" in key.casefold()
+                    else None
+                )
+                if existing and existing.accepted and (
+                    existing.consent_version_id != version.id
+                    or existing.regulation_version_id != (regulation_version.id if regulation_version else None)
+                ):
+                    if required and not accepted:
+                        raise ComplianceError(f"Wymagana zgoda „{version.title}” nie została zaakceptowana.")
+                    if accepted:
+                        self.record_reacceptances(db, submission, form_version, {key},
+                                                  due_fields=[{**(field or {}), "required": required}])
+                    continue
                 if existing and (existing.accepted or not accepted):
                     continue
                 if existing:
                     db.delete(existing)
                     db.flush()
                     records.remove(existing)
-                regulation_version = (
-                    form_version.regulation_version
-                    if version.consent_type == "regulation" or "regulamin" in key.casefold()
-                    else None
-                )
                 record = SubmissionConsent(
                     submission_id=submission.id,
                     consent_version_id=version.id,
@@ -422,6 +433,57 @@ class ComplianceService:
             for record in records:
                 db.refresh(record)
             return records
+
+    @staticmethod
+    def pending_reacceptances(db, submission: FormSubmission, form_version: FormVersion,
+                              due_fields: list[dict]) -> dict[str, dict]:
+        """Find changed required consent content without treating an old yes as a new yes."""
+        due = {str(field.get("name") or "") for field in due_fields
+               if isinstance(field, dict) and field.get("type") == "checkbox" and field.get("required")}
+        accepted = {(item.consent_key, item.consent_version_id, item.regulation_version_id)
+                    for item in submission.consents if item.accepted}
+        events = db.execute(select(SubmissionWorkflowEvent).where(
+            SubmissionWorkflowEvent.submission_id == submission.id,
+            SubmissionWorkflowEvent.source == "form_version_consent_reaccepted",
+        )).scalars().all()
+        accepted.update((str((item.side_effects or {}).get("consent_key") or ""),
+                         (item.side_effects or {}).get("consent_version_id"),
+                         (item.side_effects or {}).get("regulation_version_id")) for item in events)
+        missing = {}
+        for link in form_version.consent_links:
+            consent = link.consent_version
+            key = consent.definition.consent_key
+            if key not in due:
+                continue
+            regulation_id = (form_version.regulation_version_id
+                             if consent.consent_type == "regulation" or "regulamin" in key.casefold()
+                             else None)
+            if (key, consent.id, regulation_id) not in accepted:
+                missing[key] = {"consent_version_id": consent.id,
+                                "regulation_version_id": regulation_id,
+                                "title": consent.title, "sha256": consent.sha256}
+        return missing
+
+    @staticmethod
+    def record_reacceptances(db, submission: FormSubmission, form_version: FormVersion,
+                             keys: set[str], *, actor_role: str = "participant",
+                             due_fields: list[dict] | None = None) -> None:
+        due_fields = due_fields if due_fields is not None else (form_version.definition_json or {}).get("fields") or []
+        pending = ComplianceService.pending_reacceptances(db, submission, form_version, due_fields)
+        now = datetime.now(timezone.utc)
+        for key, snapshot in pending.items():
+            if key not in keys:
+                continue
+            db.add(SubmissionWorkflowEvent(
+                submission_id=submission.id, public_submission_id=submission.submission_id,
+                form_slug=submission.form_slug, previous_status=submission.process_status,
+                new_status=submission.process_status, previous_step=submission.workflow_step,
+                new_step=submission.workflow_step, actor_role=actor_role,
+                source="form_version_consent_reaccepted",
+                reason="Uczestnik zaakceptował aktualną treść zgody.",
+                side_effects={"form_version_id": form_version.id, "consent_key": key,
+                              **snapshot, "accepted_at": now.isoformat()},
+            ))
 
     def remove_incomplete_submission(self, submission_id: str) -> None:
         session_factory = getattr(self.submission_repository, "session_factory", None)

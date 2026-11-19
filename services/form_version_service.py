@@ -567,6 +567,11 @@ class FormVersionService:
                             with db.begin_nested():
                                 changed += bool(self.upgrade_submission(db, submission, version, actor_id=actor_id))
                         except Exception as exc:
+                            with db.begin_nested():
+                                self._require_step_reconciliation(
+                                    db, submission, version,
+                                    str(submission.workflow_step or submission.workflow_stage or ""),
+                                    actor_id=actor_id, reason="migration_failed")
                             from services.observability import safe_identifier_hash
                             logger.error("submission_version_sync_failed", extra={
                                 "event": "submission_version_sync_failed", "form_id": form_id,
@@ -690,7 +695,7 @@ class FormVersionService:
                                            generated_at=datetime.now(timezone.utc).isoformat(),
                                            requires_signature=metadata["requires_signature"])
                             record.document_states = states
-                            if metadata["requires_signature"]:
+                            if metadata["requires_signature"] and self.is_active_submission(record):
                                 data = deepcopy(record.data_json or {})
                                 upgrade = dict(data.get("_form_version_upgrade") or {})
                                 missing = list(upgrade.get("missing_documents") or [])
@@ -748,6 +753,7 @@ class FormVersionService:
         latest: FormVersion | None = None,
         *,
         actor_id: int | None = None,
+        target_step: str | None = None,
     ) -> bool:
         """Move the operational pointer while preserving the original version and case state."""
         historical = db.get(FormVersion, submission.form_version_id) if submission.form_version_id else None
@@ -774,6 +780,39 @@ class FormVersionService:
         if historical and historical.id == latest.id:
             return False
 
+        old_step = str(submission.workflow_step or submission.workflow_stage or "").strip()
+        old_workflow = (historical.definition_json or {}).get("workflow") or {} if historical else {}
+        new_workflow = (latest.definition_json or {}).get("workflow") or {}
+        new_steps = {str(step.get("id") or ""): step for step in new_workflow.get("steps") or []
+                     if isinstance(step, dict) and step.get("id")}
+        final = not self.is_active_submission(submission)
+        mapping = new_workflow.get("step_migration") or {}
+        mapped_step = str(target_step or "").strip() if target_step else old_step if old_step in new_steps else str(
+            mapping.get(old_step) or "" if isinstance(mapping, dict) else ""
+        ).strip()
+        if not final and new_steps and mapped_step not in new_steps:
+            self._require_step_reconciliation(db, submission, latest, old_step, actor_id=actor_id)
+            return False
+        if not final and not target_step and historical and mapped_step in new_steps:
+            old_ids = [str(item.get("id") or "") for item in old_workflow.get("steps") or []
+                       if isinstance(item, dict) and item.get("id")]
+            new_ids = list(new_steps)
+            current_index = new_ids.index(mapped_step)
+            if any(step_id not in old_ids for step_id in new_ids[:current_index]):
+                self._require_step_reconciliation(db, submission, latest, old_step,
+                                                  actor_id=actor_id, reason="new_prior_workflow_step")
+                return False
+            visited = set(db.execute(select(SubmissionWorkflowEvent.new_step).where(
+                SubmissionWorkflowEvent.submission_id == submission.id)).scalars())
+            if any(step_id in visited for step_id in new_ids[current_index + 1:]):
+                self._require_step_reconciliation(db, submission, latest, old_step,
+                                                  actor_id=actor_id, reason="reordered_completed_step")
+                return False
+
+        previous_status = submission.process_status
+        previous_step = submission.workflow_step
+        new_step = mapped_step or old_step
+
         data = dict(submission.data_json or {})
         now = datetime.now(timezone.utc)
         origin_id = data.get("_original_form_version_id") or (historical.id if historical else None)
@@ -783,26 +822,87 @@ class FormVersionService:
             "old_version_id": historical.id if historical else None,
             "new_version_id": latest.id,
             "upgraded_at": now.isoformat(),
-            "data_only": False,
+            "data_only": final,
             "missing_fields": [],
             "invalid_training_ids": [],
             "missing_documents": [],
         }
 
         data["_form_version_upgrade"] = marker
+        data.pop("_form_version_reconciliation", None)
         submission.data_json = data
+        if not final and historical:
+            _, changed_documents = self._reconcile_new_document_requirements(
+                db, submission, historical.definition_json or {}, latest.definition_json or {}, new_step)
+            marker["changed_documents"] = changed_documents
+        if historical:
+            self._queue_document_revisions(db, submission, historical, latest)
+        if not final and new_step in new_steps:
+            submission.workflow_step = new_step
+            submission.workflow_stage = new_step
+            old_steps = {str(step.get("id") or ""): step for step in old_workflow.get("steps") or []
+                         if isinstance(step, dict) and step.get("id")}
+            old_status = str((old_steps.get(old_step) or {}).get("status") or "")
+            if old_status and previous_status == old_status:
+                submission.process_status = str(new_steps[new_step].get("status") or previous_status)
+        marker["previous_step"] = previous_step
+        marker["new_step"] = submission.workflow_step
+        marker["previous_status"] = previous_status
+        marker["new_status"] = submission.process_status
+        queued_marker = dict((submission.data_json or {}).get("_form_version_upgrade") or {})
+        if not final and marker.get("changed_documents"):
+            from services.form_config_service import FormConfigService
+            documents = {item.get("id"): item for item in FormConfigService().normalize_documents_config(
+                latest.definition_json or {})}
+            missing = list(queued_marker.get("missing_documents") or [])
+            for changed in marker["changed_documents"]:
+                document_id = changed["document_id"]
+                if document_id in {"declaration", "agreement", "training_agreement"}:
+                    continue
+                if any(item.get("document_id") == document_id for item in missing):
+                    continue
+                document = documents.get(document_id) or {}
+                prior_file_id = db.scalar(select(func.max(SubmissionFile.id)).where(
+                    SubmissionFile.submission_id == submission.id,
+                    SubmissionFile.document_id == document_id)) or 0
+                missing.append({"document_id": document_id, "step_id": changed["step_id"],
+                                "kind": document.get("kind") or "uploaded_file",
+                                "label": document.get("label") or document_id,
+                                "signature_required": bool(document.get("signature_required", True)),
+                                "minimum_file_id": prior_file_id})
+            queued_marker["missing_documents"] = missing
+        queued_marker.update({key: value for key, value in marker.items() if key != "missing_documents"})
+        submission.data_json = {**submission.data_json, "_form_version_upgrade": queued_marker}
         submission.form_version_id = latest.id
         submission.updated_at = now
-        self._queue_document_revisions(db, submission, historical, latest)
+
+        if not final:
+            from services.qualification_condition_service import QualificationConditionService
+            evaluator = QualificationConditionService()
+            definition = latest.definition_json or {}
+            answer_values = {key: value for key, value in self.submission_values(submission, definition).items()
+                             if not str(key).startswith("_")}
+            qualification = evaluator.evaluate(
+                definition.get("qualification_conditions"), answer_values,
+                evaluator.field_catalog(definition), stage=submission.workflow_step or "submission")
+            revised = dict(submission.data_json or {})
+            if revised.get("_qualification"):
+                revised["_qualification_history"] = [*(revised.get("_qualification_history") or []),
+                                                      revised["_qualification"]]
+            revised["_qualification"] = qualification
+            submission.data_json = revised
+
+        db.flush()
+        completion = self.refresh_submission_completion(db, submission)
 
         db.add(
             SubmissionWorkflowEvent(
                 submission_id=submission.id,
                 public_submission_id=submission.submission_id,
                 form_slug=submission.form_slug,
-                previous_status=submission.process_status,
+                previous_status=previous_status,
                 new_status=submission.process_status,
-                previous_step=submission.workflow_step,
+                previous_step=previous_step,
                 new_step=submission.workflow_step,
                 actor_id=actor_id,
                 actor_role="admin" if actor_id else "system",
@@ -812,18 +912,43 @@ class FormVersionService:
                     "old_version_id": historical.id if historical else None,
                     "new_version_id": latest.id,
                     "original_version_id": origin_id,
+                    "missing_requirements": sorted(completion["errors"]),
+                    "changed_documents": marker.get("changed_documents", []),
+                    "missing_documents": completion["missing_documents"],
+                    "invalid_training_ids": completion["invalid_training_ids"],
+                    "previous_step": previous_step,
+                    "new_step": submission.workflow_step,
+                    "upgraded_at": now.isoformat(),
+                    "qualification_failed": [item.get("id") for item in
+                                              (qualification.get("failed_conditions") or [])] if not final else [],
                 },
             )
         )
 
         db.flush()
 
-        self.refresh_submission_completion(
-            db,
-            submission,
-        )
-
         return True
+
+    @staticmethod
+    def _require_step_reconciliation(db, submission, latest, old_step, *, actor_id=None,
+                                     reason="unmapped_workflow_step"):
+        marker = {"target_version_id": latest.id, "old_version_id": submission.form_version_id,
+                  "old_step": old_step, "reason": reason,
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
+        data = dict(submission.data_json or {})
+        if (data.get("_form_version_reconciliation") or {}).get("target_version_id") == latest.id:
+            return
+        data["_form_version_reconciliation"] = marker
+        submission.data_json = data
+        db.add(SubmissionWorkflowEvent(
+            submission_id=submission.id, public_submission_id=submission.submission_id,
+            form_slug=submission.form_slug, previous_status=submission.process_status,
+            new_status=submission.process_status, previous_step=submission.workflow_step,
+            new_step=submission.workflow_step, actor_id=actor_id,
+            actor_role="admin" if actor_id else "system", source="form_version_reconciliation_required",
+            reason="Etap nie ma jednoznacznego odpowiednika w nowym workflow.",
+            side_effects=marker,
+        ))
 
     @staticmethod
     def _queue_document_revisions(db, submission, historical, latest):
@@ -944,13 +1069,8 @@ class FormVersionService:
                          else file.status in {"uploaded", "signed", "generated"}) for file in matching))
                 if satisfied:
                     continue
-                if content_changed:
-                    item.clear()
-                    item["minimum_file_id"] = max((file.id for file in matching), default=0)
-                else:
-                    item.pop("completed", None)
-                step_state["completed"] = False
-                step_state["substate"] = "upload"
+                # Preserve the earlier action. The new obligation is tracked
+                # separately as a version gap with its own minimum file ID.
                 workflow_documents[step_id] = step_state
                 changed_documents.append({"step_id": step_id, "document_id": document["id"],
                                           "reason": "content_changed" if content_changed else "new_required"})
@@ -1000,50 +1120,9 @@ class FormVersionService:
             step=step,
         )
 
-        required_names = {
-            str(name or "").strip()
-            for name in field_names
-            if str(name or "").strip()
-        }
-
-        fields = []
-        current_section = None
-        section_added = False
-
-        for raw in base.get("fields") or []:
-            if not isinstance(raw, dict):
-                continue
-
-            if raw.get("type") == "section":
-                current_section = dict(raw)
-                section_added = False
-                continue
-
-            name = str(raw.get("name") or "").strip()
-
-            if name not in required_names:
-                continue
-
-            if current_section is not None and not section_added:
-                fields.append(current_section)
-                section_added = True
-
-            field = dict(raw)
-
-            # Pole zostało już wskazane przez backend jako wymagające
-            # uzupełnienia, dlatego musi być widoczne niezależnie od
-            # pól sterujących, których nie pokazujemy w tym widoku.
-            field["required"] = True
-            field["readonly"] = False
-            field.pop("required_if", None)
-            field.pop("visible_if", None)
-
-            fields.append(field)
-
-        return {
-            **base,
-            "fields": fields,
-        }
+        # Render precisely the same due fields that submission_data_errors
+        # validates.  Their saved values are supplied by submission_values.
+        return base
 
     def completion_form_definition(self, submission: FormSubmission, definition: Mapping, *, step: str | None = None) -> dict:
         """Use fields available now or at an earlier stage, keeping new sections."""
@@ -1231,6 +1310,7 @@ class FormVersionService:
         *,
         values: Mapping | None = None,
         pending_files: set[str] | None = None,
+        offered_consent_keys: set[str] | None = None,
     ) -> dict:
         historical = self.resolve_for_submission(
             db,
@@ -1275,6 +1355,17 @@ class FormVersionService:
             pending_files=pending_files,
         )
 
+        pending_consents = (
+            ComplianceService.pending_reacceptances(
+                db, submission, target,
+                self.completion_form_definition(submission, definition).get("fields") or [],
+            )
+            if marker and not data_only else {}
+        )
+        for key, consent in pending_consents.items():
+            if key not in (offered_consent_keys or set()):
+                errors[key] = f"Zaakceptuj aktualną treść zgody „{consent['title'] or key}”."
+
         if marker:
             old_version_id = marker.get("old_version_id")
             old_version = (
@@ -1299,65 +1390,10 @@ class FormVersionService:
                     if isinstance(field, dict) and field.get("name")
                 }
 
-            from form_loader import evaluate_visible_if
-
-            validation_definition = self.completion_form_definition(
-                submission,
-                definition,
-            )
-
-            current_values = (
-                dict(values)
-                if values is not None
-                else self.submission_values(
-                    submission,
-                    validation_definition,
-                )
-            )
-
-            required_changed_fields = set()
-
-            for field in validation_definition.get("fields") or []:
-                if not isinstance(field, dict):
-                    continue
-
-                name = str(field.get("name") or "").strip()
-
-                if not name or name not in changed_names:
-                    continue
-
-                if field.get("type") in {
-                    "section",
-                    "static_text",
-                    "training_selection",
-                }:
-                    continue
-
-                visible_if = field.get("visible_if")
-
-                if visible_if and not evaluate_visible_if(
-                    visible_if,
-                    current_values,
-                ):
-                    continue
-
-                required_if = field.get("required_if")
-
-                required_now = bool(field.get("required")) or bool(
-                    required_if
-                    and evaluate_visible_if(
-                        required_if,
-                        current_values,
-                    )
-                )
-
-                if required_now:
-                    required_changed_fields.add(name)
-
             errors = {
                 name: message
                 for name, message in errors.items()
-                if name in required_changed_fields
+                if name in changed_names or name in pending_consents
             }
 
         # Finished cases must never be blocked by newly added fields.
@@ -1434,6 +1470,8 @@ class FormVersionService:
         db,
         submission: FormSubmission,
     ) -> None:
+        if (submission.data_json or {}).get("_form_version_reconciliation"):
+            raise FormVersionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         marker = (
             (submission.data_json or {})
             .get("_form_version_upgrade") or {}

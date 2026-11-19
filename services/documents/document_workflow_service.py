@@ -1542,6 +1542,9 @@ class DocumentWorkflowService:
                     )
                     if comparison_method:
                         verification["document_comparison_method"] = comparison_method
+                    verification["source_revision_match"] = (
+                        None if document_status == "SKIPPED" else document_valid
+                    )
 
                 if (
                     signer == "office"
@@ -1639,7 +1642,10 @@ class DocumentWorkflowService:
             current_app.logger.info(
                 "signature_verification_result submission_id=%s document_id=%s result=%s reason_code=%s "
                 "detected_signature_type=%s verifier_backend=%s provider_allowed=%s signature_count=%s "
-                "cryptographic_valid=%s document_integrity_valid=%s certificate_chain_valid=%s timestamp_valid=%s",
+                "cryptographic_valid=%s document_integrity_valid=%s certificate_chain_valid=%s timestamp_valid=%s "
+                "byte_range_valid=%s signed_revision_length=%s pdf_total_length=%s "
+                "incremental_updates_detected=%s incremental_updates_allowed=%s "
+                "source_revision_match=%s backend_disagreement=%s",
                 row["submission_id"], document_id, outcome,
                 verification.get("reason_code") or outcome,
                 verification.get("detected_signature_type") or verification.get("signature_type"),
@@ -1647,6 +1653,10 @@ class DocumentWorkflowService:
                 verification.get("signature_count"), verification.get("cryptographic_valid"),
                 verification.get("document_integrity_valid"), verification.get("certificate_chain_valid"),
                 verification.get("timestamp_valid"),
+                verification.get("byte_range_valid"), verification.get("signed_revision_length"),
+                verification.get("pdf_total_length"), verification.get("incremental_updates_detected"),
+                verification.get("incremental_updates_allowed"), verification.get("source_revision_match"),
+                verification.get("backend_disagreement"),
             )
             if not accepted:
                 target["verification_result"] = outcome
@@ -2113,6 +2123,9 @@ class DocumentWorkflowService:
                 )
                 if comparison_method:
                     verification["document_comparison_method"] = comparison_method
+                verification["source_revision_match"] = (
+                    None if document_status == "SKIPPED" else document_valid
+                )
 
             verification["signature_result_code"] = signature_outcome
             verification["document_validation_status"] = document_status

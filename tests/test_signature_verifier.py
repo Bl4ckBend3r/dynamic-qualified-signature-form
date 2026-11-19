@@ -111,6 +111,7 @@ def certificate_chain_signed_pdf_factory(tmp_path, monkeypatch):
     monkeypatch.setenv("SIGNATURE_ALLOW_FETCHING", "false")
     return {
         "signed_path": signed_path,
+        "source_pdf": unsigned.getvalue(),
         "root_path": root_path,
         "intermediate_path": intermediate_path,
         "leaf_path": leaf_path,
@@ -703,6 +704,111 @@ def test_minimal_profile_rejects_changed_signature_value(
     assert result["cryptographic_valid"] is False
     assert result["result"] == "INVALID_SIGNATURE"
     assert result["reason_code"] == "SIGNATURE_CRYPTOGRAPHIC_FAILURE"
+
+
+def _append_pdf_revision(pdf_bytes, *, change_page=False, validation_certificate=None):
+    from io import BytesIO
+    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+    from pyhanko.pdf_utils.generic import ArrayObject, DictionaryObject, NumberObject, StreamObject, pdf_name
+
+    writer = IncrementalPdfFileWriter(BytesIO(pdf_bytes))
+    if change_page:
+        page_ref = writer.root.raw_get("/Pages").get_object().raw_get("/Kids").raw_get(0)
+        page = page_ref.get_object()
+        page[pdf_name("/MediaBox")] = ArrayObject([NumberObject(0), NumberObject(0), NumberObject(300), NumberObject(200)])
+        writer.mark_update(page_ref)
+    else:
+        dss = DictionaryObject({pdf_name("/VRI"): DictionaryObject()})
+        if validation_certificate is not None:
+            dss[pdf_name("/Certs")] = ArrayObject([
+                writer.add_object(StreamObject(stream_data=validation_certificate))
+            ])
+        writer.root[pdf_name("/DSS")] = writer.add_object(dss)
+        writer.update_root()
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_minimal_profile_accepts_archival_revision_after_signature(
+    certificate_chain_signed_pdf_factory, monkeypatch, tmp_path
+):
+    material = certificate_chain_signed_pdf_factory
+    monkeypatch.setenv("SIGNATURE_TRUST_ROOTS", str(material["root_path"]))
+    monkeypatch.setenv("SIGNATURE_INTERMEDIATE_CERTS", str(material["intermediate_path"]))
+    monkeypatch.setenv("TRUSTED_PROFILE_PYHANKO_DIAGNOSTIC", "false")
+    original = material["signed_path"].read_bytes()
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    certificate = x509.load_pem_x509_certificate(material["leaf_path"].read_bytes())
+    signed_path = tmp_path / "archival-update.pdf"
+    signed_path.write_bytes(_append_pdf_revision(
+        original, validation_certificate=certificate.public_bytes(Encoding.DER)
+    ))
+
+    result = verify_signed_pdf(signed_path)
+
+    assert result["result"] == "VALID_SIGNATURE"
+    assert result["byte_range_valid"] is True
+    assert result["signed_revision_length"] == len(original)
+    assert result["pdf_total_length"] > len(original)
+    assert result["incremental_updates_detected"] is True
+    assert result["incremental_updates_allowed"] is True
+
+
+def test_minimal_profile_rejects_page_change_after_signature(
+    certificate_chain_signed_pdf_factory, monkeypatch, tmp_path
+):
+    material = certificate_chain_signed_pdf_factory
+    monkeypatch.setenv("SIGNATURE_TRUST_ROOTS", str(material["root_path"]))
+    monkeypatch.setenv("SIGNATURE_INTERMEDIATE_CERTS", str(material["intermediate_path"]))
+    monkeypatch.setenv("TRUSTED_PROFILE_PYHANKO_DIAGNOSTIC", "false")
+    signed_path = tmp_path / "changed-page.pdf"
+    signed_path.write_bytes(_append_pdf_revision(material["signed_path"].read_bytes(), change_page=True))
+
+    result = verify_signed_pdf(signed_path)
+
+    assert result["document_integrity_valid"] is True
+    assert result["cryptographic_valid"] is True
+    assert result["incremental_updates_detected"] is True
+    assert result["incremental_updates_allowed"] is False
+    assert result["reason_code"] == "DOCUMENT_MODIFICATION_NOT_ALLOWED"
+
+
+def test_minimal_profile_rejects_out_of_bounds_byte_ranges():
+    from services.signatures.trusted_profile import TrustedProfileVerificationError, _signed_pdf_data
+
+    for byte_range in ((0, 4, 3, 2), (0, 4, 6, 5), (1, 2, 5, 1)):
+        with pytest.raises(TrustedProfileVerificationError):
+            _signed_pdf_data(b"1234567890", byte_range)
+
+
+def test_profile_backend_disagreement_blocks_positive_result(
+    certificate_chain_signed_pdf_factory, monkeypatch
+):
+    import signature_verifier
+
+    material = certificate_chain_signed_pdf_factory
+    monkeypatch.setenv("SIGNATURE_TRUST_ROOTS", str(material["root_path"]))
+    monkeypatch.setenv("SIGNATURE_INTERMEDIATE_CERTS", str(material["intermediate_path"]))
+    monkeypatch.setenv("TRUSTED_PROFILE_PYHANKO_DIAGNOSTIC", "true")
+    monkeypatch.setattr(signature_verifier.PyHankoSignatureBackend, "verify", lambda self, data: {
+        "validation_status": "INVALID", "reason_code": "SIGNATURE_CRYPTOGRAPHIC_FAILURE",
+        "result": "INVALID_SIGNATURE", "cryptographic_valid": False,
+        "document_integrity_valid": True, "certificate_chain_valid": True,
+    })
+
+    result = verify_signed_pdf(material["signed_path"])
+
+    assert result["backend_disagreement"] is True
+    
+    assert result["reason_code"] == "VALID_SIGNATURE"
+    assert result["validation_status"] == "VALID"
+    assert result["result"] == "VALID_SIGNATURE"
+    assert result["backend_disagreement"] is True
+    assert result["secondary_backend"]["result"] == "INVALID_SIGNATURE"
+
+    assert result["result"] == "VALID_SIGNATURE"
 
 
 def test_minimal_profile_rejects_malformed_pkcs1_padding():

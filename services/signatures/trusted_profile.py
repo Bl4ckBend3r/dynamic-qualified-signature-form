@@ -13,6 +13,18 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pypdf import PdfReader
+from pyhanko.pdf_utils.reader import PdfFileReader
+from pyhanko.sign.diff_analysis import DEFAULT_DIFF_POLICY
+from pyhanko.sign.diff_analysis.policy_api import DiffResult, ModificationLevel
+from pyhanko.sign.validation.pdf_embedded import SignatureCoverageLevel
+
+import logging
+
+from services.documents.pdf_revision_service import (
+    allowed_profile_post_signature_update,
+)
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_FILTER = "/Adobe.PPKLite"
@@ -97,17 +109,101 @@ def _signed_pdf_data(pdf_bytes: bytes, byte_range: tuple[int, int, int, int]) ->
     first_start, first_length, second_start, second_length = byte_range
     values = (first_start, first_length, second_start, second_length)
     if any(value < 0 for value in values):
-        raise TrustedProfileVerificationError("UNSUPPORTED_SIGNATURE_FORMAT")
+        raise TrustedProfileVerificationError("DOCUMENT_INTEGRITY_FAILURE")
     first_end = first_start + first_length
     second_end = second_start + second_length
     if (
         first_start != 0
         or first_end > second_start
         or second_start > len(pdf_bytes)
-        or second_end != len(pdf_bytes)
+        or first_end == 0
+        or second_start == first_end
+        or second_length == 0
+        or second_end > len(pdf_bytes)
     ):
         raise TrustedProfileVerificationError("DOCUMENT_INTEGRITY_FAILURE")
     return pdf_bytes[first_start:first_end] + pdf_bytes[second_start:second_end]
+
+
+
+def _allowed_incremental_updates(
+    pdf_bytes: bytes,
+    byte_range: tuple[int, int, int, int],
+) -> bool:
+    try:
+        signed_end = byte_range[2] + byte_range[3]
+
+        if signed_end > len(pdf_bytes):
+            return False
+
+        reader = PdfFileReader(BytesIO(pdf_bytes))
+        signatures = list(reader.embedded_signatures)
+
+        if len(signatures) != 1:
+            return False
+
+        signature = signatures[0]
+
+        actual_range = tuple(
+            int(value)
+            for value in signature.sig_object["/ByteRange"]
+        )
+
+        if actual_range != byte_range:
+            return False
+
+        signature.compute_integrity_info(
+            diff_policy=DEFAULT_DIFF_POLICY
+        )
+
+        if signature.coverage < SignatureCoverageLevel.ENTIRE_REVISION:
+            return False
+
+        # Brak modyfikacji po podpisaniu.
+        if signed_end == len(pdf_bytes):
+            return True
+
+        difference = signature.diff_result
+
+        if not isinstance(difference, DiffResult):
+            return False
+
+        # Zwykłe dopuszczalne aktualizacje LTA.
+        if difference.modification_level <= ModificationLevel.LTA_UPDATES:
+            return True
+
+        
+        if difference.modification_level != ModificationLevel.FORM_FILLING:
+            logger.info(
+                "trusted_profile_revision_rejected level=%s",
+                difference.modification_level.name,
+            )
+            return False
+
+        if difference.changed_form_fields:
+            logger.info(
+                "trusted_profile_form_changes_rejected count=%d",
+                len(difference.changed_form_fields),
+            )
+            return False
+
+        allowed = allowed_profile_post_signature_update(
+            pdf_bytes[:signed_end],
+            pdf_bytes,
+        )
+
+        logger.info(
+            "trusted_profile_revision_checked level=%s allowed=%s",
+            difference.modification_level.name,
+            allowed,
+        )
+
+        return allowed
+
+
+    except Exception:
+        logger.exception("trusted_profile_incremental_update_error")
+        return False
 
 
 def _load_signed_data(contents: bytes) -> cms.SignedData:
@@ -340,6 +436,11 @@ class TrustedProfileMinimalBackend:
             "reason_code": "VERIFICATION_ERROR",
             "trust_roots_loaded_count": len(self._trust_roots),
             "intermediate_certs_loaded_count": len(self._intermediates),
+            "byte_range_valid": None,
+            "signed_revision_length": None,
+            "pdf_total_length": len(pdf_bytes),
+            "incremental_updates_detected": None,
+            "incremental_updates_allowed": None,
         }
         try:
             signatures = _extract_pdf_signatures(pdf_bytes)
@@ -352,7 +453,10 @@ class TrustedProfileMinimalBackend:
             if signature.filter_name != SUPPORTED_FILTER or signature.subfilter != SUPPORTED_SUBFILTER:
                 raise TrustedProfileVerificationError("UNSUPPORTED_SIGNATURE_FORMAT")
 
+            result["signed_revision_length"] = signature.byte_range[2] + signature.byte_range[3]
+            result["incremental_updates_detected"] = result["signed_revision_length"] < len(pdf_bytes)
             signed_pdf_data = _signed_pdf_data(pdf_bytes, signature.byte_range)
+            result["byte_range_valid"] = True
             signed_data = _load_signed_data(signature.contents)
             signer_info = signed_data["signer_infos"][0]
             digest_algorithm = signer_info["digest_algorithm"]["algorithm"].native
@@ -380,6 +484,8 @@ class TrustedProfileMinimalBackend:
             if not result["cryptographic_valid"]:
                 raise TrustedProfileVerificationError("SIGNATURE_CRYPTOGRAPHIC_FAILURE")
 
+           
+            # Najpierw potwierdź zaufanie do certyfikatu.
             _verify_local_chain(
                 signer_certificate,
                 self._intermediates,
@@ -387,6 +493,20 @@ class TrustedProfileMinimalBackend:
                 moment=datetime.now(timezone.utc),
             )
             result["certificate_chain_valid"] = True
+
+            # Następnie oceń zmiany PDF po podpisaniu.
+            result["incremental_updates_allowed"] = _allowed_incremental_updates(
+                pdf_bytes,
+                signature.byte_range,
+            )
+
+            if not result["incremental_updates_allowed"]:
+                raise TrustedProfileVerificationError(
+                    "DOCUMENT_MODIFICATION_NOT_ALLOWED"
+                )
+
+           
+           
             result["valid"] = True
             result["reason_code"] = "VALID_SIGNATURE"
         except TrustedProfileVerificationError as exc:
@@ -397,6 +517,11 @@ class TrustedProfileMinimalBackend:
                 result["cryptographic_valid"] = False
             if exc.reason_code == "DOCUMENT_INTEGRITY_FAILURE":
                 result["document_integrity_valid"] = False
+                if result["byte_range_valid"] is None:
+                    result["byte_range_valid"] = False
         except Exception:
+            logger.exception(
+                "trusted_profile_verification_unexpected_error"
+            )
             result["reason_code"] = "VERIFICATION_ERROR"
         return result

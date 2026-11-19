@@ -494,9 +494,7 @@ def test_declaration_with_other_documents_collects_generates_downloads_and_waits
     assert "declaration_answer" in fields_page.text
     assert "other_answer" not in fields_page.text
 
-    csrf = fields_page.text.split(
-        'name="csrf_token" value="', 1
-    )[1].split('"', 1)[0]
+    csrf = get_csrf_from_html(fields_page.text)
     wrong = client.post(fields_url.replace("document_id=declaration", "document_id=other_step"),
                         data={"csrf_token": csrf, "declaration_answer": "Tak"})
     assert wrong.status_code == 404

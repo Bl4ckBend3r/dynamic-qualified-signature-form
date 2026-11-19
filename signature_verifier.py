@@ -930,7 +930,7 @@ def _normalize_trusted_profile_result(
         "trusted": chain_valid,
         "revoked": False,
         "revocation_checked": False,
-        "docmdp_ok": integrity_valid,
+        "docmdp_ok": payload.get("incremental_updates_allowed"),
         "timestamp_valid": timestamp_valid,
         "timestamp_status": "NOT_PRESENT",
         "timestamp_invalid": False,
@@ -984,6 +984,11 @@ def _normalize_trusted_profile_result(
         trust_source="configured_document_signing_roots",
         trust_roots_loaded_count=payload.get("trust_roots_loaded_count", 0),
         intermediate_certs_loaded_count=payload.get("intermediate_certs_loaded_count", 0),
+        byte_range_valid=payload.get("byte_range_valid"),
+        signed_revision_length=payload.get("signed_revision_length"),
+        pdf_total_length=payload.get("pdf_total_length"),
+        incremental_updates_detected=payload.get("incremental_updates_detected"),
+        incremental_updates_allowed=payload.get("incremental_updates_allowed"),
         eutl_enabled=False,
     )
     reason_code = str(payload.get("reason_code") or "VERIFICATION_ERROR")
@@ -993,6 +998,8 @@ def _normalize_trusted_profile_result(
         result.update(validation_status="UNSUPPORTED", reason_code=reason_code, result="UNSUPPORTED_SIGNATURE", reason="Format lub algorytm podpisu nie jest obsługiwany przez minimalny verifier.")
     elif reason_code == "DOCUMENT_INTEGRITY_FAILURE":
         result.update(validation_status="INVALID", reason_code="DOCUMENT_INTEGRITY_FAILURE", result="INVALID_SIGNATURE", reason="Integralność podpisanego dokumentu jest nieprawidłowa.")
+    elif reason_code == "DOCUMENT_MODIFICATION_NOT_ALLOWED":
+        result.update(validation_status="INVALID", reason_code=reason_code, result="INVALID_SIGNATURE", reason="Późniejsza rewizja PDF zawiera niedozwolone zmiany.")
     elif reason_code == "SIGNER_CERTIFICATE_NOT_FOUND":
         result.update(validation_status="INVALID", reason_code=reason_code, result="INVALID_SIGNATURE", reason="SignerInfo.sid nie wskazuje certyfikatu osadzonego w CMS.")
     elif reason_code == "SIGNATURE_CRYPTOGRAPHIC_FAILURE":
@@ -1036,28 +1043,6 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
         intermediates=_configured_paths("SIGNATURE_INTERMEDIATE_CERTS"),
     ).verify(pdf_bytes)
     result = _normalize_trusted_profile_result(payload, classification)
-    logger.info(
-        "signature_verification_result backend=%s count=%s integrity=%s crypto=%s chain=%s provider_allowed=%s reason_code=%s",
-        result.get("verifier_backend"),
-        result.get("signature_count"),
-        result.get("document_integrity_valid"),
-        result.get("cryptographic_valid"),
-        result.get("certificate_chain_valid"),
-        result.get("provider_allowed"),
-        result.get("reason_code"),
-        extra={
-            "event": "signature_verification_result",
-            "operation": "signature_verification",
-            "verifier_backend": result.get("verifier_backend"),
-            "signature_count": result.get("signature_count"),
-            "document_integrity_valid": result.get("document_integrity_valid"),
-            "cryptographic_valid": result.get("cryptographic_valid"),
-            "certificate_chain_valid": result.get("certificate_chain_valid"),
-            "provider_allowed": result.get("provider_allowed"),
-            "reason_code": result.get("reason_code"),
-        },
-    )
-
     if _env_bool("TRUSTED_PROFILE_PYHANKO_DIAGNOSTIC", default=True):
         try:
             diagnostic = PyHankoSignatureBackend().verify(pdf_bytes)
@@ -1080,6 +1065,7 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
                         "secondary_result": pyhanko_outcome,
                     },
                 )
+
         except Exception:
             logger.warning(
                 "signature_secondary_backend_unavailable",
@@ -1089,6 +1075,32 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
                     "secondary_backend": "pyhanko_pdf_cms",
                 },
             )
+    logger.info(
+        "signature_verification_result backend=%s count=%s integrity=%s crypto=%s chain=%s provider_allowed=%s reason_code=%s byte_range_valid=%s signed_revision_length=%s pdf_total_length=%s incremental_updates_detected=%s incremental_updates_allowed=%s backend_disagreement=%s",
+        result.get("verifier_backend"), result.get("signature_count"),
+        result.get("document_integrity_valid"), result.get("cryptographic_valid"),
+        result.get("certificate_chain_valid"), result.get("provider_allowed"),
+        result.get("reason_code"), result.get("byte_range_valid"),
+        result.get("signed_revision_length"), result.get("pdf_total_length"),
+        result.get("incremental_updates_detected"), result.get("incremental_updates_allowed"),
+        result.get("backend_disagreement"),
+        extra={
+            "event": "signature_verification_result", "operation": "signature_verification",
+            "verifier_backend": result.get("verifier_backend"),
+            "signature_count": result.get("signature_count"),
+            "document_integrity_valid": result.get("document_integrity_valid"),
+            "cryptographic_valid": result.get("cryptographic_valid"),
+            "certificate_chain_valid": result.get("certificate_chain_valid"),
+            "provider_allowed": result.get("provider_allowed"),
+            "reason_code": result.get("reason_code"),
+            "byte_range_valid": result.get("byte_range_valid"),
+            "signed_revision_length": result.get("signed_revision_length"),
+            "pdf_total_length": result.get("pdf_total_length"),
+            "incremental_updates_detected": result.get("incremental_updates_detected"),
+            "incremental_updates_allowed": result.get("incremental_updates_allowed"),
+            "backend_disagreement": result.get("backend_disagreement"),
+        },
+    )
     return result
 
 

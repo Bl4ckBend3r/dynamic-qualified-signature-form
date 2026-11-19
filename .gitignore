@@ -98,3 +98,4 @@ AGENTS.md
 docs\archive
 *.back*
 *.bak*
+diagnose_signed_pdf.py

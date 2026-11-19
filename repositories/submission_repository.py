@@ -608,10 +608,25 @@ class PostgresSubmissionRepository(SubmissionRepository):
                 document_operation_key="",
                 document_operation_until="0",
             )
-            db.execute(update(FormSubmission).where(FormSubmission.id == model.id,
-                FormSubmission.document_states["document_operation"].as_string() == token,
-            ).values(document_states=states).execution_options(synchronize_session=False))
+            updated = db.execute(
+                update(FormSubmission).where(
+                    FormSubmission.id == model.id,
+                    FormSubmission.document_states["document_operation"].as_string() == token,
+                ).values(document_states=states).execution_options(
+                    synchronize_session=False
+                )
+            )
             db.commit()
+
+            if updated.rowcount != 1:
+                logger.warning(
+                    "document_operation_release_failed",
+                    extra={
+                        "event": "document_operation_release_failed",
+                        "operation": "document_operation_release",
+                        "reason_code": "TOKEN_MISMATCH_OR_MISSING",
+                    },
+                )
 
     def list_by_form(self, form_slug: str) -> list[dict]:
         from sqlalchemy import select

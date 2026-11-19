@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from pypdf import PdfReader
 from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, IndirectObject, NumberObject, StreamObject
-
+from lxml import etree
 
 class PdfIdentityUnconfirmed(ValueError):
     """The PDF cannot be compared safely with the stored source."""
@@ -146,3 +146,163 @@ def compare_pdf_revision(source: bytes, signed: bytes) -> tuple[bool, str, str]:
         return False, "DOCUMENT_IDENTITY_UNCONFIRMED", ""
     method = "incremental_bytes_and_pdf" if signed.startswith(source) else "canonical_pdf"
     return (True, "OK", method) if matches else (False, "DOCUMENT_REVISION_MISMATCH", "")
+
+
+
+def allowed_profile_post_signature_update(
+    signed_revision: bytes,
+    final_pdf: bytes,
+) -> bool:
+    """
+    Dopuszcza szczególny wariant aktualizacji Profilu Zaufanego:
+    DSS/LTV oraz dodanie /DA i /DR bez modyfikowania pól,
+    zawartości stron i pozostałej struktury dokumentu.
+    """
+    matches, _, _ = compare_pdf_revision(signed_revision, final_pdf)
+    if not matches:
+        return False
+
+    try:
+        before = PdfReader(BytesIO(signed_revision), strict=False)
+        after = PdfReader(BytesIO(final_pdf), strict=False)
+
+        old_root = before.trailer["/Root"].get_object()
+        new_root = after.trailer["/Root"].get_object()
+
+        old_keys = set(map(str, old_root.keys()))
+        new_keys = set(map(str, new_root.keys()))
+
+        if old_keys - new_keys:
+            return False
+
+        allowed_root_additions = {"/DSS", "/Extensions", "/Version"}
+
+        if not (new_keys - old_keys) <= allowed_root_additions:
+            return False
+
+        # Ta szczególna ścieżka wymaga rzeczywistego
+        # dopisania danych DSS.
+        if "/DSS" not in new_root or "/DSS" in old_root:
+            return False
+
+        if "/AcroForm" not in old_root or "/AcroForm" not in new_root:
+            return False
+
+        old_form = old_root["/AcroForm"].get_object()
+        new_form = new_root["/AcroForm"].get_object()
+
+        old_form_keys = set(map(str, old_form.keys()))
+        new_form_keys = set(map(str, new_form.keys()))
+
+        if old_form_keys - new_form_keys:
+            return False
+
+        if not (new_form_keys - old_form_keys) <= {"/DA", "/DR"}:
+            return False
+
+        # Nie dopuszczamy zmiany istniejących ustawień formularza.
+        for key in old_form_keys - {"/Fields"}:
+            if _canonical(old_form[key], set()) != _canonical(
+                new_form[key], set()
+            ):
+                return False
+
+        # Zmiana domyślnego wyglądu mogłaby wpływać na
+        # niepodpisane pola formularza.
+        for field in old_form.get("/Fields", []):
+            if _ordinary_field(field) is not None:
+                return False
+
+        # Istniejące metadane i parametry bezpieczeństwa
+        # również muszą pozostać identyczne.
+        sensitive_keys = {
+            "/Metadata", "/Perms", "/Extensions",
+            "/Version", "/DSS",
+        }
+        
+        for key in old_keys & sensitive_keys:
+            if key == "/Metadata":
+                if not _allowed_xmp_metadata_update(
+                    old_root[key].get_object(),
+                    new_root[key].get_object(),
+                ):
+                    return False
+            elif _canonical(old_root[key], set()) != _canonical(
+                new_root[key], set()
+            ):
+                return False
+
+
+        return True
+
+    except Exception:
+        return False
+
+
+def _allowed_xmp_metadata_update(old_stream, new_stream) -> bool:
+    """Allow only known XMP bookkeeping changes after signing."""
+
+    ignored_stream_keys = {
+        "/Length", "/Filter", "/DecodeParms", "/DL"
+    }
+
+    old_attributes = {
+        str(k): _canonical(v, set())
+        for k, v in old_stream.items()
+        if str(k) not in ignored_stream_keys
+    }
+    new_attributes = {
+        str(k): _canonical(v, set())
+        for k, v in new_stream.items()
+        if str(k) not in ignored_stream_keys
+    }
+
+    if old_attributes != new_attributes:
+        return False
+
+    allowed_tags = {
+        "{http://ns.adobe.com/xap/1.0/}ModifyDate",
+        "{http://ns.adobe.com/xap/1.0/}MetadataDate",
+        "{http://ns.adobe.com/xap/1.0/mm/}InstanceID",
+    }
+
+    def normalized(stream):
+        raw = stream.get_data()
+
+        if b"<!DOCTYPE" in raw.upper():
+            return None
+
+        parser = etree.XMLParser(
+            resolve_entities=False,
+            load_dtd=False,
+            no_network=True,
+        )
+        document = etree.parse(BytesIO(raw), parser)
+
+        counts = {tag: 0 for tag in allowed_tags}
+
+        for element in document.getroot().iter():
+            if element.tag not in allowed_tags:
+                continue
+
+            if len(element) or element.attrib or element.text is None:
+                return None
+
+            counts[element.tag] += 1
+            element.text = "__ALLOWED_XMP_VALUE__"
+
+        if any(count != 1 for count in counts.values()):
+            return None
+
+        return etree.tostring(
+            document,
+            method="c14n",
+            with_comments=True,
+        )
+
+    try:
+        old_value = normalized(old_stream)
+        new_value = normalized(new_stream)
+        return old_value is not None and old_value == new_value
+    except Exception:
+        return False

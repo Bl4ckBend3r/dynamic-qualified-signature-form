@@ -694,11 +694,15 @@ class DocumentService:
         )
         is_signed = bool(verification.get("is_signed"))
         is_valid = verification.get("result") == "VALID_SIGNATURE"
-        if is_valid and document_id in {DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
+        verification["source_revision_match"] = None
+        if is_valid and document_id in {DocumentType.DECLARATION, DocumentType.AGREEMENT, DocumentType.TRAINING_AGREEMENT}:
             matches, document_status, reason_code, method = self.compare_signed_revision(
                 row, source_filename, uploaded_bytes, signed=False)
             verification["document_validation_status"] = document_status
             verification["document_reason_code"] = reason_code
+            verification["source_revision_match"] = (
+                None if document_status == "SKIPPED" else matches
+            )
             if method:
                 verification["document_comparison_method"] = method
             if not matches:
@@ -708,6 +712,18 @@ class DocumentService:
                     result="VERIFICATION_ERROR" if document_status == "ERROR" else "INVALID_SIGNATURE",
                 )
                 is_valid = False
+        current_app.logger.info(
+            "signed_document_verification document_id=%s result=%s reason_code=%s source_revision_match=%s",
+            document_id, verification.get("result"), verification.get("reason_code"),
+            verification.get("source_revision_match"),
+            extra={
+                "event": "signed_document_verification",
+                "document_id": document_id,
+                "result": verification.get("result"),
+                "reason_code": verification.get("reason_code"),
+                "source_revision_match": verification.get("source_revision_match"),
+            },
+        )
         coordinated_training_upload = bool(
             is_valid
             and document_id == DocumentType.TRAINING_AGREEMENT
@@ -832,10 +848,6 @@ class DocumentService:
 
     def compare_signed_revision(self, submission: dict, filename: str, uploaded: bytes, *, signed: bool):
         """Bind a signed upload to the exact stored source file and its checksum."""
-        pdf_identity_check_enabled = False
-
-        if not pdf_identity_check_enabled:
-            return True, "SKIPPED", "PDF_IDENTITY_CHECK_DISABLED", ""
         if not filename:
             return False, "ERROR", "DOCUMENT_SOURCE_MISSING", ""
         try:
@@ -846,6 +858,18 @@ class DocumentService:
         expected_hash = (metadata or {}).get("checksum_sha256")
         if expected_hash and sha256(source).hexdigest() != expected_hash:
             return False, "ERROR", "DOCUMENT_SOURCE_HASH_MISMATCH", ""
+        
+        if (
+            has_app_context()
+            and current_app.config.get("ENV") == "development"
+            and not current_app.config.get(
+                "DOCUMENT_SOURCE_MATCH_REQUIRED", True
+            )
+        ):
+            return True, "SKIPPED", "DOCUMENT_SOURCE_MATCH_DISABLED", ""
+
+        
+        
         matches, reason_code, method = compare_pdf_revision(source, uploaded)
         status = "VALID" if matches else "ERROR" if reason_code == "DOCUMENT_IDENTITY_UNCONFIRMED" else "INVALID"
         return matches, status, reason_code, method

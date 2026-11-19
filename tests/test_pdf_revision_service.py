@@ -8,7 +8,7 @@ from reportlab.pdfgen import canvas
 from services.documents.pdf_revision_service import compare_pdf_revision
 from services.document_service import DocumentService
 from signature_verifier import signature_verification_result, verify_signed_pdf
-from test_signature_verifier import signed_pdf_factory
+from test_signature_verifier import certificate_chain_signed_pdf_factory, signed_pdf_factory
 
 
 def _agreement(text="Agreement A"):
@@ -91,3 +91,32 @@ def test_document_service_checks_named_source_and_stored_checksum(monkeypatch):
                         lambda row, filename, *, signed: {"checksum_sha256": "0" * 64})
     assert service.compare_signed_revision({}, "old-version.pdf", _rewrite(source), signed=False) == (
         False, "ERROR", "DOCUMENT_SOURCE_HASH_MISMATCH", "")
+
+
+def test_profile_signature_is_bound_to_stored_declaration_revision(
+    certificate_chain_signed_pdf_factory, monkeypatch
+):
+    material = certificate_chain_signed_pdf_factory
+    source = material["source_pdf"]
+    signed = material["signed_path"].read_bytes()
+    service = DocumentService()
+    selected = []
+    monkeypatch.setattr(service, "read_document_bytes_for_download",
+                        lambda row, filename, *, signed: selected.append((filename, signed)) or source)
+    monkeypatch.setattr(service, "_file_metadata",
+                        lambda row, filename, *, signed: {"checksum_sha256": sha256(source).hexdigest()})
+
+    assert service.compare_signed_revision({}, "historical-declaration.pdf", signed, signed=False)[:2] == (
+        True, "VALID")
+    assert selected == [("historical-declaration.pdf", False)]
+
+    different = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=200)
+    writer.write(different)
+    monkeypatch.setattr(service, "read_document_bytes_for_download",
+                        lambda row, filename, *, signed: different.getvalue())
+    monkeypatch.setattr(service, "_file_metadata",
+                        lambda row, filename, *, signed: {"checksum_sha256": sha256(different.getvalue()).hexdigest()})
+    assert service.compare_signed_revision({}, "another-declaration.pdf", signed, signed=False)[:3] == (
+        False, "INVALID", "DOCUMENT_REVISION_MISMATCH")

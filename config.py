@@ -39,6 +39,10 @@ class Config:
     ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+    DOCUMENT_SOURCE_MATCH_REQUIRED = _env_bool(
+        "DOCUMENT_SOURCE_MATCH_REQUIRED",
+        "true",
+    )
     APP_BASE_PATH = normalize_app_base_path(
         os.getenv("APP_BASE_PATH")
         or os.getenv("APPLICATION_ROOT")

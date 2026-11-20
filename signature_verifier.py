@@ -22,7 +22,9 @@ from services.signatures.trusted_profile import (
     TrustedProfileMinimalBackend,
     inspect_pdf_cms_signer_names,
 )
+from io import BytesIO
 
+from services.documents.pdf_revision_service import compare_pdf_revision
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -1034,9 +1036,30 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
         result.update(validation_status="ERROR", reason_code="PDF_READ_ERROR", result="VERIFICATION_ERROR", reason=f"Nie udało się odczytać PDF: {exc.__class__.__name__}.")
         return result
 
+    
+    # Mixed signatures: verify both signatures independently.
+    try:
+        with BytesIO(pdf_bytes) as stream:
+            signature_count = len(
+                list(PdfFileReader(stream).embedded_signatures)
+            )
+    except Exception:
+        signature_count = 0
+
+    if signature_count >= 2:
+        pyhanko_result = PyHankoSignatureBackend().verify(
+            pdf_bytes
+        )
+        return _verify_mixed_profile_signatures(
+            pdf_bytes,
+            pyhanko_result,
+        )
+
     classification = _detect_signature_classification(path)
+
     if classification.get("signature_type") != "profil_zaufany":
         return PyHankoSignatureBackend().verify(pdf_bytes)
+
 
     payload = TrustedProfileMinimalBackend(
         trust_roots=_configured_paths("SIGNATURE_TRUST_ROOTS"),
@@ -1101,6 +1124,160 @@ def verify_signed_pdf(pdf_path: Path) -> dict:
             "backend_disagreement": result.get("backend_disagreement"),
         },
     )
+    return result
+
+
+
+def _verify_mixed_profile_signatures(
+    pdf_bytes: bytes,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Verify a document signed first with Profil Zaufany
+    and then with a qualified electronic signature.
+
+    Preserve strict validation of both signatures.
+    """
+    entries = result.get("signatures") or []
+
+    if len(entries) != 2:
+        return result
+
+    participant, office = entries
+
+    if participant.get("signature_type") != "profil_zaufany":
+        return result
+
+    if office.get("signature_type") not in {
+        "qualified",
+        "qualified_other",
+        "mszafir",
+    }:
+        return result
+
+    # The office signature must pass regular pyHanko validation.
+    if (
+        office.get("accepted") is not True
+        or not _signature_technical_passed(office)
+    ):
+        return result
+
+    # Never override a failed PDF integrity or modification check.
+    if (
+        participant.get("integrity_ok") is not True
+        or participant.get("docmdp_ok") is False
+        or participant.get("revoked") is True
+        or participant.get("timestamp_invalid") is True
+        or participant.get("timestamp_status", "NOT_PRESENT")
+        not in {"VALID", "NOT_PRESENT"}
+    ):
+        return result
+
+    try:
+        with BytesIO(pdf_bytes) as stream:
+            reader = PdfFileReader(stream)
+            signatures = list(reader.embedded_signatures)
+
+            if len(signatures) != 2:
+                return result
+
+            first_signature, second_signature = signatures
+
+            # Match verification records to actual PDF signature fields.
+            if (
+                participant.get("field_name")
+                != str(first_signature.field_name or "")
+                or office.get("field_name")
+                != str(second_signature.field_name or "")
+            ):
+                return result
+
+            first_range = tuple(
+                int(value)
+                for value in first_signature.sig_object["/ByteRange"]
+            )
+            second_range = tuple(
+                int(value)
+                for value in second_signature.sig_object["/ByteRange"]
+            )
+
+            if len(first_range) != 4 or len(second_range) != 4:
+                return result
+
+            first_end = first_range[2] + first_range[3]
+            second_end = second_range[2] + second_range[3]
+
+            if (
+                first_range[0] != 0
+                or second_range[0] != 0
+                or first_range[1] >= first_range[2]
+                or second_range[1] >= second_range[2]
+                or first_end <= 0
+                or first_end >= second_end
+                or second_end != len(pdf_bytes)
+            ):
+                return result
+
+            participant_revision = pdf_bytes[:first_end]
+
+        # The final PDF must preserve document content.
+        same_document, _, _ = compare_pdf_revision(
+            participant_revision,
+            pdf_bytes,
+        )
+
+        if not same_document:
+            logger.warning(
+                "mixed_signature_document_revision_mismatch"
+            )
+            return result
+
+        # Verify the first signed revision with the existing
+        # dedicated Profil Zaufany CMS/RSA backend.
+        profile_verification = TrustedProfileMinimalBackend(
+            trust_roots=_configured_paths("SIGNATURE_TRUST_ROOTS"),
+            intermediates=_configured_paths(
+                "SIGNATURE_INTERMEDIATE_CERTS"
+            ),
+        ).verify(participant_revision)
+
+        if profile_verification.get("valid") is not True:
+            logger.warning(
+                "mixed_signature_profile_rejected reason=%s",
+                profile_verification.get("reason_code"),
+            )
+            return result
+
+        # Replace only the first signature's failed pyHanko
+        # compatibility verdict with the independently
+        # verified Profil Zaufany result.
+        participant.update(
+            accepted=True,
+            bottom_line=True,
+            integrity_ok=True,
+            cryptographically_valid=True,
+            trusted=True,
+            certificate_chain_valid=True,
+            chain_valid=True,
+            chain_built=True,
+            verification_error=False,
+        )
+
+        result["mixed_signature_validation"] = True
+        result["verifier_backend"] = "mixed_profile_pyhanko"
+        result["participant_revision_length"] = first_end
+        result["reason_code"] = "OK"
+
+        logger.info(
+            "mixed_signatures_verified "
+            "profile_valid=True office_valid=True"
+        )
+
+    except Exception:
+        logger.exception(
+            "mixed_signature_verification_failed"
+        )
+
     return result
 
 

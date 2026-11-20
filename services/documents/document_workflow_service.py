@@ -1546,6 +1546,26 @@ class DocumentWorkflowService:
                         None if document_status == "SKIPPED" else document_valid
                     )
 
+                
+                if signer == "office":
+                    for index, signature in enumerate(
+                        verification.get("signatures") or [], start=1
+                    ):
+                        current_app.logger.info(
+                            "office_signature_diagnostic "
+                            "index=%s type=%s field=%s "
+                            "accepted=%s integrity=%s crypto=%s "
+                            "trusted=%s docmdp=%s warning=%s",
+                            index,
+                            signature.get("signature_type"),
+                            signature.get("field_name"),
+                            signature.get("accepted"),
+                            signature.get("integrity_ok"),
+                            signature.get("cryptographically_valid"),
+                            signature.get("trusted"),
+                            signature.get("docmdp_ok"),
+                            signature.get("warning"),
+                        )
                 if (
                     signer == "office"
                     and policy["participant_signature"]

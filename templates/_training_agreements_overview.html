@@ -25,16 +25,22 @@
                 {% elif agreement.state == "agreement_waiting_for_office_signature" or agreement.beneficiary_uploaded and not agreement.office_signed %}
                     <p>Umowa oczekuje na podpis urzędu.</p>
                 {% endif %}
-                <div class="download-links download-links--spaced agreement-overview__actions">
-                    {% if agreement.office_signed and agreement.final_url %}
-                        <a class="btn-primary" href="{{ agreement.final_url }}">Pobierz finalną umowę podpisaną przez urząd</a>
-                    {% elif agreement.beneficiary_uploaded %}
-                        {% if agreement.url %}<a class="btn-secondary" href="{{ agreement.url }}">Pobierz wygenerowaną umowę PDF</a>{% endif %}
-                        {% if agreement.signed_url %}<a class="btn-primary" href="{{ agreement.signed_url }}">Pobierz wgraną podpisaną umowę</a>{% endif %}
-                    {% elif agreement.url %}
-                        <a class="btn-primary" href="{{ agreement.url }}">{{ agreement.download_label }}</a>
-                    {% endif %}
-                </div>
+                
+                    <div class="download-links download-links--spaced agreement-overview__actions">
+
+                        {% if agreement.office_signed and agreement.final_url %}
+                            <a class="btn-primary" href="{{ agreement.final_url }}">
+                                Pobierz umowę podpisaną przez urząd
+                            </a>
+
+                        {% elif not agreement.beneficiary_uploaded and agreement.url %}
+                            <a class="btn-primary" href="{{ agreement.url }}">
+                                {{ agreement.download_label }}
+                            </a>
+                        {% endif %}
+
+                    </div>
+
             </article>
         {% endfor %}
     </div>

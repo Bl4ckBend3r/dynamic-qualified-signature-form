@@ -1789,12 +1789,81 @@ def download_pdf(slug: str, filename: str):
             type(exc).__name__,
         )
         abort(503, description="Dokument jest chwilowo niedostępny.")
+    
+    download_name = download.download_name
+
+    training = matching_training_agreement or {}
+    is_training_agreement = (
+        matching_training_agreement is not None
+        or (metadata or {}).get("document_type")
+        == SubmissionDocumentType.TRAINING_AGREEMENT
+    )
+
+    if is_training_agreement:
+        training_id = str(
+            (metadata or {}).get("training_key")
+            or training.get("training_id")
+            or training.get("id")
+            or ""
+        ).strip()
+
+        document_id = str(
+            (metadata or {}).get("document_id") or ""
+        ).strip()
+
+        document = next(
+            (
+                item for item in form_config.get("documents", [])
+                if item.get("id") == document_id
+                and item.get("filename_pattern")
+            ),
+            None,
+        )
+
+        if document is None:
+            document = next(
+                (
+                    item for item in form_config.get("documents", [])
+                    if item.get("id") in {"agreement", "training_agreement"}
+                    and item.get("filename_pattern")
+                ),
+                None,
+            )
+
+        if document and training_id:
+            row = submission.get("row") or submission
+            stored_data = row.get("data_json") or {}
+
+            if isinstance(stored_data, str):
+                try:
+                    stored_data = json.loads(stored_data)
+                except (json.JSONDecodeError, TypeError):
+                    stored_data = {}
+
+            if not isinstance(stored_data, dict):
+                stored_data = {}
+
+            naming_values = {
+                **row,
+                **stored_data,
+                "training_id": training_id,
+                "training_name": training.get("training_name", ""),
+                "agreement_sequence": training.get("sequence", 1),
+            }
+
+            download_name = (
+                services.document_service.build_filename_for_document(
+                    document,
+                    naming_values,
+                    document["id"],
+                )
+            )
 
     return send_file(
         BytesIO(download.pdf_bytes),
         mimetype=download.mimetype,
         as_attachment=True,
-        download_name=download.download_name,
+        download_name=download_name,
     )
 
 

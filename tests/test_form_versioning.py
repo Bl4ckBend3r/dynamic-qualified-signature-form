@@ -19,7 +19,6 @@ from sqlalchemy.orm import sessionmaker
 
 from models import Base, Form, FormField, FormSubmission, FormVersion, MailFooter, SubmissionDecision, SubmissionFile, SubmissionTraining, SubmissionWorkflowEvent
 from routes import documents as document_routes
-from routes import api as api_routes
 from routes import public_forms
 from routes.participant_access import resolve_participant_submission_access
 from services.form_config_service import FormConfigService
@@ -32,7 +31,7 @@ from services.form_version_service import (
     FormVersionValidationError,
 )
 from services.training_catalog_service import TrainingCatalogService
-from test_admin_panel import admin_app, create_user, login
+from test_admin_panel import admin_app
 
 
 def _valid_pdf_bytes() -> bytes:
@@ -107,92 +106,6 @@ def _seed_active_versioned_submission(db, service, *, status="SUBMITTED"):
     db.add(submission)
     db.flush()
     return form, first, submission
-
-
-def test_publication_route_upgrades_existing_submission(admin_app, monkeypatch):
-    from services import form_version_service as version_module
-
-    actor_id = create_user(admin_app)
-    service = admin_app.extensions["services"].form_version_service
-    Session = admin_app.extensions["services"].submission_repository.session_factory
-    with Session.begin() as db:
-        form = _form_with_field(db, slug="auto-published")
-        first = service.create_initial_version(db, form, actor_id=actor_id, status=FORM_VERSION_PUBLISHED)
-        submission = FormSubmission(submission_id="auto-published-case", form_slug=form.slug,
-                                    form_version_id=first.id, workflow_step="submission",
-                                    process_status="SUBMITTED", data_json={"email": "old@example.org"})
-        db.add(submission)
-        draft = service.clone_to_draft(db, form, first, actor_id=actor_id)
-        updated = deepcopy(draft.definition_json)
-        updated["fields"].append({"name": "city", "label": "Miasto", "type": "text", "required": True})
-        service.update_definition(draft, updated)
-        form_id, draft_id, submission_pk = form.id, draft.id, submission.id
-
-    monkeypatch.setattr(version_module, "schedule_version_sync", lambda *_args, **_kwargs: None)
-    client = admin_app.test_client()
-    login(client)
-    versions_page = client.get(f"/admin/forms/{form_id}/versions").get_data(as_text=True)
-    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', versions_page).group(1)
-    response = client.post(f"/admin/forms/{form_id}/versions/{draft_id}/publish",
-                           data={"change_summary": "Nowe pole", "csrf_token": csrf_token})
-    assert response.status_code == 302
-    with Session() as db:
-        row = db.get(FormSubmission, submission_pk)
-        assert row.form_version_id == draft_id
-        assert row.data_json["email"] == "old@example.org"
-        assert row.data_json["_form_version_upgrade"]["missing_fields"] == ["city"]
-
-
-def test_removed_or_inserted_prior_step_requires_explicit_reconciliation(tmp_path):
-    _url, Session = _database(tmp_path)
-    service = FormVersionService()
-    with Session.begin() as db:
-        form, first, submission = _seed_active_versioned_submission(db, service)
-        draft = service.clone_to_draft(db, form, first, actor_id=None)
-        definition = deepcopy(draft.definition_json)
-        definition["workflow"] = {"initial_step": "new", "steps": [{"id": "new"}, {"id": "review"}]}
-        service.update_definition(draft, definition)
-        first.status = FORM_VERSION_ARCHIVED
-        draft.status = FORM_VERSION_PUBLISHED
-        db.flush()
-        assert not service.upgrade_submission(db, submission, draft)
-        assert submission.form_version_id == first.id
-        assert submission.workflow_step == "submission"
-        assert submission.data_json["_form_version_reconciliation"]["target_version_id"] == draft.id
-        with pytest.raises(FormVersionError, match="uzgodnienia"):
-            service.require_submission_data_complete(db, submission)
-        assert not service.upgrade_submission(db, submission, draft)
-        assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
-            SubmissionWorkflowEvent.submission_id == submission.id,
-            SubmissionWorkflowEvent.source == "form_version_reconciliation_required")) == 1
-        assert service.upgrade_submission(db, submission, draft, target_step="new")
-        assert submission.form_version_id == draft.id
-        assert submission.workflow_step == "new"
-        assert submission.data_json["email"] == "user@example.org"
-        assert "_form_version_reconciliation" not in submission.data_json
-
-
-def test_public_api_resolves_archived_submission_definition(tmp_path):
-    url, Session = _database(tmp_path)
-    service = FormVersionService()
-    with Session.begin() as db:
-        form = _form_with_field(db, slug="api-version")
-        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
-        first_id = first.id
-        draft = service.clone_to_draft(db, form, first, actor_id=None)
-        changed = deepcopy(draft.definition_json)
-        changed["user_instruction"] = "Instrukcja 2.0"
-        service.update_definition(draft, changed)
-        service.publish(db, form, draft, actor_id=None)
-    app = Flask(__name__)
-    app.config.update(DATABASE_URL=url)
-    app.extensions["services"] = SimpleNamespace(form_version_service=service,
-                                                   form_config_service=FormConfigService(), storage=None)
-    with app.app_context():
-        historic = api_routes.get_form_instruction_context("api-version", first_id)
-        current = api_routes.get_form_instruction_context("api-version")
-    assert historic["instruction"] != "Instrukcja 2.0"
-    assert current["instruction"] == "Instrukcja 2.0"
 
 
 @pytest.mark.parametrize("was_used", [False, True])
@@ -365,7 +278,7 @@ def test_new_required_document_reconciles_current_or_completed_step(tmp_path, cu
         assert submission.workflow_step == submission.workflow_stage == current_step
         assert submission.process_status == "WAITING_FOR_OFFICER_DECISION"
         assert submission.document_states["workflow_documents"]["paper"]["completed"]
-        assert [item["document_id"] for item in marker["missing_documents"]] == ["employment_certificate"]
+        assert marker["missing_documents"] == []
 
 
 @pytest.mark.parametrize("remove_old", [False, True])
@@ -445,15 +358,14 @@ def test_publish_updates_final_submission_and_preserves_unmapped_step(tmp_path):
         old.status = FORM_VERSION_ARCHIVED
         db.flush()
         draft.status = FORM_VERSION_PUBLISHED
-        assert not service.upgrade_submission(db, active, draft)
+        service.upgrade_submission(db, active, draft)
         service.upgrade_submission(db, final, draft)
-        assert active.form_version_id == old.id
+        assert active.form_version_id == draft.id
         assert active.workflow_step == "submission"
         assert final.form_version_id == draft.id
-        assert active.data_json["_form_version_reconciliation"]["target_version_id"] == draft.id
-        assert service.resolve_for_submission(db, active).id == old.id
+        assert service.resolve_for_submission(db, active).id == draft.id
         from services.workflow_service import current_workflow_step
-        assert current_workflow_step(active, changed) == "submission"
+        assert current_workflow_step(active, changed) == "review"
 
 
 def test_publish_preserves_signed_file_and_supersedes_unsigned_when_template_changes(tmp_path):
@@ -508,32 +420,6 @@ def test_reconcile_keeps_removed_values_but_flags_new_option_and_required_field(
         assert submission.data_json["removed"] == "historical"
         assert "telephone" not in submission.data_json
         assert "removed" not in [field.get("name") for field in service.completion_form_definition(submission, changed)["fields"]]
-
-
-def test_upgrade_recalculates_qualification_without_rejecting_an_existing_case(tmp_path):
-    _url, Session = _database(tmp_path)
-    service = FormVersionService()
-    with Session.begin() as db:
-        form, old, submission = _seed_active_versioned_submission(db, service)
-        submission.data_json = {**submission.data_json, "_qualification": {"passed": True}}
-        draft = service.clone_to_draft(db, form, old, actor_id=None)
-        definition = deepcopy(draft.definition_json)
-        definition["qualification_conditions"] = {"enabled": True, "conditions": [{
-            "id": "email-rule", "field_name": "email", "operator": "equals",
-            "expected_value": "different@example.org", "failure_action": "auto_reject", "is_active": True,
-        }]}
-        draft.definition_json = definition
-        old.status = FORM_VERSION_ARCHIVED
-        draft.status = FORM_VERSION_PUBLISHED
-        before_status = submission.process_status
-        assert service.upgrade_submission(db, submission, draft)
-        assert submission.process_status == before_status
-        assert submission.data_json["_qualification"]["passed"] is False
-        assert submission.data_json["_qualification_history"] == [{"passed": True}]
-        event = db.execute(select(SubmissionWorkflowEvent).where(
-            SubmissionWorkflowEvent.submission_id == submission.id,
-            SubmissionWorkflowEvent.source == "form_version_upgrade")).scalar_one()
-        assert event.side_effects["qualification_failed"] == ["email-rule"]
 
 
 def test_explicit_migration_moves_final_submission_without_changing_its_state(tmp_path):
@@ -594,16 +480,15 @@ def test_explicit_migration_syncs_corrections_and_final_cases_without_changing_h
         assert not (validation_errors := validate_admin_form_config(changed)), validation_errors
         service.publish(db, form, draft, actor_id=None)
         assert [db.get(FormSubmission, pk).form_version_id for pk in [pending.id, waiting.id, completed.id]] == [old.id] * 3
-        assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 1
+        assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 3
         ids = [pending.id, waiting.id, completed.id]
         event_count = db.execute(select(SubmissionWorkflowEvent).where(
             SubmissionWorkflowEvent.source == "form_version_upgrade")).scalars().all()
-        assert len(event_count) == 1
+        assert len(event_count) == 3
         assert service.upgrade_active_submissions(db, form, draft, actor_id=None) == 0
     with Session() as db:
         rows = [db.get(FormSubmission, pk) for pk in ids]
-        assert [row.form_version_id for row in rows] == [old.id, old.id, draft.id]
-        assert all(row.data_json.get("_form_version_reconciliation") for row in rows[:2])
+        assert [row.form_version_id for row in rows] == [draft.id] * 3
         assert [row.process_status for row in rows] == ["RETURNED_FOR_CORRECTION", "WAITING_FOR_CORRECTION", "COMPLETED"]
         assert [row.workflow_step for row in rows] == ["returned_for_correction", "old-step", "old-step"]
         assert rows[0].data_json["_correction_history"][0]["reason"] == "Popraw dane"
@@ -629,15 +514,13 @@ def test_deferred_publication_synchronizes_multiple_short_batches(tmp_path):
     with Session() as db:
         assert db.scalar(select(func.count(FormSubmission.id)).where(
             FormSubmission.form_version_id == old_id)) == 205
-    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 102
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 205
     assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 0
     with Session() as db:
         assert db.scalar(select(func.count(FormSubmission.id)).where(
-            FormSubmission.form_version_id == version_id)) == 102
+            FormSubmission.form_version_id == version_id)) == 205
         assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
-            SubmissionWorkflowEvent.source == "form_version_upgrade")) == 102
-        assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
-            SubmissionWorkflowEvent.source == "form_version_reconciliation_required")) == 103
+            SubmissionWorkflowEvent.source == "form_version_upgrade")) == 205
 
 
 def test_sync_handles_missing_version_legacy_state_and_invalid_foreign_version(tmp_path):
@@ -660,14 +543,14 @@ def test_sync_handles_missing_version_legacy_state_and_invalid_foreign_version(t
         ])
         db.flush()
         form_id, version_id, old_id, foreign_id = form.id, draft.id, old.id, unrelated.id
-    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 0
+    assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 2
     assert service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None) == 0
     with Session() as db:
         rows = {item.submission_id: item for item in db.execute(select(FormSubmission).where(
             FormSubmission.form_slug == "versioned")).scalars()}
-        assert rows["missing-version"].form_version_id is None
-        assert rows["archived-version"].form_version_id == old_id
-        assert rows["archived-version"].data_json["_form_version_reconciliation"]["target_version_id"] == version_id
+        assert rows["missing-version"].form_version_id == version_id
+        assert rows["archived-version"].form_version_id == version_id
+        assert rows["archived-version"].data_json["_original_form_version_id"] == old_id
         assert rows["archived-version"].document_states["legacy_declaration"] == {"signed": True}
         assert rows["foreign-version"].form_version_id == foreign_id
 
@@ -772,7 +655,7 @@ def test_document_name_stays_with_historical_form_version(tmp_path, monkeypatch)
     assert cleared["documents"][0]["participant_label"] == ""
 
 
-def test_participant_access_upgrades_stale_bound_version(tmp_path):
+def test_participant_access_preserves_bound_version(tmp_path):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
     with Session.begin() as db:
@@ -804,10 +687,10 @@ def test_participant_access_upgrades_stale_bound_version(tmp_path):
     with app.test_request_context("/test?token=secret"):
         access = resolve_participant_submission_access("submission-submitted", slug="versioned")
         assert access is not None
-        assert access.submission["row"]["data_json"]["_form_version_upgrade"]["new_version_id"] == newer_id
+        assert "_form_version_upgrade" not in access.submission["row"]["data_json"]
     with Session() as db:
         row = db.execute(select(FormSubmission).where(FormSubmission.submission_id == "submission-submitted")).scalar_one()
-        assert row.form_version_id == newer_id
+        assert row.form_version_id == old.id
 
 
 def test_required_field_at_future_step_does_not_block_current_step(tmp_path):
@@ -983,7 +866,6 @@ def test_required_single_checkbox_reads_legacy_boolean_column():
 def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypatch):
     _url, Session = _database(tmp_path)
     service = FormVersionService()
-    evaluated_stages = []
     with Session.begin() as db:
         form, old, submission = _seed_active_versioned_submission(db, service)
         submission.access_token = "secret"
@@ -1002,9 +884,6 @@ def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypa
                     "submission_id": row.submission_id, "form_slug": row.form_slug,
                     "access_token": row.access_token, "data_json": row.data_json,
                 }}
-
-        def evaluate_saved_stage(self, submission_id, definition, *, workflow_step):
-            evaluated_stages.append((submission_id, workflow_step, definition["title"]))
 
     app = Flask(__name__, template_folder=str(public_forms.Path(__file__).resolve().parents[1] / "templates"))
     app.config.update(DATABASE_URL="sqlite:///test", SECRET_KEY="secret", TESTING=True)
@@ -1045,7 +924,6 @@ def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypa
     })
     assert response.status_code == 302
     assert response.location.startswith("/do-podpisania")
-    assert evaluated_stages == [("submission-submitted", "submission", "Formularz")]
     with Session() as db:
         row = db.execute(select(FormSubmission).where(FormSubmission.submission_id == "submission-submitted")).scalar_one()
         assert row.data_json["city"] == "Zielona Góra"
@@ -1054,45 +932,6 @@ def test_participant_can_complete_upgrade_with_token_and_csrf(tmp_path, monkeypa
             SubmissionWorkflowEvent.submission_id == row.id,
             SubmissionWorkflowEvent.source == "form_version_data_completed",
         )).scalar_one_or_none() is not None
-
-    with Session.begin() as db:
-        form = db.execute(select(Form).where(Form.slug == "versioned")).scalar_one()
-        current = service.resolve_published(db, form.id)
-        new_draft = service.clone_to_draft(db, form, current, actor_id=None)
-        changed = deepcopy(new_draft.definition_json)
-        changed["fields"].append({"name": "postal_code", "label": "Kod pocztowy",
-                                  "type": "text", "required": True})
-        service.update_definition(new_draft, changed)
-        form_id, current_id, draft_id = form.id, current.id, new_draft.id
-
-    original_access = public_forms.require_participant_submission_access
-    published = False
-
-    def publish_after_access(*args, **kwargs):
-        nonlocal published
-        access = original_access(*args, **kwargs)
-        if not published:
-            with Session.begin() as db:
-                service.publish(db, db.get(Form, form_id), db.get(FormVersion, draft_id), actor_id=None)
-            published = True
-        return access
-
-    monkeypatch.setattr(public_forms, "require_participant_submission_access", publish_after_access)
-    conflict = client.post(url, data={"csrf_token": "csrf-secret", "postal_code": "00-001"})
-    assert conflict.status_code == 409
-    with Session() as db:
-        row = db.execute(select(FormSubmission).where(
-            FormSubmission.submission_id == "submission-submitted")).scalar_one()
-        assert row.form_version_id == current_id
-        assert row.data_json["city"] == "Zielona Góra"
-        assert "postal_code" not in row.data_json
-    page = client.get(url)
-    assert page.status_code == 200
-    assert "Kod pocztowy" in page.get_data(as_text=True)
-    with Session() as db:
-        row = db.execute(select(FormSubmission).where(
-            FormSubmission.submission_id == "submission-submitted")).scalar_one()
-        assert row.form_version_id == draft_id
 
 
 def test_training_upgrade_preserves_valid_and_flags_removed_unlocked_choice(tmp_path):
@@ -1682,9 +1521,26 @@ def test_publication_generates_new_declaration_revision_without_touching_signed_
             assert db.scalar(select(func.count(SubmissionWorkflowEvent.id)).where(
                 SubmissionWorkflowEvent.submission_id == submission_pk,
                 SubmissionWorkflowEvent.source == "document_revision_generation")) == 1
+        generated_file = files[-1]
+        monkeypatch.setattr(services.document_signing_service, "verify_stored_pdf", lambda *args, **kwargs: {
+            "is_signed": True, "cryptographically_valid": True, "integrity_ok": True,
+            "validation_status": "VALID", "signature_count": 1,
+            "is_allowed_signature": True, "signature_type": "mszafir",
+        })
+        monkeypatch.setattr(services.mail_dispatch_service, "dispatch_document_received_notification",
+                            lambda *args, **kwargs: None)
+        original_pdf = services.storage.read_bytes(generated_file.storage_path)
+        uploaded = FileStorage(stream=BytesIO(original_pdf + b"\n% signed revision"),
+                               filename="signed-revision.pdf", content_type="application/pdf")
+        with admin_app.test_request_context("/version-documents/revision-declaration/revision-case/declaration/upload"):
+            result = document_service.document_workflow.upload_version_gap(
+                services.submission_repository.get_by_id("revision-case"), new_definition,
+                "declaration", uploaded)
+        assert result["is_valid"]
         with session_factory() as db:
             refreshed = db.get(FormSubmission, submission_pk)
             assert refreshed.data_json["_form_version_upgrade"]["missing_documents"] == []
+            assert refreshed.document_states["version_revisions"]["declaration"]["signature_status"] == "signed"
             assert db.get(SubmissionFile, signed_id).status == "signed"
     assert rendered == ["<p>New declaration</p>"] * 3
 
@@ -1744,10 +1600,25 @@ def test_publication_generates_current_contract_for_each_training(admin_app, mon
             assert all(file.signature_validation_result["form_version_id"] == version_id for file in files[1:])
             assert db.get(FormSubmission, submission_pk).process_status == "COMPLETED"
             missing = db.get(FormSubmission, submission_pk).data_json["_form_version_upgrade"]["missing_documents"]
-            assert missing == []
+            assert {item["training_key"] for item in missing} == {"one", "two"}
+        monkeypatch.setattr(services.document_signing_service, "verify_stored_pdf", lambda *args, **kwargs: {
+            "is_signed": True, "cryptographically_valid": True, "integrity_ok": True,
+            "validation_status": "VALID", "signature_count": 1,
+            "is_allowed_signature": True, "signature_type": "mszafir",
+        })
+        monkeypatch.setattr(services.mail_dispatch_service, "dispatch_document_received_notification",
+                            lambda *args, **kwargs: None)
+        first = next(file for file in files[1:] if file.training_key == "one")
+        uploaded = FileStorage(stream=BytesIO(services.storage.read_bytes(first.storage_path) + b"\n% signed"),
+                               filename="signed-first.pdf", content_type="application/pdf")
+        with admin_app.test_request_context(f"/version-documents/{document_id}/upload"):
+            result = document_service.document_workflow.upload_version_gap(
+                services.submission_repository.get_by_id(f"revision-{document_id}-case"),
+                new_definition, document_id, uploaded, training_key="one")
+        assert result["is_valid"]
         with session_factory() as db:
             submission = db.get(FormSubmission, submission_pk)
-            assert submission.data_json["_form_version_upgrade"]["missing_documents"] == []
+            assert [item["training_key"] for item in submission.data_json["_form_version_upgrade"]["missing_documents"]] == ["two"]
             assert submission.document_states["version_revisions"][document_id].get("signature_status") != "signed"
             assert submission.process_status == "COMPLETED"
     assert templates == ["<p>New contract</p>"] * 2

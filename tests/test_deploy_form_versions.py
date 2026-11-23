@@ -140,17 +140,16 @@ class _FakeFormVersionService:
 
         return version
 
-    def synchronize_published_submissions(
+    def upgrade_active_submissions(
         self,
-        _session_factory,
-        form_id,
-        version_id,
+        _db,
+        _form,
+        version,
         *,
         actor_id,
     ):
         assert actor_id is None
-        assert form_id == 1
-        assert version_id == self.published.id
+        assert version is self.published
 
         self.upgrade_calls += 1
         return self.upgrade_result
@@ -192,7 +191,7 @@ def test_main_publishes_qualified_policy_when_missing(
     assert service.clone_calls == 1
     assert service.update_calls == 1
     assert service.publish_calls == 1
-    assert service.upgrade_calls == 1
+    assert service.upgrade_calls == 0
     assert db.commits == 1
 
     allowed = service.published.definition_json[
@@ -250,7 +249,7 @@ def test_main_accepts_existing_draft_with_only_qualified_added(
     assert service.clone_calls == 0
     assert service.update_calls == 1
     assert service.publish_calls == 1
-    assert service.upgrade_calls == 1
+    assert service.upgrade_calls == 0
     assert db.commits == 1
 
 
@@ -328,7 +327,7 @@ def test_main_rejects_existing_draft_with_other_signature_added(
     assert db.commits == 0
 
 
-def test_main_does_not_migrate_submissions_when_policy_is_current(
+def test_main_upgrades_active_submissions_when_policy_is_current(
     monkeypatch,
 ):
     service = _FakeFormVersionService(
@@ -348,7 +347,7 @@ def test_main_does_not_migrate_submissions_when_policy_is_current(
     assert service.clone_calls == 0
     assert service.update_calls == 0
     assert service.publish_calls == 0
-    assert service.upgrade_calls == 0
+    assert service.upgrade_calls == 1
     assert db.commits == 1
 
 

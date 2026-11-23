@@ -271,7 +271,7 @@ class WorkflowService:
                         .get("_form_version_upgrade") or {}
                     )
 
-                    if marker.get("data_only") is True:
+                    if marker:
                         state = (
                             FormVersionService()
                             .refresh_submission_completion(

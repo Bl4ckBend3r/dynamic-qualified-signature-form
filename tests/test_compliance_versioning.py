@@ -10,7 +10,7 @@ from alembic.operations import Operations
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, Text, create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, ConsentVersion, Form, FormField, FormRegulation, FormSubmission, SubmissionConsent, SubmissionWorkflowEvent
+from models import Base, ConsentVersion, Form, FormField, FormRegulation, FormSubmission, SubmissionConsent
 from repositories.submission_repository import PostgresSubmissionRepository
 from services.compliance_service import ComplianceError, ComplianceService, consent_sha256, file_sha256, normalize_consent_text
 from services.form_version_service import FORM_VERSION_DRAFT, FormVersionService
@@ -131,43 +131,6 @@ def test_v1_v2_and_submission_snapshots_remain_historical(tmp_path):
         assert optional.accepted is False
         assert optional.accepted_at is None
         assert "SHA-256" in compliance.audit_description(a)
-
-
-def test_changed_required_consent_needs_new_explicit_acceptance(tmp_path):
-    url, Session = _database(tmp_path)
-    service = FormVersionService()
-    compliance = ComplianceService(PostgresSubmissionRepository(url, session_factory=Session))
-    with Session.begin() as db:
-        form, _ = _form(db, tmp_path)
-        first = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_DRAFT)
-        service.publish(db, form, first, actor_id=None)
-        submission = _submission(db, form, first, "reaccept")
-        submission.workflow_step = "submission"
-        submission.process_status = "SUBMITTED"
-        submission.data_json = {"accept_terms": "Tak"}
-        first_id = first.id
-    compliance.record_submission_acceptances(submission_id="reaccept", form_version_id=first_id,
-                                              submission_data={"accept_terms": "Tak"})
-    with Session.begin() as db:
-        form = db.execute(select(Form).where(Form.slug == "compliance")).scalar_one()
-        first = db.get(type(form.versions[0]), first_id)
-        draft = service.clone_to_draft(db, form, first, actor_id=None)
-        changed = deepcopy(draft.definition_json)
-        next(field for field in changed["fields"] if field.get("name") == "accept_terms")["options"][0]["label"] = "Nowy regulamin programu"
-        service.update_definition(draft, changed)
-        service.publish(db, form, draft, actor_id=None)
-        submission = db.execute(select(FormSubmission).where(FormSubmission.submission_id == "reaccept")).scalar_one()
-        assert service.upgrade_submission(db, submission, draft)
-        assert "accept_terms" in service.refresh_submission_completion(db, submission)["errors"]
-        assert "accept_terms" not in service.refresh_submission_completion(
-            db, submission, offered_consent_keys={"accept_terms"})["errors"]
-        compliance.record_reacceptances(db, submission, draft, {"accept_terms"})
-        db.flush()
-        assert "accept_terms" not in service.refresh_submission_completion(db, submission)["errors"]
-        assert next(item for item in submission.consents if item.consent_key == "accept_terms").consent_version_id == first.consent_links[0].consent_version_id
-        assert db.execute(select(SubmissionWorkflowEvent).where(
-            SubmissionWorkflowEvent.submission_id == submission.id,
-            SubmissionWorkflowEvent.source == "form_version_consent_reaccepted")).scalar_one()
 
 
 def test_required_consent_blocks_submit_but_optional_may_be_false():

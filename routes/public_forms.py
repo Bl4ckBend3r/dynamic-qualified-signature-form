@@ -945,6 +945,13 @@ def complete_version_upgrade(slug: str, submission_id: str):
             db,
             submission,
         )
+        current_upgrade_step = next((item for item in (definition.get("workflow") or {}).get("steps") or []
+            if item.get("id") == submission.workflow_step), {})
+        workflow_action_required = bool(
+            (marker.get("workflow_reconciliation") or {}).get("required_step") == submission.workflow_step
+            and current_upgrade_step.get("stage_type") == "user_action"
+            and current_upgrade_step.get("action", "none") in {"none", "form_submit"}
+        )
         for consent_key in state["errors"]:
             if any(field.get("name") == consent_key and field.get("type") == "checkbox"
                    for field in validation_definition.get("fields") or []):
@@ -980,7 +987,15 @@ def complete_version_upgrade(slug: str, submission_id: str):
 
                 db.commit()
 
-                if not state["complete"]:
+                if not state["complete"] or workflow_action_required:
+                    if not state["errors"] and not workflow_action_required:
+                        if state["invalid_training_ids"]:
+                            return redirect(url_for(
+                                "documents.training_selection", submission_id=submission_id, token=token,
+                            ))
+                        return redirect(url_for(
+                            "documents.documents_to_sign", submission_id=submission_id, token=token,
+                        ))
                     return render_template(
                         "form_page.html",
                         slug=slug,
@@ -998,6 +1013,10 @@ def complete_version_upgrade(slug: str, submission_id: str):
                             "documents.training_selection",
                             submission_id=submission_id,
                             token=token,
+                        ),
+                        missing_documents=state["missing_documents"],
+                        document_correction_url=url_for(
+                            "documents.documents_to_sign", submission_id=submission_id, token=token,
                         ),
                     )
 
@@ -1038,12 +1057,24 @@ def complete_version_upgrade(slug: str, submission_id: str):
                     )
                 )
 
+            if not state["errors"] and not workflow_action_required:
+                db.commit()
+                if state["invalid_training_ids"]:
+                    return redirect(url_for(
+                        "documents.training_selection", submission_id=submission_id, token=token,
+                    ))
+                return redirect(url_for(
+                    "documents.documents_to_sign", submission_id=submission_id, token=token,
+                ))
+
             return render_template(
                 "form_page.html", slug=slug, form_meta=form_meta, form_definition=edit_definition,
                 errors=state["errors"], values=saved_values, form_action=action,
                 correction_mode=True, correction_message=message, access_token=token,
                 version_upgrade_mode=True, invalid_training_ids=state["invalid_training_ids"],
                 training_correction_url=url_for("documents.training_selection", submission_id=submission_id, token=token),
+                missing_documents=state["missing_documents"],
+                document_correction_url=url_for("documents.documents_to_sign", submission_id=submission_id, token=token),
             )
 
         csrf_valid, _ = _valid_public_csrf(request.form)
@@ -1052,16 +1083,22 @@ def complete_version_upgrade(slug: str, submission_id: str):
         from services.audit_log_service import pending_audit_state
         if pending_audit_state(submission):
             abort(409, description="Poprzednia operacja oczekuje na audyt.")
+        from services.submission_decision_service import ConditionalApproval
         from form_loader import extract_submission_data
         from services.form_submission_mapper import FORM_FIELD_MAP, FORM_SUBMISSION_COLUMNS, convert_value_for_column
         from models import SubmissionWorkflowEvent
 
-        from services.submission_decision_service import ConditionalApproval
         if ConditionalApproval.active(submission):
             edit_definition = service.completion_form_definition(submission, definition)
             saved_values = service.submission_values(submission, edit_definition)
         submitted = extract_submission_data(edit_definition, request.form)
         values = {**saved_values, **submitted}
+        if (state["complete"] and not workflow_action_required and not ConditionalApproval.active(submission)
+                and all(saved_values.get(name) == value for name, value in submitted.items())
+                and not any(upload.filename for upload in request.files.values())):
+            return redirect(url_for(
+                "documents.documents_to_sign", submission_id=submission_id, token=token,
+            ))
         attachments, attachment_errors = services.submission_attachment_service.validate_uploads(
             edit_definition, values, request.files, submission_id=submission_id,
         )
@@ -1100,6 +1137,10 @@ def complete_version_upgrade(slug: str, submission_id: str):
                 correction_message=message,
                 access_token=token,
                 version_upgrade_mode=True,
+                invalid_training_ids=validation_state["invalid_training_ids"],
+                training_correction_url=url_for("documents.training_selection", submission_id=submission_id, token=token),
+                missing_documents=validation_state["missing_documents"],
+                document_correction_url=url_for("documents.documents_to_sign", submission_id=submission_id, token=token),
             ), 400
 
         if attachments:
@@ -1139,7 +1180,6 @@ def complete_version_upgrade(slug: str, submission_id: str):
             source="form_version_data_completed", reason="Uzupełniono dane po aktualizacji formularza.",
             side_effects={"field_names": sorted(submitted), "remaining_fields": sorted(state["errors"])},
         ))
-        from services.submission_decision_service import ConditionalApproval
         condition_audit = None
         if state["complete"] and ConditionalApproval.active(submission):
             closed = ConditionalApproval.check(db, submission, settle=True)
@@ -1160,7 +1200,8 @@ def complete_version_upgrade(slug: str, submission_id: str):
             step = next((item for item in steps if item.get("id") == current.get("workflow_step")), {})
             if current and current.get("process_status") != "AUTO_REJECTED":
                 try:
-                    if step.get("stage_type") == "user_action" and step.get("type") == "form_submit":
+                    if (step.get("stage_type") == "user_action" and step.get("type") == "form_submit"
+                            or workflow_action_required):
                         services.workflow_service.advance_after_action(current, definition, actor="participant")
                     else:
                         services.workflow_service.run_automatic_steps(current, definition)
@@ -1180,7 +1221,11 @@ def complete_version_upgrade(slug: str, submission_id: str):
                 db.rollback()
                 current_app.logger.error("conditional_approval_audit_pending error_type=%s", type(exc).__name__)
         if not state["complete"]:
-            return redirect(action)
+            if state["errors"]:
+                return redirect(action)
+            if state["invalid_training_ids"]:
+                return redirect(url_for("documents.training_selection", submission_id=submission_id, token=token))
+            return redirect(url_for("documents.documents_to_sign", submission_id=submission_id, token=token))
         if hasattr(services, "document_service"):
             from services.form_version_service import schedule_version_sync
             schedule_version_sync(current_app._get_current_object(), version.form_id, version.id,

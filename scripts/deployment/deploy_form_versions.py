@@ -128,7 +128,6 @@ def _configured_slugs() -> tuple[str, ...]:
 def main() -> int:
     Session = create_session_factory(Config.DATABASE_URL)
     service = FormVersionService()
-    published_versions: list[tuple[int, int]] = []
 
     with Session() as db:
         for slug in _configured_slugs():
@@ -199,7 +198,6 @@ def main() -> int:
                         "elektronicznych."
                     ),
                 )
-                published_versions.append((form.id, published.id))
 
                 print(
                     f"{slug}: opublikowano wersję "
@@ -207,12 +205,20 @@ def main() -> int:
                     f"(ID={published.id})"
                 )
             else:
-                print(f"{slug}: wersja {published.version_label} już aktualna.")
+                upgraded = service.upgrade_active_submissions(
+                    db,
+                    form,
+                    published,
+                    actor_id=None,
+                )
+
+                print(
+                    f"{slug}: wersja "
+                    f"{published.version_label} już aktualna; "
+                    f"zmigrowano aktywnych zgłoszeń: {upgraded}"
+                )
 
         db.commit()
-
-    for form_id, version_id in published_versions:
-        service.synchronize_published_submissions(Session, form_id, version_id, actor_id=None)
 
     return 0
 

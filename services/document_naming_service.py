@@ -139,3 +139,38 @@ def resolve_pdf_storage_path(
     if type_dir:
         return f"{normalized_output_dir}/{clean_slug}/pdf/{type_dir}/{clean_filename}"
     return f"{normalized_output_dir}/{clean_slug}/pdf/{clean_filename}"
+
+
+def build_uploaded_agreement_filename(row, training_name):
+    """Build a readable PDF filename while preserving Polish characters."""
+    import re
+    import unicodedata
+
+    def clean(value, fallback, underscores=False):
+        value = unicodedata.normalize(
+            "NFC", str(value or "")
+        ).strip()
+        value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", value)
+        value = re.sub(r"\s+", "_" if underscores else " ", value)
+        return value.strip(" ._") or fallback
+
+    first_name = clean(
+        row.get("first_name") or row.get("imiona") or row.get("imie"),
+        "Imie",
+        underscores=True,
+    )
+
+    last_name = clean(
+        row.get("last_name") or row.get("nazwisko"),
+        "Nazwisko",
+        underscores=True,
+    )
+
+    training = clean(training_name, "Szkolenie")
+
+    stem = f"{first_name}_{last_name} - {training}"
+    stem = stem.encode("utf-8")[:180].decode(
+        "utf-8", errors="ignore"
+    ).rstrip(" ._")
+
+    return f"{stem}.pdf"

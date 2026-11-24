@@ -45,8 +45,9 @@ def current_workflow_step(submission, form_config: dict | None = None) -> str:
         mapped = str(mapping.get(value) or "").strip() if isinstance(mapping, Mapping) else ""
         if mapped in steps:
             return mapped
-        initial = str(workflow.get("initial_step") or "").strip()
-        return initial if initial in steps else step_order[0]
+        # An unmapped historical step needs an explicit reconciliation.  Moving
+        # it to the first step could repeat decisions or skip signed documents.
+        return value
     return value
 
 
@@ -236,6 +237,8 @@ class WorkflowService:
     def run_automatic_steps(
         self, submission: dict, form_config: dict, *, replaces_audit_operation_id: str = "",
     ) -> None:
+        if (submission.get("data_json") or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         if (form_config.get("workflow") or {}).get("flow_mode") != "explicit":
             return
         from services.submission_decision_service import ConditionalApproval
@@ -268,7 +271,7 @@ class WorkflowService:
                         .get("_form_version_upgrade") or {}
                     )
 
-                    if marker.get("data_only") is True:
+                    if marker:
                         state = (
                             FormVersionService()
                             .refresh_submission_completion(
@@ -412,6 +415,8 @@ class WorkflowService:
         submission = self.submission_repository.get_by_id(submission_id)
         if not submission:
             return False
+        if (submission.get("data_json") or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         prior_marker = pending_audit_state(submission)
         replaces_audit_operation_id = str(replaces_audit_operation_id or "")
         can_replace_marker = bool(
@@ -651,6 +656,7 @@ class WorkflowService:
             )
         if updated:
             self._transition_sla(submission_id, old_step, target_step)
+            self.dispatch_persisted_workflow_event(submission_id, source="workflow_transition_to")
         return updated
 
     def transition_submission(
@@ -670,6 +676,8 @@ class WorkflowService:
         db = object_session(submission) if hasattr(submission, "_sa_instance_state") else None
         if getattr(submission, "deleted_at", None) is not None:
             raise WorkflowTransitionError("Zgłoszenie jest archiwalne.")
+        if (getattr(submission, "data_json", None) or {}).get("_form_version_reconciliation"):
+            raise WorkflowTransitionError("Etap zgłoszenia wymaga uzgodnienia przez administratora.")
         if pending_audit_state({"data_json": getattr(submission, "data_json", {})}):
             raise WorkflowTransitionError(
                 "Poprzednia operacja oczekuje na zapis obowiązkowego audytu."
@@ -1093,6 +1101,42 @@ class WorkflowService:
         except Exception:
             return False
 
+    def dispatch_persisted_workflow_event(
+        self, submission_id: str, *, source: str = "", audit_operation_id: str = ""
+    ) -> None:
+        """Consume a committed workflow event after required audit has completed."""
+        from flask import current_app, has_app_context
+        from models import Form
+
+        if not has_app_context() or not getattr(self.submission_repository, "session_factory", None):
+            return
+        try:
+            with self.submission_repository.session_factory() as db:
+                submission = db.execute(select(FormSubmission).where(
+                    FormSubmission.submission_id == submission_id
+                )).scalar_one_or_none()
+                if submission is None or pending_audit_state(submission) and not pending_audit_state(submission).get("audit_complete"):
+                    return
+                events = db.execute(select(SubmissionWorkflowEvent).where(
+                    SubmissionWorkflowEvent.submission_id == submission.id,
+                    *((SubmissionWorkflowEvent.source == source,) if source else ()),
+                ).order_by(SubmissionWorkflowEvent.id.desc()).limit(
+                    20 if not audit_operation_id else None
+                )).scalars().all()
+                event = next((item for item in events if not audit_operation_id or
+                              (item.side_effects or {}).get("audit_operation_id") == audit_operation_id), None)
+                if event is None:
+                    return
+                form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+                if form is None:
+                    return
+                current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_trigger_event(
+                    db=db, form=form, submission=submission, event=event
+                )
+                db.commit()
+        except Exception:
+            logger.exception("workflow_mail_dispatch_failed submission_id=%s source=%s", submission_id, source)
+
     def _transition_sla(self, submission_id: str, previous_step: str, new_step: str) -> None:
         if not self.workflow_sla_service or not hasattr(self.submission_repository, "session_factory"):
             return
@@ -1131,6 +1175,9 @@ class WorkflowService:
         )
         if any(item.get("status") == "failed" for item in results.values()):
             raise WorkflowTransitionError("Efekt uboczny workflow wymaga ponowienia.")
+        self.dispatch_persisted_workflow_event(
+            submission_id, source="workflow_transition_to", audit_operation_id=operation_id
+        )
         self._transition_sla(submission_id, previous_step, new_step)
         refreshed = self.submission_repository.get_by_id(submission_id) if self.submission_repository else None
         if refreshed:

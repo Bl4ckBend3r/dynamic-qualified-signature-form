@@ -6122,6 +6122,8 @@ def test_mail_template_editor_preserves_empty_and_literal_values(admin_app, valu
             template_types=["custom"],
             template_labels={"custom": "Własny"},
             trigger_catalog={"message": ""},
+            trigger_stages=[],
+            trigger_binding={"automatic": False, "stage": "", "decision": "", "warning": ""},
             trigger_events=[],
             trigger_statuses=[],
             trigger_decisions=[],
@@ -6268,10 +6270,12 @@ def test_mail_template_editor_uses_catalog_dropdowns_and_all_form_variables(admi
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert '<select name="trigger_event">' in html
-    assert '<select name="trigger_status">' in html
-    assert ">Wniosek złożony</option>" in html
-    assert "Wniosek złożony — FORM_SUBMITTED" not in html
+    assert 'name="automatic"' in html
+    assert '<select name="trigger_stage">' in html
+    assert 'value="submission"' in html
+    assert ">Złożenie wniosku</option>" in html
+    assert '<select name="trigger_event">' not in html
+    assert '<select name="trigger_status">' not in html
     assert "{{ app_name }}" in html
     assert "{{ public_submission_id }}" in html
     assert "{{ pesel }}" in html

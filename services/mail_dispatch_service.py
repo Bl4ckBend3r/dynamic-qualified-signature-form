@@ -99,6 +99,64 @@ class MailDispatchService:
         self.mail_settings_service = mail_settings_service
         self.mail_footer_resolver = mail_footer_resolver or MailFooterResolver()
 
+    def dispatch_workflow_trigger_event(self, *, db, form, submission, event):
+        """Send stage-entry and decision bindings for one persisted workflow event."""
+        from sqlalchemy import select
+        from models import EmailLog, MailTemplate
+        from services.workflow_mail_trigger_service import WorkflowMailTriggerService
+
+        version = submission.form_version
+        if submission.form_version_id and version is None:
+            current_app.logger.warning("mail_skipped reason=workflow_version_missing submission_id=%s event_id=%s", submission.id, event.id)
+            return []
+        definition = (version.definition_json if version else form.definition_json) or {}
+        historical_form = SimpleNamespace(definition_json=definition)
+        stages = WorkflowMailTriggerService().stage_options(historical_form)
+        previous = str(event.previous_step or "")
+        entered = str(event.new_step or "")
+        decision = str(event.decision_code or "")
+        results = []
+        templates = db.execute(select(MailTemplate).where(
+            MailTemplate.form_id == form.id,
+            MailTemplate.trigger_event == WorkflowMailTriggerService.MARKER,
+            MailTemplate.is_default_for_status.is_(True),
+        )).scalars().all()
+        for template in templates:
+            stage_id = str(template.trigger_status or "")
+            expected_decision = str(template.trigger_decision or "")
+            stage = next((item for item in stages if item["value"] == stage_id), None)
+            if not template.is_active or stage is None or (
+                expected_decision and not any(d["value"] == expected_decision for d in stage["decisions"])
+            ):
+                current_app.logger.info("mail_skipped reason=inactive_or_unmapped_workflow_binding template_id=%s event_id=%s", template.id, event.id)
+                continue
+            matches = (previous == stage_id and decision == expected_decision) if expected_decision else (
+                entered == stage_id and entered != previous
+            )
+            if not matches:
+                current_app.logger.info("mail_skipped reason=workflow_event_mismatch template_id=%s event_id=%s", template.id, event.id)
+                continue
+            marker = f"workflow_event:{event.id}:template:{template.id}"
+            existing = db.execute(select(EmailLog.id).where(
+                EmailLog.submission_id == submission.id,
+                EmailLog.template_id == template.id,
+                EmailLog.administrator_message == marker,
+            )).first()
+            if existing:
+                current_app.logger.info("mail_skipped reason=duplicate_workflow_event template_id=%s event_id=%s", template.id, event.id)
+                continue
+            result = self.dispatch_to_submission(
+                db=db, form=form, submission=submission, template=template,
+                to_email=submission.email, event_type="workflow_stage",
+                event_id=marker, at_most_once_key=marker,
+                extra_context={"workflow_step": stage_id, "decision_code": decision},
+            )
+            for delivery in result.deliveries or (result,):
+                if delivery.log is not None:
+                    delivery.log.administrator_message = marker
+            results.append(result)
+        return results
+
     def dispatch_workflow_decision_event(self, *, db, form, submission, decision, actor_id=None, group_config=None, step_config=None):
         """Consume a configured decision event; all automatic delivery stays here."""
         from sqlalchemy import select
@@ -410,6 +468,8 @@ class MailDispatchService:
         for template in templates:
             if getattr(template, "is_active", True) is False:
                 continue
+            if getattr(template, "trigger_event", "") == "workflow_stage":
+                continue
             if event_type and getattr(template, "trigger_event", "") and template.trigger_event != event_type:
                 continue
             if submission is not None:
@@ -457,6 +517,7 @@ class MailDispatchService:
             query = select(MailTemplate).where(
                 MailTemplate.form_id == form.id,
                 MailTemplate.is_active.is_(True),
+                MailTemplate.trigger_event != "workflow_stage",
                 or_(*conditions),
             )
             if mail_type.form_order == "default_then_latest":
@@ -862,6 +923,7 @@ class MailDispatchService:
                 .where(
                     MailTemplate.form_id == form.id,
                     MailTemplate.is_active.is_(True),
+                    MailTemplate.trigger_event != "workflow_stage",
                     or_(MailTemplate.template_type == "correction_accepted", MailTemplate.trigger_event == "correction_accepted"),
                 )
                 .order_by(MailTemplate.id.desc())

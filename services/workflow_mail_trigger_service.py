@@ -65,6 +65,53 @@ DECISION_LABELS = {
 
 
 class WorkflowMailTriggerService:
+    MARKER = "workflow_stage"
+
+    def stage_options(self, form) -> list[dict[str, Any]]:
+        definition = getattr(form, "definition_json", None) or {}
+        workflow = (definition.get("workflow") or {}) if isinstance(definition, Mapping) else {}
+        if not isinstance(workflow, Mapping) or not workflow.get("steps"):
+            return []
+        workflow = WorkflowConfigNormalizer().normalize(workflow)
+        catalog = self.options_for_form(form)
+        return [
+            {
+                "value": str(step.get("id") or ""),
+                "label": self._stage_label(step),
+                "status": str(step.get("status") or step.get("status_code") or ""),
+                "events": [str(value) for value in step.get("triggers") or []],
+                "decisions": [item for item in catalog["decisions"]
+                              if item.get("stage_id") == str(step.get("id") or "")],
+            }
+            for step in active_workflow_steps(workflow) if step.get("id")
+        ]
+
+    def binding_for_template(self, template, stages: list[dict]) -> dict[str, Any]:
+        """Interpret old status/event bindings only when they identify one active stage."""
+        event = str(getattr(template, "trigger_event", "") or "")
+        status = str(getattr(template, "trigger_status", "") or "")
+        decision = str(getattr(template, "trigger_decision", "") or "")
+        if event == self.MARKER:
+            stage = next((item for item in stages if item["value"] == status), None)
+            valid = bool(stage and (not decision or any(d["value"] == decision for d in stage["decisions"])))
+            return {"automatic": bool(getattr(template, "is_default_for_status", False)),
+                    "stage": status if valid else "", "decision": decision if valid else "",
+                    "warning": "Powiązanie nie należy do aktualnego workflow. Wybierz etap i decyzję ponownie."
+                    if not valid and getattr(template, "is_default_for_status", False) else ""}
+        if not any((event, status, decision, getattr(template, "is_default_for_status", False))):
+            return {"automatic": False, "stage": "", "decision": "", "warning": ""}
+        event_stages = {item["value"] for item in stages if event in item["events"] or
+                        STATUS_EVENT_MAP.get(item["status"].upper()) == event}
+        matches = [item for item in stages if
+                   (not status or item["status"] == status)
+                   and (not event or item["value"] in event_stages)
+                   and (not decision or any(d["value"] == decision for d in item["decisions"]))]
+        if len(matches) != 1 or not (status or event):
+            return {"automatic": False, "stage": "", "decision": "",
+                    "warning": "Historyczne wyzwalanie wymaga ponownego przypisania do etapu workflow."}
+        return {"automatic": True, "stage": matches[0]["value"], "decision": decision,
+                "warning": ""}
+
     def options_for_form(self, form) -> dict[str, Any]:
         definition = getattr(form, "definition_json", None) or {}
         raw_workflow = definition.get("workflow") if isinstance(definition, Mapping) else None
@@ -72,8 +119,8 @@ class WorkflowMailTriggerService:
             return {
                 "has_workflow": False,
                 "message": (
-                    "Formularz nie ma aktywnego workflow. Dostępne są tylko "
-                    "bezpieczne zdarzenia systemowe."
+                    "Formularz nie ma aktywnych etapów workflow. "
+                    "Najpierw skonfiguruj workflow."
                 ),
                 "events": [self._event(value, source="system") for value in SAFE_SYSTEM_EVENTS],
                 "statuses": [],
@@ -122,7 +169,7 @@ class WorkflowMailTriggerService:
                     events.append(self._event(value, stage_id=stage_id, stage_label=stage_label))
 
             step_decisions = step.get("decisions")
-            if isinstance(step_decisions, Mapping):
+            if workflow.get("flow_mode") != "explicit" and isinstance(step_decisions, Mapping):
                 for value in step_decisions:
                     code = str(value or "").strip()
                     if code:
@@ -150,7 +197,43 @@ class WorkflowMailTriggerService:
                         )
                     )
 
-        for decision in workflow.get("decision_settings") or []:
+        if workflow.get("flow_mode") == "explicit":
+            for decision in workflow.get("decision_types") or []:
+                if not isinstance(decision, Mapping) or not self._is_enabled(decision):
+                    continue
+
+                stage_id = str(decision.get("step_id") or "").strip()
+                code = str(decision.get("code") or "").strip()
+
+                if not code or stage_id not in active_step_ids:
+                    continue
+
+                stage = next(
+                    (item for item in steps if item.get("id") == stage_id),
+                    {},
+                )
+
+                if stage.get("stage_type") != "decision":
+                    continue
+
+                entry = self._decision(
+                    code,
+                    stage_id,
+                    self._stage_label(stage),
+                )
+                entry["label"] = str(
+                    decision.get("label") or code
+                ).strip()
+
+                decisions.append(entry)
+
+        legacy_decisions = (
+            workflow.get("decision_settings") or []
+            if workflow.get("flow_mode") != "explicit"
+            else []
+        )
+
+        for decision in legacy_decisions:
             if not isinstance(decision, Mapping) or not self._is_enabled(decision):
                 continue
             stage_id = str(decision.get("step_id") or "").strip()
@@ -201,10 +284,10 @@ class WorkflowMailTriggerService:
 
         return {
             "has_workflow": True,
-            "message": "" if events else "Aktywny workflow nie definiuje zdarzeń wysyłki e-mail.",
+            "message": "",
             "events": self._unique(events),
             "statuses": self._unique(statuses),
-            "decisions": self._unique(decisions),
+            "decisions": self._unique(decisions, by_stage=True),
         }
 
     def _event(
@@ -264,11 +347,11 @@ class WorkflowMailTriggerService:
         ).strip()
 
     @staticmethod
-    def _unique(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    def _unique(items: list[dict[str, str]], *, by_stage: bool = False) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
-        seen: set[str] = set()
+        seen: set[Any] = set()
         for item in items:
-            value = item["value"]
+            value = (item.get("stage_id", ""), item["value"]) if by_stage else item["value"]
             if value and value not in seen:
                 seen.add(value)
                 result.append(item)

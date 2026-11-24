@@ -658,7 +658,18 @@ def form_version_publish(form_id: int, version_id: int):
                               actor_id=g.admin_user.id)
         flash(f"Rozpoczęto jawną migrację zgłoszeń do wersji {published_label}; przetworzono {migrated} w pierwszej partii.", "success")
     else:
-        flash(f"Opublikowano wersję {published_label}. Istniejące zgłoszenia zachowują swoje wersje.", "success")
+        try:
+            migrated = service.synchronize_published_submissions(
+                db_session_factory(), published_form_id, published_version_id,
+                actor_id=g.admin_user.id)
+        except Exception:
+            current_app.logger.exception("Nie udało się dostosować zgłoszeń do wersji %s", published_version_id)
+            flash("Wersję opublikowano, lecz aktualizacja zgłoszeń wymaga ponowienia.", "error")
+            return redirect(url_for("admin.form_versions", form_id=form_id))
+        from services.form_version_service import schedule_version_sync
+        schedule_version_sync(current_app._get_current_object(), published_form_id, published_version_id,
+                              actor_id=g.admin_user.id, sync_submissions=False)
+        flash(f"Opublikowano wersję {published_label}; zaktualizowano {migrated} zgłoszeń.", "success")
     return redirect(url_for("admin.form_versions", form_id=form_id))
 
 

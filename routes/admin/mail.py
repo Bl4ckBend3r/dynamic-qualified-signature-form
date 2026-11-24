@@ -229,12 +229,35 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
         if not template or template.form_id != form.id:
             abort(404)
         if request.method == "POST":
+            trigger_service = WorkflowMailTriggerService()
+            stages = trigger_service.stage_options(form)
+            previous_binding = trigger_service.binding_for_template(template, stages)
+            automatic = request.form.get("automatic") == "on"
+            is_active = request.form.get("is_active") == "on"
+            subject = request.form.get(
+                "subject", template.subject or ""
+            ).strip()
+
+            if automatic and is_active and not subject:
+                flash(
+                    "Uzupełnij temat wiadomości, aby włączyć automatyczną wysyłkę.",
+                    "error",
+                )
+                return redirect(request.url), 303
+            stage_id = str(request.form.get("trigger_stage") or "").strip()
+            decision_id = str(request.form.get("trigger_decision") or "").strip()
+            stage = next((item for item in stages if item["value"] == stage_id), None)
+            if automatic and (stage is None or decision_id and not any(
+                item["value"] == decision_id for item in stage["decisions"]
+            )):
+                flash("Wybierz etap i decyzję z aktualnego workflow.", "error")
+                return redirect(request.url), 303
             uploaded_html = read_uploaded_template_file("html_file", {".html"})
             uploaded_txt = read_uploaded_template_file("txt_file", {".txt"})
             template.name = request.form.get("name", "").strip() or "Szablon"
             template.template_type = request.form.get("template_type", "").strip() or "custom"
             template.mail_type = request.form.get("mail_type", "html_text").strip() or "html_text"
-            template.subject = request.form.get("subject", "").strip()
+            template.subject = subject
             template.content_title = request.form.get("content_title", "").strip()
             raw_html = uploaded_html if uploaded_html is not None else request.form.get("body_html", request.form.get("html_body", "")).strip()
             raw_text = uploaded_txt if uploaded_txt is not None else request.form.get("body_text", request.form.get("text_body", "")).strip()
@@ -256,19 +279,11 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
                 template.instruction_html = parsed.instruction_html
                 template.instruction_text = parsed.instruction_text
                 template.footer_note = template.footer_note or parsed.footer_note
-            template.trigger_event = request.form.get("trigger_event", "").strip()
-            template.trigger_status = request.form.get("trigger_status", "").strip()
-            template.trigger_decision = request.form.get("trigger_decision", "").strip()
-            template.is_default_for_status = request.form.get("is_default_for_status") == "on"
-            if template.is_default_for_status and template.trigger_status:
-                for item in db.execute(
-                    select(MailTemplate).where(
-                        MailTemplate.form_id == form.id,
-                        MailTemplate.trigger_status == template.trigger_status,
-                        MailTemplate.id != (template.id or 0),
-                    )
-                ).scalars().all():
-                    item.is_default_for_status = False
+            if automatic or previous_binding["automatic"] or template.trigger_event == WorkflowMailTriggerService.MARKER or not template.id:
+                template.trigger_event = WorkflowMailTriggerService.MARKER
+                template.trigger_status = stage_id if automatic else ""
+                template.trigger_decision = decision_id if automatic else ""
+                template.is_default_for_status = automatic
             template.is_active = request.form.get("is_active") == "on"
             db.add(template)
             db.commit()
@@ -285,6 +300,10 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
         preview_html = render_platform_mail_html(template, preview_context)
         variable_catalog = _mail_variable_catalog(db, form, sample_submission, preview_context)
         trigger_catalog = WorkflowMailTriggerService().options_for_form(form)
+        trigger_stages = WorkflowMailTriggerService().stage_options(form)
+        trigger_binding = WorkflowMailTriggerService().binding_for_template(
+            template, trigger_stages
+        )
         return render_template(
             "admin/mail_templates/edit.html",
             form=form,
@@ -297,6 +316,8 @@ def mail_template_edit(form_id: int, template_id: int | None = None):
             template_labels=MAIL_TEMPLATE_LABELS,
             variable_catalog=variable_catalog,
             trigger_catalog=trigger_catalog,
+            trigger_stages=trigger_stages,
+            trigger_binding=trigger_binding,
             trigger_events=trigger_catalog["events"],
             trigger_statuses=trigger_catalog["statuses"],
             trigger_decisions=trigger_catalog["decisions"],

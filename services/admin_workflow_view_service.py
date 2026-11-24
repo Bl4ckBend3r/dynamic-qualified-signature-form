@@ -113,11 +113,28 @@ def build_admin_workflow_view(
     badge_class = "admin-badge-danger" if step.get("rejected") or is_rejected_status(status) else (
         "admin-badge-success" if step.get("final") or is_final_status(status) else ""
     )
+    step_labels = {item.get("id"): item.get("admin_label") or item.get("label") or item.get("id")
+                   for item in workflow.get("steps", [])}
+    upgrade = (getattr(submission, "data_json", None) or {}).get("_form_version_upgrade") or {}
+    reconciliation = upgrade.get("workflow_reconciliation") or {}
+    reason_labels = {
+        "new_workflow_step": "Dodano wymagany etap.",
+        "changed_workflow_obligation": "Zmieniono wymagania etapu.",
+        "new_required_field": "Dodano wymagane dane w tym etapie.",
+        "unverified_historical_step": "Wymagana jest ponowna weryfikacja etapu.",
+    }
+    migration_notice = None
+    if reconciliation:
+        migration_notice = {
+            "reason": reason_labels.get(reconciliation.get("reason"), "Wymagana jest ponowna ocena etapu."),
+            "historical_step": step_labels.get(reconciliation.get("historical_step"), reconciliation.get("historical_step")),
+            "required_step": step_labels.get(reconciliation.get("required_step"), reconciliation.get("required_step")),
+        }
     return {
         "status_badge_class": badge_class,
         "status_label": workflow_status_label(status, form_config or {}),
-        "step_labels": {item.get("id"): item.get("admin_label") or item.get("label") or item.get("id")
-                        for item in workflow.get("steps", [])},
+        "step_labels": step_labels,
+        "migration_notice": migration_notice,
         "explicit_flow": workflow.get("flow_mode") == "explicit",
         "officer_action": step if workflow.get("flow_mode") == "explicit" and step.get("stage_type") == "officer_action" else None,
         "sections": sections,
@@ -136,11 +153,19 @@ def build_admin_workflow_view(
 def _configured_sections(submission, workflow, events, decisions):
     """Present the saved graph and observed path; order alone never proves completion."""
     current = current_workflow_step(submission, {"workflow": workflow})
+    upgrade = (getattr(submission, "data_json", None) or {}).get("_form_version_upgrade") or {}
+    reconciliation = upgrade.get("workflow_reconciliation") or {}
+    satisfied_prefix = set((reconciliation.get("path") or [])[:-1])
+    migration = next((event for event in reversed(events)
+                      if event.get("source") == "form_version_upgrade"
+                      and (event.get("side_effects") or {}).get("new_version_id") == upgrade.get("new_version_id")), {})
+    migration_id = int(migration.get("id") or 0)
     entered, departed = {}, {}
     for event in events:
         if event.get("new_step"):
             entered[str(event["new_step"])] = event
-        if event.get("previous_step") and event.get("previous_step") != event.get("new_step"):
+        if (event.get("source") != "form_version_upgrade" and event.get("previous_step")
+                and event.get("previous_step") != event.get("new_step")):
             departed[str(event["previous_step"])] = event
     sections = []
     for step in workflow.get("steps", []):
@@ -160,10 +185,15 @@ def _configured_sections(submission, workflow, events, decisions):
             step.get("final") or step.get("stage_type") == "final"
             or (workflow.get("flow_mode") != "explicit" and is_final_status(raw_status))
         ))
-        state = "blocked" if blocked else "completed" if complete else "current" if is_current else "future"
+        historical = bool(complete and reconciliation and key not in satisfied_prefix and
+                          (not migration_id or int((departed.get(key) or {}).get("id") or 0) < migration_id))
+        state = "blocked" if blocked else "historical" if historical else "completed" if complete else "current" if is_current else "future"
         event = departed.get(key) if not is_current else entered.get(key)
         event = event or entered.get(key) or {}
         decision = next((item for item in reversed(decisions) if item.get("workflow_step") == key), {})
+        if (is_current and reconciliation and key not in satisfied_prefix and migration_id
+                and int((departed.get(key) or {}).get("id") or 0) < migration_id):
+            decision = {}
         action = "Etap oczekujący / poza dotychczasową ścieżką"
         if is_current:
             action = ("Proces zakończony" if complete else "Wymagana interwencja" if blocked else
@@ -172,7 +202,8 @@ def _configured_sections(submission, workflow, events, decisions):
                       "Sprawdź stan dokumentu" if workflow_stage_type(step) == DOCUMENTS_STAGE_TYPE or step.get("document_id") else
                       "Oczekiwanie na wykonanie akcji etapu")
         elif complete:
-            action = "Etap zakończony"
+            action = ("Historycznie zakończony; wymaga ponownej oceny po nowych etapach"
+                      if historical else "Etap zakończony")
         status_label = step.get("user_label") or workflow_status_label(raw_status, {"workflow": workflow})
         if document_status:
             status_label = document_status["message"]

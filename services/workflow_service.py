@@ -656,6 +656,7 @@ class WorkflowService:
             )
         if updated:
             self._transition_sla(submission_id, old_step, target_step)
+            self.dispatch_persisted_workflow_event(submission_id, source="workflow_transition_to")
         return updated
 
     def transition_submission(
@@ -1100,6 +1101,42 @@ class WorkflowService:
         except Exception:
             return False
 
+    def dispatch_persisted_workflow_event(
+        self, submission_id: str, *, source: str = "", audit_operation_id: str = ""
+    ) -> None:
+        """Consume a committed workflow event after required audit has completed."""
+        from flask import current_app, has_app_context
+        from models import Form
+
+        if not has_app_context() or not getattr(self.submission_repository, "session_factory", None):
+            return
+        try:
+            with self.submission_repository.session_factory() as db:
+                submission = db.execute(select(FormSubmission).where(
+                    FormSubmission.submission_id == submission_id
+                )).scalar_one_or_none()
+                if submission is None or pending_audit_state(submission) and not pending_audit_state(submission).get("audit_complete"):
+                    return
+                events = db.execute(select(SubmissionWorkflowEvent).where(
+                    SubmissionWorkflowEvent.submission_id == submission.id,
+                    *((SubmissionWorkflowEvent.source == source,) if source else ()),
+                ).order_by(SubmissionWorkflowEvent.id.desc()).limit(
+                    20 if not audit_operation_id else None
+                )).scalars().all()
+                event = next((item for item in events if not audit_operation_id or
+                              (item.side_effects or {}).get("audit_operation_id") == audit_operation_id), None)
+                if event is None:
+                    return
+                form = db.execute(select(Form).where(Form.slug == submission.form_slug)).scalar_one_or_none()
+                if form is None:
+                    return
+                current_app.extensions["services"].mail_dispatch_service.dispatch_workflow_trigger_event(
+                    db=db, form=form, submission=submission, event=event
+                )
+                db.commit()
+        except Exception:
+            logger.exception("workflow_mail_dispatch_failed submission_id=%s source=%s", submission_id, source)
+
     def _transition_sla(self, submission_id: str, previous_step: str, new_step: str) -> None:
         if not self.workflow_sla_service or not hasattr(self.submission_repository, "session_factory"):
             return
@@ -1138,6 +1175,9 @@ class WorkflowService:
         )
         if any(item.get("status") == "failed" for item in results.values()):
             raise WorkflowTransitionError("Efekt uboczny workflow wymaga ponowienia.")
+        self.dispatch_persisted_workflow_event(
+            submission_id, source="workflow_transition_to", audit_operation_id=operation_id
+        )
         self._transition_sla(submission_id, previous_step, new_step)
         refreshed = self.submission_repository.get_by_id(submission_id) if self.submission_repository else None
         if refreshed:

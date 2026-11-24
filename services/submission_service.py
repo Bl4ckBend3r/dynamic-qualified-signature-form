@@ -731,6 +731,19 @@ class SubmissionService:
         )
         if self.audit_log_service:
             self.audit_log_service.log_event("FORM_SUBMITTED", submission_id, form_slug)
+        if self.workflow_service and hasattr(self.submission_repository, "session_factory"):
+            try:
+                self.submission_repository.record_workflow_event(submission_id, {
+                    "previous_status": "", "new_status": initial_status,
+                    "previous_step": "", "new_step": initial_step,
+                    "actor_role": "participant", "reason": "submission_created",
+                    "source": "submission_created",
+                })
+                self.workflow_service.dispatch_persisted_workflow_event(
+                    submission_id, source="submission_created"
+                )
+            except Exception:
+                current_app.logger.exception("initial_workflow_mail_event_failed submission_id=%s", submission_id)
         if dispatch_received and self.mail_dispatch_service:
             try:
                 self.mail_dispatch_service.dispatch_submission_received(
@@ -1244,6 +1257,10 @@ class SubmissionService:
             "source": "qualification_recheck",
             "side_effects": {"resumed_from": str(origin["source"])},
         })
+        if self.workflow_service:
+            self.workflow_service.dispatch_persisted_workflow_event(
+                submission_id, source="qualification_recheck"
+            )
         if target_step == FieldAvailabilityService().initial_step(form_config):
             self.workflow_service.enter_submission_review(submission, form_config)
 

@@ -423,6 +423,191 @@ class ComplianceService:
                 db.refresh(record)
             return records
 
+    @staticmethod
+    def pending_reacceptances(db, submission, form_version, due_fields):
+        """Find required consents without valid acceptance for this version."""
+        from form_loader import evaluate_visible_if
+
+        values = dict(submission.data_json or {})
+        fields = {
+            str(field["name"]): field
+            for field in due_fields
+            if isinstance(field, dict)
+            and field.get("type") == "checkbox"
+            and field.get("name")
+        }
+
+        existing = {
+            record.consent_key: record
+            for record in db.execute(
+                select(SubmissionConsent).where(
+                    SubmissionConsent.submission_id == submission.id
+                )
+            ).scalars()
+        }
+
+        pending = {}
+
+        for link in form_version.consent_links:
+            version = link.consent_version
+            key = str(version.definition.consent_key)
+            field = fields.get(key)
+
+            if not field:
+                continue
+
+            if not evaluate_visible_if(
+                field.get("visible_if"), values
+            ):
+                continue
+
+            required = bool(field.get("required"))
+            required_if = field.get("required_if")
+
+            if required_if and evaluate_visible_if(required_if, values):
+                required = True
+
+            if not required:
+                continue
+
+            regulation = (
+                form_version.regulation_version
+                if version.consent_type == "regulation"
+                or "regulamin" in key.casefold()
+                else None
+            )
+
+            regulation_hash = regulation.sha256 if regulation else ""
+            previous = existing.get(key)
+
+            if (
+                previous is not None
+                and previous.accepted is True
+                and previous.consent_version_id == version.id
+                and previous.consent_sha256 == version.sha256
+                and (previous.regulation_sha256 or "") == regulation_hash
+            ):
+                continue
+
+            pending[key] = {
+                "title": version.title,
+                "consent_version_id": version.id,
+                "consent_sha256": version.sha256,
+                "regulation_sha256": regulation_hash,
+            }
+
+        return pending
+
+    @staticmethod
+    def record_reacceptances(
+        db, submission, form_version, accepted_keys, *, due_fields
+    ):
+        """Record explicit acceptance while preserving earlier evidence."""
+        from models import SubmissionWorkflowEvent
+
+        accepted_keys = {str(key) for key in accepted_keys}
+        pending = ComplianceService.pending_reacceptances(
+            db, submission, form_version, due_fields
+        )
+
+        if not pending or not accepted_keys:
+            return
+
+        now = datetime.now(timezone.utc)
+
+        versions = {
+            str(link.consent_version.definition.consent_key):
+            link.consent_version
+            for link in form_version.consent_links
+        }
+
+        for key in sorted(set(pending) & accepted_keys):
+            version = versions[key]
+
+            previous = db.execute(
+                select(SubmissionConsent).where(
+                    SubmissionConsent.submission_id == submission.id,
+                    SubmissionConsent.consent_key == key,
+                )
+            ).scalar_one_or_none()
+
+            regulation = (
+                form_version.regulation_version
+                if version.consent_type == "regulation"
+                or "regulamin" in key.casefold()
+                else None
+            )
+
+            if previous is not None:
+                db.add(SubmissionWorkflowEvent(
+                    submission_id=submission.id,
+                    public_submission_id=submission.submission_id,
+                    form_slug=submission.form_slug,
+                    previous_status=submission.process_status or "",
+                    new_status=submission.process_status or "",
+                    previous_step=submission.workflow_step or "",
+                    new_step=submission.workflow_step or "",
+                    actor_role="participant",
+                    source="consent_reacceptance",
+                    reason="Ponowna akceptacja zgody.",
+                    side_effects={
+                        "consent_key": key,
+                        "previous": {
+                            "consent_version_id": previous.consent_version_id,
+                            "consent_version": previous.consent_version,
+                            "title": previous.consent_title_snapshot,
+                            "text": previous.consent_text_snapshot,
+                            "sha256": previous.consent_sha256,
+                            "regulation_version_id": previous.regulation_version_id,
+                            "regulation_sha256": previous.regulation_sha256,
+                            "accepted": previous.accepted,
+                            "accepted_at": (
+                                previous.accepted_at.isoformat()
+                                if previous.accepted_at else None
+                            ),
+                        },
+                        "new": {
+                            "consent_version_id": version.id,
+                            "sha256": version.sha256,
+                            "regulation_sha256": (
+                                regulation.sha256 if regulation else ""
+                            ),
+                            "accepted_at": now.isoformat(),
+                        },
+                    },
+                ))
+
+                db.delete(previous)
+                db.flush()
+
+            db.add(SubmissionConsent(
+                submission_id=submission.id,
+                consent_version_id=version.id,
+                regulation_version_id=(
+                    regulation.id if regulation else None
+                ),
+                consent_key=key,
+                consent_version=version.version_label,
+                consent_title_snapshot=version.title,
+                consent_text_snapshot=version.text_snapshot,
+                consent_sha256=version.sha256,
+                regulation_version=(
+                    regulation.version_label if regulation else ""
+                ),
+                regulation_sha256=(
+                    regulation.sha256 if regulation else ""
+                ),
+                accepted=True,
+                accepted_at=now,
+                metadata_json={
+                    "consent_type": version.consent_type,
+                    "source": "version_reacceptance",
+                },
+            ))
+
+        db.flush()
+        db.expire(submission, ["consents"])
+
     def remove_incomplete_submission(self, submission_id: str) -> None:
         session_factory = getattr(self.submission_repository, "session_factory", None)
         if not session_factory:

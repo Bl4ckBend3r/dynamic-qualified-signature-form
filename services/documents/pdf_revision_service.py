@@ -179,7 +179,15 @@ def allowed_profile_post_signature_update(
             logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=old_keys - new_keys')
             return False
 
-        allowed_root_additions = {"/DSS", "/Extensions", "/Version"}
+        allowed_root_additions = {
+            "/DSS", "/Extensions", "/Version", "/Metadata"
+        }
+
+        if "/Metadata" in new_keys - old_keys:
+            if not _allowed_new_xmp_metadata(
+                new_root["/Metadata"].get_object()
+            ):
+                return False
 
         if not (new_keys - old_keys) <= allowed_root_additions:
             import logging
@@ -260,6 +268,130 @@ def allowed_profile_post_signature_update(
     except Exception:
         import logging
         logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=exception_or_validation_failure')
+        return False
+
+
+
+def _allowed_new_xmp_metadata(stream) -> bool:
+    """Validate newly added technical XMP metadata."""
+    try:
+        if str(stream.get("/Type")) != "/Metadata":
+            return False
+
+        if str(stream.get("/Subtype")) != "/XML":
+            return False
+
+        if set(map(str, stream.keys())) - {
+            "/Type", "/Subtype", "/Length"
+        }:
+            return False
+
+        raw = stream.get_data()
+
+        if not raw or len(raw) > 65536:
+            return False
+
+        parser = etree.XMLParser(
+            resolve_entities=False,
+            load_dtd=False,
+            no_network=True,
+            recover=False,
+        )
+
+        document = etree.parse(BytesIO(raw), parser)
+
+        if document.docinfo.doctype:
+            return False
+
+        for pi in document.xpath("/processing-instruction()"):
+            if pi.target != "xpacket":
+                return False
+
+        xmp = "{adobe:ns:meta/}"
+        rdf = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+        xap = "{http://ns.adobe.com/xap/1.0/}"
+        mm = "{http://ns.adobe.com/xap/1.0/mm/}"
+        pdf = "{http://ns.adobe.com/pdf/1.3/}"
+        dc = "{http://purl.org/dc/elements/1.1/}"
+
+        allowed_tags = {
+            pdf + "Producer",
+            mm + "DocumentID",
+            mm + "InstanceID",
+            xap + "CreateDate",
+            xap + "CreatorTool",
+            xap + "MetadataDate",
+            xap + "ModifyDate",
+            dc + "format",
+        }
+
+        def clean_container(element):
+            return (
+                not (element.text or "").strip()
+                and all(
+                    not (child.tail or "").strip()
+                    for child in element
+                )
+            )
+
+        root = document.getroot()
+
+        if root.tag != xmp + "xmpmeta":
+            return False
+
+        if set(root.attrib) - {xmp + "xmptk"}:
+            return False
+
+        if len(root) != 1 or not clean_container(root):
+            return False
+
+        rdf_root = root[0]
+
+        if rdf_root.tag != rdf + "RDF":
+            return False
+
+        if rdf_root.attrib or not clean_container(rdf_root):
+            return False
+
+        seen = set()
+
+        for description in rdf_root:
+            if description.tag != rdf + "Description":
+                return False
+
+            if set(description.attrib) - {rdf + "about"}:
+                return False
+
+            if description.get(rdf + "about", "") != "":
+                return False
+
+            if not clean_container(description):
+                return False
+
+            for element in description:
+                if element.tag not in allowed_tags:
+                    return False
+
+                if element.tag in seen:
+                    return False
+
+                if len(element) or element.attrib:
+                    return False
+
+                value = (element.text or "").strip()
+
+                if not value or len(value) > 4096:
+                    return False
+
+                if element.tag == dc + "format":
+                    if value != "application/pdf":
+                        return False
+
+                seen.add(element.tag)
+
+        return bool(seen)
+
+    except Exception:
         return False
 
 

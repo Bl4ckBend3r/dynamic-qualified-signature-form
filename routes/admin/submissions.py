@@ -1751,6 +1751,9 @@ def _resume_audited_workflow_continuation(db, form, submission, continuation: di
             ),
             None,
         )
+        services.workflow_service.dispatch_persisted_workflow_event(
+            submission.submission_id, source="workflow_transition_submission"
+        )
         services.mail_dispatch_service.dispatch_workflow_decision_event(
             db=db,
             form=form,
@@ -1771,6 +1774,9 @@ def _resume_audited_workflow_continuation(db, form, submission, continuation: di
     if kind != "officer_decision":
         return
     if continuation.get("explicit_workflow"):
+        services.workflow_service.dispatch_persisted_workflow_event(
+            submission.submission_id, source="workflow_transition_submission"
+        )
         row = services.submission_repository.get_by_id(submission.submission_id)
         if row:
             services.workflow_service.run_automatic_steps(
@@ -2460,6 +2466,10 @@ def repeatable_item_decision_update(form_id: int, submission_pk: int, group_key:
                 return redirect(
                     url_for("admin.submission_detail", form_id=form_id, submission_pk=submission_pk)
                     + "#repeatable-decisions"
+                )
+            if audit_marker:
+                services.workflow_service.dispatch_persisted_workflow_event(
+                    submission.submission_id, source="workflow_transition_submission"
                 )
             services.mail_dispatch_service.dispatch_workflow_decision_event(
                 db=db, form=form, submission=submission, decision=decision,
@@ -3231,6 +3241,10 @@ def save_officer_decision(db, form, submission, decision_value: str, reason_valu
             "workflow_step": target_step or previous_step,
             "decision_category": category,
         },
+    )
+
+    workflow_service.dispatch_persisted_workflow_event(
+        public_submission_id, source="workflow_transition_submission"
     )
 
     automatic_warning = False

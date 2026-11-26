@@ -1,5 +1,7 @@
 import logging
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -17,8 +19,11 @@ from services.documents.document_storage_service import DocumentStorageError, Do
 from services.documents.document_view_service import DocumentViewService
 from services.documents.pdf_render_service import PdfRenderError, PdfRenderService
 from services.documents.signed_document_service import SignedDocumentError, SignedDocumentService
+from services.document_naming_service import build_uploaded_document_filename, uploaded_filename_with_suffix
+from services.nextcloud_storage import NextcloudStorage
 from services.submission_document_service import SubmissionDocumentService
 from services.submission_service import SubmissionService
+from testing_support import InMemoryStorage
 
 
 class DummyStorage:
@@ -73,6 +78,145 @@ class TransactionalPdfStorage:
 
     def save_pdf(self, slug, filename, document_bytes, **kwargs):
         self.files[self.pdf_storage_path(slug, filename, **kwargs)] = bytes(document_bytes)
+
+
+@pytest.mark.parametrize("document_id,trainings,expected", [
+    ("declaration", ["Łódź — podstawy", "Kraków + analiza"], "Żaneta_Łuczak-deklaracja-Łódź — podstawy+Kraków + analiza.pdf"),
+    ("agreement", "Prawo i podatki", "Żaneta_Łuczak-umowa-Prawo i podatki.pdf"),
+    ("training_agreement", "Prawo i podatki", "Żaneta_Łuczak-umowa-Prawo i podatki.pdf"),
+    ("declaration", [], "Żaneta_Łuczak-deklaracja-Bez szkolenia.pdf"),
+])
+def test_participant_uploaded_filename(document_id, trainings, expected):
+    row = {"first_name": "Żaneta", "last_name": "Łuczak"}
+    assert build_uploaded_document_filename(row, document_id, trainings) == expected
+
+
+def test_participant_uploaded_filename_sanitizes_and_limits_bytes():
+    row = {"imiona": "A/da", "nazwisko": "Nowa:*"}
+    name = build_uploaded_document_filename(row, "declaration", "Zaświadczenie? <>\\/" + "ó" * 200)
+    assert name.startswith("A_da_Nowa-deklaracja-Zaświadczenie_")
+    assert len(name.encode("utf-8")) <= 184
+    assert len(uploaded_filename_with_suffix(name, 10000).encode("utf-8")) <= 184
+    assert all(character not in name for character in '<>:"/\\|?*')
+    assert build_uploaded_document_filename(
+        {"imiona": "Zo\u0301fia", "nazwisko": "No\u0301wak"},
+        "agreement", "Ło\u0301dź",
+    ) == "Zófia_Nówak-umowa-Łódź.pdf"
+
+
+def test_unique_participant_pdf_write_collisions_concurrency_and_rollback():
+    storage = InMemoryStorage({})
+    service = DocumentStorageService()
+    name = "Żaneta_Łuczak-deklaracja-Łódź.pdf"
+    barrier = Barrier(8)
+
+    def write(index):
+        barrier.wait()
+        return service.save_pdf_recoverable(
+            storage=storage, slug="one", filename=name, document_bytes=str(index).encode(),
+            document_type="declaration", signed=True, unique=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        receipts = list(pool.map(write, range(8)))
+    assert {receipt.filename for receipt in receipts} == {
+        name, *(f"Żaneta_Łuczak-deklaracja-Łódź-{number}.pdf" for number in range(2, 9))
+    }
+    assert {storage.read_bytes(receipt.storage_path) for receipt in receipts} == {
+        str(number).encode() for number in range(8)
+    }
+    other = service.save_pdf_recoverable(
+        storage=storage, slug="other", filename=name, document_bytes=b"other",
+        document_type="declaration", signed=True, unique=True,
+    )
+    assert other.filename == name
+    service.rollback_pdf_write(storage=storage, receipt=receipts[0])
+    assert not storage.exists(receipts[0].storage_path)
+    assert all(storage.exists(receipt.storage_path) for receipt in receipts[1:])
+    assert storage.read_bytes(other.storage_path) == b"other"
+
+
+def test_nextcloud_unique_write_uses_conditional_put(monkeypatch):
+    storage = NextcloudStorage("https://cloud.test", "user", "secret")
+    calls = []
+    statuses = iter((201, 412))
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=next(statuses))
+    monkeypatch.setattr(storage, "_request", request)
+    assert storage.write_bytes_if_absent("output/x.pdf", b"one", "application/pdf")
+    assert not storage.write_bytes_if_absent("output/x.pdf", b"two", "application/pdf")
+    assert all(call[2]["headers"]["If-None-Match"] == "*" for call in calls)
+
+
+def test_unique_local_pdf_write_uses_exclusive_creation(tmp_path):
+    class LocalStorage:
+        def pdf_storage_path(self, _slug, filename, **_kwargs):
+            return str(tmp_path / filename)
+
+    storage = LocalStorage()
+    service = DocumentStorageService()
+    first = service.save_pdf_recoverable(
+        storage=storage, slug="form", filename="Anna_Nowak-umowa-Test.pdf",
+        document_bytes=b"first", document_type="agreement", signed=True, unique=True,
+    )
+    second = service.save_pdf_recoverable(
+        storage=storage, slug="form", filename="Anna_Nowak-umowa-Test.pdf",
+        document_bytes=b"second", document_type="agreement", signed=True, unique=True,
+    )
+    assert first.filename == "Anna_Nowak-umowa-Test.pdf"
+    assert second.filename == "Anna_Nowak-umowa-Test-2.pdf"
+    assert (tmp_path / first.filename).read_bytes() == b"first"
+    assert (tmp_path / second.filename).read_bytes() == b"second"
+    service.rollback_pdf_write(storage=storage, receipt=second)
+    assert not (tmp_path / second.filename).exists()
+    assert (tmp_path / first.filename).read_bytes() == b"first"
+
+
+def test_legacy_participant_document_upload_uses_allocated_name_and_rolls_back(monkeypatch):
+    storage = InMemoryStorage({})
+    service = DocumentService(
+        storage=storage, submission_repository=SimpleNamespace(supports_file_metadata=True),
+    )
+    row = {"submission_id": "public", "form_slug": "form", "imiona": "Żaneta",
+           "nazwisko": "Łuczak", "selected_trainings": [{"id": "a", "name": "Łódź"}]}
+    monkeypatch.setattr(service, "_require_version_completion", lambda *_args: None)
+    monkeypatch.setattr(service, "require_workflow_document_action", lambda *_args: None)
+    monkeypatch.setattr(service, "_row", lambda *_args: row)
+    monkeypatch.setattr(service, "_slug", lambda *_args: "form")
+    monkeypatch.setattr(service, "_submission_id", lambda *_args: "public")
+    monkeypatch.setattr(service, "_signed_document_target", lambda *_args: ("generated.pdf", "generated-signed.pdf", None))
+    service.workflow_service = SimpleNamespace(definition_for=lambda *_args: {})
+    monkeypatch.setattr(service, "get_document_by_id", lambda *_args: {})
+    monkeypatch.setattr(service, "compare_signed_revision", lambda *_args, **_kwargs: (True, "VALID", "OK", ""))
+    monkeypatch.setattr(service, "_log_document_write", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_signed_updates", lambda *_args: {})
+    monkeypatch.setattr(service, "_update_submission", lambda *_args: None)
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+    recorded = []
+    monkeypatch.setattr(service.submission_document_service, "record_signed_document",
+                        lambda **kwargs: recorded.append(kwargs) or True)
+    app = Flask(__name__)
+    app.extensions["services"] = SimpleNamespace(document_signing_service=SimpleNamespace(
+        verify_uploaded_pdf=lambda *_args, **_kwargs: {"is_signed": True, "result": "VALID_SIGNATURE"},
+    ))
+    app.config["TEMP_DIR"] = "tmp"
+    app.config["DATABASE_URL"] = ""
+    upload = SimpleNamespace(filename="original.pdf", mimetype="application/pdf",
+                             read=lambda: b"%PDF-1.4\nsigned")
+    with app.app_context():
+        first = service.upload_signed_document(row, "agreement", upload)
+        second = service.upload_signed_document(row, "agreement", upload)
+        assert first["signed_filename"] == "Żaneta_Łuczak-umowa-Łódź.pdf"
+        assert second["signed_filename"] == "Żaneta_Łuczak-umowa-Łódź-2.pdf"
+        assert [item["original_filename"] for item in recorded] == ["original.pdf"] * 2
+        assert all(storage.read_bytes(item["storage_path"]) == b"%PDF-1.4\nsigned" for item in recorded)
+        monkeypatch.setattr(service.submission_document_service, "record_signed_document", lambda **_kwargs: False)
+        with pytest.raises(RuntimeError, match="metadanych"):
+            service.upload_signed_document(row, "agreement", upload)
+        third_path = recorded[0]["storage_path"].replace("Łódź.pdf", "Łódź-3.pdf")
+        assert not storage.exists(third_path)
+        assert all(storage.exists(item["storage_path"]) for item in recorded)
 
 
 class FakePdfRenderer:

@@ -200,6 +200,31 @@ def configure_participant_document_stage(env, documents):
         db.commit()
 
 
+def test_participant_declaration_upload_name_metadata_and_download(composite_env):
+    env = composite_env("declaration")
+    with env.repo.session_factory() as db:
+        model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == env.public_id)).scalar_one()
+        model.imiona = "Żaneta"
+        model.nazwisko = "Łuczak"
+        model.selected_trainings = json.dumps([
+            {"id": "a", "name": "Łódź — podstawy", "price": "10"},
+            {"id": "b", "name": "Kraków + analiza", "price": "20"},
+        ])
+        db.commit()
+    env.enter()
+    signed = env.pdf + b"\n% participant signature\n"
+    assert env.document.upload(env.row(), env.definition, "paper", env.file())["is_valid"]
+    name = "Żaneta_Łuczak-deklaracja-Łódź — podstawy+Kraków + analiza.pdf"
+    files = env.services.submission_document_service.list_documents(env.public_id)
+    uploaded = next(file for file in files if file["filename"] == name)
+    assert uploaded["original_filename"] == "signed.pdf"
+    assert uploaded["storage_path"].endswith("/" + name)
+    assert env.state()["uploaded_filename"] == name
+    assert env.document.download(env.row(), env.definition, "paper", name) == signed
+    assert env.document.upload(env.row(), env.definition, "paper", env.file())["is_valid"]
+    assert len(env.services.submission_document_service.list_documents(env.public_id)) == len(files)
+
+
 def configure_generic_document_stage(env, documents, *, step_id="paper"):
     step = env.definition["workflow"]["steps"][1]
     step.update(id=step_id, stage_type="documents", type="document", requires_user_action=True,
@@ -992,6 +1017,12 @@ def test_version_gap_upload_keeps_current_workflow_step(composite_env):
     file = next(file for file in env.services.submission_document_service.list_documents(env.public_id)
                 if file["document_id"] == "employment_certificate")
     assert file["workflow_step_at_upload"] == "paper" and file["status"] == "uploaded"
+    assert file["filename"] == "Imie_Nazwisko-dokument-Bez szkolenia.pdf"
+    assert file["original_filename"] == "certificate.pdf"
+    assert env.services.document_service.document_storage_service.read_document_bytes(
+        storage=env.services.document_service.storage, slug=row["form_slug"],
+        filename=file["filename"], metadata=file, strict_metadata=True,
+    ) == env.pdf
 
 
 def test_version_gap_generated_document_requires_signature(composite_env):
@@ -1247,7 +1278,7 @@ def test_document_signature_failure_messages(composite_env, monkeypatch, failure
         if failure == 'timeout':
             monkeypatch.setattr(env.services.document_signing_service, 'verifier', fail)
         elif failure == 'storage':
-            monkeypatch.setattr(env.services.document_service.document_storage_service, 'save_pdf', fail)
+            monkeypatch.setattr(env.services.document_service.storage, 'write_bytes_if_absent', fail)
         else:
             monkeypatch.setattr(env.services.document_service, 'read_document_bytes_for_download', fail)
     result = env.document.upload(env.row(), env.definition, 'paper', env.file())
@@ -1794,6 +1825,8 @@ def test_composite_training_agreements_keep_separate_locks(composite_env):
     with env.repo.session_factory() as db:
         model = db.execute(select(FormSubmission).where(FormSubmission.submission_id == env.public_id)).scalar_one()
         model.selected_trainings = json.dumps(snapshots)
+        model.imiona = 'Żaneta'
+        model.nazwisko = 'Łuczak'
         for snapshot in snapshots:
             db.add(env.services.submission_training_service._new_row(model.id, snapshot))
         model.form_version.definition_json = deepcopy(env.definition)
@@ -1808,6 +1841,7 @@ def test_composite_training_agreements_keep_separate_locks(composite_env):
     for key in ['a', 'b']:
         assert env.document.upload(env.row(), env.definition, 'paper', env.file(), instance=key)['is_valid']
         assert env.row()['workflow_stage'] == 'paper'
+        assert env.state()['instances'][key]['uploaded_filename'] == f'Żaneta_Łuczak-umowa-Szkolenie {key}.pdf'
     with env.repo.session_factory() as db:
         trainings = db.execute(select(SubmissionTraining)).scalars().all()
         assert len(trainings) == 2 and all(t.is_locked for t in trainings)
@@ -2838,3 +2872,4 @@ def test_composite_uses_real_document_builder_pdf_and_metadata(composite_env, mo
     data = env.document.download(env.row(), env.definition, 'paper', env.state()['generated_filename'])
     assert data.startswith(b'%PDF-')
     assert 'Deklaracja uczestnika testowego' in ''.join(p.extract_text() for p in PdfReader(BytesIO(data)).pages)
+

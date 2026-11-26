@@ -730,14 +730,25 @@ class DocumentService:
             and current_app.config.get("DATABASE_URL")
         )
         if is_valid:
-            with self.document_storage_service.transactional_pdf_write(
+            signed_filename = naming.build_uploaded_document_filename(
+                row, document_id,
+                self.document_workflow._uploaded_training_names(
+                    row, document_id,
+                    {"training_key": instance_id} if instance_id else None,
+                ),
+            )
+            pdf_write = self.document_storage_service.save_pdf_recoverable(
                 storage=self.storage,
                 slug=slug,
                 filename=signed_filename,
                 document_bytes=uploaded_bytes,
                 document_type=self._storage_document_type(document_id),
                 signed=True,
-            ) as storage_path:
+                unique=True,
+            )
+            signed_filename = pdf_write.filename
+            storage_path = pdf_write.storage_path
+            try:
                 recorded = self.submission_document_service.record_signed_document(
                     submission_id=self._submission_id(submission),
                     form_slug=slug,
@@ -755,6 +766,9 @@ class DocumentService:
                     dispatch_notification=not coordinated_training_upload,
                 )
                 self._require_metadata_record(recorded, signed_filename)
+            except Exception:
+                self.document_storage_service.rollback_pdf_write(storage=self.storage, receipt=pdf_write)
+                raise
             self._log_document_write(
                 submission,
                 filename=signed_filename,
@@ -789,7 +803,7 @@ class DocumentService:
                 document_id=document_id,
             )
         if not coordinated_training_upload:
-            self._audit("SIGNED_DOCUMENT_UPLOADED", submission, metadata={"document_id": document_id, "filename": signed_filename})
+            self._audit("SIGNED_DOCUMENT_UPLOADED", submission, metadata={"document_id": document_id})
             self._audit("SIGNATURE_VERIFIED" if is_valid else "SIGNATURE_INVALID", submission, metadata=verification)
         return {
             "source_filename": source_filename,
@@ -1182,7 +1196,7 @@ class DocumentService:
 
     def _require_metadata_record(self, recorded: bool, filename: str) -> None:
         if getattr(self.submission_repository, "supports_file_metadata", False) and not recorded:
-            raise RuntimeError(f"Nie udalo sie zapisac metadanych wygenerowanego dokumentu: {filename}")
+            raise RuntimeError("Nie udalo sie zapisac metadanych dokumentu.")
 
     def _log_document_write(
         self,
@@ -1195,13 +1209,11 @@ class DocumentService:
     ) -> None:
         row = self._row(submission)
         current_app.logger.info(
-            "Document generated public_submission_id=%s internal_submission_id=%s filename=%s "
-            "document_type=%s storage_path=%s file_saved=%s submission_file_created=%s.",
+            "Document stored public_submission_id=%s internal_submission_id=%s "
+            "document_type=%s file_saved=%s submission_file_created=%s.",
             self._submission_id(submission),
             row.get("id", ""),
-            filename,
             document_type,
-            storage_path,
             True,
             metadata_recorded,
         )

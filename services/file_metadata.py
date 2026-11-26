@@ -60,8 +60,7 @@ def record_submission_file(
     }
     recorded = bool(submission_repository.record_file(submission_id, metadata))
     logger.info(
-        "Metadane pliku %s dla zgloszenia %s: %s.",
-        filename,
+        "Metadane pliku dla zgloszenia %s: %s.",
         submission_id,
         "zapisane" if recorded else "pominiete",
     )

@@ -1,0 +1,122 @@
+diff --git a/scripts/rename_uploaded_documents.py b/scripts/rename_uploaded_documents.py
+--- a/scripts/rename_uploaded_documents.py
++++ b/scripts/rename_uploaded_documents.py
+@@ -520,7 +520,32 @@
+             for file_id, kind, training_key in plans:
+                 yield submission_id, file_id, kind, training_key
+ 
++    def _already_applied(self, db, group: list[SubmissionFile]) -> bool:
++        """Recognize journaled targets, including collision suffixes."""
++        members = {member.id: member for member in group}
++        entries = list(db.execute(select(UploadedDocumentRename).where(
++            UploadedDocumentRename.submission_file_id.in_(members),
++            UploadedDocumentRename.status == "applied",
++        ).order_by(UploadedDocumentRename.id)).scalars())
++        if not entries:
++            return False
++        if len({(item.migration_id, item.group_id) for item in entries}) != 1:
++            raise RenameError("Multiple applied journal groups", "INCOMPLETE_JOURNAL")
++        entries = self._group_entries(db, entries[0])
++        if (len(entries) != len(members)
++                or {item.submission_file_id for item in entries} != set(members)
++                or any(item.group_id != min(members) or item.status != "applied" for item in entries)):
++            raise RenameError("Incomplete applied journal group", "INCOMPLETE_JOURNAL")
++        for item in entries:
++            member = members[item.submission_file_id]
++            if (member.filename, member.storage_path) != (item.new_filename, item.new_storage_path):
++                raise RenameError("Document metadata does not match journal", "METADATA_CHANGED")
++        if not self.storage.exists(entries[0].new_storage_path):
++            raise RenameError("Applied target is missing", "SOURCE_MISSING")
++        return True
++
+     def dry_run(self) -> dict:
++        self._require_journal()
+         report = {"action": "dry-run", "candidates": [], "skipped": 0, "errors": [],
+                   "submissions_checked": 0, "unresolved": []}
+         for submission_id, file_id, kind, training_key in self._planned_files(report):
+@@ -530,6 +555,9 @@
+                     submission = _submission(db, file)
+                     group = _assert_unambiguous(db, file)
+                     _assert_reference_names_unambiguous(db, submission, group)
++                    if self._already_applied(db, group):
++                        report["skipped"] += 1
++                        continue
+                     base = _filename_for(file, submission, self.session_factory, kind=kind, training_key=training_key)
+                     old_path = _storage_path(file.storage_path)
+                     if old_path == _path_with_filename(old_path, base) and all(member.filename == base for member in group):
+@@ -858,6 +886,8 @@
+ def _automatic_migration(renamer):
+     renamer._require_journal()
+     engine = renamer.session_factory.kw["bind"]
++    if getattr(renamer.storage, "verify_ssl", None) is False:
++        raise RenameError("Automatic migration requires verified TLS", "TLS_VERIFICATION_DISABLED")
+     with _deployment_lock(engine), warnings.catch_warnings():
+         # Fail closed instead of silently copying private PDFs over unverified TLS.
+         warnings.simplefilter("error", InsecureRequestWarning)
+diff --git a/tests/test_uploaded_document_rename.py b/tests/test_uploaded_document_rename.py
+--- a/tests/test_uploaded_document_rename.py
++++ b/tests/test_uploaded_document_rename.py
+@@ -352,6 +352,13 @@
+     assert {item.new_filename for item in journals} == {"Anna_Nowak-umowa-Łódź-2.pdf"}
+     assert storage.read_bytes(collided) == b"%PDF-1.4\nunrelated"
+     assert len(storage.saved_pdfs) == 3
++    before = dict(storage.saved_pdfs)
++    preview = renamer.dry_run()
++    assert not preview["candidates"] and not preview["errors"]
++    assert preview["skipped"] == 1
++    assert renamer.apply("shared_collision")["applied"] == 0
++    assert renamer.verify("shared_collision")["verified"] == 1
++    assert storage.saved_pdfs == before
+ 
+ 
+ def test_shared_pdf_ignores_stale_stored_checksum(tmp_path):
+@@ -793,6 +800,38 @@
+     first = rename_script._automatic_migration(renamer)
+     assert not first["errors"] and first["result"]["applied"] == 2
+     before = dict(storage.saved_pdfs)
++    preview = renamer.dry_run()
++    assert not preview["candidates"] and not preview["errors"]
++    assert preview["skipped"] == 2
+     second = rename_script._automatic_migration(renamer)
+     assert not second["errors"] and second["result"]["applied"] == 0
+     assert storage.saved_pdfs == before
++
++
++def test_dry_run_reports_missing_applied_target(tmp_path):
++    renamer, sessions, storage, _, _ = _shared_agreement(tmp_path)
++    assert renamer.apply("missing_target")["applied"] == 1
++    target = _journals(sessions)[0].new_storage_path
++    del storage.saved_pdfs[target]
++    preview = renamer.dry_run()
++    assert not preview["candidates"]
++    assert any(error["reason_code"] == "SOURCE_MISSING" for error in preview["errors"])
++
++
++def test_dry_run_reports_changed_applied_journal(tmp_path):
++    renamer, sessions, _, _ = _environment(tmp_path)
++    assert renamer.apply("changed_journal")["applied"] == 2
++    with sessions.begin() as db:
++        entry = db.query(UploadedDocumentRename).order_by(UploadedDocumentRename.id).first()
++        entry.new_filename = "wrong.pdf"
++    preview = renamer.dry_run()
++    assert not preview["candidates"]
++    assert any(error["reason_code"] == "METADATA_CHANGED" for error in preview["errors"])
++
++
++def test_auto_rejects_disabled_tls(tmp_path, monkeypatch):
++    renamer, _, storage, _ = _environment(tmp_path)
++    monkeypatch.setattr(storage, "verify_ssl", False, raising=False)
++    with pytest.raises(RenameError) as error:
++        rename_script._automatic_migration(renamer)
++    assert error.value.code == "TLS_VERIFICATION_DISABLED"
+diff --git a/docker-compose.yml b/docker-compose.yml
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -9,6 +9,7 @@
+         alembic upgrade head
+         python -m scripts.deployment.init_form_share_key --env-file /deployment/.env
+         python -m scripts.deployment.deploy_form_versions
++        python -m scripts.rename_uploaded_documents --auto
+     restart: "no"
+     env_file:
+       - .env

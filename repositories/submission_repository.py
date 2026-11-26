@@ -771,12 +771,10 @@ class PostgresSubmissionRepository(SubmissionRepository):
 
         logger.info(
             "SubmissionFile zapisany public_submission_id=%s internal_submission_id=%s "
-            "filename=%s document_type=%s storage_path=%s.",
+            "document_type=%s.",
             wanted,
             submission.id,
-            metadata.get("filename"),
             metadata.get("document_type"),
-            metadata.get("storage_path"),
         )
         return True
 

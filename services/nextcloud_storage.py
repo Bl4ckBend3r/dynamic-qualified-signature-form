@@ -407,7 +407,7 @@ class NextcloudStorage:
 
     def read_bytes(self, path: str) -> bytes:
         response = self._request("GET", path)
-        self._check_status(response, (200,), f"Cannot read binary file '{path}'")
+        self._check_status(response, (200,), "Cannot read binary file")
         return response.content
 
     def write_text(self, path: str, content: str, content_type: str) -> None:
@@ -429,6 +429,33 @@ class NextcloudStorage:
         )
 
         self._check_status(response, (200, 201, 204), f"Cannot write file '{path}'")
+
+    def write_bytes_if_absent(self, path: str, content: bytes, content_type: str) -> bool:
+        """Use the WebDAV conditional PUT as the collision arbitration point."""
+        response = self._request(
+            "PUT", path,
+            headers={"Content-Type": content_type, "If-None-Match": "*"},
+            data=content,
+        )
+        if response.status_code == 201:
+            return True
+        if response.status_code == 412:
+            return False
+        self._check_status(response, (201, 412), "Cannot create PDF exclusively")
+        raise NextcloudStorageError("Cannot create PDF exclusively")
+
+    def move_if_absent(self, source_path: str, destination_path: str) -> bool:
+        """Atomically move a staged file without replacing a destination."""
+        response = self._request(
+            "MOVE", source_path,
+            headers={"Destination": self._encode_path(destination_path), "Overwrite": "F"},
+        )
+        if response.status_code == 201:
+            return True
+        if response.status_code == 412:
+            return False
+        self._check_status(response, (201, 412), "Cannot move PDF exclusively")
+        raise NextcloudStorageError("Cannot move PDF exclusively")
 
     def delete(self, path: str, *, missing_ok: bool = False) -> None:
         response = self._request("DELETE", path)

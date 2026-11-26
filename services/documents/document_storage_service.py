@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
 
 from services.file_metadata import resolve_pdf_storage_path
+from services.document_naming_service import uploaded_filename_with_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +77,7 @@ class DocumentStorageService:
                     })
                 else:
                     logger.exception(
-                        "Nie udalo sie wycofac zapisu PDF po bledzie dalszego etapu: %s.",
-                        receipt.storage_path,
+                        "Nie udalo sie wycofac zapisu PDF po bledzie dalszego etapu.",
                     )
             raise
 
@@ -89,8 +90,42 @@ class DocumentStorageService:
         document_bytes: bytes,
         document_type: str | None,
         signed: bool,
+        unique: bool = False,
     ) -> PdfWriteReceipt:
         """Write a PDF and return the state needed for explicit compensation."""
+        if unique:
+            if hasattr(storage, "ensure_form_output_structure"):
+                storage.ensure_form_output_structure(slug)
+            for sequence in range(1, 10001):
+                candidate = uploaded_filename_with_suffix(filename, sequence)
+                candidate_path = resolve_pdf_storage_path(
+                    storage, slug, candidate, document_type=document_type, signed=signed,
+                )
+                if hasattr(storage, "write_bytes_if_absent"):
+                    created = storage.write_bytes_if_absent(candidate_path, document_bytes, "application/pdf")
+                elif not hasattr(storage, "save_pdf") and not hasattr(storage, "write_bytes"):
+                    local_path = Path(candidate_path)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        with os.fdopen(os.open(local_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                            try:
+                                output.write(document_bytes)
+                            except Exception:
+                                local_path.unlink(missing_ok=True)
+                                raise
+                    except FileExistsError:
+                        created = False
+                    else:
+                        created = True
+                else:
+                    raise DocumentStorageError("Storage nie obsługuje atomowego zapisu PDF.")
+                if created:
+                    return PdfWriteReceipt(
+                        storage_path=candidate_path, slug=slug, filename=candidate,
+                        document_type=document_type, signed=signed,
+                        rollback_state=_PdfRollbackState(candidate_path, False, None),
+                    )
+            raise DocumentStorageError("Nie udało się przydzielić nazwy PDF.")
         storage_path = resolve_pdf_storage_path(
             storage,
             slug,
@@ -172,27 +207,22 @@ class DocumentStorageService:
                 if strict_metadata:
                     raise
                 logger.warning(
-                    "Document storage_path lookup failed; refusing legacy filename lookup "
-                    "submission_id=%s filename=%s storage_path=%s.",
+                    "Document storage_path lookup failed; refusing legacy filename lookup submission_id=%s.",
                     submission_id,
-                    clean_filename,
-                    storage_path,
                     exc_info=True,
                 )
                 raise DocumentStorageError("Nie udało się odczytać dokumentu pod zapisaną ścieżką.") from exc
 
         if strict_metadata:
             logger.error(
-                "strict_document_metadata_missing area=documents submission_id=%s filename=%s reason=missing_submission_file_storage_path",
+                "strict_document_metadata_missing area=documents submission_id=%s reason=missing_submission_file_storage_path",
                 submission_id,
-                clean_filename,
             )
             raise DocumentStorageError("Brak metadanych dokumentu wymaganych w strict mode.")
 
         logger.warning(
-            "Legacy PDF lookup by filename used for submission=%s filename=%s.",
+            "Legacy PDF lookup by filename used for submission=%s.",
             submission_id,
-            clean_filename,
         )
         return storage.get_pdf_bytes(slug, clean_filename)
 
@@ -253,10 +283,8 @@ class DocumentStorageService:
                     return True
             except Exception:
                 logger.warning(
-                    "Nie udalo sie sprawdzic storage_path dokumentu submission_id=%s filename=%s storage_path=%s.",
+                    "Nie udalo sie sprawdzic storage_path dokumentu submission_id=%s.",
                     (metadata or {}).get("public_submission_id", ""),
-                    clean_filename,
-                    storage_path,
                     exc_info=True,
                 )
 
@@ -293,8 +321,7 @@ class DocumentStorageService:
     ) -> None:
         if rollback_state is None:
             logger.error(
-                "Storage nie udostepnia exists(); nie mozna bezpiecznie wycofac zapisu PDF: %s.",
-                filename,
+                "Storage nie udostepnia exists(); nie mozna bezpiecznie wycofac zapisu PDF.",
             )
             return
         if rollback_state.existed:

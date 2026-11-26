@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -141,36 +142,31 @@ def resolve_pdf_storage_path(
     return f"{normalized_output_dir}/{clean_slug}/pdf/{clean_filename}"
 
 
-def build_uploaded_agreement_filename(row, training_name):
-    """Build a readable PDF filename while preserving Polish characters."""
-    import re
-    import unicodedata
+def _uploaded_filename_part(value: Any, fallback: str, *, underscores: bool = False) -> str:
+    value = unicodedata.normalize("NFC", str(value or "")).strip()
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", value)
+    value = re.sub(r"\s+", "_" if underscores else " ", value)
+    return value.strip(" ._") or fallback
 
-    def clean(value, fallback, underscores=False):
-        value = unicodedata.normalize(
-            "NFC", str(value or "")
-        ).strip()
-        value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", value)
-        value = re.sub(r"\s+", "_" if underscores else " ", value)
-        return value.strip(" ._") or fallback
 
-    first_name = clean(
-        row.get("first_name") or row.get("imiona") or row.get("imie"),
-        "Imie",
-        underscores=True,
-    )
+def _limit_uploaded_stem(stem: str, limit: int = 180) -> str:
+    return stem.encode("utf-8")[:limit].decode("utf-8", errors="ignore").rstrip(" ._")
 
-    last_name = clean(
-        row.get("last_name") or row.get("nazwisko"),
-        "Nazwisko",
-        underscores=True,
-    )
 
-    training = clean(training_name, "Szkolenie")
+def build_uploaded_document_filename(row: Mapping[str, Any], document_id: str, training_name: str | list[str]) -> str:
+    """Name a participant upload without changing generated document names."""
+    first_name = _limit_uploaded_stem(_uploaded_filename_part(get_participant_first_name(row), "Imie", underscores=True), 48)
+    last_name = _limit_uploaded_stem(_uploaded_filename_part(get_participant_last_name(row), "Nazwisko", underscores=True), 48)
+    kind = "deklaracja" if document_id == "declaration" else "umowa" if document_id in {"agreement", "training_agreement"} else "dokument"
+    names = training_name if isinstance(training_name, list) else [training_name]
+    training = "+".join(
+        _uploaded_filename_part(name, "Bez szkolenia") for name in names if name
+    ) or "Bez szkolenia"
+    return f"{_limit_uploaded_stem(f'{first_name}_{last_name}-{kind}-{training}')}.pdf"
 
-    stem = f"{first_name}_{last_name} - {training}"
-    stem = stem.encode("utf-8")[:180].decode(
-        "utf-8", errors="ignore"
-    ).rstrip(" ._")
 
-    return f"{stem}.pdf"
+def uploaded_filename_with_suffix(filename: str, sequence: int) -> str:
+    if sequence < 1:
+        raise ValueError("Invalid filename sequence")
+    suffix = "" if sequence == 1 else f"-{sequence}"
+    return f"{_limit_uploaded_stem(Path(filename).stem, 180 - len(suffix))}{suffix}.pdf"

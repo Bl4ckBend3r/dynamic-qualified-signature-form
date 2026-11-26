@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from threading import Lock
 
 
 class InMemoryStorage:
@@ -15,6 +16,7 @@ class InMemoryStorage:
         self.saved_pdfs = {}
         self.csv_rows = []
         self.direct_files = {}
+        self._write_lock = Lock()
 
     def ensure_base_structure(self):
         return None
@@ -30,6 +32,23 @@ class InMemoryStorage:
 
     def write_bytes(self, path, content, content_type=None):
         self.direct_files[path] = bytes(content)
+
+    def write_bytes_if_absent(self, path, content, content_type=None):
+        with self._write_lock:
+            if path in self.direct_files or path in self.saved_pdfs:
+                return False
+            self.saved_pdfs[path] = bytes(content)
+            return True
+
+    def move_if_absent(self, source_path, destination_path):
+        with self._write_lock:
+            if destination_path in self.direct_files or destination_path in self.saved_pdfs:
+                return False
+            source = self.saved_pdfs.pop(source_path, None)
+            if source is None:
+                source = self.direct_files.pop(source_path)
+            self.saved_pdfs[destination_path] = source
+            return True
 
     def write_text(self, path, content, content_type=None):
         self.direct_files[path] = content.encode("utf-8")

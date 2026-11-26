@@ -446,6 +446,33 @@ class SubmissionFile(Base):
     submission: Mapped[FormSubmission] = relationship(back_populates="files")
 
 
+class UploadedDocumentRename(Base):
+    """Durable copy and reference journal for participant PDF renames."""
+
+    __tablename__ = "uploaded_document_renames"
+    __table_args__ = (
+        UniqueConstraint("migration_id", "submission_file_id", name="uq_uploaded_document_renames_migration_file"),
+        Index("ix_uploaded_document_renames_file", "submission_file_id"),
+        Index("ix_uploaded_document_renames_group", "migration_id", "group_id"),
+        Index("ix_uploaded_document_renames_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    migration_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    submission_file_id: Mapped[int] = mapped_column(ForeignKey("submission_files.id", ondelete="CASCADE"), nullable=False)
+    group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    old_storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    base_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    new_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    new_storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    staging_storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="planned", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class SubmissionWorkflowEvent(Base):
     __tablename__ = "submission_workflow_events"
     __table_args__ = (

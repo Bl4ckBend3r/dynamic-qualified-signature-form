@@ -28,6 +28,7 @@ from flask import current_app
 from services.upload_validation import validate_pdf_upload
 from services.workflow_state_service import DocumentState
 from services.training_service import parse_training_snapshots
+from services.document_naming_service import build_uploaded_document_filename
 
 
 logger = logging.getLogger(__name__)
@@ -446,6 +447,21 @@ class DocumentWorkflowService:
                 if name:
                     return name
         return str(source.get("training_name") or source.get("label") or "").strip()
+
+    def _uploaded_training_names(self, row, document_id, source=None):
+        if document_id == "declaration":
+            return [
+                self._training_name(row, {"training_key": item["id"], "training_name": item["name"]})
+                for item in parse_training_snapshots(row.get("selected_trainings"))
+            ]
+        if source:
+            name = self._training_name(row, source)
+            if name:
+                return [name]
+        snapshots = parse_training_snapshots(row.get("selected_trainings"))
+        if len(snapshots) == 1:
+            return [self._training_name(row, {"training_key": snapshots[0]["id"], "training_name": snapshots[0]["name"]})]
+        return []
 
     def _public_file_label(self, row, document, source):
         if str(document.get("id") or "") not in {"agreement", "training_agreement"}:
@@ -1470,11 +1486,17 @@ class DocumentWorkflowService:
             )
             filename_suffix = "" if atomic_office_candidate else f"-{uuid4().hex[:8]}"
             filename = f"{row['submission_id']}-{step_key}-{document_key}-{signer}-{digest[:16]}{filename_suffix}.{extension}"
+            if signer == "participant":
+                filename = build_uploaded_document_filename(
+                    row, document_id,
+                    self._uploaded_training_names(row, document_id, source),
+                )
             try:
                 pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
                     slug=row["form_slug"], filename=filename, document_bytes=data,
                     document_type=self.documents._storage_document_type(document_id),
-                    signed=requires_signature)
+                    signed=requires_signature, unique=signer == "participant")
+                filename = pdf_write.filename
                 storage_path = pdf_write.storage_path
             except Exception:
                 target["verification_result"] = "VERIFICATION_ERROR"
@@ -1649,10 +1671,9 @@ class DocumentWorkflowService:
                     )
                 except Exception:
                     current_app.logger.exception(
-                        "document_storage_rollback_failed submission_id=%s document_id=%s filename=%s",
+                        "document_storage_rollback_failed submission_id=%s document_id=%s",
                         row["submission_id"],
                         document_id,
-                        filename,
                     )
                 target["verification_result"] = "VERIFICATION_ERROR"
                 target["substate"] = "verification_error"
@@ -2085,16 +2106,19 @@ class DocumentWorkflowService:
             raise ValueError("Ten dokument kończy się po wygenerowaniu.")
         data = uploaded_file.read()
         validate_pdf_upload(uploaded_file.filename, data, uploaded_file.mimetype)
-        mime_type, extension = "application/pdf", "pdf"
+        mime_type = "application/pdf"
         generated = next((file for file in files if file.get("status") == "generated"), None)
         if document.get("kind") == "generated_pdf" and not generated:
             raise ValueError("Najpierw wygeneruj dokument.")
-        digest = sha256(data).hexdigest()
-        filename = (f"{row['submission_id']}-{sha256(document_id.encode()).hexdigest()[:12]}"
-                    f"-{sha256(training_key.encode()).hexdigest()[:8]}-upgrade-{digest[:16]}.{extension}")
+        filename = build_uploaded_document_filename(
+            row, document_id,
+            self._uploaded_training_names(row, document_id, {"training_key": training_key} if training_key else None),
+        )
         pdf_write = self.documents.document_storage_service.save_pdf_recoverable(storage=self.documents.storage,
             slug=row["form_slug"], filename=filename, document_bytes=data,
-            document_type=self.documents._storage_document_type(document_id), signed=signature_required)
+            document_type=self.documents._storage_document_type(document_id), signed=signature_required,
+            unique=True)
+        filename = pdf_write.filename
         storage_path = pdf_write.storage_path
         verification = {}
         outcome = "VALID_SIGNATURE"
@@ -2200,10 +2224,9 @@ class DocumentWorkflowService:
                 )
             except Exception:
                 current_app.logger.exception(
-                    "document_storage_rollback_failed submission_id=%s document_id=%s filename=%s",
+                    "document_storage_rollback_failed submission_id=%s document_id=%s",
                     row["submission_id"],
                     document_id,
-                    filename,
                 )
             raise ValueError("Nie udało się zapisać metadanych dokumentu.")
         if accepted:

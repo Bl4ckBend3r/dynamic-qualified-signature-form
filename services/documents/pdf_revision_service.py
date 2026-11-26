@@ -160,6 +160,8 @@ def allowed_profile_post_signature_update(
     """
     matches, _, _ = compare_pdf_revision(signed_revision, final_pdf)
     if not matches:
+        import logging
+        logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=not matches')
         return False
 
     try:
@@ -173,19 +175,27 @@ def allowed_profile_post_signature_update(
         new_keys = set(map(str, new_root.keys()))
 
         if old_keys - new_keys:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=old_keys - new_keys')
             return False
 
         allowed_root_additions = {"/DSS", "/Extensions", "/Version"}
 
         if not (new_keys - old_keys) <= allowed_root_additions:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=not new_keys - old_keys <= allowed_root_additions')
             return False
 
         # Ta szczególna ścieżka wymaga rzeczywistego
         # dopisania danych DSS.
         if "/DSS" not in new_root or "/DSS" in old_root:
+            import logging
+            logging.getLogger(__name__).warning("pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition='/DSS' not in new_root or '/DSS' in old_root")
             return False
 
         if "/AcroForm" not in old_root or "/AcroForm" not in new_root:
+            import logging
+            logging.getLogger(__name__).warning("pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition='/AcroForm' not in old_root or '/AcroForm' not in new_root")
             return False
 
         old_form = old_root["/AcroForm"].get_object()
@@ -195,9 +205,13 @@ def allowed_profile_post_signature_update(
         new_form_keys = set(map(str, new_form.keys()))
 
         if old_form_keys - new_form_keys:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=old_form_keys - new_form_keys')
             return False
 
         if not (new_form_keys - old_form_keys) <= {"/DA", "/DR"}:
+            import logging
+            logging.getLogger(__name__).warning("pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=not new_form_keys - old_form_keys <= {'/DA', '/DR'}")
             return False
 
         # Nie dopuszczamy zmiany istniejących ustawień formularza.
@@ -205,12 +219,16 @@ def allowed_profile_post_signature_update(
             if _canonical(old_form[key], set()) != _canonical(
                 new_form[key], set()
             ):
+                import logging
+                logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=_canonical(old_form[key], set()) != _canonical(new_form[key], set())')
                 return False
 
         # Zmiana domyślnego wyglądu mogłaby wpływać na
         # niepodpisane pola formularza.
         for field in old_form.get("/Fields", []):
             if _ordinary_field(field) is not None:
+                import logging
+                logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=_ordinary_field(field) is not None')
                 return False
 
         # Istniejące metadane i parametry bezpieczeństwa
@@ -226,16 +244,22 @@ def allowed_profile_post_signature_update(
                     old_root[key].get_object(),
                     new_root[key].get_object(),
                 ):
+                    import logging
+                    logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=not _allowed_xmp_metadata_update(old_root[key].get_object(), new_root[key].get_object())')
                     return False
             elif _canonical(old_root[key], set()) != _canonical(
                 new_root[key], set()
             ):
+                import logging
+                logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=_canonical(old_root[key], set()) != _canonical(new_root[key], set())')
                 return False
 
 
         return True
 
     except Exception:
+        import logging
+        logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=allowed_profile_post_signature_update condition=exception_or_validation_failure')
         return False
 
 

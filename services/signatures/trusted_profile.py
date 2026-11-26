@@ -134,12 +134,16 @@ def _allowed_incremental_updates(
         signed_end = byte_range[2] + byte_range[3]
 
         if signed_end > len(pdf_bytes):
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=signed_end > len(pdf_bytes)')
             return False
 
         reader = PdfFileReader(BytesIO(pdf_bytes))
         signatures = list(reader.embedded_signatures)
 
         if len(signatures) != 1:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=len(signatures) != 1')
             return False
 
         signature = signatures[0]
@@ -150,6 +154,8 @@ def _allowed_incremental_updates(
         )
 
         if actual_range != byte_range:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=actual_range != byte_range')
             return False
 
         signature.compute_integrity_info(
@@ -157,6 +163,8 @@ def _allowed_incremental_updates(
         )
 
         if signature.coverage < SignatureCoverageLevel.ENTIRE_REVISION:
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=signature.coverage < SignatureCoverageLevel.ENTIRE_REVISION')
             return False
 
         # Brak modyfikacji po podpisaniu.
@@ -166,6 +174,8 @@ def _allowed_incremental_updates(
         difference = signature.diff_result
 
         if not isinstance(difference, DiffResult):
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=not isinstance(difference, DiffResult)')
             return False
 
         # Zwykłe dopuszczalne aktualizacje LTA.
@@ -178,6 +188,8 @@ def _allowed_incremental_updates(
                 "trusted_profile_revision_rejected level=%s",
                 difference.modification_level.name,
             )
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=difference.modification_level != ModificationLevel.FORM_FILLING')
             return False
 
         if difference.changed_form_fields:
@@ -185,6 +197,8 @@ def _allowed_incremental_updates(
                 "trusted_profile_form_changes_rejected count=%d",
                 len(difference.changed_form_fields),
             )
+            import logging
+            logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=difference.changed_form_fields')
             return False
 
         allowed = allowed_profile_post_signature_update(
@@ -203,6 +217,8 @@ def _allowed_incremental_updates(
 
     except Exception:
         logger.exception("trusted_profile_incremental_update_error")
+        import logging
+        logging.getLogger(__name__).warning('pdf_revision_rejected_detail function=_allowed_incremental_updates condition=exception_or_validation_failure')
         return False
 
 

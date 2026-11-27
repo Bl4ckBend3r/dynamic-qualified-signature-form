@@ -606,6 +606,27 @@ def build_form_definition_from_admin_form(
             "document_notifications_enabled": form_data.get("document_notifications_enabled") == "on",
             "document_notification_steps": selected_steps,
         }
+    if (
+        form_data.get("active_tab") == "declaration"
+        and form_data.get("declaration_allow_qualified") == "1"
+        and not use_full_definition
+    ):
+        declaration = next(
+            (doc for doc in definition.get("documents", [])
+             if doc.get("id") == "declaration"),
+            None,
+        )
+        if declaration is None:
+            raise ValueError("Brak konfiguracji deklaracji.")
+
+        allowed = declaration.get("allowed_signatures")
+        if not isinstance(allowed, list):
+            raise ValueError("Nieprawidłowa polityka podpisów.")
+
+        declaration["allowed_signatures"] = list(
+            dict.fromkeys([*allowed, "qualified"])
+        )
+
     if "declaration_document_name" in form_data:
         declaration = next((document for document in definition.get("documents") or []
                             if document.get("id") == "declaration"), None)

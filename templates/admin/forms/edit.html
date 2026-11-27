@@ -1134,6 +1134,19 @@
                 <div class="document-template-configuration" data-document-source-scope data-document-type="declaration" data-form-tab-only="declaration" data-workflow-template="declaration" {% if not workflow.get('requires_declaration') %}hidden{% endif %}>
                     {% set declaration_document = form.workflow_editor_documents|default([])|selectattr('id', 'equalto', 'declaration')|first|default({}) %}
                     <label><span>Nazwa dokumentu</span><input name="declaration_document_name" value="{{ declaration_document.get('participant_label', '') }}" placeholder="{{ declaration_document.get('label') or 'Deklaracja' }}"><small>Widoczna dla uczestnika. Puste pole zachowuje dotychczasową nazwę.</small></label>
+
+                    <fieldset>
+                        <legend>Podpisy elektroniczne</legend>
+                        <label class="admin-check">
+                            <input type="checkbox"
+                                name="declaration_allow_qualified"
+                                value="1"
+                                {% if 'qualified' in (declaration_document.get('allowed_signatures') or []) %}checked disabled{% endif %}>
+                            <span>Dopuść również pozostałe podpisy kwalifikowane</span>
+                            <small>CenCert, Certum, EuroCert i inni obsługiwani dostawcy.</small>
+                        </label>
+                    </fieldset>
+
                     {% set document_type = 'declaration' %}
                     {% set selected_source = workflow.get('declaration_template_source', 'builder') %}
                     {% set source_input_name = 'declaration_template_source' %}

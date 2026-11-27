@@ -80,7 +80,7 @@ class DocumentSigningService:
             raise ValueError("Przeslany plik nie zawiera podpisu PDF.")
         outcome = signature_verification_result(
             verification,
-            ["mszafir", "profil_zaufany"],
+            ["mszafir", "qualified", "profil_zaufany"],
         )
         if outcome != "VALID_SIGNATURE":
             self._record_verification_rejection(str(verification.get("reason_code") or outcome).lower())
@@ -171,9 +171,23 @@ class DocumentSigningService:
         verification.update(resolve_signature_policy(verification, allowed_signatures))
         outcome = signature_verification_result(verification, allowed_signatures)
         verification["result"] = outcome
+        
         if outcome == "SIGNATURE_TYPE_NOT_ALLOWED":
             verification["reason_code"] = "SIGNATURE_TYPE_NOT_ALLOWED"
+
+            logger.warning(
+                "signature_policy_rejected "
+                "detected_type=%r allowed_signatures=%r signature_types=%r",
+                verification.get("detected_signature_type"),
+                allowed_signatures,
+                [
+                    item.get("signature_type")
+                    for item in verification.get("signatures", [])
+                ],
+            )
+
         return verification
+
 
     def _verify_pdf(self, pdf_bytes: bytes, temp_dir: str | Path) -> Mapping[str, object]:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=temp_dir) as tmp_signed:

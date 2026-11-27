@@ -21,6 +21,10 @@ The current implementation is no longer a single hard-coded flow in `legacy_app.
 - Sends event-based e-mail notifications.
 - Writes audit logs through an audit log service and repository.
 
+### Conditional form fields
+
+`visible_if` and `required_if` accept `equals`, `not_equals`, `in`, `not_in`, `is_empty`, `is_not_empty`, `contains`, `not_contains`, `contains_any`, `contains_all`, and `contains_none`. The `contains*` operators compare exact option `value` strings in a selected-value array; `contains_any`, `contains_all`, and `contains_none` require a nonempty array of values. A checkbox with one option uses the legacy `Tak`/`Nie` value unless its configuration sets `multiple: true`; a checkbox with several options is a group. Conditions are checked again on the backend when a form is submitted.
+
 ## Current Architecture
 
 Main entry point:

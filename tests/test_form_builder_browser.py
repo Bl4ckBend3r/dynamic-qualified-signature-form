@@ -98,6 +98,7 @@ def test_form_builder_add_edit_resize_drag_preview_delete_and_serialize():
 
         page.locator("[data-builder-mode=preview]").click()
         assert page.locator("[data-form-builder]").evaluate("element => element.classList.contains('is-preview')")
+        assert page.locator("[data-preview-control]").first.is_enabled()
         page.locator("[data-builder-mode=edit]").click()
         page.locator("[data-delete-field]").click()
         assert page.locator("[data-field-key]").count() == 1
@@ -236,6 +237,11 @@ def test_public_conditional_fields_match_backend_and_toggle_required(app, client
     fields = [
         {"type": "radio", "name": "answer", "label": "Odpowiedź", "required": True,
          "options": [{"value": "Tak", "label": "Tak"}, {"value": "Nie", "label": "Nie"}]},
+        {"type": "checkbox", "name": "choices", "label": "Kompetencje", "required": False,
+         "multiple": True, "options": [{"value": "inne", "label": "Inne"}]},
+        {"type": "text", "name": "other_detail", "label": "Szczegóły", "required": False,
+         "visible_if": {"field": "choices", "operator": "contains", "value": "inne"},
+         "required_if": {"field": "choices", "operator": "contains", "value": "inne"}},
     ]
     conditions = {
         "equals": "Tak", "not_equals": "Tak", "in": ["Tak"],
@@ -260,6 +266,13 @@ def test_public_conditional_fields_match_backend_and_toggle_required(app, client
         errors = []
         page.on("pageerror", lambda exception: errors.append(str(exception)))
         _serve_project_page(page, html)
+        detail = page.locator('input[name="other_detail"]')
+        assert not detail.is_visible()
+        page.locator('input[name="choices"][value="inne"]').check()
+        assert detail.is_visible() and detail.evaluate("element => element.required")
+        assert "other_detail" in validate_submission(definition, {"answer": "Tak", "choices": ["inne"]})
+        page.locator('input[name="choices"][value="inne"]').uncheck()
+        assert not detail.is_visible()
         initial_errors = validate_submission(definition, {"answer": ""})
         for operator in conditions:
             row = page.locator(f'.form-row[data-field-name="{operator}"]')
@@ -295,4 +308,48 @@ def test_public_conditional_fields_match_backend_and_toggle_required(app, client
         admin_page.locator('input[name="equals"]').fill("Zachowaj w edycji")
         admin_page.locator('input[name="answer"][value="Nie"]').check()
         assert admin_page.locator('input[name="equals"]').input_value() == "Zachowaj w edycji"
+        browser.close()
+
+
+def test_builder_condition_picker_uses_option_values():
+    html = """<!doctype html><html><body><aside data-properties-panel>
+      <div data-properties-empty></div><div data-properties-content>
+        <select data-property=type></select><input data-property=name><div data-width-options></div><div data-availability-settings></div>
+        <input data-document-usage=declaration type=checkbox><div data-file-settings></div>
+        <textarea data-static-text-content></textarea><div data-label-setting></div><div data-static-text-setting></div>
+        <div data-name-setting></div><div data-type-setting></div><div data-width-setting></div><div data-documents-setting></div>
+        <div data-conditions-setting><div data-condition=visible_if>
+          <select data-condition-part=field><option value=''>Wybierz</option></select>
+          <select data-condition-part=operator><option value=equals>equals</option><option value=contains>contains</option><option value=contains_any>contains_any</option></select>
+          <label data-condition-value-setting><input data-condition-part=value><select data-condition-option-value hidden></select></label>
+        </div></div>
+        <div data-consent-setting></div><div data-multiple-setting></div><div data-options-setting></div>
+        <div data-placeholder-setting></div><div data-repeatable-group-settings></div><small data-name-help></small>
+        <button data-delete-field></button><button data-duplicate-field></button><button data-close-properties></button>
+      </div></aside>
+      <script type=module>
+        import {initializePropertiesPanel} from '/static/js/form_builder/properties-panel.js';
+        const fields = [{name:'choice',type:'checkbox',multiple:true,options:[{value:'ai',label:'AI'},{value:'inne',label:'Inne szkolenie'}]},
+                        {name:'detail',type:'text',options:[]}];
+        window.saved = null;
+        const render = initializePropertiesPanel(document.querySelector('[data-properties-panel]'),
+          {fields,types:['text','checkbox'],widths:{full:12},workflowSteps:[]},
+          {getFields:()=>fields,update:(change)=>{window.saved=change;Object.assign(fields[1],change);render(fields[1]);},remove:()=>{},duplicate:()=>{},close:()=>{}});
+        render(fields[1]);
+      </script></body></html>"""
+    with playwright_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except playwright_api.Error as exception:
+            pytest.skip(f"Brak przeglądarki Playwright: {exception}")
+        page = browser.new_page()
+        _serve_project_page(page, html)
+        page.wait_for_function("document.querySelector('[data-condition-part=field] option[value=choice]')")
+        page.locator("[data-condition-part=field]").select_option("choice")
+        page.locator("[data-condition-part=operator]").select_option("contains_any")
+        picker = page.locator("[data-condition-option-value]")
+        assert picker.evaluate("element => element.multiple")
+        assert picker.locator("option").all_text_contents() == ["AI", "Inne szkolenie"]
+        picker.select_option(["inne", "ai"])
+        assert page.evaluate("window.saved.visible_if") == {"field": "choice", "operator": "contains_any", "value": ["ai", "inne"]}
         browser.close()

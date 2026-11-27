@@ -585,7 +585,7 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
         elif field_type == "checkbox":
             options = field.get("options") or []
 
-            if options and field.get("consent") is not True:
+            if options and (len(options) > 1 or field.get("multiple") is True) and field.get("consent") is not True:
                 data[field_name] = _getlist(request_form, field_name)
             else:
                 data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
@@ -668,13 +668,13 @@ def _is_checked(request_data, key: str) -> bool:
 
 
 def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
-    if not rule:
+    if rule is None:
         return True
-    if not isinstance(rule, dict) or not isinstance(current_data, dict):
+    if not isinstance(rule, dict) or not rule or not isinstance(current_data, dict):
         return False
 
     field_name = rule.get("field")
-    if not isinstance(field_name, str):
+    if not isinstance(field_name, str) or not field_name.strip():
         return False
     operator = rule.get("operator")
     expected = rule.get("value")
@@ -734,12 +734,14 @@ def evaluate_scoped_condition(
     current_data: Dict[str, Any] | None = None,
 ) -> bool:
     """Evaluate a condition in an explicit root or current-record scope."""
-    if not rule:
+    if rule is None:
         return True
+    if not isinstance(rule, dict) or not rule:
+        return False
     scope = str(rule.get("scope") or "current").strip().casefold()
     if scope not in {"root", "current"}:
         return False
-    values = root_data if scope == "root" else (current_data or root_data)
+    values = root_data if scope == "root" else (root_data if current_data is None else current_data)
     return evaluate_visible_if(rule, values)
 
 
@@ -843,7 +845,7 @@ def validate_submission(
             if field_type == "checkbox":
                 options = field.get("options") or []
 
-                if options and field.get("consent") is not True:
+                if options and (len(options) > 1 or field.get("multiple") is True) and field.get("consent") is not True:
                     if not value:
                         errors[field_name] = f"Pole „{label}” jest wymagane."
                         continue
@@ -895,7 +897,7 @@ def validate_submission(
             if not isinstance(selected_values, list) or any(selected not in allowed_values for selected in selected_values):
                 errors[field_name] = "Wybrano nieprawidłową wartość."
 
-        if field_type == "checkbox" and field.get("options") and field.get("consent") is not True:
+        if field_type == "checkbox" and (len(field.get("options") or []) > 1 or field.get("multiple") is True) and field.get("consent") is not True:
             from services.form_option_service import option_value
 
             allowed_values = {option_value(option) for option in field.get("options", [])}

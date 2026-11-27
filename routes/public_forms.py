@@ -1567,13 +1567,12 @@ def normalize_field_options(field_type: str, options) -> list:
     if not isinstance(options, list):
         return []
     if field_type == "checkbox":
+        from services.form_option_service import option_label, option_value
+
         normalized = []
         for option in options:
-            if isinstance(option, dict):
-                value = str(option.get("value") or option.get("label") or "").strip()
-                label = str(option.get("label") or value).strip()
-            else:
-                value = label = str(option or "").strip()
+            value = option_value(option)
+            label = option_label(option)
             if value:
                 normalized.append({"value": value, "label": label})
         return normalized

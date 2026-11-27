@@ -1043,7 +1043,7 @@ class FormVersionService:
         changed_fields = {str(field.get("name") or "") for field in new_definition.get("fields") or []
                           if isinstance(field, dict) and field.get("name") and
                           any(old_fields.get(str(field["name"]), {}).get(key) != field.get(key)
-                              for key in ("type", "required", "required_if", "visible_if", "options", "availability", "fields"))}
+                              for key in ("type", "required", "required_if", "visible_if", "options", "multiple", "availability", "fields"))}
         availability = FieldAvailabilityService()
         engine = WorkflowService()
         values = self.submission_values(submission, new_definition)

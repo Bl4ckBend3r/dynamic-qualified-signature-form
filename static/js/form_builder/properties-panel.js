@@ -50,12 +50,13 @@ export function initializePropertiesPanel(panel, config, callbacks) {
   const documentsSetting = panel.querySelector("[data-documents-setting]");
   const conditionsSetting = panel.querySelector("[data-conditions-setting]");
   const consentSetting = panel.querySelector("[data-consent-setting]");
+  const multipleSetting = panel.querySelector("[data-multiple-setting]");
   const listOperators = new Set(["in", "not_in", "contains_any", "contains_all", "contains_none"]);
   const emptyOperators = new Set(["is_empty", "is_not_empty"]);
   const multiOperators = new Set(["contains", "not_contains", "contains_any", "contains_all", "contains_none"]);
   const optionValue = (option) => typeof option === "object" ? String(option.value ?? option.id ?? "") : String(option).split("|")[0].trim();
   const optionLabel = (option) => typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option).split("|").slice(1).join("|").trim() || optionValue(option);
-  const isMulti = (field) => (field?.type === "checkbox" && Boolean(field.options?.length) && field.consent !== true) || (field?.type === "select" && field.multiple === true);
+  const isMulti = (field) => (field?.type === "checkbox" && (field.options?.length > 1 || field.multiple === true) && field.consent !== true) || (field?.type === "select" && field.multiple === true);
   const refreshConditionValues = (group, value) => {
     const source = (callbacks.getFields?.() || config.fields).find((field) => field.name === group.querySelector('[data-condition-part="field"]').value);
     const operator = group.querySelector('[data-condition-part="operator"]').value;
@@ -217,6 +218,7 @@ export function initializePropertiesPanel(panel, config, callbacks) {
     documentsSetting.hidden = isStaticText;
     if (conditionsSetting) conditionsSetting.hidden = isStaticText || isNested;
     if (consentSetting) consentSetting.hidden = field.type !== "checkbox" || isNested;
+    if (multipleSetting) multipleSetting.hidden = !["checkbox", "select"].includes(field.type) || isNested;
 
     panel.querySelectorAll("[data-condition]").forEach((group) => {
       const rule = field[group.dataset.condition] || {};

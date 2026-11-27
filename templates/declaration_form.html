@@ -60,23 +60,23 @@ endblock %} {% block content %}
       %}
       {% if field.required_if %}data-required-rule="{{ field.required_if|tojson|forceescape }}"{% endif %}
       data-base-required="{{ 'true' if field.required else 'false' }}"
-      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and field.options and not field.consent else 'false' }}"
+      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and ((field.options or [])|length > 1 or field.multiple) and not field.consent else 'false' }}"
     >
       {% if field.type != "checkbox" %}
             <label for="additional_{{ field.name }}">
                 {{ field.label|trusted_html }}
-                {% if field.required %}
-                    <span class="required required-marker" aria-hidden="true">*</span>
+                {% if field.required or field.required_if %}
+                    <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
                 {% endif %}
             </label>
-        {% elif (field.options or [])|length > 1 %}
+        {% elif ((field.options or [])|length > 1 or field.multiple) and not field.consent %}
     <div
         class="field-group-label"
         id="{{ field.name }}-group-label"
     >
         {{ field.label|trusted_html }}
-        {% if field.required %}
-            <span class="required required-marker" aria-hidden="true">*</span>
+        {% if field.required or field.required_if %}
+            <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
         {% endif %}
     </div>
 {% endif %}
@@ -199,7 +199,7 @@ endblock %} {% block content %}
       {% elif field.type == "checkbox" %}
         <div
             class="option-list"
-            {% if (field.options or [])|length > 1 %}
+            {% if ((field.options or [])|length > 1 or field.multiple) and not field.consent %}
                 role="group"
                 aria-labelledby="{{ field.name }}-group-label"
             {% endif %}
@@ -211,7 +211,7 @@ endblock %} {% block content %}
             id="{{ field.name }}_{{ loop.index }}"
             name="{{ field.name }}"
             value="{{ option|option_value }}"
-           {% if (field.options and not field.consent and value is not string and (option|option_value) in (value or [])) or ((not field.options or field.consent) and value == (option|option_value)) %}
+           {% if (((field.options or [])|length > 1 or field.multiple) and not field.consent and value is not string and (option|option_value) in (value or [])) or (((field.options or [])|length <= 1 and not field.multiple or field.consent) and value == (option|option_value)) %}
             checked{%
             endif
             %}
@@ -231,8 +231,8 @@ endblock %} {% block content %}
             %}
           />
           <span>
-            {{ option|option_label }} {% if field.required %}
-            <span class="required required-marker" aria-hidden="true">*</span>
+            {{ option|option_label }} {% if field.required or field.required_if %}
+            <span class="required required-marker" aria-hidden="true" {% if not field.required %}hidden{% endif %}>*</span>
             {% endif %}
           </span>
         </label>
@@ -260,6 +260,7 @@ endblock %} {% block content %}
     const dynamicRows = document.querySelectorAll(".form-row");
 
     function getFieldValue(fieldName) {
+      if (typeof fieldName !== "string") return "";
       const radioChecked = document.querySelector(`input[name="${CSS.escape(fieldName)}"][type="radio"]:checked`);
       if (radioChecked) return radioChecked.value;
       if (document.querySelector(`input[name="${CSS.escape(fieldName)}"][type="radio"]`)) return "";
@@ -278,8 +279,8 @@ endblock %} {% block content %}
       dynamicRows.forEach((row) => {
         const visibleRule = row.dataset.visibleRule ? JSON.parse(row.dataset.visibleRule) : null;
         const requiredRule = row.dataset.requiredRule ? JSON.parse(row.dataset.requiredRule) : null;
-        const visible = !visibleRule || window.fieldConditionMatches(visibleRule, getFieldValue(visibleRule.field));
-        const required = visible && (row.dataset.baseRequired === "true" || (requiredRule && window.fieldConditionMatches(requiredRule, getFieldValue(requiredRule.field))));
+        const visible = visibleRule == null || (typeof visibleRule.field === "string" && window.fieldConditionMatches(visibleRule, getFieldValue(visibleRule.field)));
+        const required = visible && (row.dataset.baseRequired === "true" || (requiredRule && typeof requiredRule.field === "string" && window.fieldConditionMatches(requiredRule, getFieldValue(requiredRule.field))));
 
         row.style.display = visible ? "" : "none";
 
@@ -298,7 +299,11 @@ endblock %} {% block content %}
             }
           }
         });
-        if (row.dataset.checkboxGroup === "true" && checkboxes.length) checkboxes[0].setCustomValidity(required && !checkboxes.some((el) => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
+        if (row.dataset.checkboxGroup === "true" && checkboxes.length) {
+          checkboxes[0].setCustomValidity(required && !checkboxes.some((el) => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
+          if (required) checkboxes[0].setAttribute("aria-required", "true");
+          else checkboxes[0].removeAttribute("aria-required");
+        }
         row.querySelectorAll(".required-marker").forEach((marker) => { marker.hidden = !required; });
       });
     }

@@ -3074,7 +3074,12 @@ def _update_file_field_config(form: Form, field_name: str, form_data, prefix: st
     condition_value = str(form_data.get(prefix + "required_if_value", "") or "").strip()
     condition = None
     if condition_field:
-        parsed_value = [item.strip() for item in condition_value.split(",") if item.strip()] if condition_operator in {"in", "not_in"} else condition_value
+        from validators.form_config_validator import FIELD_CONDITION_LIST_OPERATORS, FIELD_CONDITION_OPERATORS
+        if condition_operator not in FIELD_CONDITION_OPERATORS:
+            abort(400, description="Nieznany operator warunku pola.")
+        parsed_value = ([item.strip() for item in condition_value.split(",") if item.strip()]
+                        if condition_operator in FIELD_CONDITION_LIST_OPERATORS else
+                        None if condition_operator in {"is_empty", "is_not_empty"} else condition_value)
         condition = {"field": condition_field, "operator": condition_operator, "value": parsed_value}
     from services.upload_validation import SAFE_ATTACHMENT_EXTENSIONS, SAFE_ATTACHMENT_MIME_TYPES
     extensions = split_values("allowed_extensions", "pdf") or ["pdf"]

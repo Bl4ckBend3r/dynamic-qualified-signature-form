@@ -1,7 +1,7 @@
 // Keep this predicate aligned with form_loader.evaluate_visible_if.
 window.fieldConditionMatches = function (rule, current) {
-  if (!rule) return true;
-  if (typeof rule !== "object" || Array.isArray(rule)) return false;
+  if (rule == null) return true;
+  if (typeof rule !== "object" || Array.isArray(rule) || typeof rule.field !== "string" || !rule.field.trim()) return false;
   const operators = ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty", "contains", "not_contains", "contains_any", "contains_all", "contains_none"];
   const operator = rule.operator || operators.find((key) => Object.hasOwn(rule, key)) || "equals";
   const expected = Object.hasOwn(rule, "value") ? rule.value : rule[operator];

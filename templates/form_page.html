@@ -240,7 +240,7 @@ endblock %} {% block extra_js %}
       class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
       data-field-name="{{ field.name }}"
       data-field-type="{{ field.type }}"
-      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and field.options and not field.consent else 'false' }}"
+      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and ((field.options or [])|length > 1 or field.multiple) and not field.consent else 'false' }}"
       data-base-required="{{ 'true' if field.required else 'false' }}"
       {%
       if
@@ -253,16 +253,6 @@ endblock %} {% block extra_js %}
       if
       field.required_if
       %}data-required-rule="{{ field.required_if|tojson|forceescape }}"
-      {%
-      endif
-      %}
-      {%
-      if
-      field.visible_if
-      %}
-      data-visible-field="{{ field.visible_if.field }}"
-      data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
-      data-visible-value="{{ field.visible_if.value or '' }}"
       {%
       endif
       %}
@@ -288,7 +278,7 @@ endblock %} {% block extra_js %}
 
       {% if field.content_html %}
       <div class="static-text">{{ field.content_html|trusted_html }}</div>
-      {% endif %} {% elif (field.options or [])|length > 1 %}
+      {% endif %} {% elif ((field.options or [])|length > 1 or field.multiple) and not field.consent %}
       <div class="field-group-label" id="{{ field.name }}-group-label">
         {{ field.label|trusted_html }} {% if field.required or field.required_if
         %}
@@ -543,8 +533,7 @@ endblock %} {% block extra_js %}
       </div>
 
       {% elif field.type == "checkbox" %}
-      <div class="option-list" {% if (field.options or [])|length>
-        1 %} role="group" aria-labelledby="{{ field.name }}-group-label" {%
+      <div class="option-list" {% if ((field.options or [])|length > 1 or field.multiple) and not field.consent %} role="group" aria-labelledby="{{ field.name }}-group-label" {%
         endif %} > {% for option in field.options %}
         <label class="checkbox-item">
           <input
@@ -555,7 +544,7 @@ endblock %} {% block extra_js %}
             data-field-name="{{ field.name }}"
             data-field-type="{{ field.type }}"
             value="{{ option|option_value }}"
-            {% if (field.options and not field.consent and value is not string and (option|option_value) in (value or [])) or ((not field.options or field.consent) and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}checked{% endif %}
+            {% if (((field.options or [])|length > 1 or field.multiple) and not field.consent and value is not string and (option|option_value) in (value or [])) or (((field.options or [])|length <= 1 and not field.multiple or field.consent) and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}checked{% endif %}
             {% if field.required %}required aria-required="true"{% endif %}
             {% if field.readonly %}disabled{% endif %}
             {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
@@ -956,27 +945,33 @@ endblock %} {% block extra_js %}
             const preserveConditionalValues = {{ 'true' if admin_edit_mode else 'false' }};
 
             function getFieldValue(fieldName) {
+                if (typeof fieldName !== "string") return "";
+                const escapedName = CSS.escape(fieldName);
                 const fieldRow = Array.from(dynamicRows).find(row => row.dataset.fieldName === fieldName);
-                const radioChecked = document.querySelector(`input[name="${fieldName}"][type="radio"]:checked`);
+                const radioChecked = document.querySelector(`input[name="${escapedName}"][type="radio"]:checked`);
                 if (radioChecked) return radioChecked.value;
-                if (document.querySelector(`input[name="${fieldName}"][type="radio"]`)) return "";
+                if (document.querySelector(`input[name="${escapedName}"][type="radio"]`)) return "";
 
-                const checkboxes = Array.from(document.querySelectorAll(`input[name="${fieldName}"][type="checkbox"]`));
+                const checkboxes = Array.from(document.querySelectorAll(`input[name="${escapedName}"][type="checkbox"]`));
                 if (fieldRow?.dataset.checkboxGroup === "true") return checkboxes.filter(box => box.checked).map(box => box.value);
                 if (checkboxes.length > 1) return checkboxes.filter(box => box.checked).map(box => box.value);
                 if (checkboxes.length) return checkboxes[0].checked ? "Tak" : "Nie";
 
-                const input = document.querySelector(`[name="${fieldName}"]`);
+                const input = document.querySelector(`[name="${escapedName}"]`);
                 if (input?.tagName === "SELECT" && input.multiple) return Array.from(input.selectedOptions).map(option => option.value);
                 return input ? input.value : "";
             }
 
             function conditionMatches(rule) {
-                return !rule || window.fieldConditionMatches(rule, getFieldValue(rule.field));
+                return rule == null || (typeof rule.field === "string" && window.fieldConditionMatches(rule, getFieldValue(rule.field)));
             }
 
             function updateVisibility() {
-                dynamicRows.forEach(row => {
+                let changed = false;
+                let pass = 0;
+                do {
+                  changed = false;
+                  dynamicRows.forEach(row => {
                     const visibleRule = row.dataset.visibleRule ? JSON.parse(row.dataset.visibleRule) : null;
                     const requiredRule = row.dataset.requiredRule ? JSON.parse(row.dataset.requiredRule) : null;
                     const visible = conditionMatches(visibleRule);
@@ -994,8 +989,10 @@ endblock %} {% block extra_js %}
                         el.setCustomValidity("");
                         if (!visible && !preserveConditionalValues) {
                             if (el.type === "checkbox" || el.type === "radio") {
+                                if (el.checked) changed = true;
                                 el.checked = false;
                             } else {
+                                if (el.value) changed = true;
                                 el.value = "";
                             }
                         }
@@ -1004,11 +1001,14 @@ endblock %} {% block extra_js %}
                         const first = checkboxes[0];
                         first.setCustomValidity(required && !checkboxes.some(el => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
                         if (required) first.setAttribute("aria-required", "true");
+                        else first.removeAttribute("aria-required");
                     }
                     row.querySelectorAll(".required-marker").forEach(marker => {
                         if (!marker.closest("[data-repeatable-record]")) marker.hidden = !required;
                     });
-                });
+                  });
+                  pass += 1;
+                } while (changed && pass < dynamicRows.length);
             }
 
             document.querySelectorAll("input, select, textarea").forEach(el => {
@@ -1456,7 +1456,8 @@ endblock %} {% block extra_js %}
 
 
     function repeatableConditionMatches(rule, record) {
-        if (!rule) return true;
+        if (rule == null) return true;
+        if (typeof rule.field !== "string" || (rule.scope && !["root", "current"].includes(rule.scope))) return false;
         const current = rule.scope === "root" ? repeatableRootValue(rule.field) : (record?.[rule.field] ?? "");
         return window.fieldConditionMatches(rule, current);
     }

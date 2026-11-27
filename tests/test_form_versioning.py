@@ -108,6 +108,36 @@ def _seed_active_versioned_submission(db, service, *, status="SUBMITTED"):
     return form, first, submission
 
 
+def test_conditional_checkbox_rule_survives_clone_and_publish(tmp_path):
+    _url, Session = _database(tmp_path)
+    service = FormVersionService()
+    with Session.begin() as db:
+        form = _form_with_field(db, slug="conditional-version")
+        original = deepcopy(form.definition_json)
+        original["fields"].append({"name": "choice", "type": "checkbox", "multiple": True,
+                                   "options": [{"value": "inne", "label": "Inne"}], "required": False})
+        original["fields"].append({"name": "detail", "type": "text", "required": False})
+        form.definition_json = original
+        db.add_all([
+            FormField(form_id=form.id, name="choice", label="Choice", type="checkbox", required=False,
+                      options=[{"value": "inne", "label": "Inne"}], sort_order=2, active=True),
+            FormField(form_id=form.id, name="detail", label="Detail", type="text", required=False,
+                      options=[], sort_order=3, active=True),
+        ])
+        db.flush()
+        published = service.create_initial_version(db, form, actor_id=None, status=FORM_VERSION_PUBLISHED)
+        old_snapshot = deepcopy(published.definition_json)
+        draft = service.clone_to_draft(db, form, published, actor_id=None)
+        edited = deepcopy(draft.definition_json)
+        detail = next(field for field in edited["fields"] if field.get("name") == "detail")
+        detail["visible_if"] = {"field": "choice", "operator": "contains", "value": "inne"}
+        detail["required_if"] = {"field": "choice", "operator": "contains_all", "value": ["inne"]}
+        draft.definition_json = edited
+        service.publish(db, form, draft, actor_id=None, synchronize_submissions=False)
+        assert published.definition_json == old_snapshot
+        assert next(field for field in draft.definition_json["fields"] if field.get("name") == "detail")["visible_if"] == detail["visible_if"]
+
+
 @pytest.mark.parametrize("was_used", [False, True])
 def test_removed_training_stays_out_after_editor_mirror_and_publication(tmp_path, was_used):
     from routes.admin.training_management import _save_training_catalog_with_draft

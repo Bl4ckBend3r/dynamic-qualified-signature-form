@@ -90,6 +90,22 @@ def test_builder_saves_conditions_and_checkbox_consent(tmp_path):
         assert fields["zgoda"]["consent"] is True
 
 
+def test_builder_round_trips_single_option_checkbox_group_and_contains(tmp_path):
+    factory, form_id = builder_form(tmp_path)
+    with factory() as db:
+        form = db.get(Form, form_id)
+        state = serialize_builder_fields(form, sorted(form.fields, key=lambda item: item.sort_order))
+        state[1]["multiple"] = True
+        state[0]["visible_if"] = {"field": "zgoda", "operator": "contains", "value": "tak"}
+        state[0]["required_if"] = {"field": "zgoda", "operator": "contains_all", "value": ["tak"]}
+        apply_builder_state(db, form, state, field_types=FIELD_TYPES, availability_definition=form.definition_json)
+        db.commit()
+        exported = serialize_builder_fields(form, sorted(form.fields, key=lambda item: item.sort_order))
+        assert exported[1]["multiple"] is True
+        assert exported[0]["visible_if"] == state[0]["visible_if"]
+        assert exported[0]["required_if"] == state[0]["required_if"]
+
+
 def test_builder_serialization_excludes_specialized_training_selection(tmp_path):
     factory, form_id = builder_form(tmp_path)
     with factory() as db:

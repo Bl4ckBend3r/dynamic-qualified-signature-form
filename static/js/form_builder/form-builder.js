@@ -655,7 +655,44 @@ if (builder) {
 
     stateInput.value = JSON.stringify(serializeFields(fields));
     positionPanels();
+    queueMicrotask(updatePreview);
   };
+
+  const updatePreview = () => {
+    if (!builder.classList.contains("is-preview")) return;
+    const items = Array.from(canvas.children).filter((item) => item.dataset.fieldKey);
+    const valueOf = (fieldName) => {
+      const source = fields.find((field) => field.name === fieldName);
+      const item = items.find((candidate) => candidate.dataset.fieldKey === source?._key);
+      const controls = Array.from(item?.querySelectorAll(":scope > .form-builder__option-preview input, :scope > [data-preview-control]") || []);
+      if (source?.type === "checkbox") {
+        if ((source.options?.length > 1 || source.multiple === true) && source.consent !== true) return controls.filter((control) => control.checked).map((control) => control.value);
+        return controls[0]?.checked ? "Tak" : "Nie";
+      }
+      if (source?.type === "radio") return controls.find((control) => control.checked)?.value || "";
+      if (source?.type === "select" && source.multiple) return Array.from(controls[0]?.selectedOptions || []).map((option) => option.value);
+      return controls[0]?.value || "";
+    };
+    fields.forEach((field) => {
+      const item = items.find((candidate) => candidate.dataset.fieldKey === field._key);
+      if (!item) return;
+      const matches = (rule) => rule == null || (typeof rule.field === "string" && Boolean(window.fieldConditionMatches?.(rule, valueOf(rule.field))));
+      const visible = matches(field.visible_if);
+      const required = visible && (field.required || (field.required_if && matches(field.required_if)));
+      item.hidden = !visible;
+      item.style.display = visible ? "" : "none";
+      const marker = item.querySelector(":scope > .form-builder__field-head .form-builder__field-required");
+      if (marker) marker.hidden = !required;
+      item.querySelectorAll(":scope > .form-builder__option-preview input, :scope > [data-preview-control]").forEach((control) => {
+        control.disabled = !visible;
+        if (required) control.setAttribute("aria-required", "true");
+        else control.removeAttribute("aria-required");
+      });
+    });
+  };
+
+  canvas.addEventListener("change", updatePreview);
+  canvas.addEventListener("input", updatePreview);
 
   const addFieldFromPalette = (type) => {
     /*
@@ -714,6 +751,8 @@ if (builder) {
       const preview = button.dataset.builderMode === "preview";
 
       builder.classList.toggle("is-preview", preview);
+      if (preview) updatePreview();
+      else canvas.querySelectorAll("[data-preview-control]").forEach((control) => { control.disabled = true; });
 
       builder
         .querySelectorAll("[data-builder-mode]")

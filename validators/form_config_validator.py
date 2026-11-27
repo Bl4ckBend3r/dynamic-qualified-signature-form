@@ -94,6 +94,10 @@ class FormConfigValidator:
             field_type = field.get("type")
             if field_type not in SUPPORTED_FIELD_TYPES:
                 errors.append(f"fields[{index}].type is unsupported: {field_type}")
+            if field_type in {"select", "radio", "checkbox"} and not isinstance(field.get("options", []), list):
+                errors.append(f"fields[{index}].options must be a list")
+            if field_type in {"select", "checkbox"} and "multiple" in field and not isinstance(field["multiple"], bool):
+                errors.append(f"fields[{index}].multiple must be boolean")
             field_name = str(field.get("name") or "").strip()
             if field_type not in {"section", "static_text"} and not field_name:
                 errors.append(f"fields[{index}].name is required")
@@ -155,7 +159,8 @@ class FormConfigValidator:
                 if operator not in FIELD_CONDITION_OPERATORS:
                     errors.append(f"{location}.operator is unsupported")
                     continue
-                multi = (source.get("type") == "checkbox" and bool(source.get("options")) and source.get("consent") is not True) or (source.get("type") == "select" and source.get("multiple") is True)
+                options = source.get("options") if isinstance(source.get("options"), list) else []
+                multi = (source.get("type") == "checkbox" and (len(options) > 1 or source.get("multiple") is True) and source.get("consent") is not True) or (source.get("type") == "select" and source.get("multiple") is True)
                 if operator in FIELD_CONDITION_MULTI_OPERATORS and not multi:
                     errors.append(f"{location}.operator requires a multiple-choice field")
                 expected = rule.get("values") if operator in {"in", "not_in"} and "values" in rule else rule.get("value", rule.get(operator))
@@ -172,7 +177,7 @@ class FormConfigValidator:
                 else:
                     values = [expected]
                 if source.get("type") in {"select", "radio", "checkbox"} and values:
-                    allowed = {option_value(option) for option in source.get("options") or []}
+                    allowed = {option_value(option) for option in options}
                     if not multi and source.get("type") == "checkbox":
                         allowed = {"Tak", "Nie"}
                     if any(value not in allowed for value in values):

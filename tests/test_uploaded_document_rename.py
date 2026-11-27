@@ -835,3 +835,67 @@ def test_auto_rejects_disabled_tls(tmp_path, monkeypatch):
     with pytest.raises(RenameError) as error:
         rename_script._automatic_migration(renamer)
     assert error.value.code == "TLS_VERIFICATION_DISABLED"
+
+
+
+def test_auto_defers_missing_unjournaled_source_and_retries(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    renamer, sessions, storage, old = _environment(tmp_path)
+    monkeypatch.setattr(rename_script, "_deployment_lock", lambda engine: nullcontext())
+    path, data = old[0]
+    del storage.saved_pdfs[path]
+    # Explicit manual preview remains strict.
+    preview = renamer.dry_run()
+    assert preview["errors"][0]["reason_code"] == "SOURCE_MISSING"
+    result = rename_script._automatic_migration(renamer)
+    assert result["phase"] == "verify" and not result["errors"]
+    assert result["result"]["applied"] == 1
+    assert result["verification"]["verified"] == 1
+    assert result["result"]["unresolved"][0]["condition"] == "UNJOURNALED_SOURCE_MISSING"
+    with sessions() as db:
+        file = db.query(SubmissionFile).filter_by(filename="old-1.pdf").one()
+        assert file.storage_path == path
+        assert db.get(FormSubmission, file.submission_id).declaration_signed_filename == file.filename
+        assert db.query(UploadedDocumentRename).filter_by(submission_file_id=file.id).count() == 0
+    storage.saved_pdfs[path] = data
+    retry = rename_script._automatic_migration(renamer)
+    assert not retry["errors"] and retry["result"]["applied"] == 1
+    assert retry["verification"]["verified"] == 2
+
+
+def test_auto_missing_prepared_source_blocks(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    renamer, sessions, storage, old = _environment(tmp_path)
+    monkeypatch.setattr(rename_script, "_deployment_lock", lambda engine: nullcontext())
+    with sessions() as db:
+        file_id = db.query(SubmissionFile).filter_by(filename="old-1.pdf").one().id
+    renamer._prepare(file_id, rename_script.AUTO_MIGRATION_ID)
+    del storage.saved_pdfs[old[0][0]]
+    result = rename_script._automatic_migration(renamer)
+    assert result["phase"] == "dry-run"
+    assert result["errors"][0]["reason_code"] == "SOURCE_MISSING"
+    assert len(_journals(sessions)) == 1
+
+
+def test_auto_missing_applied_target_blocks(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    renamer, sessions, storage, _ = _environment(tmp_path)
+    monkeypatch.setattr(rename_script, "_deployment_lock", lambda engine: nullcontext())
+    assert not rename_script._automatic_migration(renamer)["errors"]
+    del storage.saved_pdfs[_journals(sessions)[0].new_storage_path]
+    result = rename_script._automatic_migration(renamer)
+    assert result["phase"] == "dry-run"
+    assert result["errors"][0]["reason_code"] == "SOURCE_MISSING"
+
+
+def test_auto_storage_exception_still_blocks(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    renamer, sessions, storage, _ = _environment(tmp_path)
+    monkeypatch.setattr(rename_script, "_deployment_lock", lambda engine: nullcontext())
+    def unavailable(path):
+        raise OSError("Storage unavailable")
+    monkeypatch.setattr(storage, "exists", unavailable)
+    result = rename_script._automatic_migration(renamer)
+    assert result["phase"] == "dry-run"
+    assert result["errors"][0]["reason_code"] == "UNEXPECTED_ERROR"
+    assert not _journals(sessions)

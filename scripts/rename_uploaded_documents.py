@@ -544,7 +544,28 @@ class UploadedDocumentRenamer:
             raise RenameError("Applied target is missing", "SOURCE_MISSING")
         return True
 
-    def dry_run(self) -> dict:
+    def _check_source(self, db, group: list[SubmissionFile], old_path: str):
+        """Only an absent, never-journaled source is safe to defer."""
+        if self.storage.exists(old_path):
+            return
+        journal_id = db.execute(select(UploadedDocumentRename.id).where(
+            UploadedDocumentRename.submission_file_id.in_([member.id for member in group])
+        ).limit(1)).scalar_one_or_none()
+        raise RenameError("Source file is missing", "SOURCE_MISSING",
+                          condition="UNJOURNALED_SOURCE_MISSING" if journal_id is None else None)
+
+    @staticmethod
+    def _report_failure(report, submission_id, file_id, exc, *, allow_missing_source):
+        details = {"submission_id": submission_id, "file_id": file_id, **_diagnostic(exc)}
+        if (allow_missing_source and isinstance(exc, RenameError)
+                and exc.code == "SOURCE_MISSING"
+                and exc.condition == "UNJOURNALED_SOURCE_MISSING"):
+            report["skipped"] += 1
+            report["unresolved"].append(details)
+        else:
+            report["errors"].append(details)
+
+    def dry_run(self, *, allow_missing_source: bool = False) -> dict:
         self._require_journal()
         report = {"action": "dry-run", "candidates": [], "skipped": 0, "errors": [],
                   "submissions_checked": 0, "unresolved": []}
@@ -563,14 +584,14 @@ class UploadedDocumentRenamer:
                     if old_path == _path_with_filename(old_path, base) and all(member.filename == base for member in group):
                         report["skipped"] += 1
                         continue
-                    if not self.storage.exists(old_path):
-                        raise RenameError("Source file is missing", "SOURCE_MISSING")
+                    self._check_source(db, group, old_path)
                     report["candidates"].append({"submission_id": submission_id, "file_id": file.id,
                                                  "file_ids": [member.id for member in group],
                                                  "document_id": kind,
                                                  "collision": self.storage.exists(_path_with_filename(old_path, base))})
             except Exception as exc:
-                report["errors"].append({"submission_id": submission_id, "file_id": file_id, **_diagnostic(exc)})
+                self._report_failure(report, submission_id, file_id, exc,
+                                     allow_missing_source=allow_missing_source)
         return report
 
     def _prepare(self, file_id: int, migration_id: str) -> int | None:
@@ -605,6 +626,7 @@ class UploadedDocumentRenamer:
             old_path = _storage_path(file.storage_path)
             if old_path == _path_with_filename(old_path, base) and all(member.filename == base for member in group):
                 return None
+            self._check_source(db, group, old_path)
             _, digest = _source_bytes(self.storage, group)
             staging_name = f".uploaded-document-rename-{uuid4().hex}.pdf"
             for member in group:
@@ -731,7 +753,7 @@ class UploadedDocumentRenamer:
                 journal.status = "applied"
                 _audit(db, submission, journal, "UPLOADED_DOCUMENT_RENAMED")
 
-    def apply(self, migration_id: str) -> dict:
+    def apply(self, migration_id: str, *, allow_missing_source: bool = False) -> dict:
         self._require_journal()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", migration_id):
             raise RenameError("Invalid migration ID")
@@ -752,7 +774,8 @@ class UploadedDocumentRenamer:
                 self._finalize(entry_id)
                 report["applied" if before != "applied" else "skipped"] += 1
             except Exception as exc:
-                report["errors"].append({"submission_id": submission_id, "file_id": file_id, **_diagnostic(exc)})
+                self._report_failure(report, submission_id, file_id, exc,
+                                     allow_missing_source=allow_missing_source)
         return report
 
     def verify(self, migration_id: str | None = None) -> dict:
@@ -904,10 +927,10 @@ def _automatic_migration(renamer):
             raise RenameError("An earlier migration needs recovery before automatic deployment", "INCOMPLETE_JOURNAL")
         if rolled_back is not None:
             raise RenameError("Automatic migration was rolled back; review before reapplying", "ROLLED_BACK")
-        preview = renamer.dry_run()
+        preview = renamer.dry_run(allow_missing_source=True)
         if preview["errors"]:
             return {"action": "auto", "phase": "dry-run", "preview": preview, "errors": preview["errors"]}
-        result = renamer.apply(AUTO_MIGRATION_ID)
+        result = renamer.apply(AUTO_MIGRATION_ID, allow_missing_source=True)
         if result["errors"]:
             return {"action": "auto", "phase": "apply", "result": result, "errors": result["errors"]}
         with renamer.session_factory() as db:

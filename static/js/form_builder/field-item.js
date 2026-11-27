@@ -106,12 +106,13 @@ export function createFieldItem(field, index, selected, actions) {
   label.className = "form-builder__field-label";
   label.textContent = field.label || field.name;
 
-  if (field.required) {
+  if (field.required || field.required_if) {
     const marker = document.createElement("span");
 
     marker.className = "form-builder__field-required";
 
     marker.textContent = " *";
+    marker.hidden = !field.required;
 
     label.append(marker);
   }
@@ -150,6 +151,7 @@ export function createFieldItem(field, index, selected, actions) {
    */
   item.addEventListener("click", (event) => {
     event.stopPropagation();
+    if (item.closest("[data-form-builder]")?.classList.contains("is-preview")) return;
     actions.select();
   });
 
@@ -264,12 +266,15 @@ function previewControl(field, actions) {
     const options = field.options?.length ? field.options : ["Opcja 1"];
 
     options.slice(0, 4).forEach((option) => {
-      const span = document.createElement("span");
-
-      span.textContent =
-        typeof option === "object" ? option.label || option.value : option;
-
-      list.append(span);
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = field.type;
+      input.value = typeof option === "object" ? String(option.value ?? option.id ?? "") : String(option).split("|")[0].trim();
+      input.dataset.previewControl = "";
+      if (field.type === "radio") input.name = `preview-${field._key}`;
+      input.disabled = true;
+      label.append(input, document.createTextNode(typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option).split("|").slice(1).join("|").trim() || input.value));
+      list.append(label);
     });
 
     return list;
@@ -285,6 +290,7 @@ function previewControl(field, actions) {
   control.className = "form-builder__control";
 
   control.disabled = true;
+  control.dataset.previewControl = "";
 
   if (field.type === "time") {
     control.type = "time";
@@ -316,10 +322,17 @@ function previewControl(field, actions) {
     control.value = "Wybierz plik";
   } else if (field.type === "select") {
     const option = document.createElement("option");
-
+    option.value = "";
     option.textContent = "— wybierz —";
 
     control.append(option);
+    for (const item of field.options || []) {
+      const choice = document.createElement("option");
+      choice.value = typeof item === "object" ? String(item.value ?? item.id ?? "") : String(item).split("|")[0].trim();
+      choice.textContent = typeof item === "object" ? String(item.label ?? item.value ?? "") : String(item).split("|").slice(1).join("|").trim() || choice.value;
+      control.append(choice);
+    }
+    control.multiple = field.multiple === true;
   } else {
     control.placeholder = field.placeholder || "";
   }

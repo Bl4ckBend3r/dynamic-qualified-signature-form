@@ -84,11 +84,11 @@
       {% for kind, title in [('visible_if', 'Widoczne, gdy'), ('required_if', 'Wymagane, gdy')] %}
       <div data-condition="{{ kind }}">
         <strong>{{ title }}</strong>
-        <label><span>Nazwa pola sterującego</span><input data-condition-part="field" placeholder="np. odpowiedz" /></label>
+        <label><span>Pole sterujące</span><select data-condition-part="field"><option value="">Wybierz pole</option></select></label>
         <label><span>Operator</span><select data-condition-part="operator">
-          {% for operator in ['equals', 'not_equals', 'in', 'not_in', 'is_empty', 'is_not_empty'] %}<option value="{{ operator }}">{{ operator }}</option>{% endfor %}
+          {% for operator, label in [('equals', 'równa się'), ('not_equals', 'nie równa się'), ('in', 'jest jedną z'), ('not_in', 'nie jest żadną z'), ('is_empty', 'jest puste'), ('is_not_empty', 'nie jest puste'), ('contains', 'zawiera'), ('not_contains', 'nie zawiera'), ('contains_any', 'zawiera dowolną z'), ('contains_all', 'zawiera wszystkie'), ('contains_none', 'nie zawiera żadnej')] %}<option value="{{ operator }}">{{ label }}</option>{% endfor %}
         </select></label>
-        <label><span>Wartość (dla in/not_in oddziel przecinkami)</span><input data-condition-part="value" /></label>
+        <label data-condition-value-setting><span>Wartość</span><input data-condition-part="value" /><select data-condition-option-value hidden></select></label>
       </div>
       {% endfor %}
     </fieldset>

@@ -556,6 +556,7 @@ if (builder) {
   };
 
   const renderProperties = initializePropertiesPanel(panel, config, {
+    getFields: () => fields,
     update: updateSelected,
 
     remove: removeSelected,

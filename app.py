@@ -51,6 +51,11 @@ def create_app(config_object=None, storage_override=None) -> Flask:
     register_operational_routes(app)
     register_cli_commands(app)
 
+    if config_object is None and storage_override is None:
+        from scripts.deployment.startup_document_rename import run_startup_document_rename
+
+        run_startup_document_rename(app, container, database_readiness_status)
+
     logger.info(
         "storage_configuration_loaded base_url_configured=%s credentials_configured=%s",
         bool(app.config["NEXTCLOUD_BASE_URL"]),

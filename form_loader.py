@@ -585,7 +585,7 @@ def extract_submission_data(form_definition: Dict[str, Any], request_form,) -> D
         elif field_type == "checkbox":
             options = field.get("options") or []
 
-            if len(options) > 1:
+            if options and field.get("consent") is not True:
                 data[field_name] = _getlist(request_form, field_name)
             else:
                 data[field_name] = "Tak" if _is_checked(request_form, field_name) else "Nie"
@@ -670,12 +670,16 @@ def _is_checked(request_data, key: str) -> bool:
 def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
     if not rule:
         return True
+    if not isinstance(rule, dict) or not isinstance(current_data, dict):
+        return False
 
     field_name = rule.get("field")
+    if not isinstance(field_name, str):
+        return False
     operator = rule.get("operator")
     expected = rule.get("value")
     if not operator:
-        for candidate in ("equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"):
+        for candidate in ("equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty", "contains", "not_contains", "contains_any", "contains_all", "contains_none"):
             if candidate in rule:
                 operator = candidate
                 expected = rule.get(candidate)
@@ -683,20 +687,44 @@ def evaluate_visible_if(rule: Any, current_data: Dict[str, Any]) -> bool:
     operator = operator or "equals"
     current_value = current_data.get(field_name, "")
 
+    def same_value(left: Any, right: Any) -> bool:
+        if type(left) is not type(right):
+            return False
+        if isinstance(left, list):
+            return len(left) == len(right) and all(same_value(a, b) for a, b in zip(left, right))
+        if isinstance(left, dict):
+            return left.keys() == right.keys() and all(same_value(left[key], right[key]) for key in left)
+        return left == right
+
     if operator == "equals":
-        return current_value == expected
+        return same_value(current_value, expected)
     if operator == "not_equals":
-        return current_value != expected
+        return not same_value(current_value, expected)
     if operator == "in":
-        return current_value in (rule.get("values") if "values" in rule else expected or [])
+        choices = rule.get("values") if "values" in rule else expected
+        return isinstance(choices, list) and any(same_value(current_value, choice) for choice in choices)
     if operator == "not_in":
-        return current_value not in (rule.get("values") if "values" in rule else expected or [])
+        choices = rule.get("values") if "values" in rule else expected
+        return isinstance(choices, list) and not any(same_value(current_value, choice) for choice in choices)
     if operator == "is_empty":
         return current_value in (None, "", [], {})
     if operator == "is_not_empty":
         return current_value not in (None, "", [], {})
+    if operator in {"contains", "not_contains"}:
+        if not isinstance(current_value, list) or any(not isinstance(item, str) for item in current_value) or not isinstance(expected, str):
+            return False
+        found = expected in current_value
+        return found if operator == "contains" else not found
+    if operator in {"contains_any", "contains_all", "contains_none"}:
+        if not isinstance(current_value, list) or any(not isinstance(item, str) for item in current_value) or not isinstance(expected, list) or not expected or any(not isinstance(item, str) for item in expected):
+            return False
+        if operator == "contains_any":
+            return any(item in current_value for item in expected)
+        if operator == "contains_all":
+            return all(item in current_value for item in expected)
+        return all(item not in current_value for item in expected)
 
-    return True
+    return False
 
 
 def evaluate_scoped_condition(
@@ -709,6 +737,8 @@ def evaluate_scoped_condition(
     if not rule:
         return True
     scope = str(rule.get("scope") or "current").strip().casefold()
+    if scope not in {"root", "current"}:
+        return False
     values = root_data if scope == "root" else (current_data or root_data)
     return evaluate_visible_if(rule, values)
 
@@ -813,7 +843,7 @@ def validate_submission(
             if field_type == "checkbox":
                 options = field.get("options") or []
 
-                if len(options) > 1:
+                if options and field.get("consent") is not True:
                     if not value:
                         errors[field_name] = f"Pole „{label}” jest wymagane."
                         continue
@@ -865,7 +895,7 @@ def validate_submission(
             if not isinstance(selected_values, list) or any(selected not in allowed_values for selected in selected_values):
                 errors[field_name] = "Wybrano nieprawidłową wartość."
 
-        if field_type == "checkbox" and len(field.get("options") or []) > 1:
+        if field_type == "checkbox" and field.get("options") and field.get("consent") is not True:
             from services.form_option_service import option_value
 
             allowed_values = {option_value(option) for option in field.get("options", [])}

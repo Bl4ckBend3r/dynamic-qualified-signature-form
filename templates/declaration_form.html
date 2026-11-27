@@ -54,12 +54,13 @@ endblock %} {% block content %}
       if
       field.visible_if
       %}
-      data-visible-field="{{ field.visible_if.field }}"
-      data-visible-operator="{{ field.visible_if.operator or 'equals' }}"
-      data-visible-value="{{ field.visible_if.value or '' }}"
+      data-visible-rule="{{ field.visible_if|tojson|forceescape }}"
       {%
       endif
       %}
+      {% if field.required_if %}data-required-rule="{{ field.required_if|tojson|forceescape }}"{% endif %}
+      data-base-required="{{ 'true' if field.required else 'false' }}"
+      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and field.options and not field.consent else 'false' }}"
     >
       {% if field.type != "checkbox" %}
             <label for="additional_{{ field.name }}">
@@ -210,7 +211,7 @@ endblock %} {% block content %}
             id="{{ field.name }}_{{ loop.index }}"
             name="{{ field.name }}"
             value="{{ option|option_value }}"
-           {% if value == (option|option_value) %}
+           {% if (field.options and not field.consent and value is not string and (option|option_value) in (value or [])) or ((not field.options or field.consent) and value == (option|option_value)) %}
             checked{%
             endif
             %}
@@ -253,40 +254,42 @@ endblock %} {% block content %}
   </form>
 </div>
 
+<script src="{{ url_for('static', filename='js/field_conditions.js') }}"></script>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
-    const dynamicRows = document.querySelectorAll("[data-visible-field]");
+    const dynamicRows = document.querySelectorAll(".form-row");
 
     function getFieldValue(fieldName) {
-      const radioChecked = document.querySelector(
-        `input[name="${fieldName}"]:checked`,
-      );
+      const radioChecked = document.querySelector(`input[name="${CSS.escape(fieldName)}"][type="radio"]:checked`);
       if (radioChecked) return radioChecked.value;
+      if (document.querySelector(`input[name="${CSS.escape(fieldName)}"][type="radio"]`)) return "";
 
-      const checkbox = document.querySelector(
-        `input[name="${fieldName}"][type="checkbox"]`,
-      );
-      if (checkbox) return checkbox.checked ? "Tak" : "Nie";
+      const checkboxes = Array.from(document.querySelectorAll(`input[name="${CSS.escape(fieldName)}"][type="checkbox"]`));
+      const row = checkboxes[0]?.closest(".form-row");
+      if (row?.dataset.checkboxGroup === "true" || checkboxes.length > 1) return checkboxes.filter((box) => box.checked).map((box) => box.value);
+      if (checkboxes.length) return checkboxes[0].checked ? "Tak" : "Nie";
 
-      const input = document.querySelector(`[name="${fieldName}"]`);
+      const input = document.querySelector(`[name="${CSS.escape(fieldName)}"]`);
+      if (input?.tagName === "SELECT" && input.multiple) return Array.from(input.selectedOptions).map((option) => option.value);
       return input ? input.value : "";
     }
 
     function updateVisibility() {
       dynamicRows.forEach((row) => {
-        const watchedField = row.dataset.visibleField;
-        const operator = row.dataset.visibleOperator || "equals";
-        const expectedValue = row.dataset.visibleValue || "";
-        const currentValue = getFieldValue(watchedField);
-
-        let visible = true;
-
-        if (operator === "equals") visible = currentValue === expectedValue;
-        if (operator === "not_equals") visible = currentValue !== expectedValue;
+        const visibleRule = row.dataset.visibleRule ? JSON.parse(row.dataset.visibleRule) : null;
+        const requiredRule = row.dataset.requiredRule ? JSON.parse(row.dataset.requiredRule) : null;
+        const visible = !visibleRule || window.fieldConditionMatches(visibleRule, getFieldValue(visibleRule.field));
+        const required = visible && (row.dataset.baseRequired === "true" || (requiredRule && window.fieldConditionMatches(requiredRule, getFieldValue(requiredRule.field))));
 
         row.style.display = visible ? "" : "none";
 
-        row.querySelectorAll("input, select, textarea").forEach((el) => {
+        const controls = Array.from(row.querySelectorAll("input, select, textarea"));
+        const checkboxes = controls.filter((el) => el.type === "checkbox");
+        controls.forEach((el) => {
+          el.required = Boolean(required && (el.type !== "checkbox" || row.dataset.checkboxGroup !== "true") && el.type !== "hidden");
+          if (el.required) el.setAttribute("aria-required", "true");
+          else el.removeAttribute("aria-required");
+          el.setCustomValidity("");
           if (!visible) {
             if (el.type === "checkbox" || el.type === "radio") {
               el.checked = false;
@@ -295,6 +298,8 @@ endblock %} {% block content %}
             }
           }
         });
+        if (row.dataset.checkboxGroup === "true" && checkboxes.length) checkboxes[0].setCustomValidity(required && !checkboxes.some((el) => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
+        row.querySelectorAll(".required-marker").forEach((marker) => { marker.hidden = !required; });
       });
     }
 

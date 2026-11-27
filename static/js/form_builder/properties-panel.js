@@ -50,19 +50,55 @@ export function initializePropertiesPanel(panel, config, callbacks) {
   const documentsSetting = panel.querySelector("[data-documents-setting]");
   const conditionsSetting = panel.querySelector("[data-conditions-setting]");
   const consentSetting = panel.querySelector("[data-consent-setting]");
+  const listOperators = new Set(["in", "not_in", "contains_any", "contains_all", "contains_none"]);
+  const emptyOperators = new Set(["is_empty", "is_not_empty"]);
+  const multiOperators = new Set(["contains", "not_contains", "contains_any", "contains_all", "contains_none"]);
+  const optionValue = (option) => typeof option === "object" ? String(option.value ?? option.id ?? "") : String(option).split("|")[0].trim();
+  const optionLabel = (option) => typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option).split("|").slice(1).join("|").trim() || optionValue(option);
+  const isMulti = (field) => (field?.type === "checkbox" && Boolean(field.options?.length) && field.consent !== true) || (field?.type === "select" && field.multiple === true);
+  const refreshConditionValues = (group, value) => {
+    const source = (callbacks.getFields?.() || config.fields).find((field) => field.name === group.querySelector('[data-condition-part="field"]').value);
+    const operator = group.querySelector('[data-condition-part="operator"]').value;
+    const input = group.querySelector('[data-condition-part="value"]');
+    const options = group.querySelector("[data-condition-option-value]");
+    const holder = group.querySelector("[data-condition-value-setting]");
+    const hasOptions = ["checkbox", "select", "radio"].includes(source?.type) && Boolean(source?.options?.length);
+    holder.hidden = emptyOperators.has(operator);
+    input.hidden = hasOptions;
+    options.hidden = !hasOptions;
+    if (!hasOptions) {
+      input.value = Array.isArray(value) ? value.join(", ") : (value ?? "");
+      return;
+    }
+    options.multiple = listOperators.has(operator);
+    options.replaceChildren();
+    for (const item of source.options) {
+      const choice = document.createElement("option");
+      choice.value = optionValue(item);
+      choice.textContent = optionLabel(item);
+      choice.selected = Array.isArray(value) ? value.includes(choice.value) : value === choice.value;
+      options.append(choice);
+    }
+  };
 
   panel.querySelectorAll("[data-condition]").forEach((group) => {
-    group.querySelectorAll("[data-condition-part]").forEach((control) => {
-      control.addEventListener(control.tagName === "SELECT" ? "change" : "input", () => {
-        const field = group.querySelector('[data-condition-part="field"]').value.trim();
+    const fieldControl = group.querySelector('[data-condition-part="field"]');
+    const operatorControl = group.querySelector('[data-condition-part="operator"]');
+    const input = group.querySelector('[data-condition-part="value"]');
+    const optionControl = group.querySelector("[data-condition-option-value]");
+    const save = () => {
+        const field = fieldControl.value;
         const operator = group.querySelector('[data-condition-part="operator"]').value;
-        const raw = group.querySelector('[data-condition-part="value"]').value;
-        const value = ["in", "not_in"].includes(operator)
-          ? raw.split(",").map((part) => part.trim()).filter(Boolean)
-          : raw;
+        const raw = optionControl.hidden ? input.value : optionControl.value;
+        const value = emptyOperators.has(operator) ? null : optionControl.hidden
+          ? (listOperators.has(operator) ? raw.split(",").map((part) => part.trim()).filter(Boolean) : raw)
+          : (listOperators.has(operator) ? Array.from(optionControl.selectedOptions).map((option) => option.value) : raw);
         callbacks.update({ [group.dataset.condition]: field ? { field, operator, value } : null });
-      });
-    });
+    };
+    fieldControl.addEventListener("change", () => { refreshConditionValues(group, ""); save(); });
+    operatorControl.addEventListener("change", () => { refreshConditionValues(group, listOperators.has(operatorControl.value) ? [] : ""); save(); });
+    input.addEventListener("input", save);
+    optionControl.addEventListener("change", save);
   });
 
   staticTextContent.addEventListener("input", () => {
@@ -184,11 +220,15 @@ export function initializePropertiesPanel(panel, config, callbacks) {
 
     panel.querySelectorAll("[data-condition]").forEach((group) => {
       const rule = field[group.dataset.condition] || {};
-      const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find((key) => key in rule) || "equals";
-      group.querySelector('[data-condition-part="field"]').value = rule.field || "";
+      const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty", "contains", "not_contains", "contains_any", "contains_all", "contains_none"].find((key) => key in rule) || "equals";
+      const fieldControl = group.querySelector('[data-condition-part="field"]');
+      fieldControl.replaceChildren(new Option("Wybierz pole", ""));
+      (callbacks.getFields?.() || config.fields).filter((candidate) => candidate.name && candidate.name !== field.name && candidate.type !== "repeatable_group" && candidate.type !== "static_text").forEach((candidate) => fieldControl.add(new Option(candidate.label || candidate.name, candidate.name)));
+      fieldControl.value = rule.field || "";
       group.querySelector('[data-condition-part="operator"]').value = operator;
+      group.querySelectorAll('[data-condition-part="operator"] option').forEach((option) => { option.disabled = multiOperators.has(option.value) && !isMulti((callbacks.getFields?.() || config.fields).find((candidate) => candidate.name === fieldControl.value)); });
       const value = rule.values ?? rule.value ?? rule[operator] ?? "";
-      group.querySelector('[data-condition-part="value"]').value = Array.isArray(value) ? value.join(", ") : value;
+      refreshConditionValues(group, value);
     });
 
     panel.querySelector("[data-name-help]").hidden = isStaticText || !field.id;

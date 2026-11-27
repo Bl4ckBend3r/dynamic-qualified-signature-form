@@ -240,6 +240,7 @@ endblock %} {% block extra_js %}
       class="form-row width-{{ field.width }} {% if has_error %}has-error{% endif %}"
       data-field-name="{{ field.name }}"
       data-field-type="{{ field.type }}"
+      data-checkbox-group="{{ 'true' if field.type == 'checkbox' and field.options and not field.consent else 'false' }}"
       data-base-required="{{ 'true' if field.required else 'false' }}"
       {%
       if
@@ -554,7 +555,7 @@ endblock %} {% block extra_js %}
             data-field-name="{{ field.name }}"
             data-field-type="{{ field.type }}"
             value="{{ option|option_value }}"
-            {% if ((field.options or [])|length > 1 and value is not string and (option|option_value) in (value or [])) or ((field.options or [])|length <= 1 and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}checked{% endif %}
+            {% if (field.options and not field.consent and value is not string and (option|option_value) in (value or [])) or ((not field.options or field.consent) and (value == 'Tak' or (value != 'Nie' and value == (option|option_value)))) %}checked{% endif %}
             {% if field.required %}required aria-required="true"{% endif %}
             {% if field.readonly %}disabled{% endif %}
             {% if has_error %}aria-invalid="true" aria-describedby="{{ field.name }}-error"{% endif %}
@@ -697,6 +698,7 @@ endblock %} {% block extra_js %}
   {% endif %}
 </div>
 
+<script src="{{ url_for('static', filename='js/field_conditions.js') }}"></script>
 <script>
         document.addEventListener("DOMContentLoaded", function () {
             const reviewForm = document.querySelector("#public-submission-form[data-review-url]");
@@ -954,11 +956,13 @@ endblock %} {% block extra_js %}
             const preserveConditionalValues = {{ 'true' if admin_edit_mode else 'false' }};
 
             function getFieldValue(fieldName) {
+                const fieldRow = Array.from(dynamicRows).find(row => row.dataset.fieldName === fieldName);
                 const radioChecked = document.querySelector(`input[name="${fieldName}"][type="radio"]:checked`);
                 if (radioChecked) return radioChecked.value;
                 if (document.querySelector(`input[name="${fieldName}"][type="radio"]`)) return "";
 
                 const checkboxes = Array.from(document.querySelectorAll(`input[name="${fieldName}"][type="checkbox"]`));
+                if (fieldRow?.dataset.checkboxGroup === "true") return checkboxes.filter(box => box.checked).map(box => box.value);
                 if (checkboxes.length > 1) return checkboxes.filter(box => box.checked).map(box => box.value);
                 if (checkboxes.length) return checkboxes[0].checked ? "Tak" : "Nie";
 
@@ -968,22 +972,7 @@ endblock %} {% block extra_js %}
             }
 
             function conditionMatches(rule) {
-                if (!rule) return true;
-                const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find(key => Object.hasOwn(rule, key)) || "equals";
-                const expected = Object.hasOwn(rule, "value") ? rule.value : rule[operator];
-                const current = getFieldValue(rule.field);
-                const equal = JSON.stringify(current) === JSON.stringify(expected);
-                if (operator === "equals") return equal;
-                if (operator === "not_equals") return !equal;
-                if (operator === "in" || operator === "not_in") {
-                    const choices = Object.hasOwn(rule, "values") ? rule.values : (expected || []);
-                    const included = Array.isArray(choices) ? choices.some(choice => JSON.stringify(choice) === JSON.stringify(current)) : String(choices).includes(String(current));
-                    return operator === "in" ? included : !included;
-                }
-                const empty = current == null || current === "" || (Array.isArray(current) && current.length === 0);
-                if (operator === "is_empty") return empty;
-                if (operator === "is_not_empty") return !empty;
-                return true;
+                return !rule || window.fieldConditionMatches(rule, getFieldValue(rule.field));
             }
 
             function updateVisibility() {
@@ -998,7 +987,7 @@ endblock %} {% block extra_js %}
                     const checkboxes = controls.filter(el => el.type === "checkbox");
                     const radio = controls.filter(el => el.type === "radio");
                     controls.forEach(el => {
-                        const nativeRequired = required && (checkboxes.length <= 1 || el.type !== "checkbox") && (radio.length === 0 || el.type !== "radio" || el === radio[0]);
+                        const nativeRequired = required && (el.type !== "checkbox" || row.dataset.checkboxGroup !== "true") && (radio.length === 0 || el.type !== "radio" || el === radio[0]);
                         el.required = Boolean(nativeRequired) && el.type !== "hidden";
                         if (el.required) el.setAttribute("aria-required", "true");
                         else el.removeAttribute("aria-required");
@@ -1011,7 +1000,7 @@ endblock %} {% block extra_js %}
                             }
                         }
                     });
-                    if (checkboxes.length > 1) {
+                    if (row.dataset.checkboxGroup === "true" && checkboxes.length) {
                         const first = checkboxes[0];
                         first.setCustomValidity(required && !checkboxes.some(el => el.checked) ? "Wybierz co najmniej jedną opcję." : "");
                         if (required) first.setAttribute("aria-required", "true");
@@ -1456,6 +1445,8 @@ endblock %} {% block extra_js %}
         const controls = Array.from(document.querySelectorAll(`[name="${CSS.escape(fieldName)}"]`));
         if (controls[0]?.type === "radio") return controls.find((control) => control.checked)?.value || "";
         if (controls[0]?.type === "checkbox") {
+            const rootRow = Array.from(document.querySelectorAll(".form-row[data-field-name]")).find((row) => row.dataset.fieldName === fieldName);
+            if (rootRow?.dataset.checkboxGroup === "true") return controls.filter((control) => control.checked).map((control) => control.value);
             if (controls.length > 1) return controls.filter((control) => control.checked).map((control) => control.value);
             return controls[0].checked ? "Tak" : "Nie";
         }
@@ -1467,20 +1458,7 @@ endblock %} {% block extra_js %}
     function repeatableConditionMatches(rule, record) {
         if (!rule) return true;
         const current = rule.scope === "root" ? repeatableRootValue(rule.field) : (record?.[rule.field] ?? "");
-        const operator = rule.operator || ["equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"].find((key) => key in rule) || "equals";
-        const expected = Object.hasOwn(rule, "value") ? rule.value : rule[operator];
-        const equal = JSON.stringify(current) === JSON.stringify(expected);
-        if (operator === "equals") return equal;
-        if (operator === "not_equals") return !equal;
-        if (operator === "in" || operator === "not_in") {
-            const choices = Object.hasOwn(rule, "values") ? rule.values : (expected || []);
-            const included = Array.isArray(choices) ? choices.some((choice) => JSON.stringify(choice) === JSON.stringify(current)) : String(choices).includes(String(current));
-            return operator === "in" ? included : !included;
-        }
-        const empty = current == null || current === "" || (Array.isArray(current) && current.length === 0);
-        if (operator === "is_empty") return empty;
-        if (operator === "is_not_empty") return !empty;
-        return true;
+        return window.fieldConditionMatches(rule, current);
     }
 
 

@@ -9,7 +9,6 @@ services:
         alembic upgrade head
         python -m scripts.deployment.init_form_share_key --env-file /deployment/.env
         python -m scripts.deployment.deploy_form_versions
-        python -m scripts.rename_uploaded_documents --auto
     restart: "no"
     env_file:
       - .env

@@ -10,6 +10,12 @@ from services.form_config_service import TRIGGER_DESCRIPTIONS
 from services.qualification_condition_service import QualificationConditionService
 from services.workflow_config_service import WorkflowConfigValidator, is_workflow_step_active, is_participant_stage
 from services.upload_validation import SAFE_ATTACHMENT_EXTENSIONS, SAFE_ATTACHMENT_MIME_TYPES
+from services.form_option_service import option_value
+
+
+FIELD_CONDITION_OPERATORS = {"equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty", "contains", "not_contains", "contains_any", "contains_all", "contains_none"}
+FIELD_CONDITION_LIST_OPERATORS = {"in", "not_in", "contains_any", "contains_all", "contains_none"}
+FIELD_CONDITION_MULTI_OPERATORS = {"contains", "not_contains", "contains_any", "contains_all", "contains_none"}
 
 
 ALLOWED_FILENAME_PLACEHOLDERS = {
@@ -114,15 +120,77 @@ class FormConfigValidator:
                 else:
                     self._validate_repeatable_children(children, all_root_names, index, errors)
 
+        root_fields = {field.get("name"): field for field in fields if isinstance(field, dict) and field.get("name")}
+        self._validate_condition_set(root_fields, "fields", errors)
         for index, field in enumerate(fields):
-            condition = field.get("required_if")
-            if condition:
-                if not isinstance(condition, dict) or str(condition.get("field") or "") not in names:
-                    errors.append(f"fields[{index}].required_if.field must reference an existing field")
-                operators = {"equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"}
-                operator = condition.get("operator") or next((key for key in operators if key in condition), None)
-                if operator not in operators:
-                    errors.append(f"fields[{index}].required_if operator is unsupported")
+            if isinstance(field, dict) and field.get("type") == "repeatable_group" and isinstance(field.get("fields"), list):
+                children = {child.get("name"): child for child in field["fields"] if isinstance(child, dict) and child.get("name")}
+                self._validate_condition_set(children, f"fields[{index}].fields", errors, root_fields=root_fields)
+
+    @staticmethod
+    def _validate_condition_set(fields: dict, path: str, errors: list[str], *, root_fields: dict | None = None) -> None:
+        edges = {name: set() for name in fields}
+        for name, field in fields.items():
+            for kind in ("visible_if", "required_if"):
+                rule = field.get(kind)
+                if rule is None:
+                    continue
+                location = f"{path}.{name}.{kind}"
+                if not isinstance(rule, dict) or not rule:
+                    errors.append(f"{location} must be a non-empty object")
+                    continue
+                scope = rule.get("scope") or ("current" if root_fields is not None else "root")
+                if scope not in {"root", "current"}:
+                    errors.append(f"{location}.scope is unsupported")
+                    continue
+                catalog = root_fields if scope == "root" and root_fields is not None else fields
+                source_name = rule.get("field")
+                source = catalog.get(source_name) if isinstance(source_name, str) else None
+                if source is None:
+                    errors.append(f"{location}.field references an unknown {scope} field")
+                    continue
+                if catalog is fields:
+                    edges[name].add(source_name)
+                operator = rule.get("operator") or next((key for key in FIELD_CONDITION_OPERATORS if key in rule), "equals")
+                if operator not in FIELD_CONDITION_OPERATORS:
+                    errors.append(f"{location}.operator is unsupported")
+                    continue
+                multi = (source.get("type") == "checkbox" and bool(source.get("options")) and source.get("consent") is not True) or (source.get("type") == "select" and source.get("multiple") is True)
+                if operator in FIELD_CONDITION_MULTI_OPERATORS and not multi:
+                    errors.append(f"{location}.operator requires a multiple-choice field")
+                expected = rule.get("values") if operator in {"in", "not_in"} and "values" in rule else rule.get("value", rule.get(operator))
+                if operator in FIELD_CONDITION_LIST_OPERATORS:
+                    if not isinstance(expected, list) or not expected or any(not isinstance(item, str) or not item for item in expected):
+                        errors.append(f"{location}.value must be a non-empty array of values")
+                        continue
+                    values = expected
+                elif operator in {"is_empty", "is_not_empty"}:
+                    values = []
+                elif not isinstance(expected, str):
+                    errors.append(f"{location}.value must be a string")
+                    continue
+                else:
+                    values = [expected]
+                if source.get("type") in {"select", "radio", "checkbox"} and values:
+                    allowed = {option_value(option) for option in source.get("options") or []}
+                    if not multi and source.get("type") == "checkbox":
+                        allowed = {"Tak", "Nie"}
+                    if any(value not in allowed for value in values):
+                        errors.append(f"{location}.value references an unknown option value")
+        visited, active = set(), set()
+        def visit(name):
+            if name in active:
+                errors.append(f"{path} contains cyclic field conditions")
+                return
+            if name in visited:
+                return
+            visited.add(name)
+            active.add(name)
+            for dependency in edges[name]:
+                visit(dependency)
+            active.remove(name)
+        for name in fields:
+            visit(name)
 
     @staticmethod
     def _validate_repeatable_children(children: list[dict], root_names: set[str], group_index: int, errors: list[str]) -> None:
@@ -131,19 +199,7 @@ class FormConfigValidator:
             if not isinstance(child, dict):
                 errors.append(f"fields[{group_index}].fields[{child_index}] must be an object")
                 continue
-            for condition_name in ("visible_if", "required_if"):
-                condition = child.get(condition_name)
-                if not condition:
-                    continue
-                if not isinstance(condition, dict):
-                    errors.append(f"fields[{group_index}].fields[{child_index}].{condition_name} must be an object")
-                    continue
-                scope = str(condition.get("scope") or "current")
-                if scope not in {"root", "current"}:
-                    errors.append(f"fields[{group_index}].fields[{child_index}].{condition_name}.scope is unsupported")
-                allowed_names = root_names if scope == "root" else child_names
-                if str(condition.get("field") or "") not in allowed_names:
-                    errors.append(f"fields[{group_index}].fields[{child_index}].{condition_name}.field references an unknown {scope} field")
+            # Conditions and cycles are validated against the complete catalogs above.
 
     def _validate_file_field(self, field: dict, index: int, errors: list[str]) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", str(field.get("name") or "")):
